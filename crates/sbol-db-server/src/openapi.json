@@ -164,6 +164,33 @@
       }
     },
 
+    "/documents/bulk": {
+      "post": {
+        "tags": ["Documents"],
+        "summary": "Atomic bulk import",
+        "description": "Imports up to 100 documents inside one Postgres transaction. **Either every document commits or none do** — if any document fails to parse or persist, the entire batch is rolled back and the first error is returned unchanged. Per-document validation runs and projection events are still recorded individually, but they share the outer transaction's atomicity.",
+        "operationId": "createDocumentsBulk",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/BulkImportRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "All documents committed.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BulkImportResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
     "/objects": {
       "get": {
         "tags": ["Objects"],
@@ -756,6 +783,37 @@
           "patterns":     { "type": "array", "items": { "type": "string" }, "maxItems": 256 },
           "max_hits":     { "type": "integer", "minimum": 1, "default": 1024 },
           "forward_only": { "type": "boolean", "default": false }
+        }
+      },
+      "BulkImportRequest": {
+        "type": "object",
+        "required": ["documents"],
+        "properties": {
+          "documents": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": ["body","format"],
+              "properties": {
+                "body":         { "type": "string", "description": "RDF payload in the format named by `format`." },
+                "format":       { "type": "string", "enum": ["turtle","jsonld","rdfxml","ntriples"] },
+                "source_uri":   { "type": "string" },
+                "document_iri": { "type": "string", "format": "uri" },
+                "name":         { "type": "string" },
+                "description":  { "type": "string" },
+                "created_by":   { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "BulkImportResponse": {
+        "type": "object",
+        "required": ["imported","reports"],
+        "properties": {
+          "imported": { "type": "integer", "minimum": 0 },
+          "reports":  { "type": "array", "items": { "$ref": "#/components/schemas/ImportReport" } }
         }
       },
       "LookupObjectsRequest": {

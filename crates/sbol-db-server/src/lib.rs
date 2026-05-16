@@ -75,6 +75,7 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route("/docs", get(docs::docs_html))
         .route("/openapi.json", get(docs::openapi_json))
         .route("/documents", post(routes::create_document))
+        .route("/documents/bulk", post(routes::create_documents_bulk))
         .route("/documents/:id", get(routes::get_document))
         .route("/objects", get(routes::get_object_by_iri))
         .route("/objects/list", get(routes::list_objects))

@@ -79,6 +79,80 @@ pub async fn create_document(
     Ok(Json(report))
 }
 
+const BULK_IMPORT_MAX_DOCUMENTS: usize = 100;
+
+#[derive(Deserialize)]
+pub struct BulkImportBody {
+    pub documents: Vec<BulkImportItem>,
+}
+
+#[derive(Deserialize)]
+pub struct BulkImportItem {
+    pub body: String,
+    pub format: String,
+    #[serde(default)]
+    pub source_uri: Option<String>,
+    #[serde(default)]
+    pub document_iri: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub created_by: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct BulkImportResponse {
+    pub imported: usize,
+    pub reports: Vec<ImportReport>,
+}
+
+/// Atomic bulk import. The entire batch commits or none of it does — a
+/// failure on document N rolls back documents 1..N and returns the error
+/// unchanged from `import_document`. The body cap is the server's
+/// `SBOL_DB_MAX_BODY_BYTES`; the per-call document cap is enforced here.
+pub async fn create_documents_bulk(
+    State(state): State<AppState>,
+    Json(body): Json<BulkImportBody>,
+) -> Result<Json<BulkImportResponse>, ApiError> {
+    if body.documents.is_empty() {
+        return Ok(Json(BulkImportResponse {
+            imported: 0,
+            reports: Vec::new(),
+        }));
+    }
+    if body.documents.len() > BULK_IMPORT_MAX_DOCUMENTS {
+        return Err(ApiError::BadRequest(format!(
+            "request exceeds maximum of {BULK_IMPORT_MAX_DOCUMENTS} documents per call"
+        )));
+    }
+    let mut inputs = Vec::with_capacity(body.documents.len());
+    for item in body.documents {
+        let format = parse_format(&item.format)
+            .ok_or_else(|| ApiError::BadRequest(format!("unknown format: {}", item.format)))?;
+        let document_iri = item
+            .document_iri
+            .map(IriString::new)
+            .transpose()
+            .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        inputs.push(ImportInput {
+            body: item.body,
+            format,
+            source_uri: item.source_uri,
+            document_iri,
+            created_by: item.created_by,
+            name: item.name,
+            description: item.description,
+        });
+    }
+    let reports = state.service.import_documents(inputs).await?;
+    Ok(Json(BulkImportResponse {
+        imported: reports.len(),
+        reports,
+    }))
+}
+
 pub async fn get_document(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,

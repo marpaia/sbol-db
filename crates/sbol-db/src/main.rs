@@ -43,6 +43,11 @@ enum Command {
     /// directory; directories are walked recursively for files whose
     /// extension is a recognised RDF serialization (`.ttl`, `.nt`, `.jsonld`,
     /// `.rdf`, `.xml`, `.trig`, `.nq`).
+    ///
+    /// **Directory imports default to one atomic Postgres transaction** —
+    /// either every file commits or none do. Use `--continue-on-error` for
+    /// corpus-scale onboarding where per-file resilience matters more than
+    /// batch atomicity; that mode also enables `--parallel`.
     Import {
         path: PathBuf,
         /// Override the format inferred from the file extension. Only meaningful
@@ -56,13 +61,17 @@ enum Command {
         /// Optional name. Only allowed for single-file imports.
         #[arg(long)]
         name: Option<String>,
-        /// Number of files to import in parallel when `path` is a directory.
-        #[arg(long, default_value_t = 1)]
-        parallel: usize,
-        /// Continue past per-file failures and report the summary at the end
-        /// instead of exiting on the first error.
+        /// Run each file in its own transaction in parallel, continuing past
+        /// per-file failures. Disables the default atomic-batch behavior; use
+        /// for corpus onboarding where one bad file shouldn't roll back the
+        /// rest.
         #[arg(long)]
         continue_on_error: bool,
+        /// Number of files to import in parallel. Only valid with
+        /// `--continue-on-error`; ignored otherwise (transactional mode is
+        /// single-threaded by definition).
+        #[arg(long, default_value_t = 1)]
+        parallel: usize,
         /// Skip files whose SHA3-256 content hash is already present in
         /// `sbol_documents`. Cheap re-import idempotency.
         #[arg(long)]
@@ -238,15 +247,31 @@ async fn main() -> Result<()> {
                         "--document-iri and --name are only valid for single-file imports"
                     ));
                 }
-                run_directory_import(
-                    service.clone(),
-                    &path,
-                    format.as_deref(),
-                    parallel.max(1),
-                    continue_on_error,
-                    skip_existing,
-                )
-                .await?;
+                if !continue_on_error && parallel > 1 {
+                    return Err(anyhow!(
+                        "--parallel requires --continue-on-error (atomic transactional \
+                         imports are single-threaded by definition; set both flags to \
+                         opt into per-file resilient mode)"
+                    ));
+                }
+                if continue_on_error {
+                    run_directory_import_per_file(
+                        service.clone(),
+                        &path,
+                        format.as_deref(),
+                        parallel.max(1),
+                        skip_existing,
+                    )
+                    .await?;
+                } else {
+                    run_directory_import_atomic(
+                        service.clone(),
+                        &path,
+                        format.as_deref(),
+                        skip_existing,
+                    )
+                    .await?;
+                }
             } else {
                 let body = std::fs::read_to_string(&path)
                     .with_context(|| format!("reading {}", path.display()))?;
@@ -426,12 +451,13 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_directory_import(
+/// Atomic directory import: read every file in the tree, then submit them
+/// as one `import_documents` call so the whole batch commits or rolls back.
+/// This is the default for `sbol-db import <dir>`.
+async fn run_directory_import_atomic(
     service: Arc<SbolObjectService>,
     root: &std::path::Path,
     explicit_format: Option<&str>,
-    parallel: usize,
-    continue_on_error: bool,
     skip_existing: bool,
 ) -> Result<()> {
     let files = collect_importable_files(root)?;
@@ -440,7 +466,75 @@ async fn run_directory_import(
         return Ok(());
     }
     let total = files.len();
-    println!("importing {total} file(s) from {}", root.display());
+    println!(
+        "preparing {total} file(s) from {} (transactional)",
+        root.display()
+    );
+
+    let mut inputs: Vec<ImportInput> = Vec::with_capacity(total);
+    let mut skipped = 0usize;
+    for path in &files {
+        let body =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let format = resolve_format(explicit_format, path)?;
+        if skip_existing {
+            let hash = hash_bytes(body.as_bytes());
+            if service.documents().exists_by_hash(&hash).await? {
+                skipped += 1;
+                println!("[skip] {}", path.display());
+                continue;
+            }
+        }
+        inputs.push(ImportInput {
+            body,
+            format,
+            source_uri: Some(path.display().to_string()),
+            document_iri: None,
+            created_by: None,
+            name: None,
+            description: None,
+        });
+    }
+    if inputs.is_empty() {
+        println!("nothing new to import ({skipped} skipped)");
+        return Ok(());
+    }
+    println!(
+        "committing {} document(s) in one transaction ({skipped} skipped)",
+        inputs.len()
+    );
+    let reports = service
+        .import_documents(inputs)
+        .await
+        .map_err(|e| anyhow!("rolled back: {e}"))?;
+    println!(
+        "summary: {} imported, {skipped} skipped — committed atomically",
+        reports.len()
+    );
+    Ok(())
+}
+
+/// Per-file directory import: each file runs in its own transaction; failures
+/// are reported but don't abort the batch. Enabled with `--continue-on-error`;
+/// the right shape for corpus-scale onboarding where one bad file shouldn't
+/// roll back the rest.
+async fn run_directory_import_per_file(
+    service: Arc<SbolObjectService>,
+    root: &std::path::Path,
+    explicit_format: Option<&str>,
+    parallel: usize,
+    skip_existing: bool,
+) -> Result<()> {
+    let files = collect_importable_files(root)?;
+    if files.is_empty() {
+        println!("no importable files under {}", root.display());
+        return Ok(());
+    }
+    let total = files.len();
+    println!(
+        "importing {total} file(s) from {} (per-file, parallel={parallel})",
+        root.display()
+    );
 
     let explicit_format = explicit_format.map(str::to_owned);
     let semaphore = Arc::new(tokio::sync::Semaphore::new(parallel));
@@ -481,14 +575,6 @@ async fn run_directory_import(
         "summary: {imported} imported, {skipped} skipped, {failed} failed",
         failed = failed.len()
     );
-    if !failed.is_empty() && !continue_on_error {
-        let (path, err) = &failed[0];
-        return Err(anyhow!(
-            "{}: {err} (and {} more)",
-            path.display(),
-            failed.len() - 1
-        ));
-    }
     Ok(())
 }
 

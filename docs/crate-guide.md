@@ -215,11 +215,19 @@ amortise round-trips:
   `document_id` compose.
 - **Bulk sequence search** — `SequenceSearchRepository::search_many` /
   `POST /sequences/search`. Loops over patterns; capped at 256 per call.
-- **Directory import** — `sbol-db import <dir>` walks recursively for
-  recognised RDF extensions, imports in parallel (`--parallel N`), and
-  optionally dedupes by content hash (`--skip-existing`). Each file is
-  its own transaction, so a partial failure doesn't roll the whole
-  batch back.
+- **Atomic bulk import** — `SbolObjectService::import_documents` /
+  `POST /documents/bulk` / `sbol-db import <dir>` (default). The entire
+  batch runs inside one Postgres transaction; either every document
+  commits or none do. The HTTP endpoint caps at 100 documents per call;
+  the CLI directory walker has no hard cap. Use this whenever the batch
+  is a coherent unit and partial-import state is unacceptable.
+- **Per-file directory import** — `sbol-db import <dir> --continue-on-error`
+  is the escape hatch: each file runs in its own transaction, failures
+  are logged and reported but don't abort the batch, and `--parallel N`
+  enables concurrent imports. This is the right shape for corpus-scale
+  onboarding where one bad TTL shouldn't roll back the other 999.
+  `--parallel > 1` requires `--continue-on-error` since atomic batches
+  are single-threaded by definition.
 
 ## Key decision points
 

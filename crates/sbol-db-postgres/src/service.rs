@@ -89,7 +89,45 @@ impl SbolObjectService {
         &self.ontology
     }
 
+    /// Atomically import a batch of documents inside one Postgres transaction.
+    /// Either every document commits or none do — there is no half-imported
+    /// state. The implementation is sequential per-document inside the shared
+    /// transaction; the caller controls batch composition. Per-document
+    /// validation runs and projection events are still recorded individually
+    /// (so the batch shows up as N separate document_imported events), but
+    /// they share the outer transaction's atomicity.
+    ///
+    /// Callers wanting partial-success semantics for corpus-scale onboarding
+    /// should fan out to [`import_document`] themselves; the CLI directory
+    /// import is the reference for that pattern.
+    pub async fn import_documents(
+        &self,
+        inputs: Vec<ImportInput>,
+    ) -> Result<Vec<ImportReport>, DomainError> {
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let mut reports = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            reports.push(self.import_into_conn(&mut tx, input).await?);
+        }
+        tx.commit().await.map_err(db_err)?;
+        Ok(reports)
+    }
+
     pub async fn import_document(&self, input: ImportInput) -> Result<ImportReport, DomainError> {
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let report = self.import_into_conn(&mut tx, input).await?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(report)
+    }
+
+    async fn import_into_conn(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        input: ImportInput,
+    ) -> Result<ImportReport, DomainError> {
         let rdf_format = to_rdf_format(input.format)?;
         let doc = Document::read(&input.body, rdf_format)
             .map_err(|e| DomainError::Parse(e.to_string()))?;
@@ -109,14 +147,12 @@ impl SbolObjectService {
                     .unwrap_or_else(|| format!("urn:sbol-db:import:{}", uuid::Uuid::new_v4()))
             });
 
-        let mut tx = self.pool.begin().await.map_err(db_err)?;
-
         let raw_payload = serde_json::to_value(triples_json_snapshot(&doc))?;
 
         let document_id = self
             .documents
             .insert(
-                &mut tx,
+                &mut *conn,
                 NewDocument {
                     document_iri: input.document_iri.clone(),
                     name: input.name,
@@ -135,25 +171,28 @@ impl SbolObjectService {
 
         for slice in &summaries {
             self.objects
-                .upsert(&mut tx, &slice.summary, Some(document_id))
+                .upsert(&mut *conn, &slice.summary, Some(document_id))
                 .await?;
         }
 
         let typed_projections = document_to_projections(&doc);
-        let typed_counts = self.typed.upsert_all(&mut tx, &typed_projections).await?;
+        let typed_counts = self
+            .typed
+            .upsert_all(&mut *conn, &typed_projections)
+            .await?;
 
         let graph_iri =
             IriString::unchecked(format!("{}{}", GRAPH_IRI_PREFIX, document_id.as_uuid()));
         let quads = document_to_quads(&doc, &graph_iri);
         let quad_count = self
             .quads
-            .replace_document_graph(&mut tx, document_id, &quads)
+            .replace_document_graph(&mut *conn, document_id, &quads)
             .await?;
 
         let recorded = self
             .validation
             .record_run(
-                &mut tx,
+                &mut *conn,
                 &target_iri,
                 Some(document_id),
                 "sbol-rs",
@@ -165,7 +204,7 @@ impl SbolObjectService {
 
         self.projection
             .append(
-                &mut tx,
+                &mut *conn,
                 ProjectionEvent {
                     event_type: "document_imported".to_owned(),
                     subject_iri: Some(IriString::unchecked(target_iri.clone())),
@@ -179,8 +218,6 @@ impl SbolObjectService {
                 },
             )
             .await?;
-
-        tx.commit().await.map_err(db_err)?;
 
         Ok(ImportReport {
             document_id,

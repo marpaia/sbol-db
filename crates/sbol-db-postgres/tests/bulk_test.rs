@@ -158,6 +158,100 @@ async fn exists_by_hash_round_trips() {
 }
 
 #[tokio::test]
+async fn import_documents_commits_all_when_every_doc_is_valid() {
+    let _g = db_lock().await;
+    let svc = fresh_service().await;
+    let inputs = vec![
+        ImportInput {
+            body: FIXTURE.to_owned(),
+            format: SerializationFormat::Turtle,
+            source_uri: Some("bulk://simple".to_owned()),
+            document_iri: None,
+            created_by: None,
+            name: None,
+            description: None,
+        },
+        ImportInput {
+            body: NESTED.to_owned(),
+            format: SerializationFormat::Turtle,
+            source_uri: Some("bulk://nested".to_owned()),
+            document_iri: None,
+            created_by: None,
+            name: None,
+            description: None,
+        },
+    ];
+    let reports = svc.import_documents(inputs).await.expect("bulk import");
+    assert_eq!(reports.len(), 2);
+
+    let doc_count: i64 = sqlx::query_scalar("SELECT count(*) FROM sbol_documents")
+        .fetch_one(svc.pool())
+        .await
+        .expect("count documents");
+    assert_eq!(doc_count, 2, "both documents should be visible");
+}
+
+#[tokio::test]
+async fn import_documents_rolls_back_entire_batch_on_failure() {
+    let _g = db_lock().await;
+    let svc = fresh_service().await;
+    // The middle input is unparseable Turtle. The first and third are valid.
+    // Whole-batch atomicity means *nothing* should land.
+    let inputs = vec![
+        ImportInput {
+            body: FIXTURE.to_owned(),
+            format: SerializationFormat::Turtle,
+            source_uri: Some("bulk://good-1".to_owned()),
+            document_iri: None,
+            created_by: None,
+            name: None,
+            description: None,
+        },
+        ImportInput {
+            body: "this is not turtle at all".to_owned(),
+            format: SerializationFormat::Turtle,
+            source_uri: Some("bulk://bad".to_owned()),
+            document_iri: None,
+            created_by: None,
+            name: None,
+            description: None,
+        },
+        ImportInput {
+            body: NESTED.to_owned(),
+            format: SerializationFormat::Turtle,
+            source_uri: Some("bulk://good-2".to_owned()),
+            document_iri: None,
+            created_by: None,
+            name: None,
+            description: None,
+        },
+    ];
+    let err = svc
+        .import_documents(inputs)
+        .await
+        .expect_err("batch must fail");
+    // The parse error from the middle doc surfaces verbatim.
+    assert!(
+        format!("{err}").to_ascii_lowercase().contains("parse")
+            || matches!(err, sbol_db_core::DomainError::Parse(_))
+    );
+
+    let doc_count: i64 = sqlx::query_scalar("SELECT count(*) FROM sbol_documents")
+        .fetch_one(svc.pool())
+        .await
+        .expect("count documents");
+    assert_eq!(
+        doc_count, 0,
+        "rolled-back batch must leave the documents table empty"
+    );
+    let obj_count: i64 = sqlx::query_scalar("SELECT count(*) FROM sbol_objects")
+        .fetch_one(svc.pool())
+        .await
+        .expect("count objects");
+    assert_eq!(obj_count, 0, "rolled-back batch must leave no objects");
+}
+
+#[tokio::test]
 async fn search_many_preserves_pattern_order() {
     let _g = db_lock().await;
     let svc = fresh_service().await;

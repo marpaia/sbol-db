@@ -50,8 +50,11 @@ sbol-db migrate up
 # Import a single document.
 sbol-db import path/to/design.ttl
 
-# Import an entire directory in parallel; skip files we've already seen.
-sbol-db import path/to/corpus/ --parallel 4 --skip-existing --continue-on-error
+# Import an entire directory as one atomic transaction (commits all or none).
+sbol-db import path/to/designs/ --skip-existing
+
+# Corpus-scale onboarding: per-file txs, parallel, tolerate bad files.
+sbol-db import path/to/corpus/ --continue-on-error --parallel 4 --skip-existing
 
 # Resolve an object by IRI.
 sbol-db get https://synbiohub.org/public/igem/i13504
@@ -134,6 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Method | Path                              | Purpose                                |
 | ------ | --------------------------------- | -------------------------------------- |
 | `POST` | `/documents`                      | Import an SBOL document                |
+| `POST` | `/documents/bulk`                 | Atomic bulk import (≤ 100, one txn)    |
 | `GET`  | `/documents/{id}`                 | Document metadata                      |
 | `GET`  | `/objects?iri=...`                | Resolve a stored object by IRI         |
 | `GET`  | `/objects/list`                   | Paginated corpus listing (keyset cursor) |
