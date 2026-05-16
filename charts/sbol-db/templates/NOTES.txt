@@ -1,0 +1,48 @@
+sbol-db {{ .Chart.AppVersion }} is starting up.
+
+The pre-install/upgrade Job has applied `sbol-db migrate up` and the
+Deployment is rolling. Watch progress with:
+
+  kubectl --namespace {{ .Release.Namespace }} rollout status deploy/{{ include "sbol-db.fullname" . }}
+
+{{- if .Values.ingress.enabled }}
+
+Reachable via Ingress:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+
+The Service is internal ({{ .Values.service.type }}). To reach it from
+your workstation:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "sbol-db.fullname" . }} 8080:{{ .Values.service.port }}
+
+Then open http://127.0.0.1:8080/docs for the interactive API reference.
+{{- end }}
+
+Import an SBOL document from your workstation against the port-forward:
+
+  sbol-db --database-url <your-dsn> import path/to/design.ttl
+
+Or POST it to /documents via curl:
+
+  curl -X POST http://127.0.0.1:8080/documents \
+    --data-binary @design.ttl \
+    -H 'Content-Type: text/turtle'
+
+{{- if .Values.postgresql.enabled }}
+
+You are running the bundled bitnami/postgresql subchart. Its credentials
+live in `{{ .Release.Name }}-postgresql`; this is convenient for
+development but not recommended for production. To switch, set
+`postgresql.enabled=false` and point `externalDatabase.existingSecret` at
+your managed Postgres.
+{{- end }}
+
+{{- if not .Values.serviceMonitor.enabled }}
+
+Metrics are exposed on the main port at `/metrics` and the pods carry
+`prometheus.io/scrape` annotations. For Prometheus Operator clusters,
+set `serviceMonitor.enabled=true` to switch to a CR-driven scrape.
+{{- end }}

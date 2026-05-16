@@ -1,0 +1,279 @@
+## Default values for sbol-db.
+##
+## Reusable knobs only. Anything specific to a single deployment belongs in
+## an override file, not here.
+
+# -- Override the chart name used in resource names. Leave empty to use the
+# chart's own name.
+nameOverride: ""
+# -- Fully override the generated resource names (replaces both name and
+# release prefix).
+fullnameOverride: ""
+
+image:
+  # -- Container image registry/repository. Built by `make container` and
+  # published to ghcr.io/marpaia/sbol-db.
+  repository: ghcr.io/marpaia/sbol-db
+  # -- Image tag. Defaults to the chart's appVersion so chart upgrades stay
+  # lockstep with the binary they were tested against. Override for
+  # floating tags (e.g. the Makefile's `<sha>-dirty` dev tag).
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# -- Names of pre-created `imagePullSecrets` to attach to the workloads.
+# GHCR public images don't need this; private packages do.
+imagePullSecrets: []
+# - name: ghcr-pull
+
+# -- Number of sbol-db serve replicas. SBOL queries are read-mostly and
+# imports are single Postgres transactions, so horizontal scale-out is
+# safe with no leader election.
+replicaCount: 1
+
+# -- Strategy for the sbol-db Deployment.
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+# -- Seconds Kubernetes waits between SIGTERM and SIGKILL during pod
+# termination. sbol-db drains in-flight requests on SIGTERM up to the
+# per-request timeout (`config.server.requestTimeoutSecs`), so this
+# value should be ≥ that timeout + a few seconds of headroom — the
+# default below (65s) matches the default 60s request timeout. Raise
+# this if you raise the request timeout.
+terminationGracePeriodSeconds: 65
+
+serviceAccount:
+  # -- Create a dedicated ServiceAccount for sbol-db.
+  create: true
+  # -- Annotations applied to the ServiceAccount (e.g. IRSA role ARN).
+  annotations: {}
+  # -- Name of an existing ServiceAccount to bind to. Ignored unless
+  # `create: false`.
+  name: ""
+
+## Database configuration. Choose exactly one of the following modes:
+##
+##   1. Production: point `externalDatabase.existingSecret` at a Secret
+##      that already carries the full DATABASE_URL.
+##   2. Quick-start: set `postgresql.enabled=true` (provisions the
+##      bitnami subchart) AND `postgresql.auth.password`.
+##   3. Inline: set `externalDatabase.url` literally (development only;
+##      the value lands in a chart-managed Secret).
+
+externalDatabase:
+  # -- Full Postgres DSN. Used only when `existingSecret.name` is empty
+  # and `postgresql.enabled` is false. The chart materializes this into a
+  # managed Secret; treat it as dev-grade and prefer `existingSecret` for
+  # production.
+  url: ""
+  existingSecret:
+    # -- Name of a Secret that already contains the DATABASE_URL.
+    name: ""
+    # -- Key within `existingSecret.name` that holds the DSN.
+    key: "url"
+
+postgresql:
+  # -- Whether to provision the bundled bitnami/postgresql subchart. Off
+  # by default — production should bring its own Postgres.
+  enabled: false
+  ## Values forwarded to the subchart. See
+  ## https://github.com/bitnami/charts/tree/main/bitnami/postgresql
+  auth:
+    username: sbol
+    database: sbol
+    # -- REQUIRED when `postgresql.enabled=true`. The chart fails to
+    # render otherwise. Generated random passwords aren't supported in v1
+    # because they regenerate on upgrade without a lookup step.
+    password: ""
+
+migrate:
+  # -- Run `sbol-db migrate up` as a Helm pre-install/pre-upgrade hook
+  # before the Deployment rolls.
+  enabled: true
+  # -- Pod labels for the migration Job.
+  podLabels: {}
+  # -- Resource requests/limits for the short-lived migration container.
+  resources:
+    requests: { cpu: 50m,  memory: 64Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+  # -- Seconds the finished Job lingers before garbage collection.
+  ttlSecondsAfterFinished: 600
+  # -- Number of retries before the hook is treated as failed.
+  backoffLimit: 3
+
+service:
+  type: ClusterIP
+  port: 80
+  # -- Port name exposed on the Service.
+  portName: http
+
+## Application configuration. The chart serializes these into env vars
+## on both the serve Deployment and (where applicable) the migration
+## Job. CLI flags are not used; everything goes through the binary's
+## env-var fallbacks so the chart owns one source of truth.
+config:
+  # -- Log format. `json` is structured output for Loki/Stackdriver/etc.;
+  # `text` is the human-readable formatter; `auto` lets the binary pick
+  # JSON when stdout isn't a TTY (containers) and text otherwise.
+  logFormat: json
+
+  # -- `RUST_LOG` env-filter passed to tracing-subscriber. Use e.g.
+  # `info,sbol_db=debug` to bump verbosity per crate.
+  rustLog: info
+
+  # -- Address sbol-db's HTTP server binds on, inside the container.
+  # Change only if you also change `image` to a build that listens on a
+  # different port — the Service and probes assume 8080.
+  bind: "0.0.0.0:8080"
+
+  server:
+    # -- Wall-clock timeout per HTTP request (seconds). Requests that
+    # exceed this return 408. SPARQL's internal 30s timeout applies
+    # first; this is the outer bound for every other route.
+    requestTimeoutSecs: 60
+    # -- Maximum request body size in bytes. Oversize bodies return 413.
+    # Applies to `/documents`, `/sparql` POST, etc.
+    maxBodyBytes: 33554432  # 32 MiB
+
+  database:
+    # -- Max simultaneous Postgres connections held by the pool.
+    maxConnections: 8
+    # -- Min idle connections to keep warm. Useful for spiky workloads;
+    # leave at 0 for typical request-driven traffic.
+    minConnections: 0
+    # -- Per-acquire wait (seconds) when the pool is saturated.
+    acquireTimeoutSecs: 5
+    # -- Idle-connection eviction (seconds). `0` disables eviction.
+    idleTimeoutSecs: 300
+    # -- Hard lifetime per connection (seconds). `0` disables recycling.
+    # Useful when a Postgres-side proxy (PgBouncer) wants connections
+    # rotated periodically.
+    maxLifetimeSecs: 1800
+    # -- Single-attempt connect timeout (seconds).
+    connectTimeoutSecs: 5
+    # -- Total wall-clock budget for the boot-time retry loop. sbol-db
+    # retries `connect()` with exponential backoff until this deadline
+    # expires. Mitigates the race where the pod boots before Postgres is
+    # ready (common with `postgresql.enabled=true`).
+    startupTimeoutSecs: 30
+
+# -- Extra environment variables appended to the sbol-db container,
+# merged AFTER the chart-managed `config:` vars so they can override.
+extraEnv: []
+# - name: RUST_LOG
+#   value: info,sbol_db=debug,sqlx=warn
+
+# -- Extra volumes added to the pod spec.
+extraVolumes: []
+# -- Extra volume mounts on the sbol-db container.
+extraVolumeMounts: []
+
+## Pod-level scheduling controls.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+# -- Annotations applied to the Deployment pods. The chart adds
+# Prometheus scrape annotations only when `serviceMonitor.enabled` is
+# false (so they're a fallback for clusters without Prometheus Operator).
+podAnnotations: {}
+# -- Labels applied to the Deployment pods.
+podLabels: {}
+
+## Pod-level securityContext. Distroless runs as UID 65532 by default.
+podSecurityContext:
+  fsGroup: 65532
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+## Container-level securityContext.
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# -- Container resource requests/limits.
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits:   { cpu: 1,    memory: 512Mi }
+
+## Probes. Probe paths are hardcoded to /healthz (liveness) and /readyz
+## (readiness, hits Postgres). Only the timing knobs are exposed.
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 3
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 3
+  periodSeconds: 5
+  timeoutSeconds: 2
+  failureThreshold: 3
+startupProbe:
+  enabled: true
+  periodSeconds: 5
+  failureThreshold: 30
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: sbol-db.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  # - secretName: sbol-db-tls
+  #   hosts: [sbol-db.example.com]
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: 0  # 0 disables the memory rule
+
+podDisruptionBudget:
+  enabled: false
+  # -- Either `minAvailable` or `maxUnavailable`, not both.
+  minAvailable: 1
+  maxUnavailable: ""
+
+## Prometheus Operator ServiceMonitor for scraping /metrics. The endpoint
+## is on the main HTTP port (no separate metrics port); the app has no
+## auth, so cluster-internal scraping is the assumed model.
+serviceMonitor:
+  enabled: false
+  # -- Namespace for the ServiceMonitor. Empty = release namespace.
+  namespace: ""
+  # -- Extra labels applied to the ServiceMonitor (e.g. `release: kube-prometheus-stack`).
+  labels: {}
+  interval: 30s
+  scrapeTimeout: 10s
+  honorLabels: false
+  # -- relabelings applied at scrape time.
+  relabelings: []
+  metricRelabelings: []
+
+networkPolicy:
+  # -- Apply a default-deny NetworkPolicy for the sbol-db pods. Allows
+  # ingress on the HTTP port and egress to the configured Postgres + DNS.
+  enabled: false
+  # -- Allow egress to OBO Foundry (purl.obolibrary.org) so
+  # `sbol-db ontology fetch …` works from inside the cluster.
+  allowOntologyFetch: true
+  # -- Extra ingress rules merged in.
+  extraIngress: []
+  # -- Extra egress rules merged in.
+  extraEgress: []

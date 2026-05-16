@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sbol-db.fullname" . }}
+  labels: {{- include "sbol-db.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector: {{- include "sbol-db.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: {{ .Values.service.portName | default "http" }}
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP

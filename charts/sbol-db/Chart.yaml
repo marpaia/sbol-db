@@ -1,0 +1,35 @@
+apiVersion: v2
+name: sbol-db
+description: |
+  Postgres-backed query database for SBOL 3 synthetic biology data. Ships
+  the sbol-db HTTP API, runs `sbol-db migrate up` as a pre-install/upgrade
+  hook, and exposes /healthz, /readyz, and /metrics for probes and
+  Prometheus scraping.
+type: application
+# Chart version is independent of the binary; bump on any template change.
+version: 0.1.0
+# Tracks the sbol-db binary it's tested against. Override per-install via
+# `image.tag` for floating tags (e.g. dev builds from the Makefile's
+# `<short-sha>-dirty` convention).
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/marpaia/sbol-db
+sources:
+  - https://github.com/marpaia/sbol-db
+keywords:
+  - sbol
+  - synthetic-biology
+  - rdf
+  - sparql
+  - postgres
+maintainers:
+  - name: Mike Arpaia
+    email: mike@arpaia.co
+dependencies:
+  # Convenience subchart for quick-start installs. Production deployments
+  # should set `postgresql.enabled=false` and point `externalDatabase.*`
+  # at a managed Postgres instance.
+  - name: postgresql
+    version: "16.x.x"
+    repository: oci://registry-1.docker.io/bitnamicharts
+    condition: postgresql.enabled

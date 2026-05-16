@@ -1,0 +1,168 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "sbol-db chart values",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "nameOverride":     { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "replicaCount":     { "type": "integer", "minimum": 0 },
+    "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 },
+    "image": {
+      "type": "object",
+      "required": ["repository", "pullPolicy"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag":        { "type": "string" },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "imagePullSecrets": { "type": "array", "items": { "type": "object" } },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create":      { "type": "boolean" },
+        "name":        { "type": "string" },
+        "annotations": { "type": "object" }
+      }
+    },
+    "externalDatabase": {
+      "type": "object",
+      "properties": {
+        "url": { "type": "string" },
+        "existingSecret": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "key":  { "type": "string" }
+          }
+        }
+      }
+    },
+    "postgresql": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "username": { "type": "string" },
+            "database": { "type": "string" },
+            "password": { "type": "string" }
+          }
+        }
+      }
+    },
+    "config": {
+      "type": "object",
+      "properties": {
+        "logFormat": { "type": "string", "enum": ["json", "text", "plain", "human", "auto"] },
+        "rustLog":   { "type": "string" },
+        "bind":      { "type": "string" },
+        "server": {
+          "type": "object",
+          "properties": {
+            "requestTimeoutSecs": { "type": "integer", "minimum": 1 },
+            "maxBodyBytes":       { "type": "integer", "minimum": 1024 }
+          }
+        },
+        "database": {
+          "type": "object",
+          "properties": {
+            "maxConnections":     { "type": "integer", "minimum": 1 },
+            "minConnections":     { "type": "integer", "minimum": 0 },
+            "acquireTimeoutSecs": { "type": "integer", "minimum": 1 },
+            "idleTimeoutSecs":    { "type": "integer", "minimum": 0 },
+            "maxLifetimeSecs":    { "type": "integer", "minimum": 0 },
+            "connectTimeoutSecs": { "type": "integer", "minimum": 1 },
+            "startupTimeoutSecs": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "migrate": {
+      "type": "object",
+      "properties": {
+        "enabled":                 { "type": "boolean" },
+        "ttlSecondsAfterFinished": { "type": "integer", "minimum": 0 },
+        "backoffLimit":            { "type": "integer", "minimum": 0 },
+        "resources":               { "type": "object" },
+        "podLabels":               { "type": "object" }
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type":     { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "port":     { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "portName": { "type": "string" }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled":     { "type": "boolean" },
+        "className":   { "type": "string" },
+        "annotations": { "type": "object" },
+        "hosts":       { "type": "array" },
+        "tls":         { "type": "array" }
+      }
+    },
+    "autoscaling": {
+      "type": "object",
+      "properties": {
+        "enabled":                            { "type": "boolean" },
+        "minReplicas":                        { "type": "integer", "minimum": 1 },
+        "maxReplicas":                        { "type": "integer", "minimum": 1 },
+        "targetCPUUtilizationPercentage":     { "type": "integer", "minimum": 0, "maximum": 100 },
+        "targetMemoryUtilizationPercentage":  { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "properties": {
+        "enabled":        { "type": "boolean" },
+        "minAvailable":   { "type": ["integer", "string"] },
+        "maxUnavailable": { "type": ["integer", "string"] }
+      }
+    },
+    "serviceMonitor": {
+      "type": "object",
+      "properties": {
+        "enabled":           { "type": "boolean" },
+        "namespace":         { "type": "string" },
+        "labels":            { "type": "object" },
+        "interval":          { "type": "string" },
+        "scrapeTimeout":     { "type": "string" },
+        "honorLabels":       { "type": "boolean" },
+        "relabelings":       { "type": "array" },
+        "metricRelabelings": { "type": "array" }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled":             { "type": "boolean" },
+        "allowOntologyFetch":  { "type": "boolean" },
+        "extraIngress":        { "type": "array" },
+        "extraEgress":         { "type": "array" }
+      }
+    },
+    "livenessProbe":  { "type": "object" },
+    "readinessProbe": { "type": "object" },
+    "startupProbe":   { "type": "object" },
+    "resources":      { "type": "object" },
+    "securityContext":     { "type": "object" },
+    "podSecurityContext":  { "type": "object" },
+    "podLabels":      { "type": "object" },
+    "podAnnotations": { "type": "object" },
+    "extraEnv":          { "type": "array" },
+    "extraVolumes":      { "type": "array" },
+    "extraVolumeMounts": { "type": "array" },
+    "nodeSelector":             { "type": "object" },
+    "tolerations":              { "type": "array" },
+    "affinity":                 { "type": "object" },
+    "topologySpreadConstraints":{ "type": "array" },
+    "strategy": { "type": "object" }
+  }
+}
