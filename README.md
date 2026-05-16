@@ -1,4 +1,4 @@
-# sbol-db
+![sbol-db: A Postgres-backed data management system for synthetic biology](docs/images/sbol-db.png)
 
 `sbol-db` is a Postgres-backed data management system for
 synthetic biology data. It ingests [SBOL 3](https://sbolstandard.org/)
