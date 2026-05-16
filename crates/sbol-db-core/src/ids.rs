@@ -48,3 +48,4 @@ macro_rules! id_newtype {
 id_newtype!(DocumentId);
 id_newtype!(ObjectId);
 id_newtype!(ValidationRunId);
+id_newtype!(JobId);

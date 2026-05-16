@@ -13,7 +13,7 @@ mod record;
 mod validation;
 
 pub use error::DomainError;
-pub use ids::{DocumentId, ObjectId, ValidationRunId};
+pub use ids::{DocumentId, JobId, ObjectId, ValidationRunId};
 pub use iri::{IriString, IriValidationError};
 pub use neighborhood::{
     group_by_depth, Direction, EdgeInfo, EdgeObject, NeighborhoodQuery, NeighborhoodResult,

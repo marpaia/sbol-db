@@ -1,11 +1,12 @@
 # Deploying sbol-db
 
-This is the operator's reference: container image, Helm chart,
-configuration knobs, probes, metrics, logging, shutdown semantics, and
-troubleshooting. It does **not** cover the API surface — see the
-[crate guide](crate-guide.md) for architecture and `/docs` (or
-[openapi.json](../crates/sbol-db-server/src/openapi.json)) for the REST
-API.
+This is the operator's reference: architecture, install, configuration,
+day-2 operations, capacity planning, and troubleshooting. It does
+**not** cover the request shape of individual REST endpoints — see
+`/docs` (Scalar UI) or
+[openapi.json](../crates/sbol-db-server/src/openapi.json) for that,
+and the [crate guide](crate-guide.md) for codebase architecture (Rust
+modules, traits, repositories).
 
 ## Audience
 
@@ -13,16 +14,183 @@ You're standing up sbol-db in a real environment (k8s cluster, managed
 Postgres, observability stack). If you're just trying the CLI locally,
 the [README quickstart](../README.md#installation) is faster.
 
-## Topology in one paragraph
+## Architecture
 
-`sbol-db serve` is a single stateless HTTP binary that talks to one
-Postgres instance. Everything — the typed objects, the RDF quad store,
-the typed projections, the k-mer index, ontology closures — lives in
-Postgres. Multiple `sbol-db` pods can share a database safely; there's
-no in-process state to coordinate. Migrations are idempotent and run
-before the serve pods roll. The HTTP surface exposes the SBOL query
-API plus three operational endpoints (`/healthz`, `/readyz`, `/metrics`)
-on a single port.
+The conceptual model. Read this section once to understand what
+you're deploying; reach for the later sections to do the actual work.
+
+### Topology
+
+`sbol-db serve` is a single stateless binary that talks to one
+Postgres instance. Each pod runs both an HTTP listener **and** an
+embedded async-job worker by default — the worker subscribes to every
+registered queue and shares the database (but not the connection
+pool) with the HTTP routes. Everything — the typed objects, the RDF
+quad store, the typed projections, the k-mer index, ontology
+closures, the job queue itself — lives in Postgres. Multiple pods can
+share a database safely; work is distributed across the cluster via
+`FOR UPDATE SKIP LOCKED` against `sbol_jobs`, with no leader election
+or external broker. Migrations are idempotent and run before the
+serve pods roll.
+
+The HTTP surface exposes the SBOL query API, the async-job operator
+surface (`POST /jobs`, etc.), and three operational endpoints
+(`/healthz`, `/readyz`, `/metrics`) on a single port.
+
+### Async job runtime
+
+`sbol-db` ships a Postgres-backed async job runtime for work that
+shouldn't block an HTTP request: corpus-scale imports, ontology
+fetches, future projection workers, index rebuilds. The job system is
+intentionally narrow — infrastructure for sbol-db's own async work,
+not a general-purpose workflow engine.
+
+#### Deployment shapes
+
+| Shape | When | How |
+|---|---|---|
+| **Single-node** | Dev / small prod | `sbol-db serve` on one pod. HTTP and worker share a process. |
+| **Two-node HA** | Most production | `sbol-db serve` on two pods behind an L7 load balancer, both pointed at the same Postgres. SKIP LOCKED splits work; a dead pod's leases expire and the other picks up. |
+| **Dedicated worker fleet** | When async capacity has to scale independently of API throughput | `sbol-db serve --no-worker` on API nodes; a separate `sbol-db worker run` Deployment for workers. |
+
+There is no leader election, no external broker, and no in-process
+state shared between pods.
+
+#### Why two connection pools
+
+A long-running job handler holds its Postgres transaction for the
+handler's full duration. If that ran on the HTTP pool, a handful of
+slow imports would starve inbound API requests of connections. So
+each pod opens **two** pools:
+
+- The **API pool** sized for request throughput (default 8, env
+  `DATABASE_MAX_CONNECTIONS`).
+- The **worker pool** sized to `worker_concurrency + 4` (override
+  via `SBOL_DB_WORKER_POOL_MAX`).
+
+When `--no-worker` is set, the worker pool isn't opened at all.
+
+#### At-least-once delivery
+
+The runtime guarantees at-least-once execution of every enqueued
+job. Handlers must therefore be idempotent or use `idempotency_key`;
+`sbol_documents.content_hash` gives natural idempotency for imports.
+
+- **Lease.** A worker takes a lease (default 60s) on dequeue and
+  renews it while the handler runs. The lease in Postgres is what
+  makes work safely partitionable across nodes — see
+  [Process lifecycle](#process-lifecycle) for what happens when
+  leases lapse.
+- **Exponential backoff on failure.** Each failed attempt re-queues
+  the row with `available_at = now() + min(60s × 2^attempts, 1h)`.
+  After `max_attempts` (default 5) the row lands in `dead`.
+- **LISTEN/NOTIFY for low-latency wake.** Workers `LISTEN
+  sbol_jobs_enqueued`; a trigger fires `NOTIFY` on insert. The
+  poll-interval fallback (default 5s) covers transient listener
+  disconnects.
+
+#### Registered job kinds
+
+Built-in handlers ship in `sbol-db-jobs::handlers`. Today:
+
+| `kind` | Purpose |
+|---|---|
+| `import_document` | Async equivalent of `POST /documents`. Payload is the inline RDF body + format + optional metadata; `result` is the `ImportReport`. |
+
+Future handlers (projection worker, ontology fetch, index rebuild)
+will land here as new modules without schema changes.
+
+#### Operator surfaces
+
+REST (mirrors the CLI):
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/jobs` | Enqueue. Body: `{kind, payload, queue?, priority?, max_attempts?, idempotency_key?, correlation_id?}`. |
+| `GET` | `/jobs` | List. Filters: `kind`, `status`, `queue`, `correlation_id`, `limit` (max 1000). |
+| `GET` | `/jobs/{id}` | One job. |
+| `POST` | `/jobs/{id}/cancel` | Cancel a queued or running job. |
+
+CLI:
+
+```sh
+sbol-db jobs enqueue import_document @payload.json --idempotency-key=doc:42
+sbol-db jobs status <uuid>
+sbol-db jobs list --kind import_document --status failed --limit 50
+sbol-db jobs cancel <uuid>
+
+# Dedicated worker fleet (alternative to `serve --no-worker` + standalone API):
+sbol-db worker run --concurrency 8 --queues default
+```
+
+The `/jobs` routes inherit the same `SBOL_DB_MAX_BODY_BYTES` and
+`SBOL_DB_REQUEST_TIMEOUT_SECS` limits as the rest of the HTTP surface;
+keep that in mind when enqueueing large `import_document` bodies (split
+into multiple jobs, or use synchronous `POST /documents` with a higher
+body cap if you really need a single 200 MB import).
+
+### Process lifecycle
+
+What happens when a pod boots, terminates gracefully, or crashes.
+
+#### Startup
+
+1. Resolve config; build the job handler registry.
+2. Connect the API pool, run migrations (idempotent), ping the
+   database.
+3. Open the worker pool (skipped under `--no-worker`).
+4. Spawn the worker, lease reaper, and `LISTEN sbol_jobs_enqueued`
+   task.
+5. Bind the HTTP listener last; `/readyz` returns 200 only once every
+   step above is up.
+
+Startup honors `DATABASE_STARTUP_TIMEOUT_SECS` (default 30s) on every
+connect path, so the boot retries Postgres with capped exponential
+backoff before declaring failure.
+
+#### Graceful shutdown
+
+SIGTERM (and SIGINT) drive a unified shutdown of HTTP and worker
+concurrently:
+
+1. The HTTP listener stops accepting new connections; in-flight
+   requests run to completion (bounded by
+   `SBOL_DB_REQUEST_TIMEOUT_SECS`).
+2. The worker stops dequeuing immediately; in-flight handlers get the
+   configured grace window (default 30s) to finish.
+3. Past the grace deadline, the worker exits and any still-running
+   handlers are abandoned. Their leases expire shortly after and
+   another node (or the same node on restart) picks them up — the
+   at-least-once contract covers the rest.
+4. Once both halves drain, the process exits 0.
+
+Kubernetes pod termination sequence:
+
+1. Pod marked Terminating; removed from Service endpoints; SIGTERM
+   sent to PID 1.
+2. sbol-db enters drain mode.
+3. After `terminationGracePeriodSeconds` (default 65s in the chart),
+   kubelet sends SIGKILL.
+
+Match `terminationGracePeriodSeconds` ≥ `SBOL_DB_REQUEST_TIMEOUT_SECS`
++ worker grace + a few seconds of headroom, otherwise SIGKILL will
+arrive mid-request or mid-handler.
+
+#### Crash semantics
+
+When a worker dies hard (OOM, node failure, SIGKILL), no graceful
+drain runs. The safety net is the lease itself:
+
+- The dead worker's `sbol_jobs.lease_expires_at` is fixed in the
+  past.
+- Every running worker periodically reaps expired leases —
+  `UPDATE sbol_jobs SET status='queued', leased_by=NULL WHERE
+  status='running' AND lease_expires_at < now()`.
+- Another worker dequeues the row on its next tick.
+
+Hard-kill and graceful-shutdown produce the same observable end state
+in Postgres. The cost difference is latency: a hard kill leaks at
+most one lease duration of stalled work per affected job.
 
 ## Container image
 
@@ -182,15 +350,33 @@ inline comments for every key.
 
 #### Database pool
 
+These knobs apply to the API pool. They also apply to the worker pool
+*except* `max_connections`, which the worker pool sizes from
+`worker_concurrency` (override with `SBOL_DB_WORKER_POOL_MAX`).
+
 | Chart value | Env | Default | Purpose |
 |---|---|---|---|
-| `config.database.maxConnections` | `DATABASE_MAX_CONNECTIONS` | `8` | Pool ceiling. |
+| `config.database.maxConnections` | `DATABASE_MAX_CONNECTIONS` | `8` | API pool ceiling. |
 | `config.database.minConnections` | `DATABASE_MIN_CONNECTIONS` | `0` | Idle floor (warm pool). |
 | `config.database.acquireTimeoutSecs` | `DATABASE_ACQUIRE_TIMEOUT_SECS` | `5` | Per-request wait when the pool is saturated. |
 | `config.database.idleTimeoutSecs` | `DATABASE_IDLE_TIMEOUT_SECS` | `300` | Idle eviction. `0` disables. |
 | `config.database.maxLifetimeSecs` | `DATABASE_MAX_LIFETIME_SECS` | `1800` | Hard connection lifetime. `0` disables. Useful behind PgBouncer. |
 | `config.database.connectTimeoutSecs` | `DATABASE_CONNECT_TIMEOUT_SECS` | `5` | Per-attempt connect cap. |
 | `config.database.startupTimeoutSecs` | `DATABASE_STARTUP_TIMEOUT_SECS` | `30` (chart-set on serve / migrate) or `0` (other CLI commands) | Total budget for the boot-time retry loop. |
+
+#### Async-job worker
+
+These knobs apply to the embedded worker spawned by `sbol-db serve`
+and to the standalone `sbol-db worker run` process. All take effect at
+process start; there is no live-reload.
+
+| Chart value | Env / CLI flag | Default | Purpose |
+|---|---|---|---|
+| `config.worker.disabled` | `SBOL_DB_WORKER_DISABLED` / `--no-worker` | `false` | Skip the embedded worker entirely. Set on API-only pods when running a dedicated worker fleet. |
+| `config.worker.concurrency` | `SBOL_DB_WORKER_CONCURRENCY` / `--worker-concurrency` | `num_cpus()` | Max in-flight handler tasks per worker. Also sizes the worker connection pool floor (`concurrency + 4`). |
+| `config.worker.queues` | `SBOL_DB_WORKER_QUEUES` / `--worker-queues` | `default` | Comma-separated queue allowlist. A worker only dequeues rows whose `queue` matches. |
+| `config.worker.id` | `SBOL_DB_WORKER_ID` / `--worker-id` | `<hostname>-<pid>-<rand>` | Stable identity persisted as `sbol_jobs.leased_by`; the label on the `sbol_db_worker_*` metric series. Set explicitly when running multiple workers per pod. |
+| `config.worker.poolMax` | `SBOL_DB_WORKER_POOL_MAX` | `concurrency + 4` | Override for the worker pool's `max_connections`. The other pool knobs (`DATABASE_*`) apply to both pools. |
 
 #### Logging
 
@@ -212,7 +398,7 @@ correspond to env vars on the binary.
 |---|---|---|
 | `replicaCount` | `1` | sbol-db serve replicas. Set `≥ 2` for production. |
 | `strategy` | `RollingUpdate{maxSurge: 1, maxUnavailable: 0}` | Deployment update strategy. |
-| `terminationGracePeriodSeconds` | `65` | SIGTERM-to-SIGKILL window. Must be ≥ `config.server.requestTimeoutSecs` + headroom or in-flight requests get killed on rollouts. |
+| `terminationGracePeriodSeconds` | `65` | SIGTERM-to-SIGKILL window. Must be ≥ `config.server.requestTimeoutSecs` + worker grace + headroom or in-flight work gets killed on rollouts. |
 | `resources` | `requests: {100m, 128Mi}, limits: {1, 512Mi}` | Container resource requests/limits. |
 | `image.repository` / `image.tag` / `image.pullPolicy` | `ghcr.io/marpaia/sbol-db` / `appVersion` / `IfNotPresent` | Container image coordinates. |
 | `imagePullSecrets` | `[]` | Attached to the Deployment, migration Job, and (when created) the ServiceAccount. |
@@ -227,7 +413,7 @@ correspond to env vars on the binary.
 
 The probe **paths** are hardcoded (`/healthz`, `/readyz`); only the
 timing knobs are exposed. Defaults match the
-[probe-tuning guidance](#probe-tuning) above.
+[probe-tuning guidance](#probe-tuning) under Operating sbol-db.
 
 | Chart value | Default | Purpose |
 |---|---|---|
@@ -265,19 +451,24 @@ timing knobs are exposed. Defaults match the
 | `serviceMonitor.{enabled,namespace,labels,interval,scrapeTimeout,honorLabels,relabelings,metricRelabelings}` | Prometheus Operator `ServiceMonitor` | Scrapes `/metrics` on the main port. When disabled, fallback `prometheus.io/scrape` annotations are added to the pod. |
 | `networkPolicy.{enabled,allowOntologyFetch,extraIngress,extraEgress}` | `NetworkPolicy` | Default-deny; allows ingress on 8080, egress to DNS + Postgres + (optional) HTTPS to OBO Foundry. |
 
-## Operational endpoints
+## Operating sbol-db
+
+The cluster-facing surfaces: probes, metrics, and logs.
+
+### Probes and discovery endpoints
 
 | Path | Method | Description |
 |---|---|---|
 | `/healthz` | `GET` | Static liveness. Returns `200 ok` if the process is running. Does **not** touch Postgres. Wire to `livenessProbe`. |
 | `/readyz` | `GET` | Readiness. Issues a 1s-timeout `SELECT 1` against the pool. `200 {"status":"ready"}` or `503 {"status":"not_ready","reason":"…"}`. Wire to `readinessProbe` and `startupProbe`. |
-| `/metrics` | `GET` | Prometheus exposition format. |
+| `/metrics` | `GET` | Prometheus exposition format. See [Metrics](#metrics) below. |
 | `/docs` | `GET` | Scalar-rendered API explorer. |
 | `/openapi.json` | `GET` | OpenAPI 3.1 schema. |
 
-### Probe tuning
+#### Probe tuning
 
-The chart sets reasonable defaults but a few relationships are worth
+The chart sets reasonable defaults (see
+[Probe timings](#probe-timings)) but a few relationships are worth
 understanding:
 
 - **Liveness** failing should be rare and recovery-by-restart. Don't
@@ -292,44 +483,151 @@ understanding:
   Kubernetes gives up. Match `DATABASE_STARTUP_TIMEOUT_SECS` to this
   budget (default 30s is well under the 150s ceiling).
 
-## Metrics
+### Metrics
 
 Exposed in Prometheus text format at `/metrics` on the main HTTP port
 (no separate metrics port — sbol-db has no auth, so cluster-internal
 scraping is the assumed model). Add the `monitoring.coreos.com/v1`
 ServiceMonitor with `serviceMonitor.enabled=true`.
 
-### Metric catalog
+#### Metric catalog
+
+##### HTTP
 
 | Metric | Type | Labels | Notes |
 |---|---|---|---|
 | `http_requests_total` | counter | `method`, `route`, `status` | `route` is the **templated** path (e.g. `/objects/:id`), so cardinality stays bounded. Unmatched paths are bucketed as `unmatched`. |
 | `http_request_duration_seconds` | histogram | `method`, `route`, `status` | Buckets: 5 ms → 10 s (standard HTTP histogram set). |
-| `sbol_db_pool_connections` | gauge | `state` ∈ {`open`, `idle`, `in_use`} | Snapshot taken on each scrape. |
-| `sbol_db_build_info` | gauge | `version` | Constant 1; the label carries the binary version. |
 
-### Useful PromQL
+##### Connection pools
+
+| Metric | Type | Labels | Notes |
+|---|---|---|---|
+| `sbol_db_pool_connections` | gauge | `state` ∈ {`open`, `idle`, `in_use`} | API pool snapshot. Taken on each scrape. |
+| `sbol_db_worker_pool_connections` | gauge | `state` ∈ {`open`, `idle`, `in_use`} | Worker pool snapshot. Absent when the worker is disabled. |
+
+##### Worker process
+
+| Metric | Type | Labels | Notes |
+|---|---|---|---|
+| `sbol_db_worker_concurrency` | gauge | `worker_id` | Static at startup. The max simultaneous in-flight handlers for this worker. |
+| `sbol_db_worker_inflight` | gauge | `worker_id` | Current in-flight handler count. Increments at dequeue, decrements on completion. |
+| `sbol_db_worker_heartbeat_timestamp_seconds` | gauge | `worker_id` | Unix seconds, updated every 5s by the worker. Alert on `time() - this > N` to detect dead/stuck workers. |
+
+##### Job lifecycle
+
+| Metric | Type | Labels | Notes |
+|---|---|---|---|
+| `sbol_db_jobs_started_total` | counter | `kind`, `queue`, `worker_id` | Incremented on successful dequeue. |
+| `sbol_db_jobs_completed_total` | counter | `kind`, `queue`, `status` ∈ {`succeeded`, `failed`, `dead`, `handler_missing`} | Terminal outcome of each handler invocation. `failed` rows re-queue with backoff; `dead` is terminal. |
+| `sbol_db_jobs_duration_seconds` | histogram | `kind`, `status` | Handler runtime. Buckets: 10 ms → 1 h. |
+| `sbol_db_jobs_wait_seconds` | histogram | `kind`, `queue` | Time from enqueue to first attempt. Recorded only on `attempts = 1` (retries have their own backoff). Buckets: 10 ms → 1 h. |
+| `sbol_db_jobs_dequeue_errors_total` | counter | — | Dequeue query failures (DB unreachable, etc.). |
+
+##### Queue state (scrape-time)
+
+These are computed on each `/metrics` call from `sbol_jobs`. The
+queries are cheap given the partial dequeue index.
+
+| Metric | Type | Labels | Notes |
+|---|---|---|---|
+| `sbol_db_jobs_queue_depth` | gauge | `status` ∈ {`queued`, `running`, `failed`, `dead`}, `queue` | Row count per `(status, queue)` bucket. |
+| `sbol_db_jobs_oldest_queued_age_seconds` | gauge | `queue` | Age of the oldest still-queued (and available) row per queue. Drives stuck-queue alerts. |
+| `sbol_db_jobs_status_enum` | gauge | `status` | Always emitted (value `1`) for every status value. Anchors dashboards so `sum by (status) (queue_depth)` queries don't go blank when a status is absent. |
+| `sbol_db_jobs_scrape_errors_total` | counter | `scope` ∈ {`queue_depth`, `oldest_age`} | Increments when the scrape query itself fails. |
+
+##### Lease, reaper, listener
+
+| Metric | Type | Labels | Notes |
+|---|---|---|---|
+| `sbol_db_jobs_lease_renewals_total` | counter | `result` ∈ {`ok`, `lost`, `error`} | `lost` means the row's status or `leased_by` changed under us — usually because another node reaped an expired lease. |
+| `sbol_db_jobs_reaped_total` | counter | — | Total rows transitioned back from `running` → `queued` by the lease reaper. A non-zero rate means workers are losing leases (crashes, network partitions, oversubscribed CPU). |
+| `sbol_db_jobs_reap_errors_total` | counter | — | Reaper query failures. |
+| `sbol_db_jobs_reaper_last_run_timestamp_seconds` | gauge | — | Unix seconds; the reaper writes it on every tick. Alert on staleness alongside the worker heartbeat. |
+| `sbol_db_jobs_listener_connected` | gauge | — | `1` when the worker's `LISTEN` connection is up. `0` means the worker is in poll-only fallback (still correct, just higher tail latency). |
+| `sbol_db_jobs_listener_reconnects_total` | counter | `reason` ∈ {`connect_failed`, `listen_failed`, `stream_error`, `stream_closed`} | Listener reconnect attempts. |
+| `sbol_db_jobs_notifications_received_total` | counter | `queue` | Successful `NOTIFY sbol_jobs_enqueued` deliveries matched to a subscribed queue. |
+
+##### Build info
+
+| Metric | Type | Labels | Notes |
+|---|---|---|---|
+| `sbol_db_build_info` | gauge | `version` | Constant `1`; the label carries the binary version. |
+
+#### Useful PromQL
 
 ```promql
+# --- HTTP -----------------------------------------------------------
+
 # Request rate by route
 sum by (route) (rate(http_requests_total[5m]))
 
 # 99th-percentile latency, per route
-histogram_quantile(0.99, sum by (route, le) (rate(http_request_duration_seconds_bucket[5m])))
+histogram_quantile(0.99,
+  sum by (route, le) (rate(http_request_duration_seconds_bucket[5m])))
 
-# Error rate as a fraction
+# 5xx rate as a fraction
 sum(rate(http_requests_total{status=~"5.."}[5m]))
   / sum(rate(http_requests_total[5m]))
 
-# Pool saturation
-sbol_db_pool_connections{state="in_use"} / on() group_left
+# --- Pools ----------------------------------------------------------
+
+# API pool saturation (0..1)
+sbol_db_pool_connections{state="in_use"}
+  / on() group_left
   (sbol_db_pool_connections{state="open"} + sbol_db_pool_connections{state="idle"})
+
+# Worker pool saturation
+sbol_db_worker_pool_connections{state="in_use"}
+  / on() group_left
+  (sbol_db_worker_pool_connections{state="open"} + sbol_db_worker_pool_connections{state="idle"})
+
+# --- Worker liveness -----------------------------------------------
+
+# Workers whose heartbeat is older than 30s (alert)
+time() - sbol_db_worker_heartbeat_timestamp_seconds > 30
+
+# Reaper hasn't run in 2 minutes (every worker runs one — this firing
+# means *no* worker is healthy)
+time() - sbol_db_jobs_reaper_last_run_timestamp_seconds > 120
+
+# Listener flapping
+changes(sbol_db_jobs_listener_connected[5m]) > 2
+
+# --- Job throughput / success --------------------------------------
+
+# Per-kind throughput
+sum by (kind) (rate(sbol_db_jobs_completed_total[5m]))
+
+# Per-kind success rate
+sum by (kind) (rate(sbol_db_jobs_completed_total{status="succeeded"}[5m]))
+  / sum by (kind) (rate(sbol_db_jobs_completed_total[5m]))
+
+# Per-kind p99 handler duration
+histogram_quantile(0.99,
+  sum by (kind, le) (rate(sbol_db_jobs_duration_seconds_bucket[5m])))
+
+# p99 enqueue→start wait, by queue
+histogram_quantile(0.99,
+  sum by (queue, le) (rate(sbol_db_jobs_wait_seconds_bucket[5m])))
+
+# --- Stuck-queue / dead-letter alerts ------------------------------
+
+# Queued backlog by queue
+sum by (queue) (sbol_db_jobs_queue_depth{status="queued"})
+
+# Oldest queued job in any queue is older than 5 minutes
+max(sbol_db_jobs_oldest_queued_age_seconds) > 300
+
+# Jobs landing in dead-letter
+sum by (kind) (rate(sbol_db_jobs_completed_total{status="dead"}[15m])) > 0
+
+# Lease churn (workers losing leases under us — investigate CPU starvation,
+# network partitions, or under-sized lease intervals)
+rate(sbol_db_jobs_reaped_total[5m]) > 0.1
 ```
 
-Domain metrics (imports, sparql queries, document/quad gauges) are on
-the [operability roadmap](operations-roadmap) but not yet implemented.
-
-## Logging
+### Logging
 
 `tracing-subscriber` is the logger. Two output formats:
 
@@ -346,60 +644,78 @@ typical intervals; if you don't want them in logs add
 `tower_http=off,axum=off` to your `RUST_LOG` filter (we don't currently
 mount a per-route trace layer; this is preparatory for that change).
 
-### Notable log events
+#### Notable log events
 
 - `database connect failed; retrying` (warn) — emitted by the
   boot-time retry loop. Each retry includes the next backoff in
   seconds. If you see this repeatedly without a `connected` follow-up,
   `DATABASE_STARTUP_TIMEOUT_SECS` is too low or the DSN is wrong.
+- `starting sbol-db worker` (info) — emitted once per worker on
+  startup; the structured fields (`worker_id`, `concurrency`,
+  `queues`, `kinds`) capture the worker's full subscription state.
+  Match `worker_id` against the `sbol_db_worker_*` metric labels.
+- `job started` / `job succeeded` / `job failed` (info / warn) — per
+  handler invocation, inside a span carrying `job_id`, `kind`, and
+  `attempt`. `elapsed_secs` shows handler runtime on completion.
+- `lease lost` (warn) — the row's lease was reaped from under a
+  running handler. Either the lease was too short for the workload or
+  the worker pod was CPU-starved and missed renewals.
+- `reaped expired job leases` (warn, with `reclaimed = N`) — the
+  reaper re-queued N rows. Investigate alongside `lease lost`.
 - `shutdown signal received` (info) — emitted when SIGTERM or SIGINT
   arrives. Followed by `sbol-db serve loop exited cleanly` when the
-  drain completes; if you don't see that, in-flight requests didn't
-  finish before `terminationGracePeriodSeconds` elapsed.
-
-## Graceful shutdown
-
-The `serve` subcommand installs a SIGTERM + SIGINT handler and routes
-the signal into `axum::serve(...).with_graceful_shutdown(...)`. On
-signal:
-
-1. The listener stops accepting new connections.
-2. In-flight requests run to completion (bounded by their per-request
-   timeout).
-3. Once the last response is sent, the process exits 0.
-
-Kubernetes pod termination sequence:
-
-1. Pod marked Terminating; removed from Service endpoints; SIGTERM
-   sent to PID 1.
-2. sbol-db enters drain mode.
-3. After `terminationGracePeriodSeconds` (default 30s), kubelet sends
-   SIGKILL.
-
-Match `terminationGracePeriodSeconds` ≥
-`SBOL_DB_REQUEST_TIMEOUT_SECS` + a few seconds of headroom, otherwise
-SIGKILL will arrive mid-request.
+  drain completes; if you don't see that, in-flight work didn't finish
+  before `terminationGracePeriodSeconds` elapsed.
 
 ## Capacity planning
 
-`sbol-db serve` is stateless and CPU-light for typical query workloads;
-Postgres does the work. Defaults:
+`sbol-db serve` is stateless and CPU-light for typical query
+workloads; Postgres does the work. Defaults:
 
 | Resource | Default request | Default limit |
 |---|---|---|
 | CPU | 100m | 1 |
 | Memory | 128Mi | 512Mi |
 
-Three signals to scale on:
+There are three independent scaling axes — HTTP request throughput,
+async-worker throughput, and Postgres capacity.
 
-1. **Pool saturation** (`sbol_db_pool_connections{state="in_use"}` near
-   `max_connections`). Either bump `DATABASE_MAX_CONNECTIONS` (and the
-   Postgres `max_connections` it consumes) or add replicas.
-2. **Request latency p99** drifting past your SLO — usually pool
+### Scaling the HTTP path
+
+Three signals to watch:
+
+1. **API pool saturation** — `sbol_db_pool_connections{state="in_use"}`
+   near `max_connections`. Either bump `DATABASE_MAX_CONNECTIONS` (and
+   the Postgres `max_connections` it consumes) or add replicas.
+2. **Request latency p99 drifting past your SLO** — usually pool
    saturation or a hot SPARQL query. Inspect histograms by route.
-3. **CPU near limit** — almost always SPARQL or a sequence k-mer scan.
-   Scale horizontally; multiple replicas share Postgres without
+3. **CPU near limit** — almost always SPARQL or a sequence k-mer
+   scan. Scale horizontally; multiple replicas share Postgres without
    coordination.
+
+### Scaling the worker fleet
+
+Three signals to watch:
+
+1. **Queued backlog growing**
+   (`sum by (queue) (sbol_db_jobs_queue_depth{status="queued"})`) or
+   **oldest-queued age rising** (`sbol_db_jobs_oldest_queued_age_seconds`).
+   Increase `SBOL_DB_WORKER_CONCURRENCY`, add pod replicas, or both.
+2. **Worker pool saturation**
+   (`sbol_db_worker_pool_connections{state="in_use"}`). Raise
+   `SBOL_DB_WORKER_POOL_MAX` *or* `DATABASE_MAX_CONNECTIONS` on the
+   underlying Postgres if the pool ceiling is the bottleneck rather
+   than handler concurrency itself.
+3. **Lease churn** (`rate(sbol_db_jobs_reaped_total[5m]) > 0`).
+   Workers are losing leases under load — either CPU is starving the
+   renewer or jobs run longer than the lease. Scale CPU or increase
+   the lease duration in the WorkerConfig.
+
+Workers are stateless. To shift load from API pods to dedicated
+worker pods, set `config.worker.disabled=true` on the API Deployment
+and run a second Deployment using `sbol-db worker run`. Either fleet
+can scale horizontally without coordinating with the other; SKIP
+LOCKED handles distribution.
 
 ### Postgres sizing
 
@@ -412,6 +728,12 @@ The dominant tables grow with the imported design corpus:
   ~10 k rows.
 - `sbol_objects.data` — JSON-LD slice per object; bounded by document
   size.
+- `sbol_jobs` / `sbol_job_attempts` — one row per enqueued job and per
+  attempt. Stays small if traffic is bursty; can grow large if you run
+  millions of jobs without pruning terminal (`succeeded`, `dead`,
+  `cancelled`) rows. There is no built-in retention sweeper yet — a
+  `pg_cron` job that periodically `DELETE`s old terminal rows is the
+  recommended pattern.
 
 A managed Postgres with 2 vCPU / 8 GiB RAM handles ≪1 M designs.
 Beyond that, the typed projections + GIN indexes start mattering.
@@ -432,6 +754,23 @@ last-resort path, not a primary backup strategy.
 
 ## Troubleshooting
 
+### Helm install fails with "set externalDatabase.existingSecret.name…"
+
+The chart's DSN resolver requires exactly one of the three modes. Set
+`externalDatabase.existingSecret.name`, or `externalDatabase.url`, or
+`postgresql.enabled=true` (with `postgresql.auth.password`).
+
+### Migration Job stays Pending forever
+
+The pre-install hook can't schedule. Check:
+
+- ImagePullBackOff — the image tag doesn't exist in GHCR. The chart
+  defaults `image.tag` to `appVersion`; supply `--set image.tag=<sha>`
+  when running against a dev build.
+- The Job's pod sees the same resource constraints as the Deployment;
+  if your cluster has a per-namespace quota set tightly, the Job's
+  modest request (50m CPU, 64Mi RAM) may still bump it.
+
 ### Pod boots, then crash-loops with "connecting to …"
 
 The pod can't reach Postgres before `DATABASE_STARTUP_TIMEOUT_SECS`
@@ -446,17 +785,6 @@ are wrong, the Postgres pod isn't running, or a NetworkPolicy is
 blocking egress. Raise the timeout only if Postgres reliably takes >30s
 to become ready — the root cause is usually the DSN.
 
-### Migration Job stays Pending forever
-
-The pre-install hook can't schedule. Check:
-
-- ImagePullBackOff — the image tag doesn't exist in GHCR. The chart
-  defaults `image.tag` to `appVersion`; supply `--set image.tag=<sha>`
-  when running against a dev build.
-- The Job's pod sees the same resource constraints as the Deployment;
-  if your cluster has a per-namespace quota set tightly, the Job's
-  modest request (50m CPU, 64Mi RAM) may still bump it.
-
 ### `/readyz` flaps between 200 and 503
 
 Most likely the Postgres pool is saturated. Symptoms:
@@ -468,18 +796,6 @@ Most likely the Postgres pool is saturated. Symptoms:
 Fixes (in increasing impact order): raise
 `DATABASE_ACQUIRE_TIMEOUT_SECS`, raise `DATABASE_MAX_CONNECTIONS`, add
 sbol-db replicas, scale Postgres.
-
-### `sbol-db ontology fetch so` fails in-cluster
-
-The container has no shell, so you'd run it via:
-
-```sh
-kubectl exec deploy/sbol-db -- /usr/local/bin/sbol-db ontology fetch so
-```
-
-If `networkPolicy.enabled=true`, the policy must allow egress to OBO
-Foundry. Set `networkPolicy.allowOntologyFetch=true` (default) — this
-opens 443/TCP egress.
 
 ### Imports return 413 Payload Too Large
 
@@ -494,11 +810,62 @@ Server-side wall-clock cap hit. Either the request is genuinely slow
 `http_request_duration_seconds` histograms by route to localize.
 Raising `SBOL_DB_REQUEST_TIMEOUT_SECS` only papers over the symptom.
 
-### Helm install fails with "set externalDatabase.existingSecret.name…"
+### `sbol-db ontology fetch so` fails in-cluster
 
-The chart's DSN resolver requires exactly one of the three modes. Set
-`externalDatabase.existingSecret.name`, or `externalDatabase.url`, or
-`postgresql.enabled=true` (with `postgresql.auth.password`).
+The container has no shell, so you'd run it via:
+
+```sh
+kubectl exec deploy/sbol-db -- /usr/local/bin/sbol-db ontology fetch so
+```
+
+If `networkPolicy.enabled=true`, the policy must allow egress to OBO
+Foundry. Set `networkPolicy.allowOntologyFetch=true` (default) — this
+opens 443/TCP egress.
+
+### Jobs stay `queued` and never run
+
+In order of likelihood:
+
+1. **No worker is subscribed.** Check the metric series
+   `sbol_db_worker_concurrency{worker_id=...}` exists for at least one
+   pod. If absent, every pod is running `--no-worker` (or the worker
+   pool failed to open at startup — look for `opening worker connection
+   pool` in the logs).
+2. **Wrong queue.** The job's `queue` column doesn't match any
+   worker's allowlist. `sbol-db jobs status <id>` shows the queue;
+   check the startup log line `starting sbol-db worker { … queues:
+   [...] }` for what each worker is subscribed to.
+3. **Backoff in effect.** A failed retry pins `available_at` up to 1
+   hour out. Inspect the row: is `available_at` past `now()`? If not,
+   either wait or `UPDATE sbol_jobs SET available_at = now() WHERE id
+   = …` for an operator-issued "retry now".
+
+### Worker heartbeat is stale
+
+`time() - sbol_db_worker_heartbeat_timestamp_seconds` is high. The
+heartbeat task ticks every 5s, so anything past ~30s is broken. Check:
+
+- The worker pod isn't crash-looping (`kubectl logs --previous`).
+- The worker pod isn't CPU-starved (other heavy tasks on the same
+  node). The heartbeat is a tokio task; if the runtime can't schedule
+  it, the gauge stalls even though the process is "alive."
+- Lease churn (`rate(sbol_db_jobs_reaped_total[5m]) > 0`) is the
+  symptom: jobs get reaped because lease renewal can't run. Scale up
+  CPU or shorten the renewal interval.
+
+### Dead-letter is filling up
+
+`sbol_db_jobs_completed_total{status="dead"}` is incrementing. Each
+row hit `max_attempts` (default 5) and stopped retrying. List them:
+
+```sh
+sbol-db jobs list --status dead --limit 50
+```
+
+The `error` column carries the last failure. Common causes: malformed
+payload (deserialisation rejection), a handler that mis-classifies a
+permanent failure as retryable, or a downstream system that's been
+down longer than the backoff envelope (`60s × 2^4 = 16m`).
 
 ## Production checklist
 
@@ -511,14 +878,23 @@ Before declaring a deployment production-ready:
       Prometheus.
 - [ ] Dashboards alert on:
       - 5xx rate > X% for N minutes
-      - Pool saturation > 80% for N minutes
+      - Pool saturation > 80% for N minutes (both `sbol_db_pool_connections`
+        and `sbol_db_worker_pool_connections`)
       - `/readyz` failing for any single pod
+      - Worker heartbeat staleness: `time() -
+        sbol_db_worker_heartbeat_timestamp_seconds > 60`
+      - Stuck queue: `max(sbol_db_jobs_oldest_queued_age_seconds) > 300`
+      - Dead-letter rate: `rate(sbol_db_jobs_completed_total{status="dead"}[15m]) > 0`
+      - Listener disconnected: `sbol_db_jobs_listener_connected == 0` for > 5 min
+- [ ] `config.worker.disabled` set consistently across the fleet (either
+      every pod embeds a worker, or API-only pods set it and a dedicated
+      worker Deployment runs `sbol-db worker run`).
 - [ ] `podDisruptionBudget.enabled=true` with `minAvailable: 1` (or
       `maxUnavailable: 25%` for `replicaCount > 1`).
 - [ ] `replicaCount ≥ 2` for redundancy.
 - [ ] `ingress.tls` configured (or TLS terminated at a managed L7).
 - [ ] `terminationGracePeriodSeconds` ≥ `SBOL_DB_REQUEST_TIMEOUT_SECS`
-      with headroom.
+      + worker grace + headroom.
 - [ ] `RUST_LOG=info` (not debug) in steady state.
 
 ## What this doc intentionally doesn't cover
@@ -529,6 +905,9 @@ Before declaring a deployment production-ready:
   isolation, run separate deployments.
 - **Distributed tracing / OpenTelemetry.** JSON logs + request IDs (a
   near-term addition) cover most needs.
-- **Background workers.** The `sbol_rdf_projection_events` table exists for
-  a future async consumer; today, all projections are written
-  synchronously inside the import transaction.
+- **Async projection consumer.** The job runtime is in place (see
+  [Async job runtime](#async-job-runtime)) but there's no built-in
+  handler yet that drains `sbol_rdf_projection_events`. Today, all
+  projections are still written synchronously inside the import
+  transaction; the event log exists for a future projection handler to
+  tail deterministically.

@@ -1,4 +1,5 @@
 pub mod document;
+pub mod job;
 pub mod neighborhood;
 pub mod object;
 pub mod ontology;
@@ -9,6 +10,10 @@ pub mod sequence_search;
 pub mod validation;
 
 pub use document::DocumentRepository;
+pub use job::{
+    EnqueueOutcome, JobRepository, JobStatus, ListJobsFilter, NewJob, OldestQueuedAge,
+    QueueDepthRow, SbolJob, DEFAULT_QUEUE,
+};
 pub use neighborhood::NeighborhoodRepository;
 pub use object::{ListObjectsFilter, SbolObjectRepository};
 pub use ontology::{OntologyLoadReport, OntologyRecord, OntologyRepository, OntologyTermRecord};

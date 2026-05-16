@@ -151,6 +151,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `GET`/`POST` | `/ontology`                 | List / load ontologies                 |
 | `GET`  | `/ontology/term`                  | Term metadata (resolves IRI aliases)   |
 | `GET`  | `/ontology/descendants`           | Transitive closure for a term          |
+| `POST` | `/jobs`                           | Enqueue an async job (returns id)      |
+| `GET`  | `/jobs`                           | List recent jobs (filterable)          |
+| `GET`  | `/jobs/{id}`                      | One job (status, result, error)        |
+| `POST` | `/jobs/{id}/cancel`               | Cancel a queued or running job         |
 | `GET`  | `/healthz`                        | Static liveness probe                  |
 | `GET`  | `/readyz`                         | Postgres `SELECT 1` readiness probe    |
 | `GET`  | `/metrics`                        | Prometheus metrics exposition          |
@@ -162,6 +166,38 @@ See [`docs/sparql.md`](docs/sparql.md) for the SPARQL Protocol shape,
 [`docs/sequences.md`](docs/sequences.md) for the k-mer search, and
 [`docs/ontology.md`](docs/ontology.md) for ontology loading.
 
+## Async batch processing
+
+For corpus-scale imports and background work, `sbol-db` ships a
+Postgres-backed async job runtime that distributes work across every
+node in the cluster — no sidecar broker, no leader election, no extra
+infra. Each `sbol-db serve` pod embeds a worker by default; multiple
+pods share the database safely via `FOR UPDATE SKIP LOCKED`.
+
+- **`POST /jobs`** and `sbol-db jobs enqueue` for fire-and-poll bulk
+  imports.
+- **At-least-once delivery** with idempotency keys, exponential
+  backoff, and a dead-letter queue.
+- **Embedded or dedicated** workers — run `sbol-db serve` everywhere,
+  or split the API and worker fleets with `--no-worker` and
+  `sbol-db worker run`.
+- **Observable** via Prometheus: queue depth, oldest-queued age,
+  per-kind throughput and durations, worker heartbeats. See the
+  [deployment guide](docs/deployment.md#metrics).
+
+```sh
+# Enqueue an import job (returns a UUID immediately).
+sbol-db jobs enqueue import_document @payload.json \
+  --idempotency-key=doc:42
+
+# Poll until done.
+sbol-db jobs status <uuid>
+```
+
+See [`docs/deployment.md#async-job-runtime`](docs/deployment.md#async-job-runtime)
+for deployment shapes (single-node, two-node HA, dedicated worker fleet)
+and operator-surface details.
+
 ## Workspace layout
 
 | Crate              | Purpose                                                                                |
@@ -170,6 +206,7 @@ See [`docs/sparql.md`](docs/sparql.md) for the SPARQL Protocol shape,
 | `sbol-db-rdf`      | `sbol::Document` ↔ quads projection, RDF export, content hashing.                       |
 | `sbol-db-postgres` | sqlx repositories, embedded migrations, the `SbolObjectService` domain entry point.     |
 | `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over `sbol_quads`).            |
+| `sbol-db-jobs`     | Async job runtime — `JobHandler` trait, registry, worker, built-in handlers.            |
 | `sbol-db-server`   | axum HTTP API.                                                                          |
 | `sbol-db`          | CLI binary.                                                                             |
 

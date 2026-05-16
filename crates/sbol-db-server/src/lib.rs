@@ -16,7 +16,7 @@ use std::time::Duration;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use axum::Router;
-use sbol_db_postgres::SbolObjectService;
+use sbol_db_postgres::{JobRepository, SbolObjectService};
 use sbol_db_sparql::SparqlEngine;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -26,6 +26,7 @@ pub struct AppState {
     pub service: Arc<SbolObjectService>,
     pub sparql: Arc<SparqlEngine>,
     pub metrics: Arc<Metrics>,
+    pub jobs: Arc<JobRepository>,
 }
 
 /// Operational limits applied to every route. The outer
@@ -95,6 +96,9 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         )
         .route("/ontology/term", get(routes::ontology_term))
         .route("/ontology/descendants", get(routes::ontology_descendants))
+        .route("/jobs", get(routes::list_jobs).post(routes::enqueue_job))
+        .route("/jobs/:id", get(routes::get_job))
+        .route("/jobs/:id/cancel", post(routes::cancel_job))
         .route_layer(axum::middleware::from_fn(metrics::track_metrics))
         // Body limit and timeout apply to every route, including the
         // operational endpoints. `DefaultBodyLimit::max` overrides axum's

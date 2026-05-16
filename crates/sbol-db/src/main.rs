@@ -7,15 +7,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sbol_db_core::{
-    Direction, DocumentId, IriString, NeighborhoodQuery, ObjectId, SerializationFormat,
+    Direction, DocumentId, IriString, JobId, NeighborhoodQuery, ObjectId, SerializationFormat,
 };
+use sbol_db_jobs::{default_registry, Worker, WorkerConfig};
 use sbol_db_postgres::{
-    connect_with_retry, run_migrations, ImportInput, ListObjectsFilter, SbolObjectService,
-    SequenceSearchOptions,
+    connect_with_retry, run_migrations, ImportInput, JobRepository, JobStatus, ListJobsFilter,
+    ListObjectsFilter, NewJob, SbolObjectService, SequenceSearchOptions,
 };
 use sbol_db_rdf::hash_bytes;
 use sbol_db_server::{router, AppState, Metrics};
 use sbol_db_sparql::{ResultFormat, SparqlEngine, SparqlOptions};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "sbol-db CLI", long_about = None)]
@@ -160,11 +162,92 @@ enum Command {
         #[command(subcommand)]
         action: OntologyAction,
     },
-    /// Start the HTTP server.
+    /// Start the HTTP server. By default an embedded async-job worker
+    /// runs in the same process, subscribed to every registered queue —
+    /// the single-binary path for one- and two-node deployments. Use
+    /// `--no-worker` on API-only nodes when scaling a dedicated worker
+    /// fleet separately (see `sbol-db worker run`).
     Serve {
         #[arg(long, env = "SBOL_DB_BIND", default_value = "127.0.0.1:8080")]
         bind: SocketAddr,
+        /// Disable the embedded worker. Use on API-only nodes when a
+        /// dedicated worker fleet runs elsewhere.
+        #[arg(long, env = "SBOL_DB_WORKER_DISABLED")]
+        no_worker: bool,
+        /// Maximum concurrent in-flight handler tasks. Defaults to the
+        /// machine's available parallelism.
+        #[arg(long, env = "SBOL_DB_WORKER_CONCURRENCY")]
+        worker_concurrency: Option<usize>,
+        /// Comma-separated queue allowlist. Defaults to all registered
+        /// queues (currently just `default`).
+        #[arg(long, env = "SBOL_DB_WORKER_QUEUES")]
+        worker_queues: Option<String>,
+        /// Stable worker identity for log attribution. Defaults to
+        /// `<hostname>-<pid>-<random>`.
+        #[arg(long, env = "SBOL_DB_WORKER_ID")]
+        worker_id: Option<String>,
     },
+    /// Run a standalone async-job worker (no HTTP listener). Use this to
+    /// scale worker capacity independently of API throughput; otherwise
+    /// just run `sbol-db serve`, which embeds a worker by default.
+    Worker {
+        #[command(subcommand)]
+        action: WorkerAction,
+    },
+    /// Operator surface for the async job queue: enqueue, inspect, cancel.
+    Jobs {
+        #[command(subcommand)]
+        action: JobsAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum WorkerAction {
+    /// Drain jobs forever. Stops on SIGTERM / Ctrl-C; in-flight handlers
+    /// get a grace window to finish before their leases are abandoned.
+    Run {
+        #[arg(long, env = "SBOL_DB_WORKER_CONCURRENCY")]
+        concurrency: Option<usize>,
+        #[arg(long, env = "SBOL_DB_WORKER_QUEUES")]
+        queues: Option<String>,
+        #[arg(long, env = "SBOL_DB_WORKER_ID")]
+        worker_id: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum JobsAction {
+    /// Enqueue a job. `payload` must be a JSON object matching the
+    /// handler's payload schema for `kind`.
+    Enqueue {
+        kind: String,
+        /// JSON payload, inline (`'{"...":...}'`) or `@path/to/file.json`
+        /// to read from disk.
+        payload: String,
+        #[arg(long)]
+        queue: Option<String>,
+        #[arg(long)]
+        priority: Option<i16>,
+        #[arg(long)]
+        max_attempts: Option<i32>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Show one job by id.
+    Status { id: uuid::Uuid },
+    /// List recent jobs, newest first.
+    List {
+        #[arg(long)]
+        kind: Option<String>,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        queue: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
+    /// Cancel a queued or running job.
+    Cancel { id: uuid::Uuid },
 }
 
 #[derive(Subcommand, Debug)]
@@ -430,25 +513,273 @@ async fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&descendants)?);
             }
         },
-        Command::Serve { bind } => {
+        Command::Serve {
+            bind,
+            no_worker,
+            worker_concurrency,
+            worker_queues,
+            worker_id,
+        } => {
             let engine = Arc::new(SparqlEngine::new(Arc::new(service.quads().clone())));
+            let jobs_repo = Arc::new(JobRepository::new(pool.clone()));
+
+            // Build the worker pool first (if enabled) so the /metrics
+            // gauges have it. The worker itself is spawned a few lines
+            // down once everything else is up.
+            let worker_setup = if !no_worker {
+                Some(
+                    build_worker_setup(
+                        &cli.database_url,
+                        worker_concurrency,
+                        worker_queues.as_deref(),
+                        worker_id.as_deref(),
+                    )
+                    .await?,
+                )
+            } else {
+                tracing::info!("embedded worker disabled (--no-worker); HTTP-only node");
+                None
+            };
+
             let metrics = Metrics::install(pool.clone(), env!("CARGO_PKG_VERSION"));
+            let metrics = metrics.with_jobs_repo(jobs_repo.clone());
+            let metrics = if let Some(setup) = worker_setup.as_ref() {
+                metrics.with_worker_pool(setup.pool.clone())
+            } else {
+                metrics
+            };
+
             let state = AppState {
-                service,
+                service: service.clone(),
                 sparql: engine,
                 metrics,
+                jobs: jobs_repo,
             };
             let app = router(state, sbol_db_server::ServerConfig::from_env());
+
+            let cancel = CancellationToken::new();
+            let worker_handle = worker_setup.map(|setup| setup.spawn(cancel.clone()));
+
             let listener = tokio::net::TcpListener::bind(bind).await?;
-            tracing::info!(%bind, "sbol-db serving");
+            tracing::info!(%bind, worker = worker_handle.is_some(), "sbol-db serving");
             println!("sbol-db listening on http://{bind}");
-            axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown_signal())
-                .await?;
+
+            let cancel_for_shutdown = cancel.clone();
+            let serve = axum::serve(listener, app).with_graceful_shutdown(async move {
+                shutdown_signal().await;
+                cancel_for_shutdown.cancel();
+            });
+            serve.await?;
+            tracing::info!("HTTP listener stopped; waiting for embedded worker to drain");
+
+            if let Some(handle) = worker_handle {
+                if let Err(err) = handle.await {
+                    tracing::warn!(error = %err, "embedded worker task panicked");
+                }
+            }
             tracing::info!("sbol-db serve loop exited cleanly");
         }
+        Command::Worker { action } => match action {
+            WorkerAction::Run {
+                concurrency,
+                queues,
+                worker_id,
+            } => {
+                let cancel = CancellationToken::new();
+                let setup = build_worker_setup(
+                    &cli.database_url,
+                    concurrency,
+                    queues.as_deref(),
+                    worker_id.as_deref(),
+                )
+                .await?;
+                let handle = setup.spawn(cancel.clone());
+                tracing::info!("standalone worker started");
+                shutdown_signal().await;
+                cancel.cancel();
+                if let Err(err) = handle.await {
+                    tracing::warn!(error = %err, "worker task panicked");
+                }
+            }
+        },
+        Command::Jobs { action } => match action {
+            JobsAction::Enqueue {
+                kind,
+                payload,
+                queue,
+                priority,
+                max_attempts,
+                idempotency_key,
+            } => {
+                let payload = read_payload(&payload)?;
+                let repo = JobRepository::new(pool.clone());
+                let outcome = repo
+                    .enqueue(NewJob {
+                        kind,
+                        payload,
+                        queue,
+                        priority,
+                        max_attempts,
+                        idempotency_key,
+                        available_at: None,
+                        parent_job_id: None,
+                        correlation_id: None,
+                    })
+                    .await?;
+                let (dedup, job) = match outcome {
+                    sbol_db_postgres::EnqueueOutcome::Inserted(j) => (false, j),
+                    sbol_db_postgres::EnqueueOutcome::AlreadyExists(j) => (true, j),
+                };
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "deduplicated": dedup,
+                        "job": job,
+                    }))?
+                );
+            }
+            JobsAction::Status { id } => {
+                let repo = JobRepository::new(pool.clone());
+                let job = repo
+                    .get(JobId(id))
+                    .await?
+                    .ok_or_else(|| anyhow!("no job with id {id}"))?;
+                println!("{}", serde_json::to_string_pretty(&job)?);
+            }
+            JobsAction::List {
+                kind,
+                status,
+                queue,
+                limit,
+            } => {
+                let status = match status.as_deref() {
+                    None => None,
+                    Some(s) => Some(parse_cli_job_status(s)?),
+                };
+                let repo = JobRepository::new(pool.clone());
+                let jobs = repo
+                    .list(&ListJobsFilter {
+                        kind,
+                        status,
+                        queue,
+                        correlation_id: None,
+                        since: None,
+                        limit,
+                    })
+                    .await?;
+                println!("{}", serde_json::to_string_pretty(&jobs)?);
+            }
+            JobsAction::Cancel { id } => {
+                let repo = JobRepository::new(pool.clone());
+                let cancelled = repo.cancel(JobId(id)).await?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "cancelled": cancelled,
+                    }))?
+                );
+            }
+        },
     }
     Ok(())
+}
+
+fn parse_cli_job_status(s: &str) -> Result<JobStatus> {
+    Ok(match s {
+        "queued" => JobStatus::Queued,
+        "running" => JobStatus::Running,
+        "succeeded" => JobStatus::Succeeded,
+        "failed" => JobStatus::Failed,
+        "cancelled" => JobStatus::Cancelled,
+        "dead" => JobStatus::Dead,
+        other => return Err(anyhow!("unknown job status: {other}")),
+    })
+}
+
+/// Read the `payload` argument: inline JSON or `@path` for file-backed JSON.
+fn read_payload(spec: &str) -> Result<serde_json::Value> {
+    let body = if let Some(path) = spec.strip_prefix('@') {
+        std::fs::read_to_string(path).with_context(|| format!("reading payload from {path}"))?
+    } else {
+        spec.to_owned()
+    };
+    serde_json::from_str(&body).with_context(|| "payload is not valid JSON")
+}
+
+/// Constructed setup for an embedded / standalone worker: the separate
+/// connection pool, the service that wraps it, and the worker config.
+/// Split from spawning so callers (e.g. `serve`) can hand the pool to
+/// `Metrics::with_worker_pool` before the worker starts taking work.
+struct WorkerSetup {
+    pool: sbol_db_postgres::PgPool,
+    service: Arc<SbolObjectService>,
+    config: WorkerConfig,
+}
+
+impl WorkerSetup {
+    fn spawn(self, cancel: CancellationToken) -> tokio::task::JoinHandle<()> {
+        let registry = Arc::new(default_registry());
+        let worker = Worker::new(self.pool, self.service, registry, self.config);
+        tokio::spawn(async move {
+            if let Err(err) = worker.run(cancel).await {
+                tracing::error!(error = %err, "embedded worker exited with error");
+            }
+        })
+    }
+}
+
+/// Build the worker pool, service, and config. The worker shares
+/// Postgres with the API but keeps its own connection pool so
+/// long-running handlers cannot starve inbound HTTP requests.
+async fn build_worker_setup(
+    database_url: &str,
+    concurrency: Option<usize>,
+    queues: Option<&str>,
+    worker_id: Option<&str>,
+) -> Result<WorkerSetup> {
+    let concurrency = concurrency.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+    });
+    let queue_list: Vec<String> = match queues {
+        None => vec![sbol_db_postgres::DEFAULT_QUEUE.to_owned()],
+        Some(s) => s
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect(),
+    };
+
+    let mut worker_pool_cfg = sbol_db_postgres::PoolConfig::from_env();
+    // Sized for the worker's in-flight count plus headroom for lease
+    // renewal / status writes. Operators can override via
+    // `SBOL_DB_WORKER_POOL_MAX`.
+    let override_max = std::env::var("SBOL_DB_WORKER_POOL_MAX")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok());
+    worker_pool_cfg.max_connections = override_max.unwrap_or((concurrency as u32) + 4);
+
+    let pool = sbol_db_postgres::pool::connect_with_config(database_url, &worker_pool_cfg)
+        .await
+        .context("opening worker connection pool")?;
+    let service = Arc::new(SbolObjectService::new(pool.clone()));
+
+    let mut config = WorkerConfig {
+        concurrency,
+        queues: queue_list,
+        ..WorkerConfig::default()
+    };
+    if let Some(id) = worker_id {
+        config.worker_id = id.into();
+    }
+
+    Ok(WorkerSetup {
+        pool,
+        service,
+        config,
+    })
 }
 
 /// Atomic directory import: read every file in the tree, then submit them
@@ -808,11 +1139,14 @@ fn init_logging() {
     }
 }
 
-/// Commands that need a long startup retry loop (`serve`, `migrate up`)
-/// honor `DATABASE_STARTUP_TIMEOUT_SECS`; everything else fails fast on
-/// the first connection error.
+/// Commands that need a long startup retry loop (`serve`, `migrate up`,
+/// standalone `worker run`) honor `DATABASE_STARTUP_TIMEOUT_SECS`;
+/// everything else fails fast on the first connection error.
 async fn open_pool(database_url: &str, command: &Command) -> Result<sbol_db_postgres::PgPool> {
-    let needs_retry = matches!(command, Command::Serve { .. } | Command::Migrate { .. });
+    let needs_retry = matches!(
+        command,
+        Command::Serve { .. } | Command::Migrate { .. } | Command::Worker { .. }
+    );
     let deadline = if needs_retry {
         Duration::from_secs(
             std::env::var("DATABASE_STARTUP_TIMEOUT_SECS")

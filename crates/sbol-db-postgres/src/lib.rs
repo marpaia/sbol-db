@@ -6,10 +6,12 @@ mod service;
 
 pub use pool::{connect, connect_with_retry, run_migrations, PgPool, PoolConfig};
 pub use repo::{
-    BatchSequenceMatch, DocumentRepository, GraphFilter, ListObjectsFilter, NeighborhoodRepository,
+    BatchSequenceMatch, DocumentRepository, EnqueueOutcome, GraphFilter, JobRepository, JobStatus,
+    ListJobsFilter, ListObjectsFilter, NeighborhoodRepository, NewJob, OldestQueuedAge,
     OntologyLoadReport, OntologyRecord, OntologyRepository, OntologyTermRecord, PatternObject,
-    PatternSubject, ProjectionEvent, ProjectionEventRepository, QuadRepository, RecordedValidation,
-    SbolObjectRepository, SequenceMatch, SequenceSearchOptions, SequenceSearchRepository,
-    TypedProjectionCounts, TypedProjectionRepository, ValidationRepository,
+    PatternSubject, ProjectionEvent, ProjectionEventRepository, QuadRepository, QueueDepthRow,
+    RecordedValidation, SbolJob, SbolObjectRepository, SequenceMatch, SequenceSearchOptions,
+    SequenceSearchRepository, TypedProjectionCounts, TypedProjectionRepository,
+    ValidationRepository, DEFAULT_QUEUE,
 };
 pub use service::{ImportInput, SbolObjectService};

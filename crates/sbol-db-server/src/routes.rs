@@ -6,12 +6,13 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
 use sbol_db_core::{
-    Direction, DocumentId, DocumentRecord, ImportReport, IriString, NeighborhoodQuery,
+    Direction, DocumentId, DocumentRecord, ImportReport, IriString, JobId, NeighborhoodQuery,
     NeighborhoodResult, ObjectId, SbolObjectRecord, SerializationFormat,
 };
 use sbol_db_postgres::{
-    BatchSequenceMatch, ImportInput, ListObjectsFilter, OntologyLoadReport, OntologyRecord,
-    OntologyTermRecord, SequenceMatch, SequenceSearchOptions,
+    BatchSequenceMatch, ImportInput, JobStatus, ListJobsFilter, ListObjectsFilter, NewJob,
+    OntologyLoadReport, OntologyRecord, OntologyTermRecord, SbolJob, SequenceMatch,
+    SequenceSearchOptions,
 };
 use sbol_db_sparql::{ResultFormat, SparqlOptions};
 use serde::Deserialize;
@@ -773,4 +774,120 @@ fn resolve_ontology_defaults(
             Ok((url, name))
         }
     }
+}
+
+#[derive(Deserialize)]
+pub struct EnqueueJobBody {
+    pub kind: String,
+    pub payload: serde_json::Value,
+    #[serde(default)]
+    pub queue: Option<String>,
+    #[serde(default)]
+    pub priority: Option<i16>,
+    #[serde(default)]
+    pub max_attempts: Option<i32>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+    #[serde(default)]
+    pub correlation_id: Option<Uuid>,
+}
+
+#[derive(serde::Serialize)]
+pub struct EnqueueJobResponse {
+    pub job: SbolJob,
+    pub deduplicated: bool,
+}
+
+pub async fn enqueue_job(
+    State(state): State<AppState>,
+    Json(body): Json<EnqueueJobBody>,
+) -> Result<Json<EnqueueJobResponse>, ApiError> {
+    let outcome = state
+        .jobs
+        .enqueue(NewJob {
+            kind: body.kind,
+            payload: body.payload,
+            queue: body.queue,
+            priority: body.priority,
+            max_attempts: body.max_attempts,
+            idempotency_key: body.idempotency_key,
+            available_at: None,
+            parent_job_id: None,
+            correlation_id: body.correlation_id,
+        })
+        .await?;
+    let (deduplicated, job) = match outcome {
+        sbol_db_postgres::EnqueueOutcome::Inserted(j) => (false, j),
+        sbol_db_postgres::EnqueueOutcome::AlreadyExists(j) => (true, j),
+    };
+    Ok(Json(EnqueueJobResponse { job, deduplicated }))
+}
+
+pub async fn get_job(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<SbolJob>, ApiError> {
+    let job = state
+        .jobs
+        .get(JobId(id))
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("job {id}")))?;
+    Ok(Json(job))
+}
+
+#[derive(Deserialize)]
+pub struct ListJobsParams {
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub queue: Option<String>,
+    #[serde(default)]
+    pub correlation_id: Option<Uuid>,
+    #[serde(default = "default_jobs_list_limit")]
+    pub limit: u32,
+}
+
+fn default_jobs_list_limit() -> u32 {
+    100
+}
+
+pub async fn list_jobs(
+    State(state): State<AppState>,
+    Query(params): Query<ListJobsParams>,
+) -> Result<Json<Vec<SbolJob>>, ApiError> {
+    let status = match params.status.as_deref() {
+        None => None,
+        Some(s) => Some(parse_job_status(s)?),
+    };
+    let filter = ListJobsFilter {
+        kind: params.kind,
+        status,
+        queue: params.queue,
+        correlation_id: params.correlation_id,
+        since: None,
+        limit: params.limit,
+    };
+    Ok(Json(state.jobs.list(&filter).await?))
+}
+
+pub async fn cancel_job(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let cancelled = state.jobs.cancel(JobId(id)).await?;
+    Ok(Json(json!({ "cancelled": cancelled })))
+}
+
+fn parse_job_status(s: &str) -> Result<JobStatus, ApiError> {
+    Ok(match s {
+        "queued" => JobStatus::Queued,
+        "running" => JobStatus::Running,
+        "succeeded" => JobStatus::Succeeded,
+        "failed" => JobStatus::Failed,
+        "cancelled" => JobStatus::Cancelled,
+        "dead" => JobStatus::Dead,
+        other => return Err(ApiError::BadRequest(format!("unknown job status: {other}"))),
+    })
 }

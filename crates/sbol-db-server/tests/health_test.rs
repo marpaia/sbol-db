@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
-use sbol_db_postgres::{connect, run_migrations, SbolObjectService};
+use sbol_db_postgres::{connect, run_migrations, JobRepository, SbolObjectService};
 use sbol_db_server::{router, AppState, Metrics, ServerConfig};
 use sbol_db_sparql::SparqlEngine;
 use tower::ServiceExt;
@@ -21,11 +21,17 @@ async fn state() -> AppState {
     run_migrations(&pool).await.expect("migrate");
     let service = Arc::new(SbolObjectService::new(pool.clone()));
     let sparql = Arc::new(SparqlEngine::new(Arc::new(service.quads().clone())));
-    let metrics = Metrics::install(pool, env!("CARGO_PKG_VERSION"));
+    let jobs = Arc::new(JobRepository::new(pool.clone()));
+    let metrics = Metrics::install(pool.clone(), env!("CARGO_PKG_VERSION"));
+    // Wire the worker pool + jobs repo so the /metrics test sees the
+    // scrape-time gauges. In a serve setup these come from
+    // `build_worker_setup`; for the test we reuse the same pool.
+    let metrics = metrics.with_worker_pool(pool).with_jobs_repo(jobs.clone());
     AppState {
         service,
         sparql,
         metrics,
+        jobs,
     }
 }
 
@@ -130,7 +136,10 @@ async fn metrics_exposes_prometheus_format() {
         "http_requests_total",
         "http_request_duration_seconds",
         "sbol_db_pool_connections",
+        "sbol_db_worker_pool_connections",
         "sbol_db_build_info",
+        // Scrape-time worker / job gauges.
+        "sbol_db_jobs_status_enum",
     ] {
         assert!(body.contains(needle), "missing {needle} in /metrics output");
     }
