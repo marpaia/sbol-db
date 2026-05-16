@@ -19,11 +19,11 @@ async fn fresh_service() -> SbolObjectService {
     let pool = connect(&database_url).await.expect("connect");
     run_migrations(&pool).await.expect("migrate");
     sqlx::query(
-        "TRUNCATE sbol_documents, sbol_objects, sbol_quads, validation_findings, \
-         validation_runs, object_revisions, rdf_projection_events, sbol_components, \
+        "TRUNCATE sbol_documents, sbol_objects, sbol_quads, sbol_validation_findings, \
+         sbol_validation_runs, sbol_object_revisions, sbol_rdf_projection_events, sbol_components, \
          sbol_sequences, sbol_features, sbol_locations, sbol_constraints, \
-         sbol_interactions, sbol_participations, sequence_kmers, ontologies, \
-         ontology_terms, ontology_term_aliases, ontology_closure \
+         sbol_interactions, sbol_participations, sbol_sequence_kmers, sbol_ontologies, \
+         sbol_ontology_terms, sbol_ontology_term_aliases, sbol_ontology_closure \
          RESTART IDENTITY CASCADE",
     )
     .execute(&pool)

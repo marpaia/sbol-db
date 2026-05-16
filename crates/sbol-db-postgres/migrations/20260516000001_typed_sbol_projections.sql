@@ -3,13 +3,13 @@
 
 CREATE TABLE sbol_components (
     object_id        uuid PRIMARY KEY REFERENCES sbol_objects(id) ON DELETE CASCADE,
-    iri              iri NOT NULL UNIQUE,
-    types            ontology_term[] NOT NULL DEFAULT '{}',
-    roles            ontology_term[] NOT NULL DEFAULT '{}',
-    sequence_iris    iri[] NOT NULL DEFAULT '{}',
-    feature_iris     iri[] NOT NULL DEFAULT '{}',
-    interaction_iris iri[] NOT NULL DEFAULT '{}',
-    model_iris       iri[] NOT NULL DEFAULT '{}',
+    iri              sbol_iri NOT NULL UNIQUE,
+    types            sbol_ontology_term[] NOT NULL DEFAULT '{}',
+    roles            sbol_ontology_term[] NOT NULL DEFAULT '{}',
+    sequence_iris    sbol_iri[] NOT NULL DEFAULT '{}',
+    feature_iris     sbol_iri[] NOT NULL DEFAULT '{}',
+    interaction_iris sbol_iri[] NOT NULL DEFAULT '{}',
+    model_iris       sbol_iri[] NOT NULL DEFAULT '{}',
     organism         text,
     chassis          text,
     design_domain    text,
@@ -38,8 +38,8 @@ CREATE INDEX sbol_components_modality_idx
 
 CREATE TABLE sbol_sequences (
     object_id    uuid PRIMARY KEY REFERENCES sbol_objects(id) ON DELETE CASCADE,
-    iri          iri NOT NULL UNIQUE,
-    encoding_iri iri,
+    iri          sbol_iri NOT NULL UNIQUE,
+    encoding_iri sbol_iri,
     elements     text,
     length_bp    integer GENERATED ALWAYS AS (char_length(elements)) STORED,
     alphabet     text CHECK (alphabet IN ('DNA', 'RNA', 'PROTEIN', 'SMILES', 'OTHER')),
@@ -59,12 +59,12 @@ CREATE INDEX sbol_sequences_alphabet_idx
 
 CREATE TABLE sbol_features (
     object_id            uuid PRIMARY KEY REFERENCES sbol_objects(id) ON DELETE CASCADE,
-    iri                  iri NOT NULL UNIQUE,
-    parent_component_iri iri,
+    iri                  sbol_iri NOT NULL UNIQUE,
+    parent_component_iri sbol_iri,
     feature_kind         text NOT NULL,
-    instance_of_iri      iri,
-    roles                ontology_term[] NOT NULL DEFAULT '{}',
-    orientation_iri      iri,
+    instance_of_iri      sbol_iri,
+    roles                sbol_ontology_term[] NOT NULL DEFAULT '{}',
+    orientation_iri      sbol_iri,
     created_at           timestamptz NOT NULL DEFAULT now()
 );
 
@@ -82,14 +82,14 @@ CREATE INDEX sbol_features_kind_idx
 
 CREATE TABLE sbol_locations (
     object_id       uuid PRIMARY KEY REFERENCES sbol_objects(id) ON DELETE CASCADE,
-    iri             iri NOT NULL UNIQUE,
-    feature_iri     iri,
-    sequence_iri    iri,
+    iri             sbol_iri NOT NULL UNIQUE,
+    feature_iri     sbol_iri,
+    sequence_iri    sbol_iri,
     location_kind   text NOT NULL,
     start_pos       integer,
     end_pos         integer,
     cut_pos         integer,
-    orientation_iri iri,
+    orientation_iri sbol_iri,
     data            jsonb NOT NULL DEFAULT '{}'::jsonb,
 
     CHECK (
@@ -106,11 +106,11 @@ CREATE INDEX sbol_locations_sequence_range_idx
 
 CREATE TABLE sbol_constraints (
     object_id            uuid PRIMARY KEY REFERENCES sbol_objects(id) ON DELETE CASCADE,
-    iri                  iri NOT NULL UNIQUE,
-    parent_component_iri iri,
-    restriction_iri      iri,
-    subject_iri          iri,
-    object_iri           iri,
+    iri                  sbol_iri NOT NULL UNIQUE,
+    parent_component_iri sbol_iri,
+    restriction_iri      sbol_iri,
+    subject_iri          sbol_iri,
+    object_iri           sbol_iri,
     created_at           timestamptz NOT NULL DEFAULT now()
 );
 
@@ -125,9 +125,9 @@ CREATE INDEX sbol_constraints_restriction_idx
 
 CREATE TABLE sbol_interactions (
     object_id            uuid PRIMARY KEY REFERENCES sbol_objects(id) ON DELETE CASCADE,
-    iri                  iri NOT NULL UNIQUE,
-    parent_component_iri iri,
-    interaction_types    ontology_term[] NOT NULL DEFAULT '{}',
+    iri                  sbol_iri NOT NULL UNIQUE,
+    parent_component_iri sbol_iri,
+    interaction_types    sbol_ontology_term[] NOT NULL DEFAULT '{}',
     created_at           timestamptz NOT NULL DEFAULT now()
 );
 
@@ -139,10 +139,10 @@ CREATE INDEX sbol_interactions_types_gin
 
 CREATE TABLE sbol_participations (
     object_id       uuid PRIMARY KEY REFERENCES sbol_objects(id) ON DELETE CASCADE,
-    iri             iri NOT NULL UNIQUE,
-    interaction_iri iri,
-    participant_iri iri,
-    roles           ontology_term[] NOT NULL DEFAULT '{}',
+    iri             sbol_iri NOT NULL UNIQUE,
+    interaction_iri sbol_iri,
+    participant_iri sbol_iri,
+    roles           sbol_ontology_term[] NOT NULL DEFAULT '{}',
     created_at      timestamptz NOT NULL DEFAULT now()
 );
 

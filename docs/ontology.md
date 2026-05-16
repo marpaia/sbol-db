@@ -11,7 +11,7 @@ match every SO subclass of promoter, not just the literal IRI.
 precomputes the transitive `is_a` closure, and exposes both raw term
 lookup and closure queries. Role expansion against typed projections
 (`sbol_components.roles`, `sbol_features.roles`, ...) is a single join
-against `ontology_closure`.
+against `sbol_ontology_closure`.
 
 ## CLI
 
@@ -37,7 +37,7 @@ sbol-db ontology descendants http://identifiers.org/so/SO:0000167
 The `descendants` subcommand accepts the canonical OBO Foundry IRI,
 the identifiers.org form (common in SBOL documents), or a bare CURIE
 (`SO:0000167`). All three resolve to the same canonical term through
-`ontology_term_aliases`.
+`sbol_ontology_term_aliases`.
 
 ## HTTP
 
@@ -62,7 +62,7 @@ For each term in the OBO source:
 - name, optional definition, `is_obsolete` flag, synonym list.
 
 For each `is_a` relation in-ontology, an entry is materialised in
-`ontology_closure` along with the self-pair `(X, X, 0)`. Cross-ontology
+`sbol_ontology_closure` along with the self-pair `(X, X, 0)`. Cross-ontology
 parents are ignored -- closure stays within a single ontology by
 design, so the descendant set of an SO term never silently includes
 RO or BFO subclasses.
@@ -75,18 +75,18 @@ Two aliases are generated per term:
   the current term).
 
 Both alias forms resolve to the canonical IRI via
-`ontology_term_aliases`.
+`sbol_ontology_term_aliases`.
 
 ## Architecture
 
 Three tables drive expansion:
 
-- `ontology_terms (iri, prefix, curie, name, definition, ...)` -- one
-  row per canonical term, keyed by IRI.
-- `ontology_term_aliases (alias_iri, canonical_iri)` -- the
+- `sbol_ontology_terms (iri, prefix, curie, name, definition, ...)` --
+  one row per canonical term, keyed by IRI.
+- `sbol_ontology_term_aliases (alias_iri, canonical_iri)` -- the
   redirection layer that lets a query for any historical IRI form
   hit the same term.
-- `ontology_closure (ancestor_iri, descendant_iri, depth)` -- the
+- `sbol_ontology_closure (ancestor_iri, descendant_iri, depth)` -- the
   precomputed transitive closure including self-pairs.
 
 The closure is computed in Rust at load time via BFS upward from each
@@ -94,7 +94,7 @@ term through its `is_a` parents. The result is bulk-inserted via
 `UNNEST` in a single round trip. For SO (~3,600 terms) the closure has
 roughly 30 k pairs; for SBO (~700 terms) closer to 4 k.
 
-A reload is a transactional replacement: `DELETE FROM ontologies
+A reload is a transactional replacement: `DELETE FROM sbol_ontologies
 WHERE prefix = $1` cascades through every dependent table, the new
 terms and closure go in, and the entire swap commits atomically. The
 old prefix never appears alongside the new one.

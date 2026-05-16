@@ -74,7 +74,7 @@ Reverse-complement matching is on by default. Pass `--forward-only`
 
 ## Architecture
 
-`sequence_kmers` is the seed index: one row per (sequence,
+`sbol_sequence_kmers` is the seed index: one row per (sequence,
 position, strand) for every 8-mer in every indexed sequence. The
 stored `kmer` is the *canonical* form -- `min(forward, reverse_complement)`
 of the 2-bit packed nucleotide -- and `strand` records which arm of
@@ -87,7 +87,7 @@ At query time the engine:
 2. Computes the canonical k-mer of the first `K` bases of the pattern
    and of its reverse complement. (Both reduce to the same canonical
    if the pattern is its own reverse complement.)
-3. Resolves candidate sequence ids via `sequence_kmers.kmer = ANY(seeds)`.
+3. Resolves candidate sequence ids via `sbol_sequence_kmers.kmer = ANY(seeds)`.
 4. Fetches the candidates' `elements` column and verifies each
    candidate by direct substring match against the forward pattern and,
    unless `forward_only`, against the reverse complement.
@@ -101,10 +101,10 @@ search is dominated by the restriction-site use case (6 bp).
 ## Performance
 
 Indexing cost: roughly `O(length)` per sequence. A 10 kb part adds
-~10 k rows to `sequence_kmers`. Bulk-insert via `UNNEST` keeps it a
+~10 k rows to `sbol_sequence_kmers`. Bulk-insert via `UNNEST` keeps it a
 single round trip per sequence.
 
-Query cost: index probe on `sequence_kmers (kmer)` selects candidate
+Query cost: index probe on `sbol_sequence_kmers (kmer)` selects candidate
 sequences quickly; the per-candidate verification reads `elements`
 and runs Rust's `str::match_indices`, which is linear in the elements
 length per candidate. For typical SBOL designs (hundreds of

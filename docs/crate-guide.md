@@ -82,7 +82,7 @@ Three Postgres tables carry the bulk of the data:
   predicate / object positions, literal datatype + language, and a
   back-reference to the originating document. Blank nodes live in
   companion `subject_blank` / `object_blank` text columns because
-  the `iri` domain rejects `_:b0`-shaped values; see
+  the `sbol_iri` domain rejects `_:b0`-shaped values; see
   [`schema.md`](schema.md) for the full schema.
 
 Typed projection tables (`sbol_components`, `sbol_sequences`,
@@ -94,9 +94,10 @@ etc. These projections are derived during import from the
 `sbol::Document` typed-objects iterator and never written by hand.
 
 Validation findings and per-object revisions live in
-`validation_runs` / `validation_findings` / `object_revisions`.
-Projection events go to `rdf_projection_events` (currently write-only
-— reserved for a future async projection worker).
+`sbol_validation_runs` / `sbol_validation_findings` /
+`sbol_object_revisions`. Projection events go to
+`sbol_rdf_projection_events` (currently write-only — reserved for a
+future async projection worker).
 
 ## Document lifecycle
 
@@ -113,8 +114,8 @@ even if validation will fail.
 ### Validate
 
 The import service calls `Document::validate()` and writes the
-report — passed or failed — into `validation_runs` and
-`validation_findings`. A failed validation does not abort the
+report — passed or failed — into `sbol_validation_runs` and
+`sbol_validation_findings`. A failed validation does not abort the
 import; the document is still persisted so the caller can inspect
 the findings. To gate hard on validation failures, surface
 `validation_status` from the `ImportReport` and reject the import on
@@ -130,7 +131,7 @@ Postgres transaction:
    - Build a `SbolObjectRecord` (IRI, class, display ID, name,
      types, roles, the per-object JSON-LD slice, content hash).
    - Upsert into `sbol_objects`.
-   - Write a row to `object_revisions`.
+   - Write a row to `sbol_object_revisions`.
 3. Project the document to quads (`document_to_quads`), tag every
    quad with `graph:document:{document_id}`, and replace the
    document's existing named graph atomically.
@@ -260,9 +261,9 @@ triples, exploratory queries from a human-in-the-loop), this is a
 deliberate choice. See [`sparql.md`](sparql.md) for the perf
 characteristics.
 
-### Blank nodes alongside the `iri` domain
+### Blank nodes alongside the `sbol_iri` domain
 
-The `iri` Postgres domain enforces `^[a-zA-Z][a-zA-Z0-9+.-]*:.+`,
+The `sbol_iri` Postgres domain enforces `^[a-zA-Z][a-zA-Z0-9+.-]*:.+`,
 which rejects `_:b0`. Real SBOL documents (especially after a
 parser pass) routinely carry blank-node resources in subject and
 object positions. `sbol_quads` resolves this with companion
@@ -325,7 +326,7 @@ gate; it's clean on `main`.
 
 ## What's intentionally not here
 
-- **Background workers.** The `rdf_projection_events` table is
+- **Background workers.** The `sbol_rdf_projection_events` table is
   written but no consumer processes it. A future async projection
   worker (Oxigraph sidecar, materialized view refresh, search index)
   would tail this log, but the v1 query surface is fully synchronous.

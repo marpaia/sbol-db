@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::iri::IriString;
 
-/// Validation severity recorded in `validation_findings.severity`.
+/// Validation severity recorded in `sbol_validation_findings.severity`.
 ///
 /// The Postgres CHECK constraint allows info/warning/error/fatal, but the
 /// upstream `sbol` crate currently emits only `Warning` and `Error`. We

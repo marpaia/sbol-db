@@ -5,7 +5,7 @@
 //! `Y`, ...) interrupt the k-mer stream — the iterator skips any window
 //! containing one rather than emitting partial / degenerate values.
 //!
-//! Storage shape (sequence_kmers): kmer = canonical_kmer(forward, rc),
+//! Storage shape (sbol_sequence_kmers): kmer = canonical_kmer(forward, rc),
 //! strand = '+' if forward was lex-smaller (or equal), '-' otherwise. This
 //! halves the index footprint and turns reverse-complement search into a
 //! single lookup per seed position.

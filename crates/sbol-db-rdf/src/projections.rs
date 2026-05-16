@@ -17,7 +17,7 @@ const EDAM_SMILES: &str = "https://identifiers.org/edam:format_1196";
 
 /// Walk every typed object in `doc` and build per-table projection records.
 /// Objects whose identity is a blank node are skipped — they cannot satisfy
-/// the `iri` Postgres domain.
+/// the `sbol_iri` Postgres domain.
 pub fn document_to_projections(doc: &Document) -> TypedProjections {
     let mut out = TypedProjections::default();
 

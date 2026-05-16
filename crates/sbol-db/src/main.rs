@@ -333,7 +333,7 @@ async fn main() -> Result<()> {
         Command::Validate { document_id } => {
             println!(
                 "Phase 1 placeholder: revalidation requires re-parseable raw payload; \
-                 inspect the validation_runs / validation_findings tables directly for now."
+                 inspect the sbol_validation_runs / sbol_validation_findings tables directly for now."
             );
             let _ = document_id;
         }

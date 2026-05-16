@@ -1,6 +1,6 @@
 //! Nucleotide substring + reverse-complement search over `sbol_sequences`.
 //!
-//! The seed index is `sequence_kmers`: one row per observed canonical
+//! The seed index is `sbol_sequence_kmers`: one row per observed canonical
 //! 8-mer position. At query time we pick the first k-mer of the query and
 //! of its reverse complement, ask Postgres for the candidate sequence ids,
 //! then verify each candidate by direct substring match on
@@ -176,7 +176,7 @@ impl SequenceSearchRepository {
             WHERE s.elements IS NOT NULL
               AND s.alphabet IN ('DNA', 'RNA')
               AND s.object_id IN (
-                SELECT DISTINCT sequence_object_id FROM sequence_kmers
+                SELECT DISTINCT sequence_object_id FROM sbol_sequence_kmers
                 WHERE kmer = ANY($1::int[])
               )
             "#,
@@ -246,7 +246,7 @@ pub(crate) async fn reindex_kmers(
     elements: Option<&str>,
     alphabet: Option<&str>,
 ) -> Result<usize, DomainError> {
-    sqlx::query("DELETE FROM sequence_kmers WHERE sequence_object_id = $1")
+    sqlx::query("DELETE FROM sbol_sequence_kmers WHERE sequence_object_id = $1")
         .bind(object_id)
         .execute(&mut *conn)
         .await
@@ -279,7 +279,7 @@ pub(crate) async fn reindex_kmers(
 
     sqlx::query(
         r#"
-        INSERT INTO sequence_kmers (sequence_object_id, kmer, position, strand)
+        INSERT INTO sbol_sequence_kmers (sequence_object_id, kmer, position, strand)
         SELECT $1, k, p, s
         FROM UNNEST($2::int[], $3::int[], $4::text[]) AS u(k, p, s)
         "#,

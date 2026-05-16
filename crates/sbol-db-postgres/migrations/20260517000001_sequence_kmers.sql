@@ -14,12 +14,12 @@
 -- k = 8 (16-bit packed); ambiguous IUPAC bases (N, R, Y, ...) skip the
 -- position rather than emitting partial k-mers.
 
-CREATE TABLE sequence_kmers (
+CREATE TABLE sbol_sequence_kmers (
     sequence_object_id uuid    NOT NULL REFERENCES sbol_sequences(object_id) ON DELETE CASCADE,
     kmer               integer NOT NULL,
     position           integer NOT NULL,
     strand             char(1) NOT NULL CHECK (strand IN ('+', '-'))
 );
 
-CREATE INDEX sequence_kmers_kmer_idx ON sequence_kmers (kmer);
-CREATE INDEX sequence_kmers_seq_idx  ON sequence_kmers (sequence_object_id);
+CREATE INDEX sbol_sequence_kmers_kmer_idx ON sbol_sequence_kmers (kmer);
+CREATE INDEX sbol_sequence_kmers_seq_idx  ON sbol_sequence_kmers (sequence_object_id);

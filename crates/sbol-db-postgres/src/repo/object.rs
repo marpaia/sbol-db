@@ -39,8 +39,8 @@ impl SbolObjectRepository {
                 INSERT INTO sbol_objects (
                     iri, sbol_class, display_id, name, description,
                     document_id, types, roles, data, content_hash, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7::text[]::ontology_term[],
-                          $8::text[]::ontology_term[], $9, $10, now())
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7::text[]::sbol_ontology_term[],
+                          $8::text[]::sbol_ontology_term[], $9, $10, now())
                 ON CONFLICT (iri) DO UPDATE SET
                     sbol_class = EXCLUDED.sbol_class,
                     display_id = EXCLUDED.display_id,
@@ -55,14 +55,14 @@ impl SbolObjectRepository {
                 RETURNING id
             ),
             next_revision AS (
-                INSERT INTO object_revisions (
+                INSERT INTO sbol_object_revisions (
                     object_id, iri, revision_number, data, content_hash
                 )
                 SELECT
                     (SELECT id FROM upsert),
                     $1,
                     COALESCE(
-                        (SELECT MAX(revision_number) + 1 FROM object_revisions
+                        (SELECT MAX(revision_number) + 1 FROM sbol_object_revisions
                             WHERE object_id = (SELECT id FROM upsert)),
                         1
                     ),

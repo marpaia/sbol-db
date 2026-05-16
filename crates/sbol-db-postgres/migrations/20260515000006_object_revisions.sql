@@ -1,7 +1,7 @@
-CREATE TABLE object_revisions (
+CREATE TABLE sbol_object_revisions (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     object_id       uuid NOT NULL REFERENCES sbol_objects(id) ON DELETE CASCADE,
-    iri             iri NOT NULL,
+    iri             sbol_iri NOT NULL,
     revision_number bigint NOT NULL,
     data            jsonb NOT NULL,
     triples_snapshot jsonb,
@@ -13,5 +13,5 @@ CREATE TABLE object_revisions (
     UNIQUE (object_id, revision_number)
 );
 
-CREATE INDEX object_revisions_iri_idx
-    ON object_revisions (iri);
+CREATE INDEX sbol_object_revisions_iri_idx
+    ON sbol_object_revisions (iri);

@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// A string that we've checked looks IRI-shaped. Matches the Postgres `iri`
-/// domain at the database boundary; deeper RFC 3987 conformance is delegated
+/// A string that we've checked looks IRI-shaped. Matches the Postgres
+/// `sbol_iri` domain at the database boundary; deeper RFC 3987 conformance is delegated
 /// to the upstream `sbol-rdf` parser.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]

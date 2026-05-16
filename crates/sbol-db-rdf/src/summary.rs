@@ -18,7 +18,7 @@ pub struct ObjectQuads {
 /// Build one `ObjectQuads` per top-level + typed SBOL object in the document.
 ///
 /// Objects whose identity is a blank node are skipped because the schema's
-/// `iri` domain rejects `_:b...` — their triples still land in `sbol_quads`
+/// `sbol_iri` domain rejects `_:b...` — their triples still land in `sbol_quads`
 /// via [`document_to_quads`](crate::document_to_quads).
 pub fn document_to_summaries(doc: &Document) -> Vec<ObjectQuads> {
     let triples_by_subject = group_triples_by_subject(doc);

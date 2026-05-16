@@ -30,7 +30,7 @@ impl ProjectionEventRepository {
         use sqlx::Row;
         let row = sqlx::query(
             r#"
-            INSERT INTO rdf_projection_events (event_type, subject_iri, graph_iri, payload)
+            INSERT INTO sbol_rdf_projection_events (event_type, subject_iri, graph_iri, payload)
             VALUES ($1, $2, $3, $4)
             RETURNING id
             "#,

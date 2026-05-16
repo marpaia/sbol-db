@@ -203,7 +203,7 @@ If queries become the bottleneck, the supported escape hatches are
    1 000 000).
 3. BGP fusion in `PostgresDataset` (would override the trait's
    default per-pattern path).
-4. Oxigraph sidecar built from `rdf_projection_events`.
+4. Oxigraph sidecar built from `sbol_rdf_projection_events`.
 
 ## What's intentionally not here
 

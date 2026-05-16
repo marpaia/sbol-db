@@ -39,7 +39,7 @@ impl ValidationRepository {
         let status = classify(report);
         let run_row = sqlx::query(
             r#"
-            INSERT INTO validation_runs (
+            INSERT INTO sbol_validation_runs (
                 target_iri, target_document_id, validator_name, validator_version,
                 ruleset, status, finished_at, summary
             ) VALUES ($1, $2, $3, $4, $5, $6, now(), $7)
@@ -71,7 +71,7 @@ impl ValidationRepository {
             let subject_iri = issue.subject.as_iri().map(|i| i.as_str().to_owned());
             sqlx::query(
                 r#"
-                INSERT INTO validation_findings (
+                INSERT INTO sbol_validation_findings (
                     validation_run_id, severity, rule_id, message, subject_iri, path
                 ) VALUES ($1, $2, $3, $4, $5, $6)
                 "#,

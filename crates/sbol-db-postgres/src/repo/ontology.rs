@@ -1,11 +1,11 @@
 //! Ontology storage + transitive-closure builder, plus a small HTTP loader
 //! that fetches an OBO file from a canonical URL (OBO Foundry / EBI) and
-//! materialises it into `ontologies` / `ontology_terms` /
-//! `ontology_term_aliases` / `ontology_closure`.
+//! materialises it into `sbol_ontologies` / `sbol_ontology_terms` /
+//! `sbol_ontology_term_aliases` / `sbol_ontology_closure`.
 //!
 //! The closure is computed in Rust at load time -- one BFS per term up
 //! through `is_a` parents -- so role-expansion queries reduce to one
-//! indexed lookup against `ontology_closure.ancestor_iri`.
+//! indexed lookup against `sbol_ontology_closure.ancestor_iri`.
 //!
 //! IRI canonicalisation: every term gets its OBO Foundry PURL
 //! (`http://purl.obolibrary.org/obo/{PREFIX}_{NUMBER}`) as its canonical
@@ -65,7 +65,7 @@ impl OntologyRepository {
     /// Fetch an OBO file from `source_url`, parse it, and persist the
     /// ontology + terms + closure in a single transaction. `prefix` (e.g.
     /// "SO", "SBO") drives IRI generation and is the row key in
-    /// `ontologies`.
+    /// `sbol_ontologies`.
     pub async fn load_from_url(
         &self,
         prefix: &str,
@@ -171,7 +171,7 @@ impl OntologyRepository {
         let mut tx = self.pool.begin().await.map_err(db_err)?;
 
         // Replace any previous ontology of this prefix.
-        sqlx::query("DELETE FROM ontologies WHERE prefix = $1")
+        sqlx::query("DELETE FROM sbol_ontologies WHERE prefix = $1")
             .bind(&prefix_upper)
             .execute(&mut *tx)
             .await
@@ -179,7 +179,7 @@ impl OntologyRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO ontologies (prefix, name, source_url, version, term_count, imported_at)
+            INSERT INTO sbol_ontologies (prefix, name, source_url, version, term_count, imported_at)
             VALUES ($1, $2, $3, $4, $5, now())
             "#,
         )
@@ -199,7 +199,7 @@ impl OntologyRepository {
         for t in &terms {
             sqlx::query(
                 r#"
-                INSERT INTO ontology_terms
+                INSERT INTO sbol_ontology_terms
                     (iri, prefix, curie, name, definition, is_obsolete, synonyms)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
                 "#,
@@ -246,7 +246,7 @@ impl OntologyRepository {
         if !alias_iri.is_empty() {
             sqlx::query(
                 r#"
-                INSERT INTO ontology_term_aliases (alias_iri, canonical_iri)
+                INSERT INTO sbol_ontology_term_aliases (alias_iri, canonical_iri)
                 SELECT alias, canonical
                 FROM UNNEST($1::text[], $2::text[]) AS u(alias, canonical)
                 ON CONFLICT (alias_iri) DO UPDATE
@@ -272,7 +272,7 @@ impl OntologyRepository {
         if !anc.is_empty() {
             sqlx::query(
                 r#"
-                INSERT INTO ontology_closure (ancestor_iri, descendant_iri, depth)
+                INSERT INTO sbol_ontology_closure (ancestor_iri, descendant_iri, depth)
                 SELECT ancestor, descendant, depth
                 FROM UNNEST($1::text[], $2::text[], $3::int2[])
                   AS u(ancestor, descendant, depth)
@@ -302,7 +302,7 @@ impl OntologyRepository {
         let rows = sqlx::query(
             r#"
             SELECT prefix, name, source_url, version, term_count, imported_at
-            FROM ontologies
+            FROM sbol_ontologies
             ORDER BY prefix
             "#,
         )
@@ -328,10 +328,10 @@ impl OntologyRepository {
         let row = sqlx::query(
             r#"
             SELECT iri::text AS canonical
-            FROM ontology_terms WHERE iri = $1
+            FROM sbol_ontology_terms WHERE iri = $1
             UNION ALL
             SELECT canonical_iri::text AS canonical
-            FROM ontology_term_aliases WHERE alias_iri = $1
+            FROM sbol_ontology_term_aliases WHERE alias_iri = $1
             LIMIT 1
             "#,
         )
@@ -355,7 +355,7 @@ impl OntologyRepository {
         let rows = sqlx::query(
             r#"
             SELECT descendant_iri::text AS iri, depth
-            FROM ontology_closure
+            FROM sbol_ontology_closure
             WHERE ancestor_iri = $1
             ORDER BY depth ASC, descendant_iri ASC
             "#,
@@ -383,7 +383,7 @@ impl OntologyRepository {
             r#"
             SELECT iri::text AS iri, prefix, curie, name, definition,
                    is_obsolete, synonyms
-            FROM ontology_terms WHERE iri = $1
+            FROM sbol_ontology_terms WHERE iri = $1
             "#,
         )
         .bind(&canonical)

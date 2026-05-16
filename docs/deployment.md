@@ -407,7 +407,7 @@ The dominant tables grow with the imported design corpus:
 
 - `sbol_quads` — one row per RDF triple, ~10× the typed-object count.
   Plan for tens of millions of rows on a serious deployment.
-- `sequence_kmers` — one row per 8-mer position per nucleotide
+- `sbol_sequence_kmers` — one row per 8-mer position per nucleotide
   Sequence. Long sequences blow up here; e.g. a 10 kb plasmid yields
   ~10 k rows.
 - `sbol_objects.data` — JSON-LD slice per object; bounded by document
@@ -529,6 +529,6 @@ Before declaring a deployment production-ready:
   isolation, run separate deployments.
 - **Distributed tracing / OpenTelemetry.** JSON logs + request IDs (a
   near-term addition) cover most needs.
-- **Background workers.** The `rdf_projection_events` table exists for
+- **Background workers.** The `sbol_rdf_projection_events` table exists for
   a future async consumer; today, all projections are written
   synchronously inside the import transaction.

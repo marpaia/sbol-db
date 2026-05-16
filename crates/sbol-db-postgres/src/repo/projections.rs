@@ -89,12 +89,12 @@ async fn upsert_component(
             interaction_iris, model_iris
         )
         SELECT id, $1,
-               $2::text[]::ontology_term[],
-               $3::text[]::ontology_term[],
-               $4::text[]::iri[],
-               $5::text[]::iri[],
-               $6::text[]::iri[],
-               $7::text[]::iri[]
+               $2::text[]::sbol_ontology_term[],
+               $3::text[]::sbol_ontology_term[],
+               $4::text[]::sbol_iri[],
+               $5::text[]::sbol_iri[],
+               $6::text[]::sbol_iri[],
+               $7::text[]::sbol_iri[]
         FROM sbol_objects WHERE iri = $1
         ON CONFLICT (object_id) DO UPDATE SET
             types = EXCLUDED.types,
@@ -171,7 +171,7 @@ async fn upsert_feature(
             object_id, iri, parent_component_iri, feature_kind,
             instance_of_iri, roles, orientation_iri
         )
-        SELECT id, $1, $2, $3, $4, $5::text[]::ontology_term[], $6
+        SELECT id, $1, $2, $3, $4, $5::text[]::sbol_ontology_term[], $6
         FROM sbol_objects WHERE iri = $1
         ON CONFLICT (object_id) DO UPDATE SET
             parent_component_iri = EXCLUDED.parent_component_iri,
@@ -270,7 +270,7 @@ async fn upsert_interaction(
         INSERT INTO sbol_interactions (
             object_id, iri, parent_component_iri, interaction_types
         )
-        SELECT id, $1, $2, $3::text[]::ontology_term[]
+        SELECT id, $1, $2, $3::text[]::sbol_ontology_term[]
         FROM sbol_objects WHERE iri = $1
         ON CONFLICT (object_id) DO UPDATE SET
             parent_component_iri = EXCLUDED.parent_component_iri,
@@ -295,7 +295,7 @@ async fn upsert_participation(
         INSERT INTO sbol_participations (
             object_id, iri, interaction_iri, participant_iri, roles
         )
-        SELECT id, $1, $2, $3, $4::text[]::ontology_term[]
+        SELECT id, $1, $2, $3, $4::text[]::sbol_ontology_term[]
         FROM sbol_objects WHERE iri = $1
         ON CONFLICT (object_id) DO UPDATE SET
             interaction_iri = EXCLUDED.interaction_iri,

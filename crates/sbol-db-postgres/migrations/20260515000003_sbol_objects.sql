@@ -1,9 +1,9 @@
 CREATE TABLE sbol_objects (
     id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    iri                 iri NOT NULL UNIQUE,
+    iri                 sbol_iri NOT NULL UNIQUE,
     sbol_class          text NOT NULL,
 
-    persistent_identity iri,
+    persistent_identity sbol_iri,
     display_id          text,
     version             text,
 
@@ -12,8 +12,8 @@ CREATE TABLE sbol_objects (
 
     document_id         uuid REFERENCES sbol_documents(id) ON DELETE SET NULL,
 
-    types               ontology_term[] NOT NULL DEFAULT '{}',
-    roles               ontology_term[] NOT NULL DEFAULT '{}',
+    types               sbol_ontology_term[] NOT NULL DEFAULT '{}',
+    roles               sbol_ontology_term[] NOT NULL DEFAULT '{}',
 
     data                jsonb NOT NULL DEFAULT '{}'::jsonb,
     content_hash        bytea,

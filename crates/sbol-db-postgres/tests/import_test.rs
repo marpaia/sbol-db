@@ -23,8 +23,8 @@ async fn fresh_service() -> SbolObjectService {
     run_migrations(&pool).await.expect("migrate");
     // Reset between tests so they're isolated.
     sqlx::query(
-        "TRUNCATE sbol_documents, sbol_objects, sbol_quads, validation_findings, \
-         validation_runs, object_revisions, rdf_projection_events RESTART IDENTITY CASCADE",
+        "TRUNCATE sbol_documents, sbol_objects, sbol_quads, sbol_validation_findings, \
+         sbol_validation_runs, sbol_object_revisions, sbol_rdf_projection_events RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
     .await
@@ -97,7 +97,7 @@ async fn reimport_is_idempotent_and_bumps_revision() {
     // The object's revision_number should be >= 2 because the upsert created
     // a fresh revision on each import.
     let max_rev: i64 =
-        sqlx::query_scalar("SELECT MAX(revision_number) FROM object_revisions WHERE iri = $1")
+        sqlx::query_scalar("SELECT MAX(revision_number) FROM sbol_object_revisions WHERE iri = $1")
             .bind("https://example.org/sbol-db/test/promoter_j23119")
             .fetch_one(svc.pool())
             .await
@@ -122,16 +122,17 @@ async fn validation_findings_are_persisted() {
         .await
         .expect("import");
 
-    let runs: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM validation_runs WHERE target_document_id = $1")
-            .bind(report.document_id.as_uuid())
-            .fetch_one(svc.pool())
-            .await
-            .expect("count");
+    let runs: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sbol_validation_runs WHERE target_document_id = $1",
+    )
+    .bind(report.document_id.as_uuid())
+    .fetch_one(svc.pool())
+    .await
+    .expect("count");
     assert_eq!(runs, 1);
 
     let summary_row =
-        sqlx::query("SELECT summary FROM validation_runs WHERE target_document_id = $1")
+        sqlx::query("SELECT summary FROM sbol_validation_runs WHERE target_document_id = $1")
             .bind(report.document_id.as_uuid())
             .fetch_one(svc.pool())
             .await
