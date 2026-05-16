@@ -1,0 +1,9 @@
+target/
+**/*.rs.bk
+.env
+.sqlx
+.git
+.github
+Dockerfile
+.dockerignore
+docker-compose.yaml

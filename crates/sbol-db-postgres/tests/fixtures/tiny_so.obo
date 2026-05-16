@@ -1,0 +1,44 @@
+format-version: 1.4
+data-version: tiny-2026-05-15
+default-namespace: sequence
+
+[Term]
+id: SO:0000110
+name: sequence_feature
+def: "Any extent of continuous biological sequence." [SO:ke]
+
+[Term]
+id: SO:0000001
+name: region
+def: "A sequence_feature with an extent greater than zero." [SO:ke]
+is_a: SO:0000110 ! sequence_feature
+
+[Term]
+id: SO:0001055
+name: transcriptional_cis_regulatory_region
+def: "A regulatory_region." [SO:regcreative]
+is_a: SO:0000001 ! region
+
+[Term]
+id: SO:0000167
+name: promoter
+def: "A regulatory_region composed of the TSS." [SO:regcreative]
+is_a: SO:0001055 ! transcriptional_cis_regulatory_region
+alt_id: SO:0000067
+
+[Term]
+id: SO:0000169
+name: TATA_box
+def: "A TATA box element." [SO:ke]
+is_a: SO:0000167 ! promoter
+
+[Term]
+id: SO:0000141
+name: terminator
+def: "A regulatory_region that terminates transcription." [SO:ke]
+is_a: SO:0000001 ! region
+
+[Typedef]
+id: part_of
+name: part_of
+is_transitive: true

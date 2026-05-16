@@ -1,0 +1,33 @@
+[package]
+name = "sbol-db"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI entry point for sbol-db."
+
+[[bin]]
+name = "sbol-db"
+path = "src/main.rs"
+
+[dependencies]
+sbol-db-core.workspace = true
+sbol-db-rdf.workspace = true
+sbol-db-postgres.workspace = true
+sbol-db-sparql.workspace = true
+sbol-db-server.workspace = true
+sbol.workspace = true
+sbol-rdf.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+axum.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true

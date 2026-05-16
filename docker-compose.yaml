@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sbol
+      POSTGRES_PASSWORD: sbol
+      POSTGRES_DB: sbol
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:

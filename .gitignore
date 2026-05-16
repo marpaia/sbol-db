@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+.env
+.sqlx
+
+# Helm — dependency tarballs are fetched via `helm dependency build` from
+# Chart.lock; don't commit them. Chart.lock is committed.
+charts/*/charts/
+

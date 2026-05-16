@@ -1,0 +1,73 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sbol-db-core",
+    "crates/sbol-db-rdf",
+    "crates/sbol-db-postgres",
+    "crates/sbol-db-sparql",
+    "crates/sbol-db-server",
+    "crates/sbol-db",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.93"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/marpaia/sbol-db"
+
+[workspace.dependencies]
+sbol = "0.1.0"
+sbol-rdf = "0.1.0"
+sbol-ontology = "0.1.0"
+
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio-rustls",
+    "postgres",
+    "uuid",
+    "chrono",
+    "json",
+    "macros",
+    "migrate",
+] }
+
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "query", "tokio", "matched-path"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "signal"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_urlencoded = "0.7"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+
+thiserror = "2"
+anyhow = "1"
+
+clap = { version = "4.5", features = ["derive", "env"] }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+sha3 = "0.10"
+hex = "0.4"
+url = "2"
+
+assert_cmd = "2"
+
+spareval = "0.2.6"
+spargebra = "0.4.6"
+sparesults = "0.3.3"
+oxrdf = "0.3.3"
+oxiri = "0.2.11"
+
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
+
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", default-features = false }
+
+sbol-db-core = { path = "crates/sbol-db-core", version = "0.1.0" }
+sbol-db-rdf = { path = "crates/sbol-db-rdf", version = "0.1.0" }
+sbol-db-postgres = { path = "crates/sbol-db-postgres", version = "0.1.0" }
+sbol-db-sparql = { path = "crates/sbol-db-sparql", version = "0.1.0" }
+sbol-db-server = { path = "crates/sbol-db-server", version = "0.1.0" }

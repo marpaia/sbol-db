@@ -1,0 +1,23 @@
+BASE <https://example.org/sbol-db/test/>
+PREFIX :     <https://example.org/sbol-db/test/>
+PREFIX SBO:  <https://identifiers.org/SBO:>
+PREFIX SO:   <https://identifiers.org/SO:>
+PREFIX EDAM: <https://identifiers.org/edam:>
+PREFIX sbol: <http://sbols.org/v3#>
+
+:promoter_j23119
+    a                  sbol:Component ;
+    sbol:displayId     "promoter_j23119" ;
+    sbol:name          "J23119 promoter" ;
+    sbol:description   "Strong constitutive promoter" ;
+    sbol:hasNamespace  <https://example.org/sbol-db/test> ;
+    sbol:type          SBO:0000251 ;
+    sbol:role          SO:0000167 ;
+    sbol:hasSequence   :promoter_j23119_seq .
+
+:promoter_j23119_seq
+    a                  sbol:Sequence ;
+    sbol:displayId     "promoter_j23119_seq" ;
+    sbol:hasNamespace  <https://example.org/sbol-db/test> ;
+    sbol:elements      "ttgacagctagctcagtcctaggtataatgctagc" ;
+    sbol:encoding      EDAM:format_1207 .

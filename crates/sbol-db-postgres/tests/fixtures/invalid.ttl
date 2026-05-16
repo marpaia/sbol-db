@@ -1,0 +1,8 @@
+BASE <https://example.org/sbol-db/test/>
+PREFIX sbol: <http://sbols.org/v3#>
+PREFIX SBO:  <https://identifiers.org/SBO:>
+
+# A Component missing its required `sbol:type` and `sbol:hasNamespace`.
+:bad_component
+    a               sbol:Component ;
+    sbol:displayId  "bad_component" .

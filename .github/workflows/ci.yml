@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: sbol
+          POSTGRES_PASSWORD: sbol
+          POSTGRES_DB: sbol
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://sbol:sbol@localhost:5432/sbol
+      SQLX_OFFLINE: "true"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --all-targets
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.2
+      - name: Fetch chart dependencies
+        run: helm dependency build charts/sbol-db
+      - name: Lint chart
+        run: helm lint --strict charts/sbol-db --set externalDatabase.existingSecret.name=db-creds
+      - name: Render — external secret profile
+        run: helm template sbol-db charts/sbol-db --set externalDatabase.existingSecret.name=db-creds > /dev/null
+      - name: Render — embedded postgres profile
+        run: |
+          helm template sbol-db charts/sbol-db \
+            --set postgresql.enabled=true \
+            --set postgresql.auth.password=ci-test \
+            > /dev/null
+      - name: Render — all optional resources enabled
+        run: |
+          helm template sbol-db charts/sbol-db \
+            --set externalDatabase.existingSecret.name=db-creds \
+            --set ingress.enabled=true \
+            --set autoscaling.enabled=true \
+            --set podDisruptionBudget.enabled=true \
+            --set serviceMonitor.enabled=true \
+            --set networkPolicy.enabled=true \
+            > /dev/null

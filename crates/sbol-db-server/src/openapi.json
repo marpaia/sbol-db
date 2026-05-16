@@ -1,0 +1,708 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "sbol-db",
+    "version": "0.1.0",
+    "description": "A Postgres-backed data management system for synthetic biology data. It ingests SBOL documents in any spec-listed RDF serialization, projects them into a typed relational schema *and* an RDF quad store inside the same Postgres instance, then exposes the result through five composable query primitives: typed lookup by IRI, bounded graph neighborhood traversal, read-only SPARQL 1.1, nucleotide substring + reverse-complement search, and ontology-aware role expansion.\n\nSee [`docs/crate-guide.md`](https://github.com/marpaia/sbol-db/blob/master/docs/crate-guide.md) for an architectural tour.",
+    "contact": {
+      "name": "sbol-db",
+      "url": "https://github.com/marpaia/sbol-db"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0"
+    }
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Current server"
+    }
+  ],
+  "tags": [
+    { "name": "Documents",    "description": "Import SBOL documents and inspect what was stored." },
+    { "name": "Objects",      "description": "Resolve typed SBOL objects by IRI and re-emit them as RDF." },
+    { "name": "Neighborhood", "description": "Bounded recursive graph traversal across `sbol_quads`." },
+    { "name": "SPARQL",       "description": "Read-only SPARQL 1.1 evaluator (SELECT / ASK / CONSTRUCT / DESCRIBE)." },
+    { "name": "Sequences",    "description": "Nucleotide substring + reverse-complement search backed by the k-mer seed index." },
+    { "name": "Ontology",     "description": "Load OBO ontologies (SO, SBO, ...) and resolve transitive `is_a` closure." },
+    { "name": "Meta",         "description": "Liveness, readiness, metrics, OpenAPI schema, and this docs page." }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": ["Meta"],
+        "summary": "Liveness check",
+        "description": "Static liveness probe. Returns `ok` if the process is running; does not touch Postgres. Wire this to Kubernetes `livenessProbe`.",
+        "operationId": "healthz",
+        "responses": {
+          "200": {
+            "description": "Server is live.",
+            "content": {
+              "text/plain": {
+                "schema": { "type": "string" },
+                "example": "ok"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": ["Meta"],
+        "summary": "Readiness check",
+        "description": "Issues a short-timeout `SELECT 1` against the connection pool. Returns 200 when Postgres is reachable, 503 otherwise. Wire this to Kubernetes `readinessProbe`.",
+        "operationId": "readyz",
+        "responses": {
+          "200": {
+            "description": "Database is reachable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status"],
+                  "properties": { "status": { "type": "string", "enum": ["ready"] } }
+                },
+                "example": { "status": "ready" }
+              }
+            }
+          },
+          "503": {
+            "description": "Database is unreachable or slow.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "reason"],
+                  "properties": {
+                    "status": { "type": "string", "enum": ["not_ready"] },
+                    "reason": { "type": "string" }
+                  }
+                },
+                "example": { "status": "not_ready", "reason": "database probe timed out" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": ["Meta"],
+        "summary": "Prometheus metrics",
+        "description": "Prometheus text-format exposition of HTTP request counters/histograms (keyed by templated route), `sbol_db_pool_connections` gauges, and a `sbol_db_build_info` label gauge. Intended for in-cluster scraping; not part of the public query API.",
+        "operationId": "metrics",
+        "responses": {
+          "200": {
+            "description": "Prometheus exposition.",
+            "content": {
+              "text/plain": {
+                "schema": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/documents": {
+      "post": {
+        "tags": ["Documents"],
+        "summary": "Import an SBOL document",
+        "description": "Parses the request body as an SBOL document in the format derived from the `format` query parameter or the `Content-Type` header, persists it inside one transaction (objects + quads + typed projections + validation), and returns an import report.",
+        "operationId": "importDocument",
+        "parameters": [
+          { "$ref": "#/components/parameters/SerializationFormat" },
+          { "name": "source_uri",   "in": "query", "schema": { "type": "string" } },
+          { "name": "document_iri", "in": "query", "schema": { "type": "string", "format": "uri" } },
+          { "name": "name",         "in": "query", "schema": { "type": "string" } },
+          { "name": "description",  "in": "query", "schema": { "type": "string" } },
+          { "name": "created_by",   "in": "query", "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "The serialized RDF body for the SBOL document.",
+          "content": {
+            "text/turtle":        { "schema": { "type": "string" } },
+            "application/ld+json":{ "schema": { "type": "string" } },
+            "application/rdf+xml":{ "schema": { "type": "string" } },
+            "application/n-triples": { "schema": { "type": "string" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Document imported.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ImportReport" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/documents/{id}": {
+      "get": {
+        "tags": ["Documents"],
+        "summary": "Fetch document metadata",
+        "operationId": "getDocument",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Document found.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DocumentRecord" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+
+    "/objects": {
+      "get": {
+        "tags": ["Objects"],
+        "summary": "Resolve a stored SBOL object by IRI",
+        "operationId": "getObjectByIri",
+        "parameters": [
+          { "name": "iri", "in": "query", "required": true, "schema": { "type": "string", "format": "uri" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Object found.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SbolObjectRecord" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/objects/{id}/rdf": {
+      "get": {
+        "tags": ["Objects"],
+        "summary": "Re-emit an object subgraph as RDF",
+        "operationId": "exportObjectRdf",
+        "parameters": [
+          { "name": "id",     "in": "path",  "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["turtle","jsonld","rdfxml","ntriples"], "default": "turtle" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "RDF subgraph for the object.",
+            "content": {
+              "text/turtle":          { "schema": { "type": "string" } },
+              "application/ld+json":  { "schema": { "type": "string" } },
+              "application/rdf+xml":  { "schema": { "type": "string" } },
+              "application/n-triples":{ "schema": { "type": "string" } }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+
+    "/objects/neighborhood": {
+      "get": {
+        "tags": ["Neighborhood"],
+        "summary": "Bounded graph traversal (JSON)",
+        "description": "Walks the graph outward from `iri` under explicit depth, direction, and predicate-allowlist bounds. Returns visited nodes and edges as JSON. See [`docs/neighborhood.md`](https://github.com/marpaia/sbol-db/blob/master/docs/neighborhood.md).",
+        "operationId": "neighborhood",
+        "parameters": [
+          { "$ref": "#/components/parameters/NeighborhoodIri" },
+          { "$ref": "#/components/parameters/NeighborhoodDepth" },
+          { "$ref": "#/components/parameters/NeighborhoodDirection" },
+          { "$ref": "#/components/parameters/NeighborhoodPredicates" },
+          { "$ref": "#/components/parameters/NeighborhoodMaxNodes" },
+          { "$ref": "#/components/parameters/NeighborhoodLiterals" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Traversal result.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NeighborhoodResult" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/objects/neighborhood.rdf": {
+      "get": {
+        "tags": ["Neighborhood"],
+        "summary": "Bounded graph traversal (RDF subgraph)",
+        "operationId": "neighborhoodRdf",
+        "parameters": [
+          { "$ref": "#/components/parameters/NeighborhoodIri" },
+          { "$ref": "#/components/parameters/NeighborhoodDepth" },
+          { "$ref": "#/components/parameters/NeighborhoodDirection" },
+          { "$ref": "#/components/parameters/NeighborhoodPredicates" },
+          { "$ref": "#/components/parameters/NeighborhoodMaxNodes" },
+          { "$ref": "#/components/parameters/NeighborhoodLiterals" },
+          { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["turtle","jsonld","ntriples","rdfxml"], "default": "turtle" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Visited subgraph in the chosen format.",
+            "content": {
+              "text/turtle":          { "schema": { "type": "string" } },
+              "application/ld+json":  { "schema": { "type": "string" } },
+              "application/n-triples":{ "schema": { "type": "string" } },
+              "application/rdf+xml":  { "schema": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+
+    "/sparql": {
+      "get": {
+        "tags": ["SPARQL"],
+        "summary": "Run a SPARQL 1.1 query (URL form)",
+        "description": "Read-only SPARQL endpoint. Update queries are rejected. The result format defaults to `application/sparql-results+json` for SELECT / ASK and `text/turtle` for CONSTRUCT / DESCRIBE; override via `Accept` header or the `format` query parameter.",
+        "operationId": "sparqlGet",
+        "parameters": [
+          { "name": "query",  "in": "query", "required": true, "schema": { "type": "string" }, "example": "PREFIX sbol: <http://sbols.org/v3#> SELECT ?s WHERE { ?s a sbol:Component } LIMIT 10" },
+          { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["json","xml","csv","tsv","turtle","ntriples","jsonld"] } }
+        ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/SparqlResult" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "504": { "description": "Query exceeded the configured timeout." }
+        }
+      },
+      "post": {
+        "tags": ["SPARQL"],
+        "summary": "Run a SPARQL 1.1 query (POST body)",
+        "operationId": "sparqlPost",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/sparql-query": {
+              "schema": { "type": "string" },
+              "example": "PREFIX sbol: <http://sbols.org/v3#> ASK { ?s sbol:hasFeature ?f }"
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                  "query":  { "type": "string" },
+                  "format": { "type": "string", "enum": ["json","xml","csv","tsv","turtle","ntriples","jsonld"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/SparqlResult" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "504": { "description": "Query exceeded the configured timeout." }
+        }
+      }
+    },
+
+    "/sequences/search": {
+      "get": {
+        "tags": ["Sequences"],
+        "summary": "Nucleotide substring search (forward + reverse complement)",
+        "description": "Exact-match search over every indexed nucleotide `sbol:Sequence`. The k-mer seed index covers queries ≥ 8 bp; shorter patterns fall back to an `ILIKE` candidate scan. See [`docs/sequences.md`](https://github.com/marpaia/sbol-db/blob/master/docs/sequences.md).",
+        "operationId": "sequenceSearch",
+        "parameters": [
+          { "name": "pattern",      "in": "query", "required": true, "schema": { "type": "string" }, "example": "GAATTC" },
+          { "name": "max_hits",     "in": "query", "schema": { "type": "integer", "default": 1024, "minimum": 1 } },
+          { "name": "forward_only", "in": "query", "schema": { "type": "boolean", "default": false } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Hits sorted by sequence then position.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/SequenceMatch" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/ontology": {
+      "get": {
+        "tags": ["Ontology"],
+        "summary": "List loaded ontologies",
+        "operationId": "ontologyList",
+        "responses": {
+          "200": {
+            "description": "Ontologies currently in the database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/OntologyRecord" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Ontology"],
+        "summary": "Fetch an OBO ontology and load it",
+        "description": "Recognised prefixes (`so`, `sbo`) resolve to OBO Foundry defaults; for any other prefix supply `url` (and optionally `name`). The terms, aliases, and transitive `is_a` closure are materialised in one transaction. Reload replaces the previous version atomically.",
+        "operationId": "ontologyLoad",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/OntologyLoadRequest" },
+              "examples": {
+                "Sequence Ontology": {
+                  "value": { "prefix": "so" }
+                },
+                "Custom": {
+                  "value": {
+                    "prefix": "chebi",
+                    "url": "http://purl.obolibrary.org/obo/chebi/chebi_lite.obo",
+                    "name": "Chemical Entities of Biological Interest"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Load report.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OntologyLoadReport" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/ontology/term": {
+      "get": {
+        "tags": ["Ontology"],
+        "summary": "Get an ontology term by IRI or CURIE",
+        "operationId": "ontologyTerm",
+        "parameters": [
+          { "name": "iri", "in": "query", "required": true, "schema": { "type": "string" }, "example": "SO:0000167" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Term metadata.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OntologyTermRecord" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/ontology/descendants": {
+      "get": {
+        "tags": ["Ontology"],
+        "summary": "Transitive `is_a` closure for a term",
+        "description": "Returns the canonical term plus every descendant under it. Accepts the canonical OBO Foundry IRI (`http://purl.obolibrary.org/obo/SO_0000167`), the identifiers.org form, or a bare CURIE (`SO:0000167`).",
+        "operationId": "ontologyDescendants",
+        "parameters": [
+          { "name": "iri", "in": "query", "required": true, "schema": { "type": "string" }, "example": "SO:0000167" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Descendant IRIs with depth.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["iri", "depth"],
+                    "properties": {
+                      "iri":   { "type": "string", "format": "uri" },
+                      "depth": { "type": "integer", "minimum": 0 }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/openapi.json": {
+      "get": {
+        "tags": ["Meta"],
+        "summary": "OpenAPI 3.1 schema for this server",
+        "operationId": "openApiSchema",
+        "responses": {
+          "200": {
+            "description": "The OpenAPI document.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/docs": {
+      "get": {
+        "tags": ["Meta"],
+        "summary": "Interactive API documentation (Scalar)",
+        "operationId": "docsUi",
+        "responses": {
+          "200": {
+            "description": "The rendered docs page.",
+            "content": {
+              "text/html": { "schema": { "type": "string" } }
+            }
+          }
+        }
+      }
+    }
+  },
+
+  "components": {
+    "parameters": {
+      "SerializationFormat": {
+        "name": "format",
+        "in": "query",
+        "description": "Override the format inferred from `Content-Type`.",
+        "schema": { "type": "string", "enum": ["turtle","jsonld","rdfxml","ntriples"] }
+      },
+      "NeighborhoodIri": {
+        "name": "iri",
+        "in": "query",
+        "required": true,
+        "schema": { "type": "string", "format": "uri" },
+        "description": "Root IRI to expand from."
+      },
+      "NeighborhoodDepth": {
+        "name": "depth",
+        "in": "query",
+        "schema": { "type": "integer", "default": 2, "minimum": 0 }
+      },
+      "NeighborhoodDirection": {
+        "name": "direction",
+        "in": "query",
+        "schema": { "type": "string", "enum": ["forward","backward","both"], "default": "forward" }
+      },
+      "NeighborhoodPredicates": {
+        "name": "predicates",
+        "in": "query",
+        "description": "Comma-separated predicate IRIs (axum's default query parser does not support repeated keys).",
+        "schema": { "type": "string" }
+      },
+      "NeighborhoodMaxNodes": {
+        "name": "max_nodes",
+        "in": "query",
+        "schema": { "type": "integer", "default": 2048, "minimum": 1 }
+      },
+      "NeighborhoodLiterals": {
+        "name": "literals",
+        "in": "query",
+        "description": "Include literal-position edges in the result (does not affect the traversal frontier).",
+        "schema": { "type": "boolean", "default": false }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "The request was malformed.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorBody" }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "The requested resource does not exist.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorBody" }
+          }
+        }
+      },
+      "SparqlResult": {
+        "description": "Serialized SPARQL result. The content type matches the format the engine produced.",
+        "content": {
+          "application/sparql-results+json": { "schema": { "type": "object" } },
+          "application/sparql-results+xml":  { "schema": { "type": "string" } },
+          "text/csv":                        { "schema": { "type": "string" } },
+          "text/tab-separated-values":       { "schema": { "type": "string" } },
+          "text/turtle":                     { "schema": { "type": "string" } },
+          "application/n-triples":           { "schema": { "type": "string" } },
+          "application/ld+json":             { "schema": { "type": "object" } }
+        }
+      }
+    },
+    "schemas": {
+      "ErrorBody": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error":   { "type": "string" },
+          "details": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "ImportReport": {
+        "type": "object",
+        "required": ["document_id", "object_count", "quad_count", "validation_status", "validation_issue_count"],
+        "properties": {
+          "document_id":            { "type": "string", "format": "uuid" },
+          "object_count":           { "type": "integer", "minimum": 0 },
+          "quad_count":             { "type": "integer", "minimum": 0 },
+          "validation_status":      { "type": "string", "enum": ["passed","failed"] },
+          "validation_issue_count": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "DocumentRecord": {
+        "type": "object",
+        "properties": {
+          "id":                   { "type": "string", "format": "uuid" },
+          "document_iri":         { "type": "string", "format": "uri" },
+          "name":                 { "type": "string" },
+          "description":          { "type": "string" },
+          "serialization_format": { "type": "string" },
+          "source_uri":           { "type": "string" },
+          "created_by":           { "type": "string" },
+          "created_at":           { "type": "string", "format": "date-time" }
+        }
+      },
+      "SbolObjectRecord": {
+        "type": "object",
+        "properties": {
+          "id":                  { "type": "string", "format": "uuid" },
+          "iri":                 { "type": "string", "format": "uri" },
+          "sbol_class":          { "type": "string" },
+          "display_id":          { "type": "string" },
+          "name":                { "type": "string" },
+          "persistent_identity": { "type": "string", "format": "uri" },
+          "version":             { "type": "string" },
+          "types":               { "type": "array", "items": { "type": "string" } },
+          "roles":               { "type": "array", "items": { "type": "string" } },
+          "data":                { "type": "object", "additionalProperties": true },
+          "created_at":          { "type": "string", "format": "date-time" }
+        }
+      },
+      "NeighborhoodResult": {
+        "type": "object",
+        "required": ["root_iri","nodes","edges","max_depth_reached","truncated"],
+        "properties": {
+          "root_iri":          { "type": "string", "format": "uri" },
+          "nodes":             { "type": "array", "items": { "$ref": "#/components/schemas/NodeInfo" } },
+          "edges":             { "type": "array", "items": { "$ref": "#/components/schemas/EdgeInfo" } },
+          "max_depth_reached": { "type": "integer", "minimum": 0 },
+          "truncated":         { "type": "boolean" }
+        }
+      },
+      "NodeInfo": {
+        "type": "object",
+        "required": ["id","depth"],
+        "properties": {
+          "id":          { "type": "string" },
+          "depth":       { "type": "integer", "minimum": 0 },
+          "blank_node":  { "type": "boolean", "default": false },
+          "sbol_class":  { "type": "string" },
+          "display_id":  { "type": "string" },
+          "name":        { "type": "string" }
+        }
+      },
+      "EdgeInfo": {
+        "type": "object",
+        "required": ["subject","predicate","object","depth"],
+        "properties": {
+          "subject":   { "type": "string" },
+          "predicate": { "type": "string", "format": "uri" },
+          "depth":     { "type": "integer", "minimum": 0 },
+          "object":    {
+            "oneOf": [
+              { "type": "object", "properties": { "iri":       { "type": "string", "format": "uri" } }, "required": ["iri"] },
+              { "type": "object", "properties": { "blank":     { "type": "string" } },                  "required": ["blank"] },
+              { "type": "object", "properties": {
+                  "literal":  { "type": "string" },
+                  "datatype": { "type": "string", "format": "uri" },
+                  "language": { "type": "string" }
+                }, "required": ["literal","datatype"] }
+            ]
+          }
+        }
+      },
+      "SequenceMatch": {
+        "type": "object",
+        "required": ["sequence_iri","start","length","strand"],
+        "properties": {
+          "sequence_iri": { "type": "string", "format": "uri" },
+          "start":        { "type": "integer", "minimum": 0 },
+          "length":       { "type": "integer", "minimum": 1 },
+          "strand":       { "type": "string", "enum": ["+","-"] }
+        }
+      },
+      "OntologyRecord": {
+        "type": "object",
+        "required": ["prefix","name","term_count","imported_at"],
+        "properties": {
+          "prefix":     { "type": "string" },
+          "name":       { "type": "string" },
+          "source_url": { "type": "string", "format": "uri" },
+          "version":    { "type": "string" },
+          "term_count": { "type": "integer", "minimum": 0 },
+          "imported_at":{ "type": "string", "format": "date-time" }
+        }
+      },
+      "OntologyTermRecord": {
+        "type": "object",
+        "required": ["iri","prefix","curie","name","is_obsolete","synonyms"],
+        "properties": {
+          "iri":         { "type": "string", "format": "uri" },
+          "prefix":      { "type": "string" },
+          "curie":       { "type": "string", "example": "SO:0000167" },
+          "name":        { "type": "string" },
+          "definition":  { "type": "string" },
+          "is_obsolete": { "type": "boolean" },
+          "synonyms":    { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "OntologyLoadRequest": {
+        "type": "object",
+        "required": ["prefix"],
+        "properties": {
+          "prefix": { "type": "string", "description": "Short prefix used as the row key (e.g. `so`, `sbo`)." },
+          "url":    { "type": "string", "format": "uri", "description": "Required for prefixes without a built-in default." },
+          "name":   { "type": "string", "description": "Display name. Defaults to the prefix when omitted." }
+        }
+      },
+      "OntologyLoadReport": {
+        "type": "object",
+        "required": ["prefix","term_count","closure_count","alias_count"],
+        "properties": {
+          "prefix":        { "type": "string" },
+          "source_url":    { "type": "string", "format": "uri" },
+          "version":       { "type": "string" },
+          "term_count":    { "type": "integer", "minimum": 0 },
+          "closure_count": { "type": "integer", "minimum": 0 },
+          "alias_count":   { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

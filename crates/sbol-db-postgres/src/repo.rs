@@ -1,0 +1,25 @@
+pub mod document;
+pub mod neighborhood;
+pub mod object;
+pub mod ontology;
+pub mod projection;
+pub mod projections;
+pub mod quad;
+pub mod sequence_search;
+pub mod validation;
+
+pub use document::DocumentRepository;
+pub use neighborhood::NeighborhoodRepository;
+pub use object::SbolObjectRepository;
+pub use ontology::{OntologyLoadReport, OntologyRecord, OntologyRepository, OntologyTermRecord};
+pub use projection::{ProjectionEvent, ProjectionEventRepository};
+pub use projections::{TypedProjectionCounts, TypedProjectionRepository};
+pub use quad::{GraphFilter, PatternObject, PatternSubject, QuadRepository};
+pub use sequence_search::{SequenceMatch, SequenceSearchOptions, SequenceSearchRepository};
+pub use validation::{RecordedValidation, ValidationRepository};
+
+use sbol_db_core::DomainError;
+
+pub(crate) fn db_err<E: std::fmt::Display>(e: E) -> DomainError {
+    DomainError::Database(e.to_string())
+}
