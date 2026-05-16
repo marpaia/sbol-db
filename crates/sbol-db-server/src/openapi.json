@@ -185,6 +185,59 @@
         }
       }
     },
+    "/objects/list": {
+      "get": {
+        "tags": ["Objects"],
+        "summary": "Paginated corpus listing",
+        "description": "Lists stored objects in lexicographic IRI order with a keyset cursor. Use this for whole-corpus dumps; per-page size capped at 5000. Pass the response's `next_cursor` as `after` on the next call until `next_cursor` is null.",
+        "operationId": "listObjects",
+        "parameters": [
+          { "name": "sbol_class",  "in": "query", "schema": { "type": "string", "format": "uri" } },
+          { "name": "role",        "in": "query", "schema": { "type": "string", "format": "uri" } },
+          { "name": "document_id", "in": "query", "schema": { "type": "string", "format": "uuid" } },
+          { "name": "after",       "in": "query", "schema": { "type": "string", "format": "uri" }, "description": "Cursor: last `iri` from the prior page." },
+          { "name": "limit",       "in": "query", "schema": { "type": "integer", "default": 1000, "minimum": 1, "maximum": 5000 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of matching objects plus a cursor for the next page (null when exhausted).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ListObjectsResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/objects/lookup": {
+      "post": {
+        "tags": ["Objects"],
+        "summary": "Bulk resolution of objects by IRI",
+        "description": "Batched form of `GET /objects?iri=…`. Resolves up to 1000 IRIs in a single round trip via `WHERE iri = ANY(...)`. The response separates the IRIs that resolved (`found`) from those that did not (`missing`).",
+        "operationId": "lookupObjects",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LookupObjectsRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Lookup results.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LookupObjectsResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
     "/objects/{id}/rdf": {
       "get": {
         "tags": ["Objects"],
@@ -334,6 +387,34 @@
               }
             }
           }
+        }
+      },
+      "post": {
+        "tags": ["Sequences"],
+        "summary": "Bulk nucleotide substring search",
+        "description": "Runs the GET form for each pattern in the request body. Capped at 256 patterns per call. The response preserves input order with one `BatchSequenceMatch` entry per pattern.",
+        "operationId": "sequenceSearchBatch",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SequenceSearchBatchRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One entry per input pattern.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/BatchSequenceMatch" }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
         }
       }
     },
@@ -655,6 +736,49 @@
           "start":        { "type": "integer", "minimum": 0 },
           "length":       { "type": "integer", "minimum": 1 },
           "strand":       { "type": "string", "enum": ["+","-"] }
+        }
+      },
+      "BatchSequenceMatch": {
+        "type": "object",
+        "required": ["pattern","matches"],
+        "properties": {
+          "pattern": { "type": "string" },
+          "matches": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/SequenceMatch" }
+          }
+        }
+      },
+      "SequenceSearchBatchRequest": {
+        "type": "object",
+        "required": ["patterns"],
+        "properties": {
+          "patterns":     { "type": "array", "items": { "type": "string" }, "maxItems": 256 },
+          "max_hits":     { "type": "integer", "minimum": 1, "default": 1024 },
+          "forward_only": { "type": "boolean", "default": false }
+        }
+      },
+      "LookupObjectsRequest": {
+        "type": "object",
+        "required": ["iris"],
+        "properties": {
+          "iris": { "type": "array", "items": { "type": "string", "format": "uri" }, "maxItems": 1000 }
+        }
+      },
+      "LookupObjectsResponse": {
+        "type": "object",
+        "required": ["found","missing"],
+        "properties": {
+          "found":   { "type": "array", "items": { "$ref": "#/components/schemas/SbolObjectRecord" } },
+          "missing": { "type": "array", "items": { "type": "string", "format": "uri" } }
+        }
+      },
+      "ListObjectsResponse": {
+        "type": "object",
+        "required": ["objects"],
+        "properties": {
+          "objects":     { "type": "array", "items": { "$ref": "#/components/schemas/SbolObjectRecord" } },
+          "next_cursor": { "type": "string", "format": "uri", "nullable": true, "description": "IRI to pass as `after` on the next call; absent or null when the listing is exhausted." }
         }
       },
       "OntologyRecord": {

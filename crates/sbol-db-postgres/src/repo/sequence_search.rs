@@ -45,6 +45,12 @@ pub struct SequenceMatch {
     pub strand: char,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BatchSequenceMatch {
+    pub pattern: String,
+    pub matches: Vec<SequenceMatch>,
+}
+
 impl SequenceSearchRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -121,6 +127,25 @@ impl SequenceSearchRepository {
             }
         }
         Ok(matches)
+    }
+
+    /// Run [`search`](Self::search) for each pattern. Patterns are independent;
+    /// the implementation is a simple loop. Use this to amortise HTTP / CLI
+    /// round-trips when scanning N motifs against the same corpus.
+    pub async fn search_many(
+        &self,
+        patterns: &[String],
+        options: SequenceSearchOptions,
+    ) -> Result<Vec<BatchSequenceMatch>, DomainError> {
+        let mut out = Vec::with_capacity(patterns.len());
+        for pattern in patterns {
+            let matches = self.search(pattern, options.clone()).await?;
+            out.push(BatchSequenceMatch {
+                pattern: pattern.clone(),
+                matches,
+            });
+        }
+        Ok(out)
     }
 
     async fn candidates_seeded(

@@ -10,12 +10,14 @@ pub mod validation;
 
 pub use document::DocumentRepository;
 pub use neighborhood::NeighborhoodRepository;
-pub use object::SbolObjectRepository;
+pub use object::{ListObjectsFilter, SbolObjectRepository};
 pub use ontology::{OntologyLoadReport, OntologyRecord, OntologyRepository, OntologyTermRecord};
 pub use projection::{ProjectionEvent, ProjectionEventRepository};
 pub use projections::{TypedProjectionCounts, TypedProjectionRepository};
 pub use quad::{GraphFilter, PatternObject, PatternSubject, QuadRepository};
-pub use sequence_search::{SequenceMatch, SequenceSearchOptions, SequenceSearchRepository};
+pub use sequence_search::{
+    BatchSequenceMatch, SequenceMatch, SequenceSearchOptions, SequenceSearchRepository,
+};
 pub use validation::{RecordedValidation, ValidationRepository};
 
 use sbol_db_core::DomainError;

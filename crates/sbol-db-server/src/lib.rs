@@ -77,12 +77,17 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route("/documents", post(routes::create_document))
         .route("/documents/:id", get(routes::get_document))
         .route("/objects", get(routes::get_object_by_iri))
+        .route("/objects/list", get(routes::list_objects))
+        .route("/objects/lookup", post(routes::lookup_objects))
         .route("/objects/:id/rdf", get(routes::export_object))
         .route("/objects/neighborhood", get(routes::neighborhood))
         .route("/objects/neighborhood.rdf", get(routes::neighborhood_rdf))
         .route("/validation-runs", post(routes::revalidate_document))
         .route("/sparql", get(routes::sparql_get).post(routes::sparql_post))
-        .route("/sequences/search", get(routes::sequence_search))
+        .route(
+            "/sequences/search",
+            get(routes::sequence_search).post(routes::sequence_search_batch),
+        )
         .route(
             "/ontology",
             get(routes::ontology_list).post(routes::ontology_load),

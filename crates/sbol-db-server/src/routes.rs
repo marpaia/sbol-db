@@ -10,8 +10,8 @@ use sbol_db_core::{
     NeighborhoodResult, ObjectId, SbolObjectRecord, SerializationFormat,
 };
 use sbol_db_postgres::{
-    ImportInput, OntologyLoadReport, OntologyRecord, OntologyTermRecord, SequenceMatch,
-    SequenceSearchOptions,
+    BatchSequenceMatch, ImportInput, ListObjectsFilter, OntologyLoadReport, OntologyRecord,
+    OntologyTermRecord, SequenceMatch, SequenceSearchOptions,
 };
 use sbol_db_sparql::{ResultFormat, SparqlOptions};
 use serde::Deserialize;
@@ -108,6 +108,105 @@ pub async fn get_object_by_iri(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("object {}", params.iri)))?;
     Ok(Json(obj))
+}
+
+/// Hard cap on the size of a `POST /objects/lookup` request, applied
+/// before hitting Postgres. Matches the spirit of `max_rows` on SPARQL —
+/// keep batch APIs bounded even when the body limit allows more.
+const LOOKUP_MAX_IRIS: usize = 1000;
+
+#[derive(Deserialize)]
+pub struct LookupObjectsBody {
+    pub iris: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct LookupObjectsResponse {
+    pub found: Vec<SbolObjectRecord>,
+    pub missing: Vec<String>,
+}
+
+pub async fn lookup_objects(
+    State(state): State<AppState>,
+    Json(body): Json<LookupObjectsBody>,
+) -> Result<Json<LookupObjectsResponse>, ApiError> {
+    if body.iris.is_empty() {
+        return Ok(Json(LookupObjectsResponse {
+            found: Vec::new(),
+            missing: Vec::new(),
+        }));
+    }
+    if body.iris.len() > LOOKUP_MAX_IRIS {
+        return Err(ApiError::BadRequest(format!(
+            "request exceeds maximum of {LOOKUP_MAX_IRIS} IRIs per call"
+        )));
+    }
+    for iri in &body.iris {
+        IriString::new(iri.clone()).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    }
+    let refs: Vec<&str> = body.iris.iter().map(String::as_str).collect();
+    let found = state.service.objects().get_by_iris(&refs).await?;
+    let found_set: std::collections::HashSet<&str> = found.iter().map(|r| r.iri.as_str()).collect();
+    let missing: Vec<String> = body
+        .iris
+        .iter()
+        .filter(|iri| !found_set.contains(iri.as_str()))
+        .cloned()
+        .collect();
+    Ok(Json(LookupObjectsResponse { found, missing }))
+}
+
+const LIST_MAX_LIMIT: u32 = 5000;
+const LIST_DEFAULT_LIMIT: u32 = 1000;
+
+#[derive(Deserialize)]
+pub struct ListObjectsParams {
+    #[serde(default)]
+    pub sbol_class: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub document_id: Option<Uuid>,
+    #[serde(default)]
+    pub after: Option<String>,
+    #[serde(default = "default_list_limit")]
+    pub limit: u32,
+}
+
+fn default_list_limit() -> u32 {
+    LIST_DEFAULT_LIMIT
+}
+
+#[derive(serde::Serialize)]
+pub struct ListObjectsResponse {
+    pub objects: Vec<SbolObjectRecord>,
+    /// Cursor for the next page (last `iri` of the current page) when the
+    /// page filled to `limit`; `None` when the listing has been exhausted.
+    pub next_cursor: Option<String>,
+}
+
+pub async fn list_objects(
+    State(state): State<AppState>,
+    Query(params): Query<ListObjectsParams>,
+) -> Result<Json<ListObjectsResponse>, ApiError> {
+    let limit = params.limit.clamp(1, LIST_MAX_LIMIT);
+    let filter = ListObjectsFilter {
+        sbol_class: params.sbol_class,
+        role: params.role,
+        document_id: params.document_id.map(DocumentId),
+        after_iri: params.after,
+        limit,
+    };
+    let objects = state.service.objects().list(&filter).await?;
+    let next_cursor = if objects.len() as u32 >= limit {
+        objects.last().map(|o| o.iri.as_str().to_owned())
+    } else {
+        None
+    };
+    Ok(Json(ListObjectsResponse {
+        objects,
+        next_cursor,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -461,6 +560,44 @@ pub async fn sequence_search(
         )
         .await?;
     Ok(Json(matches))
+}
+
+const SEARCH_MAX_PATTERNS: usize = 256;
+
+#[derive(Deserialize)]
+pub struct SequenceSearchBody {
+    pub patterns: Vec<String>,
+    #[serde(default)]
+    pub max_hits: Option<u32>,
+    #[serde(default)]
+    pub forward_only: Option<bool>,
+}
+
+pub async fn sequence_search_batch(
+    State(state): State<AppState>,
+    Json(body): Json<SequenceSearchBody>,
+) -> Result<Json<Vec<BatchSequenceMatch>>, ApiError> {
+    if body.patterns.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+    if body.patterns.len() > SEARCH_MAX_PATTERNS {
+        return Err(ApiError::BadRequest(format!(
+            "request exceeds maximum of {SEARCH_MAX_PATTERNS} patterns per call"
+        )));
+    }
+    let opts = SequenceSearchOptions {
+        max_hits: Some(body.max_hits.unwrap_or(default_sequence_max_hits())),
+        forward_only: match body.forward_only {
+            Some(true) => Some(true),
+            _ => None,
+        },
+    };
+    let results = state
+        .service
+        .sequence_search()
+        .search_many(&body.patterns, opts)
+        .await?;
+    Ok(Json(results))
 }
 
 #[derive(Deserialize)]

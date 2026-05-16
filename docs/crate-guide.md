@@ -201,6 +201,26 @@ present; the `TypedProjectionRepository` carries them. SQL is not a
 public surface for end users — read the projections through the
 relevant repository if you're consuming `sbol-db` as a library.
 
+### Bulk shapes
+
+Each query primitive has a plural form for callers that need to
+amortise round-trips:
+
+- **Bulk IRI lookup** — `SbolObjectRepository::get_by_iris(&[&str])` /
+  `POST /objects/lookup`. One `WHERE iri = ANY($1)` scan; capped at
+  1000 IRIs per call.
+- **Corpus listing** — `SbolObjectRepository::list(&ListObjectsFilter)`
+  / `GET /objects/list` / `sbol-db export-all`. Keyset cursor on `iri`,
+  page size capped at 5000; filters by `sbol_class`, `role`, and
+  `document_id` compose.
+- **Bulk sequence search** — `SequenceSearchRepository::search_many` /
+  `POST /sequences/search`. Loops over patterns; capped at 256 per call.
+- **Directory import** — `sbol-db import <dir>` walks recursively for
+  recognised RDF extensions, imports in parallel (`--parallel N`), and
+  optionally dedupes by content hash (`--skip-existing`). Each file is
+  its own transaction, so a partial failure doesn't roll the whole
+  batch back.
+
 ## Key decision points
 
 These are the choices a newcomer hits first.

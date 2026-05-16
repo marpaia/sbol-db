@@ -47,11 +47,17 @@ sbol-db migrate up
 ## Quickstart — CLI
 
 ```sh
-# Import a document.
+# Import a single document.
 sbol-db import path/to/design.ttl
+
+# Import an entire directory in parallel; skip files we've already seen.
+sbol-db import path/to/corpus/ --parallel 4 --skip-existing --continue-on-error
 
 # Resolve an object by IRI.
 sbol-db get https://synbiohub.org/public/igem/i13504
+
+# Stream every stored object as newline-delimited JSON (corpus dump).
+sbol-db export-all --sbol-class http://sbols.org/v3#Component > components.jsonl
 
 # Re-emit a single object as RDF.
 sbol-db export <iri> --format turtle
@@ -130,11 +136,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `POST` | `/documents`                      | Import an SBOL document                |
 | `GET`  | `/documents/{id}`                 | Document metadata                      |
 | `GET`  | `/objects?iri=...`                | Resolve a stored object by IRI         |
+| `GET`  | `/objects/list`                   | Paginated corpus listing (keyset cursor) |
+| `POST` | `/objects/lookup`                 | Bulk IRI → object resolution (≤ 1000)  |
 | `GET`  | `/objects/{id}/rdf`               | Re-emit object subgraph as RDF         |
 | `GET`  | `/objects/neighborhood`           | Bounded graph traversal (JSON)         |
 | `GET`  | `/objects/neighborhood.rdf`       | Bounded graph traversal (RDF subgraph) |
 | `GET`/`POST` | `/sparql`                   | Read-only SPARQL 1.1 endpoint          |
 | `GET`  | `/sequences/search`               | Nucleotide substring + RC search       |
+| `POST` | `/sequences/search`               | Bulk pattern search (≤ 256 patterns)   |
 | `GET`/`POST` | `/ontology`                 | List / load ontologies                 |
 | `GET`  | `/ontology/term`                  | Term metadata (resolves IRI aliases)   |
 | `GET`  | `/ontology/descendants`           | Transitive closure for a term          |

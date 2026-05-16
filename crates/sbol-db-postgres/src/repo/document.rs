@@ -52,6 +52,19 @@ impl DocumentRepository {
         Ok(DocumentId(id))
     }
 
+    /// Returns true when any document row already carries this content hash.
+    /// Used by bulk import to dedup re-uploaded files without re-parsing.
+    pub async fn exists_by_hash(&self, hash: &[u8]) -> Result<bool, DomainError> {
+        let row = sqlx::query(
+            "SELECT EXISTS(SELECT 1 FROM sbol_documents WHERE content_hash = $1) AS hit",
+        )
+        .bind(hash)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db_err)?;
+        row.try_get::<bool, _>("hit").map_err(db_err)
+    }
+
     pub async fn get(&self, id: DocumentId) -> Result<Option<DocumentRecord>, DomainError> {
         let row = sqlx::query(
             r#"

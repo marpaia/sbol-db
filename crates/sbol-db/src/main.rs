@@ -6,10 +6,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use sbol_db_core::{Direction, IriString, NeighborhoodQuery, ObjectId, SerializationFormat};
-use sbol_db_postgres::{
-    connect_with_retry, run_migrations, ImportInput, SbolObjectService, SequenceSearchOptions,
+use sbol_db_core::{
+    Direction, DocumentId, IriString, NeighborhoodQuery, ObjectId, SerializationFormat,
 };
+use sbol_db_postgres::{
+    connect_with_retry, run_migrations, ImportInput, ListObjectsFilter, SbolObjectService,
+    SequenceSearchOptions,
+};
+use sbol_db_rdf::hash_bytes;
 use sbol_db_server::{router, AppState, Metrics};
 use sbol_db_sparql::{ResultFormat, SparqlEngine, SparqlOptions};
 
@@ -35,18 +39,51 @@ enum Command {
         #[command(subcommand)]
         action: MigrateAction,
     },
-    /// Import an SBOL document from a file.
+    /// Import one or more SBOL documents. `path` may be a single file or a
+    /// directory; directories are walked recursively for files whose
+    /// extension is a recognised RDF serialization (`.ttl`, `.nt`, `.jsonld`,
+    /// `.rdf`, `.xml`, `.trig`, `.nq`).
     Import {
         path: PathBuf,
-        /// Override the format inferred from the file extension.
+        /// Override the format inferred from the file extension. Only meaningful
+        /// when `path` is a single file.
         #[arg(long)]
         format: Option<String>,
-        /// Optional document IRI to record alongside the import.
+        /// Optional document IRI to record alongside the import. Only allowed
+        /// for single-file imports.
         #[arg(long)]
         document_iri: Option<String>,
-        /// Optional name.
+        /// Optional name. Only allowed for single-file imports.
         #[arg(long)]
         name: Option<String>,
+        /// Number of files to import in parallel when `path` is a directory.
+        #[arg(long, default_value_t = 1)]
+        parallel: usize,
+        /// Continue past per-file failures and report the summary at the end
+        /// instead of exiting on the first error.
+        #[arg(long)]
+        continue_on_error: bool,
+        /// Skip files whose SHA3-256 content hash is already present in
+        /// `sbol_documents`. Cheap re-import idempotency.
+        #[arg(long)]
+        skip_existing: bool,
+    },
+    /// Stream every stored object out as newline-delimited JSON (`SbolObjectRecord`
+    /// per line). Pages through `sbol_objects` with a keyset cursor; safe for
+    /// corpus-scale dumps.
+    ExportAll {
+        /// Restrict to objects whose `sbol_class` equals this IRI.
+        #[arg(long)]
+        sbol_class: Option<String>,
+        /// Restrict to objects carrying this role IRI in their `roles` array.
+        #[arg(long)]
+        role: Option<String>,
+        /// Restrict to objects belonging to a specific document.
+        #[arg(long)]
+        document_id: Option<uuid::Uuid>,
+        /// Page size used internally; max 5000.
+        #[arg(long, default_value_t = 1000)]
+        page_size: u32,
     },
     /// Fetch a stored object by its IRI.
     Get {
@@ -189,23 +226,60 @@ async fn main() -> Result<()> {
             format,
             document_iri,
             name,
+            parallel,
+            continue_on_error,
+            skip_existing,
         } => {
-            let body = std::fs::read_to_string(&path)
-                .with_context(|| format!("reading {}", path.display()))?;
-            let format = resolve_format(format.as_deref(), &path)?;
-            let document_iri = document_iri.map(IriString::new).transpose()?;
-            let report = service
-                .import_document(ImportInput {
-                    body,
-                    format,
-                    source_uri: Some(path.display().to_string()),
-                    document_iri,
-                    created_by: None,
-                    name,
-                    description: None,
-                })
+            let meta =
+                std::fs::metadata(&path).with_context(|| format!("reading {}", path.display()))?;
+            if meta.is_dir() {
+                if document_iri.is_some() || name.is_some() {
+                    return Err(anyhow!(
+                        "--document-iri and --name are only valid for single-file imports"
+                    ));
+                }
+                run_directory_import(
+                    service.clone(),
+                    &path,
+                    format.as_deref(),
+                    parallel.max(1),
+                    continue_on_error,
+                    skip_existing,
+                )
                 .await?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                let body = std::fs::read_to_string(&path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                let format = resolve_format(format.as_deref(), &path)?;
+                if skip_existing {
+                    let hash = hash_bytes(body.as_bytes());
+                    if service.documents().exists_by_hash(&hash).await? {
+                        println!("[skipped] {} (already imported)", path.display());
+                        return Ok(());
+                    }
+                }
+                let document_iri = document_iri.map(IriString::new).transpose()?;
+                let report = service
+                    .import_document(ImportInput {
+                        body,
+                        format,
+                        source_uri: Some(path.display().to_string()),
+                        document_iri,
+                        created_by: None,
+                        name,
+                        description: None,
+                    })
+                    .await?;
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            }
+        }
+        Command::ExportAll {
+            sbol_class,
+            role,
+            document_id,
+            page_size,
+        } => {
+            run_export_all(service.clone(), sbol_class, role, document_id, page_size).await?;
         }
         Command::Get { iri, json } => {
             let obj = service
@@ -347,6 +421,181 @@ async fn main() -> Result<()> {
                 .with_graceful_shutdown(shutdown_signal())
                 .await?;
             tracing::info!("sbol-db serve loop exited cleanly");
+        }
+    }
+    Ok(())
+}
+
+async fn run_directory_import(
+    service: Arc<SbolObjectService>,
+    root: &std::path::Path,
+    explicit_format: Option<&str>,
+    parallel: usize,
+    continue_on_error: bool,
+    skip_existing: bool,
+) -> Result<()> {
+    let files = collect_importable_files(root)?;
+    if files.is_empty() {
+        println!("no importable files under {}", root.display());
+        return Ok(());
+    }
+    let total = files.len();
+    println!("importing {total} file(s) from {}", root.display());
+
+    let explicit_format = explicit_format.map(str::to_owned);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(parallel));
+    let mut set: tokio::task::JoinSet<(PathBuf, OutcomeOfFile)> = tokio::task::JoinSet::new();
+    for (idx, path) in files.into_iter().enumerate() {
+        let svc = service.clone();
+        let sem = semaphore.clone();
+        let fmt = explicit_format.clone();
+        set.spawn(async move {
+            let permit = sem.acquire_owned().await.expect("semaphore");
+            let outcome = import_one(svc, &path, fmt.as_deref(), skip_existing).await;
+            drop(permit);
+            let label = match &outcome {
+                OutcomeOfFile::Imported(rep) => format!(
+                    "imported ({} objects, {} quads, {:?})",
+                    rep.object_count, rep.quad_count, rep.validation_status
+                ),
+                OutcomeOfFile::Skipped => "skipped (already imported)".to_owned(),
+                OutcomeOfFile::Failed(err) => format!("FAILED: {err}"),
+            };
+            println!("[{}/{}] {} — {}", idx + 1, total, path.display(), label);
+            (path, outcome)
+        });
+    }
+
+    let mut imported = 0usize;
+    let mut skipped = 0usize;
+    let mut failed: Vec<(PathBuf, String)> = Vec::new();
+    while let Some(joined) = set.join_next().await {
+        let (path, outcome) = joined.context("join import task")?;
+        match outcome {
+            OutcomeOfFile::Imported(_) => imported += 1,
+            OutcomeOfFile::Skipped => skipped += 1,
+            OutcomeOfFile::Failed(err) => failed.push((path, err)),
+        }
+    }
+    println!(
+        "summary: {imported} imported, {skipped} skipped, {failed} failed",
+        failed = failed.len()
+    );
+    if !failed.is_empty() && !continue_on_error {
+        let (path, err) = &failed[0];
+        return Err(anyhow!(
+            "{}: {err} (and {} more)",
+            path.display(),
+            failed.len() - 1
+        ));
+    }
+    Ok(())
+}
+
+enum OutcomeOfFile {
+    Imported(sbol_db_core::ImportReport),
+    Skipped,
+    Failed(String),
+}
+
+async fn import_one(
+    service: Arc<SbolObjectService>,
+    path: &std::path::Path,
+    explicit_format: Option<&str>,
+    skip_existing: bool,
+) -> OutcomeOfFile {
+    let body = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => return OutcomeOfFile::Failed(format!("read: {e}")),
+    };
+    let format = match resolve_format(explicit_format, path) {
+        Ok(f) => f,
+        Err(e) => return OutcomeOfFile::Failed(e.to_string()),
+    };
+    if skip_existing {
+        let hash = hash_bytes(body.as_bytes());
+        match service.documents().exists_by_hash(&hash).await {
+            Ok(true) => return OutcomeOfFile::Skipped,
+            Ok(false) => {}
+            Err(e) => return OutcomeOfFile::Failed(e.to_string()),
+        }
+    }
+    match service
+        .import_document(ImportInput {
+            body,
+            format,
+            source_uri: Some(path.display().to_string()),
+            document_iri: None,
+            created_by: None,
+            name: None,
+            description: None,
+        })
+        .await
+    {
+        Ok(report) => OutcomeOfFile::Imported(report),
+        Err(e) => OutcomeOfFile::Failed(e.to_string()),
+    }
+}
+
+fn collect_importable_files(root: &std::path::Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in
+            std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))?
+        {
+            let entry = entry?;
+            let ty = entry.file_type()?;
+            let path = entry.path();
+            if ty.is_dir() {
+                stack.push(path);
+            } else if ty.is_file()
+                && path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .and_then(SerializationFormat::from_extension)
+                    .is_some()
+            {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+async fn run_export_all(
+    service: Arc<SbolObjectService>,
+    sbol_class: Option<String>,
+    role: Option<String>,
+    document_id: Option<uuid::Uuid>,
+    page_size: u32,
+) -> Result<()> {
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let mut cursor: Option<String> = None;
+    let limit = page_size.clamp(1, 5000);
+    loop {
+        let filter = ListObjectsFilter {
+            sbol_class: sbol_class.clone(),
+            role: role.clone(),
+            document_id: document_id.map(DocumentId),
+            after_iri: cursor.clone(),
+            limit,
+        };
+        let page = service.objects().list(&filter).await?;
+        let page_len = page.len();
+        for record in &page {
+            serde_json::to_writer(&mut out, record)?;
+            out.write_all(b"\n")?;
+        }
+        if (page_len as u32) < limit {
+            break;
+        }
+        cursor = page.last().map(|r| r.iri.as_str().to_owned());
+        if cursor.is_none() {
+            break;
         }
     }
     Ok(())

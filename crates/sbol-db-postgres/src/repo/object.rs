@@ -131,6 +131,77 @@ impl SbolObjectRepository {
 
         row.map(row_to_record).transpose()
     }
+
+    /// Bulk variant of [`get_by_iri`]. Returns matching live rows in arbitrary
+    /// order; IRIs that don't resolve are simply absent from the result. A
+    /// single indexed scan via `iri = ANY($1)`.
+    pub async fn get_by_iris(&self, iris: &[&str]) -> Result<Vec<SbolObjectRecord>, DomainError> {
+        if iris.is_empty() {
+            return Ok(Vec::new());
+        }
+        let owned: Vec<String> = iris.iter().map(|s| (*s).to_owned()).collect();
+        let rows = sqlx::query(
+            r#"
+            SELECT id, iri::text AS iri, sbol_class, display_id, name, description,
+                   document_id, types::text[] AS types, roles::text[] AS roles,
+                   data, content_hash
+            FROM sbol_objects
+            WHERE iri::text = ANY($1::text[]) AND is_deleted = false
+            "#,
+        )
+        .bind(&owned)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+
+        rows.into_iter().map(row_to_record).collect()
+    }
+
+    /// Paginated listing for corpus-scale export. Keyset cursor on `iri`
+    /// (lexicographic ascending); pass the last `iri` of the prior page as
+    /// `after_iri` to fetch the next. Filters compose: when any of
+    /// `sbol_class`, `role`, or `document_id` is `Some`, the corresponding
+    /// predicate is added to the WHERE clause.
+    pub async fn list(
+        &self,
+        filter: &ListObjectsFilter,
+    ) -> Result<Vec<SbolObjectRecord>, DomainError> {
+        let limit = filter.limit.clamp(1, 5000) as i64;
+        let rows = sqlx::query(
+            r#"
+            SELECT id, iri::text AS iri, sbol_class, display_id, name, description,
+                   document_id, types::text[] AS types, roles::text[] AS roles,
+                   data, content_hash
+            FROM sbol_objects
+            WHERE is_deleted = false
+              AND ($1::text IS NULL OR sbol_class = $1)
+              AND ($2::text IS NULL OR $2 = ANY(roles::text[]))
+              AND ($3::uuid IS NULL OR document_id = $3)
+              AND ($4::text IS NULL OR iri::text > $4)
+            ORDER BY iri::text ASC
+            LIMIT $5
+            "#,
+        )
+        .bind(filter.sbol_class.as_deref())
+        .bind(filter.role.as_deref())
+        .bind(filter.document_id.map(|d| d.0))
+        .bind(filter.after_iri.as_deref())
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+
+        rows.into_iter().map(row_to_record).collect()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ListObjectsFilter {
+    pub sbol_class: Option<String>,
+    pub role: Option<String>,
+    pub document_id: Option<DocumentId>,
+    pub after_iri: Option<String>,
+    pub limit: u32,
 }
 
 fn row_to_record(row: sqlx::postgres::PgRow) -> Result<SbolObjectRecord, DomainError> {
