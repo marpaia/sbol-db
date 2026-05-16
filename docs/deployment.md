@@ -156,58 +156,114 @@ The Job inherits `DATABASE_STARTUP_TIMEOUT_SECS` (default 30s), so the
 hook can survive a slow Postgres cold-start — the migration container
 retries `connect()` with exponential backoff before declaring failure.
 
-### Optional resources
-
-Every optional Kubernetes object is gated by a single flag in
-`values.yaml`. Enable a flag and (where applicable) supply the
-relevant subkeys.
-
-| Flag | Resource | Notes |
-|---|---|---|
-| `ingress.enabled` | `Ingress` | TLS, host, className all configurable. |
-| `autoscaling.enabled` | `HorizontalPodAutoscaler` | CPU + optional memory targets. |
-| `podDisruptionBudget.enabled` | `PodDisruptionBudget` | One of `minAvailable` or `maxUnavailable`. |
-| `serviceMonitor.enabled` | Prometheus Operator `ServiceMonitor` | Scrapes `/metrics`; when off, the Deployment falls back to `prometheus.io/scrape` pod annotations. |
-| `networkPolicy.enabled` | `NetworkPolicy` | Default-deny; allows ingress on 8080, egress to DNS + Postgres + (optional) OBO Foundry. |
-
 ## Configuration reference
 
-All knobs are environment variables. The Helm chart materializes them
-from `values.yaml` (see [chart README](../charts/sbol-db/README.md#tunable-configuration-config)).
-The binary also accepts them directly when not running under the chart.
+This is the operator's single source of truth for tunable knobs. The
+Helm chart materializes each value from `values.yaml`; the binary
+falls back to the env var directly when running outside the chart. The
+chart's own [values.yaml](../charts/sbol-db/values.yaml) carries
+inline comments for every key.
 
-### Connection
+### Application config (env-driven)
 
-| Env | Default | Purpose |
+#### Connection
+
+| Chart value | Env | Default | Purpose |
+|---|---|---|---|
+| `externalDatabase.*` or `postgresql.*` | `DATABASE_URL` | — | Postgres DSN. Resolved via one of the three DSN modes above. |
+| `config.bind` | `SBOL_DB_BIND` | `0.0.0.0:8080` | Listen address. The Service and probes assume port 8080. |
+
+#### Server
+
+| Chart value | Env | Default | Purpose |
+|---|---|---|---|
+| `config.server.requestTimeoutSecs` | `SBOL_DB_REQUEST_TIMEOUT_SECS` | `60` | Outer wall-clock timeout per HTTP request; returns 408. |
+| `config.server.maxBodyBytes` | `SBOL_DB_MAX_BODY_BYTES` | `33554432` (32 MiB) | Max request body; oversize returns 413. |
+
+#### Database pool
+
+| Chart value | Env | Default | Purpose |
+|---|---|---|---|
+| `config.database.maxConnections` | `DATABASE_MAX_CONNECTIONS` | `8` | Pool ceiling. |
+| `config.database.minConnections` | `DATABASE_MIN_CONNECTIONS` | `0` | Idle floor (warm pool). |
+| `config.database.acquireTimeoutSecs` | `DATABASE_ACQUIRE_TIMEOUT_SECS` | `5` | Per-request wait when the pool is saturated. |
+| `config.database.idleTimeoutSecs` | `DATABASE_IDLE_TIMEOUT_SECS` | `300` | Idle eviction. `0` disables. |
+| `config.database.maxLifetimeSecs` | `DATABASE_MAX_LIFETIME_SECS` | `1800` | Hard connection lifetime. `0` disables. Useful behind PgBouncer. |
+| `config.database.connectTimeoutSecs` | `DATABASE_CONNECT_TIMEOUT_SECS` | `5` | Per-attempt connect cap. |
+| `config.database.startupTimeoutSecs` | `DATABASE_STARTUP_TIMEOUT_SECS` | `30` (chart-set on serve / migrate) or `0` (other CLI commands) | Total budget for the boot-time retry loop. |
+
+#### Logging
+
+| Chart value | Env | Default | Purpose |
+|---|---|---|---|
+| `config.rustLog` | `RUST_LOG` | `info` | `tracing-subscriber` env-filter directive. Common: `info,sbol_db=debug,sqlx=warn`. |
+| `config.logFormat` | `LOG_FORMAT` | `json` (chart default) / auto (binary default) | `json` for structured output; `text`/`plain`/`human` for the human-readable formatter; `auto` (binary only) picks JSON when stdout isn't a TTY. |
+
+`extraEnv:` is appended after the chart-managed env block and can
+override any of the above, for one-off cases that don't warrant a new
+top-level value.
+
+### Workload knobs (chart-only)
+
+These shape the Deployment, Service, and ServiceAccount; they don't
+correspond to env vars on the binary.
+
+| Chart value | Default | Purpose |
 |---|---|---|
-| `DATABASE_URL` | `postgres://sbol:sbol@localhost:5432/sbol` | Postgres DSN. Required. |
-| `SBOL_DB_BIND` | `127.0.0.1:8080` | Listen address. Chart sets `0.0.0.0:8080`. |
+| `replicaCount` | `1` | sbol-db serve replicas. Set `≥ 2` for production. |
+| `strategy` | `RollingUpdate{maxSurge: 1, maxUnavailable: 0}` | Deployment update strategy. |
+| `terminationGracePeriodSeconds` | `65` | SIGTERM-to-SIGKILL window. Must be ≥ `config.server.requestTimeoutSecs` + headroom or in-flight requests get killed on rollouts. |
+| `resources` | `requests: {100m, 128Mi}, limits: {1, 512Mi}` | Container resource requests/limits. |
+| `image.repository` / `image.tag` / `image.pullPolicy` | `ghcr.io/marpaia/sbol-db` / `appVersion` / `IfNotPresent` | Container image coordinates. |
+| `imagePullSecrets` | `[]` | Attached to the Deployment, migration Job, and (when created) the ServiceAccount. |
+| `serviceAccount.{create,name,annotations}` | `{true, "", {}}` | Per-release SA with `automountServiceAccountToken: false`. |
+| `podSecurityContext`, `securityContext` | distroless-compatible strict defaults | `runAsUser: 65532`, `runAsNonRoot: true`, `readOnlyRootFilesystem: true`, `drop: [ALL]`. |
+| `service.{type,port,portName}` | `{ClusterIP, 80, http}` | Service shape. |
+| `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints` | `{}` / `[]` | Scheduling controls. |
+| `podLabels`, `podAnnotations` | `{}` | Pod metadata. The chart adds `prometheus.io/scrape` annotations automatically when `serviceMonitor.enabled=false`. |
+| `extraVolumes`, `extraVolumeMounts` | `[]` | Escape hatch for volumes (e.g. mounting a CA bundle). |
 
-### Server
+### Probe timings
 
-| Env | Default | Purpose |
+The probe **paths** are hardcoded (`/healthz`, `/readyz`); only the
+timing knobs are exposed. Defaults match the
+[probe-tuning guidance](#probe-tuning) above.
+
+| Chart value | Default | Purpose |
 |---|---|---|
-| `SBOL_DB_REQUEST_TIMEOUT_SECS` | `60` | Outer wall-clock timeout per HTTP request; returns 408. |
-| `SBOL_DB_MAX_BODY_BYTES` | `33554432` (32 MiB) | Max request body; oversize returns 413. |
+| `livenessProbe.enabled` | `true` | |
+| `livenessProbe.initialDelaySeconds` | `5` | |
+| `livenessProbe.periodSeconds` | `10` | |
+| `livenessProbe.timeoutSeconds` | `2` | |
+| `livenessProbe.failureThreshold` | `3` | |
+| `readinessProbe.enabled` | `true` | |
+| `readinessProbe.initialDelaySeconds` | `3` | |
+| `readinessProbe.periodSeconds` | `5` | |
+| `readinessProbe.timeoutSeconds` | `2` | Must be > 1s (the `/readyz` internal DB-probe timeout). |
+| `readinessProbe.failureThreshold` | `3` | |
+| `startupProbe.enabled` | `true` | |
+| `startupProbe.periodSeconds` | `5` | |
+| `startupProbe.failureThreshold` | `30` | Gives the pod ≈ `periodSeconds × failureThreshold = 150s` to become ready. |
 
-### Database pool
+### Migration Job knobs
 
-| Env | Default | Purpose |
+| Chart value | Default | Purpose |
 |---|---|---|
-| `DATABASE_MAX_CONNECTIONS` | `8` | Pool ceiling. |
-| `DATABASE_MIN_CONNECTIONS` | `0` | Idle floor (warm pool). |
-| `DATABASE_ACQUIRE_TIMEOUT_SECS` | `5` | Per-request wait when the pool is saturated. |
-| `DATABASE_IDLE_TIMEOUT_SECS` | `300` | Idle eviction. `0` disables. |
-| `DATABASE_MAX_LIFETIME_SECS` | `1800` | Hard connection lifetime. `0` disables. Useful behind PgBouncer. |
-| `DATABASE_CONNECT_TIMEOUT_SECS` | `5` | Per-attempt connect cap. |
-| `DATABASE_STARTUP_TIMEOUT_SECS` | `30` (serve / migrate) or `0` (other CLI commands) | Total budget for the boot-time retry loop. |
+| `migrate.enabled` | `true` | Whether to run the pre-install/pre-upgrade Job at all. |
+| `migrate.backoffLimit` | `3` | Retries before the hook is treated as failed. |
+| `migrate.ttlSecondsAfterFinished` | `600` | Lingering time for inspection after success. |
+| `migrate.resources` | `requests: {50m, 64Mi}, limits: {500m, 256Mi}` | Resource bounds for the short-lived migrate container. |
+| `migrate.podLabels` | `{}` | Extra labels on the Job pod. |
 
-### Logging
+### Optional resources (each gated by `.enabled`)
 
-| Env | Default | Purpose |
+| Chart subtree | Resource emitted | Notes |
 |---|---|---|
-| `RUST_LOG` | `info` | `tracing-subscriber` env-filter directive. Common: `info,sbol_db=debug,sqlx=warn`. |
-| `LOG_FORMAT` | auto (`json` when stdout isn't a TTY, `text` when it is) | `json` for structured output; `text`/`plain`/`human` for the human-readable formatter. |
+| `ingress.{enabled,className,annotations,hosts,tls}` | `Ingress` | Multi-host + TLS supported. |
+| `autoscaling.{enabled,minReplicas,maxReplicas,targetCPUUtilizationPercentage,targetMemoryUtilizationPercentage}` | `HorizontalPodAutoscaler` v2 | Set memory target to `0` to disable that rule. |
+| `podDisruptionBudget.{enabled,minAvailable,maxUnavailable}` | `PodDisruptionBudget` | Exactly one of `minAvailable` / `maxUnavailable`. |
+| `serviceMonitor.{enabled,namespace,labels,interval,scrapeTimeout,honorLabels,relabelings,metricRelabelings}` | Prometheus Operator `ServiceMonitor` | Scrapes `/metrics` on the main port. When disabled, fallback `prometheus.io/scrape` annotations are added to the pod. |
+| `networkPolicy.{enabled,allowOntologyFetch,extraIngress,extraEgress}` | `NetworkPolicy` | Default-deny; allows ingress on 8080, egress to DNS + Postgres + (optional) HTTPS to OBO Foundry. |
 
 ## Operational endpoints
 
