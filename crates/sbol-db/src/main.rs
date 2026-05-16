@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use sbol_db_core::{Direction, IriString, NeighborhoodQuery, ObjectId, SerializationFormat};
 use sbol_db_postgres::{
-    connect, run_migrations, ImportInput, SbolObjectService, SequenceSearchOptions,
+    connect_with_retry, run_migrations, ImportInput, SbolObjectService, SequenceSearchOptions,
 };
 use sbol_db_server::{router, AppState, Metrics};
 use sbol_db_sparql::{ResultFormat, SparqlEngine, SparqlOptions};
@@ -116,7 +116,7 @@ enum Command {
     },
     /// Start the HTTP server.
     Serve {
-        #[arg(long, default_value = "127.0.0.1:8080")]
+        #[arg(long, env = "SBOL_DB_BIND", default_value = "127.0.0.1:8080")]
         bind: SocketAddr,
     },
 }
@@ -165,7 +165,7 @@ enum MigrateAction {
 async fn main() -> Result<()> {
     init_logging();
     let cli = Cli::parse();
-    let pool = connect(&cli.database_url)
+    let pool = open_pool(&cli.database_url, &cli.command)
         .await
         .with_context(|| format!("connecting to {}", cli.database_url))?;
     let service = Arc::new(SbolObjectService::new(pool.clone()));
@@ -339,11 +339,14 @@ async fn main() -> Result<()> {
                 sparql: engine,
                 metrics,
             };
-            let app = router(state);
+            let app = router(state, sbol_db_server::ServerConfig::from_env());
             let listener = tokio::net::TcpListener::bind(bind).await?;
             tracing::info!(%bind, "sbol-db serving");
             println!("sbol-db listening on http://{bind}");
-            axum::serve(listener, app).await?;
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal())
+                .await?;
+            tracing::info!("sbol-db serve loop exited cleanly");
         }
     }
     Ok(())
@@ -443,7 +446,73 @@ fn parse_format(s: &str) -> Option<SerializationFormat> {
 }
 
 fn init_logging() {
+    use std::io::IsTerminal;
     use tracing_subscriber::{fmt, EnvFilter};
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = fmt().with_env_filter(filter).with_target(false).try_init();
+    // LOG_FORMAT={json,text} forces a format; otherwise default to JSON
+    // when stdout isn't a TTY (containers, pipes) and human-readable
+    // when it is.
+    let want_json = match std::env::var("LOG_FORMAT")
+        .ok()
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("json") => true,
+        Some("text") | Some("plain") | Some("human") => false,
+        _ => !std::io::stdout().is_terminal(),
+    };
+    if want_json {
+        let _ = fmt()
+            .with_env_filter(filter)
+            .with_target(false)
+            .json()
+            .try_init();
+    } else {
+        let _ = fmt().with_env_filter(filter).with_target(false).try_init();
+    }
+}
+
+/// Commands that need a long startup retry loop (`serve`, `migrate up`)
+/// honor `DATABASE_STARTUP_TIMEOUT_SECS`; everything else fails fast on
+/// the first connection error.
+async fn open_pool(database_url: &str, command: &Command) -> Result<sbol_db_postgres::PgPool> {
+    let needs_retry = matches!(command, Command::Serve { .. } | Command::Migrate { .. });
+    let deadline = if needs_retry {
+        Duration::from_secs(
+            std::env::var("DATABASE_STARTUP_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(30),
+        )
+    } else {
+        Duration::ZERO
+    };
+    connect_with_retry(database_url, deadline)
+        .await
+        .map_err(Into::into)
+}
+
+/// Listens for SIGTERM (k8s pod termination) and Ctrl-C so axum can
+/// drain in-flight requests during a Helm rollout instead of dropping
+/// them mid-flight.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("install ctrl-c handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => tracing::info!(signal = "SIGINT", "shutdown signal received"),
+        _ = terminate => tracing::info!(signal = "SIGTERM", "shutdown signal received"),
+    }
 }

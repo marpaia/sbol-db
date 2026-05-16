@@ -37,6 +37,14 @@ Entry points to the project's documentation, organized by topic.
   projections, validation, projection events, blank-node handling,
   index choices.
 
+## Operations
+
+- **[Deployment guide](deployment.md)**: container image, CI workflows,
+  Helm chart, environment-variable reference, probes, metrics, JSON
+  logging, graceful shutdown semantics, capacity planning, and a
+  troubleshooting playbook. Start here when standing sbol-db up in a
+  real environment.
+
 ## Scope
 
 `sbol-db` deliberately stays narrow on SBOL query capabilities and

@@ -4,7 +4,7 @@ pub mod pool;
 mod repo;
 mod service;
 
-pub use pool::{connect, run_migrations, PgPool};
+pub use pool::{connect, connect_with_retry, run_migrations, PgPool, PoolConfig};
 pub use repo::{
     DocumentRepository, GraphFilter, NeighborhoodRepository, OntologyLoadReport, OntologyRecord,
     OntologyRepository, OntologyTermRecord, PatternObject, PatternSubject, ProjectionEvent,

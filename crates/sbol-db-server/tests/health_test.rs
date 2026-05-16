@@ -8,7 +8,7 @@ use std::sync::Arc;
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use sbol_db_postgres::{connect, run_migrations, SbolObjectService};
-use sbol_db_server::{router, AppState, Metrics};
+use sbol_db_server::{router, AppState, Metrics, ServerConfig};
 use sbol_db_sparql::SparqlEngine;
 use tower::ServiceExt;
 
@@ -36,7 +36,7 @@ async fn read_body(res: axum::response::Response) -> String {
 
 #[tokio::test]
 async fn healthz_returns_ok_literal() {
-    let app = router(state().await);
+    let app = router(state().await, sbol_db_server::ServerConfig::default());
     let res = app
         .oneshot(
             Request::builder()
@@ -52,7 +52,7 @@ async fn healthz_returns_ok_literal() {
 
 #[tokio::test]
 async fn readyz_reports_ready_when_db_reachable() {
-    let app = router(state().await);
+    let app = router(state().await, sbol_db_server::ServerConfig::default());
     let res = app
         .oneshot(
             Request::builder()
@@ -71,8 +71,30 @@ async fn readyz_reports_ready_when_db_reachable() {
 }
 
 #[tokio::test]
+async fn oversize_body_returns_413() {
+    let cfg = ServerConfig {
+        max_body_bytes: 1024,
+        ..ServerConfig::default()
+    };
+    let app = router(state().await, cfg);
+    let body = vec![b'x'; 4096];
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/documents")
+                .header("content-type", "text/turtle")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("request");
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
 async fn metrics_exposes_prometheus_format() {
-    let app = router(state().await);
+    let app = router(state().await, sbol_db_server::ServerConfig::default());
 
     // Drive a request through the middleware so the http counter has a
     // sample to render.

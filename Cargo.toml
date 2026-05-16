@@ -33,7 +33,7 @@ sqlx = { version = "0.8", default-features = false, features = [
 axum = { version = "0.7", default-features = false, features = ["http1", "json", "query", "tokio", "matched-path"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "signal"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.6", features = ["trace", "timeout", "limit"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

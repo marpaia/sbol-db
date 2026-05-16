@@ -9,6 +9,7 @@ query primitives: typed lookup by IRI, bounded graph neighborhood
 traversal, and read-only SPARQL 1.1.
 
 New to the codebase? Start with the [**crate guide**](docs/crate-guide.md).
+Deploying it? See [**docs/deployment.md**](docs/deployment.md).
 
 ## Scope
 
