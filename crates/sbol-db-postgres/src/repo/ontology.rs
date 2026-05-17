@@ -374,6 +374,103 @@ impl OntologyRepository {
         Ok(out)
     }
 
+    /// Page through every term that belongs to `prefix`, sorted by
+    /// curie. `search` (when non-empty) restricts by case-insensitive
+    /// substring match on either the curie or the name. Returns the
+    /// page rows plus the total matching count so that callers can render
+    /// a paginated UI without a second round-trip.
+    pub async fn list_terms(
+        &self,
+        prefix: &str,
+        limit: i64,
+        offset: i64,
+        search: Option<&str>,
+    ) -> Result<(Vec<OntologyTermRecord>, i64), DomainError> {
+        let prefix_upper = prefix.to_ascii_uppercase();
+        let pattern = search.map(|s| s.trim()).filter(|s| !s.is_empty()).map(|s| {
+            format!(
+                "%{}%",
+                s.replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_")
+            )
+        });
+
+        let total: i64 = if let Some(pat) = pattern.as_deref() {
+            sqlx::query_scalar(
+                r#"
+                SELECT COUNT(*)::bigint
+                FROM sbol_ontology_terms
+                WHERE prefix = $1
+                  AND (curie ILIKE $2 OR name ILIKE $2)
+                "#,
+            )
+            .bind(&prefix_upper)
+            .bind(pat)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db_err)?
+        } else {
+            sqlx::query_scalar("SELECT COUNT(*)::bigint FROM sbol_ontology_terms WHERE prefix = $1")
+                .bind(&prefix_upper)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(db_err)?
+        };
+
+        let rows = if let Some(pat) = pattern.as_deref() {
+            sqlx::query(
+                r#"
+                SELECT iri::text AS iri, prefix, curie, name, definition,
+                       is_obsolete, synonyms
+                FROM sbol_ontology_terms
+                WHERE prefix = $1
+                  AND (curie ILIKE $2 OR name ILIKE $2)
+                ORDER BY curie ASC
+                LIMIT $3 OFFSET $4
+                "#,
+            )
+            .bind(&prefix_upper)
+            .bind(pat)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db_err)?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT iri::text AS iri, prefix, curie, name, definition,
+                       is_obsolete, synonyms
+                FROM sbol_ontology_terms
+                WHERE prefix = $1
+                ORDER BY curie ASC
+                LIMIT $2 OFFSET $3
+                "#,
+            )
+            .bind(&prefix_upper)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db_err)?
+        };
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(OntologyTermRecord {
+                iri: row.try_get("iri").map_err(db_err)?,
+                prefix: row.try_get("prefix").map_err(db_err)?,
+                curie: row.try_get("curie").map_err(db_err)?,
+                name: row.try_get("name").map_err(db_err)?,
+                definition: row.try_get("definition").map_err(db_err)?,
+                is_obsolete: row.try_get("is_obsolete").map_err(db_err)?,
+                synonyms: row.try_get("synonyms").map_err(db_err)?,
+            });
+        }
+        Ok((out, total))
+    }
+
     pub async fn get_term(&self, iri: &str) -> Result<Option<OntologyTermRecord>, DomainError> {
         let canonical = self
             .canonicalize(iri)

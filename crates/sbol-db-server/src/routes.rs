@@ -732,6 +732,53 @@ pub struct OntologyDescendant {
     pub depth: i16,
 }
 
+#[derive(Deserialize)]
+pub struct OntologyTermsQuery {
+    pub prefix: String,
+    pub q: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(serde::Serialize)]
+pub struct OntologyTermsPage {
+    pub prefix: String,
+    pub total: i64,
+    pub limit: i64,
+    pub offset: i64,
+    pub terms: Vec<OntologyTermRecord>,
+}
+
+const ONTOLOGY_TERMS_DEFAULT_LIMIT: i64 = 100;
+const ONTOLOGY_TERMS_MAX_LIMIT: i64 = 500;
+
+pub async fn ontology_terms(
+    State(state): State<AppState>,
+    Query(params): Query<OntologyTermsQuery>,
+) -> Result<Json<OntologyTermsPage>, ApiError> {
+    if params.prefix.trim().is_empty() {
+        return Err(ApiError::BadRequest("prefix is required".to_owned()));
+    }
+    let limit = params
+        .limit
+        .unwrap_or(ONTOLOGY_TERMS_DEFAULT_LIMIT)
+        .clamp(1, ONTOLOGY_TERMS_MAX_LIMIT);
+    let offset = params.offset.unwrap_or(0).max(0);
+    let prefix_upper = params.prefix.to_ascii_uppercase();
+    let (terms, total) = state
+        .service
+        .ontology()
+        .list_terms(&prefix_upper, limit, offset, params.q.as_deref())
+        .await?;
+    Ok(Json(OntologyTermsPage {
+        prefix: prefix_upper,
+        total,
+        limit,
+        offset,
+        terms,
+    }))
+}
+
 pub async fn ontology_descendants(
     State(state): State<AppState>,
     Query(params): Query<OntologyTermQuery>,

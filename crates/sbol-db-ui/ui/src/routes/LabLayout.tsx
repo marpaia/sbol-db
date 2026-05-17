@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Command as CommandIcon } from "lucide-react";
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { AppSidebar } from "@/components/lab/AppSidebar";
 import { CommandPalette } from "@/components/lab/CommandPalette";
@@ -97,6 +97,24 @@ export default function LabLayout() {
 }
 
 function Breadcrumb({ pathname }: { pathname: string }) {
+  const ontologyMatch = pathname.match(/^\/ontologies\/([^/]+)\/?$/);
+  if (ontologyMatch) {
+    const prefix = decodeURIComponent(ontologyMatch[1]).toLowerCase();
+    return (
+      <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-sm">
+        <span className="text-muted-foreground">Lab</span>
+        <span className="text-muted-foreground/40">/</span>
+        <Link
+          to="/ontologies"
+          className="text-muted-foreground transition-colors hover:text-foreground"
+        >
+          Ontologies
+        </Link>
+        <span className="text-muted-foreground/40">/</span>
+        <span className="font-mono font-medium text-foreground">{prefix}</span>
+      </nav>
+    );
+  }
   const segment = pathname.startsWith("/sparql")
     ? "SPARQL"
     : pathname.startsWith("/sql")

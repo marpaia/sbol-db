@@ -524,6 +524,43 @@
         }
       }
     },
+    "/ontology/terms": {
+      "get": {
+        "tags": ["Ontology"],
+        "summary": "Page through every term in a loaded ontology",
+        "description": "Returns the terms belonging to `prefix`, sorted by curie, optionally filtered by a case-insensitive substring match against either the curie or the name. The response includes the total match count so clients can render pagination without a second round-trip.",
+        "operationId": "ontologyTerms",
+        "parameters": [
+          { "name": "prefix", "in": "query", "required": true, "schema": { "type": "string" }, "example": "SBO" },
+          { "name": "q",      "in": "query", "required": false, "schema": { "type": "string" }, "example": "binding" },
+          { "name": "limit",  "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 0, "default": 0 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching terms with pagination metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["prefix", "total", "limit", "offset", "terms"],
+                  "properties": {
+                    "prefix": { "type": "string" },
+                    "total":  { "type": "integer", "minimum": 0 },
+                    "limit":  { "type": "integer", "minimum": 1 },
+                    "offset": { "type": "integer", "minimum": 0 },
+                    "terms":  {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/OntologyTermRecord" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/ontology/descendants": {
       "get": {
         "tags": ["Ontology"],

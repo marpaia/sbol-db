@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   ChevronRight,
   Library,
@@ -119,7 +120,10 @@ export default function OntologyRoute() {
 
 function OntologyCard({ ontology }: { ontology: OntologyRecord }) {
   return (
-    <article className="rounded-lg border bg-card p-4">
+    <Link
+      to={`/ontologies/${ontology.prefix.toLowerCase()}`}
+      className="group block rounded-lg border bg-card p-4 transition-colors hover:bg-accent/40 hover:border-foreground/20"
+    >
       <header className="flex items-center gap-2">
         <Library size={14} className="shrink-0 text-muted-foreground/70" />
         <span className="font-mono text-sm font-medium text-foreground">
@@ -133,6 +137,10 @@ function OntologyCard({ ontology }: { ontology: OntologyRecord }) {
         <span className="ml-auto text-xs tabular-nums text-muted-foreground">
           {ontology.term_count.toLocaleString()} terms
         </span>
+        <ChevronRight
+          size={14}
+          className="text-muted-foreground/60 transition-transform group-hover:translate-x-0.5 group-hover:text-foreground"
+        />
       </header>
       <div className="mt-1.5 text-sm text-foreground">{ontology.name}</div>
       {ontology.source_url && (
@@ -143,13 +151,26 @@ function OntologyCard({ ontology }: { ontology: OntologyRecord }) {
       <div className="mt-2 text-[11px] text-muted-foreground/70">
         imported {formatRelative(ontology.imported_at)}
       </div>
-    </article>
+    </Link>
   );
 }
 
 function TermLookup() {
-  const [draft, setDraft] = useState("");
-  const [submitted, setSubmitted] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const lookupParam = searchParams.get("lookup") ?? "";
+  const [draft, setDraft] = useState(lookupParam);
+  const [submitted, setSubmitted] = useState(lookupParam);
+
+  // Deep links (`/ontologies?lookup=SBO:0000515`) from per-ontology
+  // browsers should auto-trigger the lookup. Sync both fields when the
+  // URL changes, and clear the param after we've consumed it so the
+  // back button doesn't keep re-triggering.
+  useEffect(() => {
+    if (!lookupParam) return;
+    setDraft(lookupParam);
+    setSubmitted(lookupParam);
+    setSearchParams({}, { replace: true });
+  }, [lookupParam, setSearchParams]);
 
   const { data, isLoading, error, isFetching } = useOntologyTerm(submitted);
 

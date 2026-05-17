@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 
 import DashboardRoute from "@/routes/DashboardRoute";
 import LabLayout from "@/routes/LabLayout";
+import OntologyDetailRoute from "@/routes/OntologyDetailRoute";
 import OntologyRoute from "@/routes/OntologyRoute";
 import SchemaRoute from "@/routes/SchemaRoute";
 import SparqlRoute from "@/routes/SparqlRoute";
@@ -16,6 +17,10 @@ export default function App() {
         <Route path="sql" element={<SqlRoute />} />
         <Route path="schema" element={<SchemaRoute />} />
         <Route path="ontologies" element={<OntologyRoute />} />
+        <Route
+          path="ontologies/:prefix"
+          element={<OntologyDetailRoute />}
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

@@ -157,6 +157,7 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
             get(routes::ontology_list).post(routes::ontology_load),
         )
         .route("/ontology/term", get(routes::ontology_term))
+        .route("/ontology/terms", get(routes::ontology_terms))
         .route("/ontology/descendants", get(routes::ontology_descendants))
         .route("/jobs", get(routes::list_jobs).post(routes::enqueue_job))
         .route("/jobs/:id", get(routes::get_job))

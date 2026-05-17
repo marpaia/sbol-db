@@ -363,3 +363,37 @@ export async function fetchOntologyDescendants(
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as OntologyDescendant[];
 }
+
+export interface OntologyTermsPage {
+  prefix: string;
+  total: number;
+  limit: number;
+  offset: number;
+  terms: OntologyTermRecord[];
+}
+
+export interface OntologyTermsQuery {
+  prefix: string;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function listOntologyTerms(
+  query: OntologyTermsQuery,
+  signal?: AbortSignal
+): Promise<OntologyTermsPage> {
+  const parts: string[] = [`prefix=${encodeURIComponent(query.prefix)}`];
+  if (query.q && query.q.length > 0) {
+    parts.push(`q=${encodeURIComponent(query.q)}`);
+  }
+  if (typeof query.limit === "number") {
+    parts.push(`limit=${query.limit}`);
+  }
+  if (typeof query.offset === "number") {
+    parts.push(`offset=${query.offset}`);
+  }
+  const res = await fetch(`/ontology/terms?${parts.join("&")}`, { signal });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as OntologyTermsPage;
+}

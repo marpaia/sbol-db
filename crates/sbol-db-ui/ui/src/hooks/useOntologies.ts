@@ -6,6 +6,8 @@ import {
   fetchOntologyDescendants,
   fetchOntologyTerm,
   listOntologies,
+  listOntologyTerms,
+  type OntologyTermsQuery,
 } from "@/lib/api";
 
 const FRESH_MS = 60_000;
@@ -35,5 +37,23 @@ export function useOntologyDescendants(iri: string, enabled: boolean) {
     enabled: enabled && iri.length > 0,
     staleTime: FRESH_MS,
     retry: false,
+  });
+}
+
+export function useOntologyTerms(query: OntologyTermsQuery) {
+  return useQuery({
+    queryKey: [
+      "lab",
+      "ontology",
+      "terms",
+      query.prefix,
+      query.q ?? "",
+      query.limit ?? null,
+      query.offset ?? 0,
+    ],
+    queryFn: ({ signal }) => listOntologyTerms(query, signal),
+    enabled: query.prefix.length > 0,
+    staleTime: FRESH_MS,
+    placeholderData: (prev) => prev,
   });
 }
