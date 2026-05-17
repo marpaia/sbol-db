@@ -397,3 +397,292 @@ export async function listOntologyTerms(
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as OntologyTermsPage;
 }
+
+// ---------- Observability ----------
+
+export interface PoolStat {
+  size: number;
+  idle: number;
+  in_use: number;
+}
+
+export interface PoolSnapshot {
+  api: PoolStat;
+  worker: PoolStat | null;
+}
+
+export interface BucketSnapshot {
+  started_at: string;
+  count: number;
+  error_count: number;
+  p50_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  max_ms: number;
+}
+
+export interface RollingSnapshot {
+  bucket_secs: number;
+  window_buckets: number;
+  buckets: BucketSnapshot[];
+}
+
+export interface ObservabilityHealth {
+  ready: boolean;
+  version: string;
+  uptime_secs: number;
+  snapshot_at: string;
+}
+
+export interface QueueDepthRow {
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "dead";
+  queue: string;
+  count: number;
+}
+
+export interface OldestQueuedAge {
+  queue: string;
+  age_secs: number;
+}
+
+export interface JobsSnapshot {
+  queue_depth: QueueDepthRow[];
+  oldest_age: OldestQueuedAge[];
+  failures_24h: number;
+}
+
+export interface ObservabilitySummary {
+  health: ObservabilityHealth;
+  pool: PoolSnapshot;
+  jobs: JobsSnapshot;
+  rolling: RollingSnapshot;
+}
+
+export async function fetchObservabilitySummary(
+  signal?: AbortSignal
+): Promise<ObservabilitySummary> {
+  const res = await fetch("/lab/api/observability/summary", { signal });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as ObservabilitySummary;
+}
+
+export interface DatabaseSize {
+  database: string;
+  total_bytes: number;
+}
+
+export async function fetchPgDatabase(
+  signal?: AbortSignal
+): Promise<DatabaseSize> {
+  const res = await fetch("/lab/api/observability/postgres/database", {
+    signal,
+  });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as DatabaseSize;
+}
+
+export interface TableStats {
+  name: string;
+  rows_estimate: number;
+  total_bytes: number;
+  index_bytes: number;
+  n_live_tup: number;
+  n_dead_tup: number;
+  last_vacuum: string | null;
+  last_autovacuum: string | null;
+  last_analyze: string | null;
+}
+
+export async function fetchPgTables(
+  limit = 20,
+  offset = 0,
+  signal?: AbortSignal
+): Promise<TableStats[]> {
+  const res = await fetch(
+    `/lab/api/observability/postgres/tables?limit=${limit}&offset=${offset}`,
+    { signal }
+  );
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as TableStats[];
+}
+
+export interface IndexStats {
+  table: string;
+  index: string;
+  idx_scan: number;
+  bytes: number;
+}
+
+export async function fetchPgIndexes(
+  limit = 30,
+  signal?: AbortSignal
+): Promise<IndexStats[]> {
+  const res = await fetch(
+    `/lab/api/observability/postgres/indexes?limit=${limit}`,
+    { signal }
+  );
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as IndexStats[];
+}
+
+export interface PgActivity {
+  pid: number;
+  application_name: string | null;
+  state: string | null;
+  wait_event_type: string | null;
+  wait_event: string | null;
+  query: string | null;
+  query_start: string | null;
+  duration_secs: number | null;
+  client_addr: string | null;
+}
+
+export async function fetchPgActivity(
+  limit = 50,
+  signal?: AbortSignal
+): Promise<PgActivity[]> {
+  const res = await fetch(
+    `/lab/api/observability/postgres/activity?limit=${limit}`,
+    { signal }
+  );
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as PgActivity[];
+}
+
+export interface BlockingLock {
+  blocker_pid: number;
+  blocker_query: string | null;
+  blocked_pid: number;
+  blocked_query: string | null;
+  mode: string | null;
+  locktype: string | null;
+}
+
+export async function fetchPgLocks(
+  signal?: AbortSignal
+): Promise<BlockingLock[]> {
+  const res = await fetch("/lab/api/observability/postgres/locks", { signal });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as BlockingLock[];
+}
+
+export interface SlowQuery {
+  queryid: string;
+  query: string | null;
+  calls: number;
+  total_exec_ms: number;
+  mean_exec_ms: number;
+  rows: number;
+}
+
+export interface TableColumn {
+  name: string;
+  pg_type: string;
+  nullable: boolean;
+  default_expr: string | null;
+  ordinal: number;
+  comment: string | null;
+  is_primary_key: boolean;
+}
+
+export interface OutgoingForeignKey {
+  name: string;
+  columns: string[];
+  target_table: string;
+  target_columns: string[];
+}
+
+export interface IncomingForeignKey {
+  name: string;
+  source_table: string;
+  source_columns: string[];
+  target_columns: string[];
+}
+
+export interface TableSchema {
+  name: string;
+  comment: string | null;
+  columns: TableColumn[];
+  foreign_keys_out: OutgoingForeignKey[];
+  foreign_keys_in: IncomingForeignKey[];
+}
+
+export async function fetchPgTableSchema(
+  name: string,
+  signal?: AbortSignal
+): Promise<TableSchema> {
+  const res = await fetch(
+    `/lab/api/observability/postgres/tables/${encodeURIComponent(name)}/schema`,
+    { signal }
+  );
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as TableSchema;
+}
+
+export type SlowQueriesResponse =
+  | { status: "not_installed"; setup_hint: string }
+  | { status: "installed"; rows: SlowQuery[] };
+
+export async function fetchPgSlowQueries(
+  limit = 20,
+  signal?: AbortSignal
+): Promise<SlowQueriesResponse> {
+  const res = await fetch(
+    `/lab/api/observability/postgres/slow-queries?limit=${limit}`,
+    { signal }
+  );
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as SlowQueriesResponse;
+}
+
+export type JobStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "dead";
+
+export interface RecentJob {
+  id: string;
+  kind: string;
+  status: JobStatus;
+  priority: number;
+  queue: string;
+  payload: unknown;
+  result: unknown;
+  error: string | null;
+  idempotency_key: string | null;
+  attempts: number;
+  max_attempts: number;
+  available_at: string;
+  leased_by: string | null;
+  lease_expires_at: string | null;
+  parent_job_id: string | null;
+  correlation_id: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface RecentJobsQuery {
+  limit?: number;
+  queue?: string;
+  status?: JobStatus;
+}
+
+export async function fetchRecentJobs(
+  query: RecentJobsQuery = {},
+  signal?: AbortSignal
+): Promise<RecentJob[]> {
+  const parts: string[] = [];
+  if (typeof query.limit === "number") parts.push(`limit=${query.limit}`);
+  if (query.queue) parts.push(`queue=${encodeURIComponent(query.queue)}`);
+  if (query.status) parts.push(`status=${encodeURIComponent(query.status)}`);
+  const qs = parts.length > 0 ? `?${parts.join("&")}` : "";
+  const res = await fetch(`/lab/api/observability/jobs/recent${qs}`, {
+    signal,
+  });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as RecentJob[];
+}

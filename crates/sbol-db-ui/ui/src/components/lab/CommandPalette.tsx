@@ -12,7 +12,21 @@
 
 import { useEffect, useState } from "react";
 import { Command } from "cmdk";
-import { Clock, Database, History, Network, Star } from "lucide-react";
+import {
+  Activity,
+  Clock,
+  Compass,
+  Database,
+  Gauge,
+  HardDrive,
+  History,
+  Home,
+  Library,
+  Network,
+  Star,
+  Table2,
+} from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 import { type Dialect, useLabStore } from "@/lib/store";
 
@@ -31,6 +45,12 @@ export function CommandPalette({
 }: CommandPaletteProps) {
   const saved = useLabStore((s) => s.saved);
   const history = useLabStore((s) => s.history);
+  const navigate = useNavigate();
+
+  const goTo = (path: string) => {
+    navigate(path);
+    onOpenChange(false);
+  };
 
   const [value, setValue] = useState("");
   useEffect(() => {
@@ -83,6 +103,44 @@ export function CommandPalette({
                 onSwitchDialect("sql");
                 onOpenChange(false);
               }}
+            />
+          </Command.Group>
+
+          <Command.Group
+            heading="Go to"
+            className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground"
+          >
+            <Item icon={<Home size={14} />} label="Overview" onSelect={() => goTo("/")} />
+            <Item
+              icon={<Table2 size={14} />}
+              label="Schema browser"
+              onSelect={() => goTo("/schema")}
+            />
+            <Item
+              icon={<Library size={14} />}
+              label="Ontologies"
+              onSelect={() => goTo("/ontologies")}
+            />
+            <Item
+              icon={<Activity size={14} />}
+              label="Observability"
+              trailing="metrics + jobs"
+              onSelect={() => goTo("/observability")}
+            />
+            <Item
+              icon={<Gauge size={14} />}
+              label="App metrics"
+              onSelect={() => goTo("/observability")}
+            />
+            <Item
+              icon={<HardDrive size={14} />}
+              label="Postgres Maintenance"
+              onSelect={() => goTo("/observability/postgres")}
+            />
+            <Item
+              icon={<Compass size={14} />}
+              label="Explore"
+              onSelect={() => goTo("/schema")}
             />
           </Command.Group>
 

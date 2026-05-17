@@ -7,11 +7,14 @@
  */
 
 import {
+  Activity,
   ChevronRight,
   Command as CommandIcon,
   Compass,
   Database,
   FlaskConical,
+  Gauge,
+  HardDrive,
   Home,
   Library,
   Network,
@@ -78,6 +81,18 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/ontologies", icon: <Library />, label: "Ontologies" },
     ],
   },
+  {
+    label: "Observability",
+    icon: <Activity />,
+    items: [
+      { to: "/observability", end: true, icon: <Gauge />, label: "Metrics" },
+      {
+        to: "/observability/postgres",
+        icon: <HardDrive />,
+        label: "Postgres",
+      },
+    ],
+  },
 ];
 
 export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
@@ -86,15 +101,15 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild tooltip="sbol-db lab">
+            <SidebarMenuButton size="lg" asChild tooltip="SBOL Data Lab">
               <NavLink to="/">
                 <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary/15 text-primary">
                   <FlaskConical className="size-4" />
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-semibold">sbol-db</span>
+                  <span className="truncate font-semibold">SBOL Data Lab</span>
                   <span className="truncate text-xs text-sidebar-foreground/60">
-                    data lab
+                    Powered by sbol-db 🦀
                   </span>
                 </div>
               </NavLink>

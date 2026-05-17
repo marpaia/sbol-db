@@ -17,11 +17,14 @@ pub use metrics::Metrics;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{DefaultBodyLimit, Request};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{Json, Router};
 use sbol_db_postgres::{JobRepository, SbolObjectService};
 use sbol_db_sparql::SparqlEngine;
+use serde_json::json;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
@@ -164,7 +167,9 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route("/jobs/:id/cancel", post(routes::cancel_job))
         .route_layer(axum::middleware::from_fn(metrics::track_metrics));
 
-    let app = mount_lab(api, &config).with_state(state);
+    let app = mount_lab(api, &config)
+        .fallback(not_found_handler)
+        .with_state(state);
 
     // Body limit and timeout apply to every route, including the
     // operational endpoints. `DefaultBodyLimit::max` overrides axum's
@@ -177,6 +182,25 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
             axum::http::StatusCode::REQUEST_TIMEOUT,
             config.request_timeout,
         ))
+}
+
+/// Catch-all that logs unmatched requests and returns a JSON-shaped
+/// 404. Axum's default 404 is silent and bodyless, which makes "why is
+/// the UI getting Not Found?" hard to debug. The log line lands at WARN
+/// so it shows up in normal `cargo run` output.
+async fn not_found_handler(req: Request) -> impl IntoResponse {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    tracing::warn!(%method, path = %uri.path(), "404: no route matched");
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({
+            "type": "not_found",
+            "title": "not_found",
+            "status": 404,
+            "detail": format!("no route registered for {method} {}", uri.path()),
+        })),
+    )
 }
 
 #[cfg(feature = "lab")]

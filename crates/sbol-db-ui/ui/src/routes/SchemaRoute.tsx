@@ -13,8 +13,8 @@
  * server-side write here — this is a pure read-only browser.
  */
 
-import { useNavigate } from "react-router-dom";
-import { Copy, Database, Network, Play } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { ChevronRight, Copy, Database, Network, Play } from "lucide-react";
 
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import {
@@ -47,7 +47,7 @@ export default function SchemaRoute() {
       <div className="mx-auto max-w-6xl space-y-6 px-8 py-10">
         <header>
           <h1 className="text-2xl font-semibold tracking-tight">Schema</h1>
-          <p className="mt-2 max-w-prose text-sm text-muted-foreground">
+          <p className="mt-2 text-sm text-muted-foreground">
             Read-only browser for the SQL projection and SPARQL prefix table.
             Click a table or class to drop a starter query into the editor.
           </p>
@@ -117,23 +117,37 @@ function TableCard({
   onLaunch: (query: string) => void;
 }) {
   const template = `SELECT *\nFROM ${table.name}\nLIMIT 100;\n`;
+  const detailHref = `/schema/tables/public/${encodeURIComponent(table.name)}`;
   return (
     <section className="rounded-lg border bg-card">
-      <header className="flex items-center gap-3 border-b px-4 py-2.5">
-        <Database
-          size={14}
-          className="shrink-0 text-muted-foreground/70"
-          aria-hidden
-        />
-        <h3 className="font-mono text-sm text-foreground">{table.name}</h3>
-        <span className="text-xs text-muted-foreground">
-          {table.columns.length}{" "}
-          {table.columns.length === 1 ? "column" : "columns"}
-        </span>
+      <header className="flex items-center gap-2 border-b px-2 py-1.5">
+        <Link
+          to={detailHref}
+          title={`Open ${table.name} stats and indexes`}
+          className="group flex min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-1 transition-colors hover:bg-accent"
+        >
+          <Database
+            size={14}
+            className="shrink-0 text-muted-foreground/70"
+            aria-hidden
+          />
+          <h3 className="truncate font-mono text-sm text-foreground">
+            {table.name}
+          </h3>
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {table.columns.length}{" "}
+            {table.columns.length === 1 ? "column" : "columns"}
+          </span>
+          <ChevronRight
+            size={12}
+            className="ml-auto shrink-0 text-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-foreground"
+            aria-hidden
+          />
+        </Link>
         <button
           type="button"
           onClick={() => onLaunch(template)}
-          className="ml-auto inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs text-foreground transition-colors hover:bg-accent"
+          className="inline-flex shrink-0 items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs text-foreground transition-colors hover:bg-accent"
           title={`Insert "SELECT * FROM ${table.name}" into the SQL editor`}
         >
           <Play size={11} />

@@ -11,7 +11,7 @@
  * wrap themselves in `WorkbenchShell` for the three-column experience.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { Command as CommandIcon } from "lucide-react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 
@@ -96,24 +96,34 @@ export default function LabLayout() {
   );
 }
 
-function Breadcrumb({ pathname }: { pathname: string }) {
+const ROOT_CRUMB = "SBOL Data Lab";
+
+type Crumb = { label: string; to?: string; mono?: boolean };
+
+function buildTrail(pathname: string): Crumb[] {
   const ontologyMatch = pathname.match(/^\/ontologies\/([^/]+)\/?$/);
   if (ontologyMatch) {
     const prefix = decodeURIComponent(ontologyMatch[1]).toLowerCase();
-    return (
-      <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-sm">
-        <span className="text-muted-foreground">Lab</span>
-        <span className="text-muted-foreground/40">/</span>
-        <Link
-          to="/ontologies"
-          className="text-muted-foreground transition-colors hover:text-foreground"
-        >
-          Ontologies
-        </Link>
-        <span className="text-muted-foreground/40">/</span>
-        <span className="font-mono font-medium text-foreground">{prefix}</span>
-      </nav>
-    );
+    return [
+      { label: "Ontologies", to: "/ontologies" },
+      { label: prefix, mono: true },
+    ];
+  }
+  const tableMatch = pathname.match(/^\/schema\/tables\/([^/]+)\/?$/);
+  if (tableMatch) {
+    const name = decodeURIComponent(tableMatch[1]);
+    return [
+      { label: "Schema", to: "/schema" },
+      { label: name, mono: true },
+    ];
+  }
+  if (pathname.startsWith("/observability/")) {
+    const tail = pathname.replace(/^\/observability\//, "");
+    const sub =
+      tail === "postgres"
+        ? "Postgres"
+        : tail.charAt(0).toUpperCase() + tail.slice(1);
+    return [{ label: "Observability", to: "/observability" }, { label: sub }];
   }
   const segment = pathname.startsWith("/sparql")
     ? "SPARQL"
@@ -123,12 +133,43 @@ function Breadcrumb({ pathname }: { pathname: string }) {
         ? "Schema"
         : pathname.startsWith("/ontologies")
           ? "Ontologies"
-          : "Overview";
+          : pathname.startsWith("/observability")
+            ? "Observability"
+            : "Overview";
+  return [{ label: segment }];
+}
+
+function Breadcrumb({ pathname }: { pathname: string }) {
+  const trail = buildTrail(pathname);
   return (
     <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-sm">
-      <span className="text-muted-foreground">Lab</span>
-      <span className="text-muted-foreground/40">/</span>
-      <span className="font-medium text-foreground">{segment}</span>
+      <span className="text-muted-foreground">{ROOT_CRUMB}</span>
+      {trail.map((crumb, i) => {
+        const isLast = i === trail.length - 1;
+        return (
+          <Fragment key={i}>
+            <span className="text-muted-foreground/40">/</span>
+            {crumb.to && !isLast ? (
+              <Link
+                to={crumb.to}
+                className="text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {crumb.label}
+              </Link>
+            ) : (
+              <span
+                className={
+                  crumb.mono
+                    ? "font-mono font-medium text-foreground"
+                    : "font-medium text-foreground"
+                }
+              >
+                {crumb.label}
+              </span>
+            )}
+          </Fragment>
+        );
+      })}
     </nav>
   );
 }

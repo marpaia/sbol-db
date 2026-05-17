@@ -8,8 +8,20 @@ services:
       POSTGRES_DB: sbol
     ports:
       - "5432:5432"
+    # Preload pg_stat_statements so the lab observability page can read
+    # query stats. The CREATE EXTENSION runs once on first init via the
+    # mount below. For an already-initialized volume, run manually:
+    #   docker compose exec postgres psql -U sbol -d sbol \
+    #     -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements;'
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
 
 volumes:
   postgres-data:

@@ -56,11 +56,20 @@ impl IntoResponse for ApiError {
             ApiError::Sparql(_) => (StatusCode::INTERNAL_SERVER_ERROR, "sparql_error"),
             ApiError::Timeout => (StatusCode::GATEWAY_TIMEOUT, "timeout"),
         };
+        let detail = self.to_string();
+        if status.is_server_error() {
+            tracing::error!(
+                status = status.as_u16(),
+                kind = kind,
+                detail = %detail,
+                "request failed"
+            );
+        }
         let body = Json(json!({
             "type": kind,
             "title": kind,
             "status": status.as_u16(),
-            "detail": self.to_string(),
+            "detail": detail,
         }));
         (status, body).into_response()
     }

@@ -6,12 +6,14 @@ mod service;
 
 pub use pool::{connect, connect_with_retry, run_migrations, PgPool, PoolConfig};
 pub use repo::{
-    BatchSequenceMatch, DocumentRepository, EnqueueOutcome, GraphFilter, JobRepository, JobStatus,
-    ListJobsFilter, ListObjectsFilter, NeighborhoodRepository, NewJob, OldestQueuedAge,
-    OntologyLoadReport, OntologyRecord, OntologyRepository, OntologyTermRecord, PatternObject,
-    PatternSubject, ProjectionEvent, ProjectionEventRepository, QuadRepository, QueueDepthRow,
-    RecordedValidation, SbolJob, SbolObjectRepository, SequenceMatch, SequenceSearchOptions,
-    SequenceSearchRepository, TypedProjectionCounts, TypedProjectionRepository,
-    ValidationRepository, DEFAULT_QUEUE,
+    Activity, BatchSequenceMatch, BlockingLock, DatabaseSize, DocumentRepository, EnqueueOutcome,
+    GraphFilter, IncomingForeignKey, IndexStats, JobRepository, JobStatus, ListJobsFilter,
+    ListObjectsFilter, NeighborhoodRepository, NewJob, OldestQueuedAge, OntologyLoadReport,
+    OntologyRecord, OntologyRepository, OntologyTermRecord, OutgoingForeignKey, PatternObject,
+    PatternSubject, PgStatsRepository, ProjectionEvent, ProjectionEventRepository, QuadRepository,
+    QueueDepthRow, RecordedValidation, SbolJob, SbolObjectRepository, SequenceMatch,
+    SequenceSearchOptions, SequenceSearchRepository, SlowQuery, TableColumn, TableSchema,
+    TableStats, TypedProjectionCounts, TypedProjectionRepository, ValidationRepository,
+    DEFAULT_QUEUE,
 };
 pub use service::{ImportInput, SbolObjectService};

@@ -34,6 +34,11 @@ import { useOverview } from "@/hooks/useOverview";
 import { type Dialect, useLabStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
+function greeting(): string {
+  const h = new Date().getHours();
+  return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+}
+
 export default function DashboardRoute() {
   const { data, isLoading, error } = useOverview();
   const navigate = useNavigate();
@@ -71,11 +76,24 @@ export default function DashboardRoute() {
     <div className="h-full w-full overflow-y-auto">
       <div className="mx-auto max-w-6xl px-8 py-10 space-y-10">
         <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Data lab</h1>
-          <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-            A starting point: corpus snapshot, recent imports, loaded
-            ontologies, and a few canned queries to get going. Click any
-            template to load it into the editor.
+          <h1 className="text-2xl font-semibold tracking-tight">{greeting()}! 👋</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Welcome to the SBOL Data Lab. Query your corpus with SPARQL or
+            SQL, browse the schema, or load ontology packs. The panels below
+            show what's loaded, with a few templates to get you started.
+          </p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            This UI is powered by sbol-db, a Postgres-backed data management
+            system for synthetic biology data. Check out sbol-db on{" "}
+            <a
+              href="https://github.com/marpaia/sbol-db"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2 transition-colors hover:text-foreground"
+            >
+              GitHub
+            </a>
+            !
           </p>
         </header>
 

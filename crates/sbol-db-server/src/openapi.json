@@ -593,6 +593,149 @@
       }
     },
 
+    "/lab/api/observability/summary": {
+      "get": {
+        "tags": ["Lab Observability"],
+        "summary": "Compact health + traffic snapshot for the lab observability page",
+        "description": "Returns process health, the API + worker pool capacity, job queue depth + oldest-queued age, recent failure counts, and a rolling 10-minute traffic window (request rate, latency quantiles, error counts).",
+        "operationId": "labObservabilitySummary",
+        "responses": {
+          "200": {
+            "description": "Snapshot blob.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/lab/api/observability/postgres/database": {
+      "get": {
+        "tags": ["Lab Observability"],
+        "summary": "Total + per-schema database size",
+        "operationId": "labObsPgDatabase",
+        "responses": {
+          "200": {
+            "description": "Total bytes for the current database plus top-10 schemas.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/lab/api/observability/postgres/tables": {
+      "get": {
+        "tags": ["Lab Observability"],
+        "summary": "Top tables by total relation size",
+        "operationId": "labObsPgTables",
+        "parameters": [
+          { "name": "limit",  "in": "query", "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 200 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0,  "minimum": 0 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-table stats joined from pg_stat_user_tables + pg_total_relation_size.",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
+          }
+        }
+      }
+    },
+    "/lab/api/observability/postgres/indexes": {
+      "get": {
+        "tags": ["Lab Observability"],
+        "summary": "Top indexes by on-disk size (with idx_scan)",
+        "operationId": "labObsPgIndexes",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 30, "minimum": 1, "maximum": 200 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Index stats with idx_scan = 0 entries flagged for review.",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
+          }
+        }
+      }
+    },
+    "/lab/api/observability/postgres/activity": {
+      "get": {
+        "tags": ["Lab Observability"],
+        "summary": "Live activity from pg_stat_activity",
+        "operationId": "labObsPgActivity",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50, "minimum": 1, "maximum": 200 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-pid live state, excluding the requester's own backend.",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
+          }
+        }
+      }
+    },
+    "/lab/api/observability/postgres/locks": {
+      "get": {
+        "tags": ["Lab Observability"],
+        "summary": "Blocker → blocked pairs from pg_locks",
+        "operationId": "labObsPgLocks",
+        "responses": {
+          "200": {
+            "description": "Blocking lock pairs (read-only — no terminate action in v1).",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
+          }
+        }
+      }
+    },
+    "/lab/api/observability/postgres/tables/{name}/schema": {
+      "get": {
+        "tags": ["Lab Observability"],
+        "summary": "Schema introspection for a single table",
+        "description": "Columns (with type, nullability, default, comment, primary-key flag) plus outgoing and incoming foreign-key references. Always reads from the `public` schema; sbol-db doesn't expose Postgres schemas as a domain concept. Returns 404 when the relation does not exist.",
+        "operationId": "labObsPgTableSchema",
+        "parameters": [
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full schema metadata for the requested table.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/lab/api/observability/postgres/slow-queries": {
+      "get": {
+        "tags": ["Lab Observability"],
+        "summary": "Top slow queries from pg_stat_statements (if installed)",
+        "description": "Returns `{ status: \"not_installed\", setup_hint }` when the extension isn't present; otherwise `{ status: \"installed\", rows }`.",
+        "operationId": "labObsPgSlowQueries",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tagged union: not_installed vs installed.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/lab/api/observability/jobs/recent": {
+      "get": {
+        "tags": ["Lab Observability"],
+        "summary": "Recent job history across all queues",
+        "operationId": "labObsJobsRecent",
+        "parameters": [
+          { "name": "limit",  "in": "query", "schema": { "type": "integer", "default": 50, "minimum": 1, "maximum": 500 } },
+          { "name": "queue",  "in": "query", "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "schema": { "type": "string", "enum": ["queued","running","succeeded","failed","cancelled","dead"] } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Most-recent-first sbol_jobs rows.",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
+          }
+        }
+      }
+    },
+
     "/openapi.json": {
       "get": {
         "tags": ["Meta"],

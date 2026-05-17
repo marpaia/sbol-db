@@ -56,7 +56,7 @@ export default function OntologyRoute() {
             <h1 className="text-2xl font-semibold tracking-tight">
               Ontologies
             </h1>
-            <p className="mt-2 max-w-prose text-sm text-muted-foreground">
+            <p className="mt-2 text-sm text-muted-foreground">
               Browse the OBO ontologies loaded into this database, look up
               terms by CURIE or IRI, and explore their <code>is_a</code>{" "}
               descendants.

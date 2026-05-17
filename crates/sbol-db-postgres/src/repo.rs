@@ -3,6 +3,7 @@ pub mod job;
 pub mod neighborhood;
 pub mod object;
 pub mod ontology;
+pub mod pg_stats;
 pub mod projection;
 pub mod projections;
 pub mod quad;
@@ -17,6 +18,10 @@ pub use job::{
 pub use neighborhood::NeighborhoodRepository;
 pub use object::{ListObjectsFilter, SbolObjectRepository};
 pub use ontology::{OntologyLoadReport, OntologyRecord, OntologyRepository, OntologyTermRecord};
+pub use pg_stats::{
+    Activity, BlockingLock, DatabaseSize, IncomingForeignKey, IndexStats, OutgoingForeignKey,
+    PgStatsRepository, SlowQuery, TableColumn, TableSchema, TableStats,
+};
 pub use projection::{ProjectionEvent, ProjectionEventRepository};
 pub use projections::{TypedProjectionCounts, TypedProjectionRepository};
 pub use quad::{GraphFilter, PatternObject, PatternSubject, QuadRepository};
