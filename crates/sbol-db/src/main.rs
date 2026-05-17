@@ -549,13 +549,17 @@ async fn main() -> Result<()> {
                 metrics
             };
 
+            let config = sbol_db_server::ServerConfig::from_env();
             let state = AppState {
                 service: service.clone(),
                 sparql: engine,
                 metrics,
                 jobs: jobs_repo,
+                config: config.clone(),
+                #[cfg(feature = "lab")]
+                schema_cache: Arc::new(sbol_db_server::SchemaCache::new()),
             };
-            let app = router(state, sbol_db_server::ServerConfig::from_env());
+            let app = router(state, config);
 
             let cancel = CancellationToken::new();
             let worker_handle = worker_setup.map(|setup| setup.spawn(cancel.clone()));

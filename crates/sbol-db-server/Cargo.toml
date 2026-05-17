@@ -7,14 +7,26 @@ license.workspace = true
 repository.workspace = true
 description = "HTTP server for sbol-db."
 
+[features]
+default = ["lab"]
+# Compiles in the SBOL data lab bench: the embedded TypeScript SPA at
+# /lab plus any future /lab/api/* JSON endpoints. Turning the feature
+# off strips the UI assets from the binary entirely; for runtime-only
+# toggling, use the SBOL_DB_LAB_ENABLED env var.
+lab = ["dep:sbol-db-ui", "dep:pg_query"]
+
 [dependencies]
 sbol-db-core.workspace = true
 sbol-db-rdf.workspace = true
 sbol-db-postgres.workspace = true
 sbol-db-sparql.workspace = true
 sbol-db-jobs.workspace = true
+sbol-db-ui = { workspace = true, optional = true }
+pg_query = { version = "6", optional = true }
+spargebra = { workspace = true }
 sbol.workspace = true
 sbol-rdf.workspace = true
+sqlx.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tower.workspace = true
@@ -24,6 +36,7 @@ serde_json.workspace = true
 serde_urlencoded.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+hex.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 url.workspace = true

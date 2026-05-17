@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>sbol-db data lab</title>
+    <style>
+      body {
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: #0b1020;
+        color: #e6e9f5;
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+      }
+      .card {
+        max-width: 36rem;
+        padding: 2rem 2.5rem;
+        background: #131a36;
+        border: 1px solid #25305a;
+        border-radius: 12px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+      }
+      h1 { margin: 0 0 1rem; font-size: 1.5rem; }
+      code, pre {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        background: #0b1020;
+        border: 1px solid #25305a;
+        border-radius: 6px;
+        padding: 0.15rem 0.4rem;
+      }
+      pre { padding: 0.75rem 1rem; overflow-x: auto; }
+      ul { padding-left: 1.2rem; }
+      a { color: #8ab4ff; }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>sbol-db data lab — UI not built</h1>
+      <p>
+        The server is running, but the embedded TypeScript UI was not
+        compiled into this binary.
+      </p>
+      <p>Likely causes:</p>
+      <ul>
+        <li>
+          Node.js (<code>npm</code>) wasn't on <code>PATH</code> at build
+          time.
+        </li>
+        <li>
+          <code>SBOL_DB_SKIP_UI_BUILD=1</code> was set during the build.
+        </li>
+        <li>The <code>crates/sbol-db-ui/ui/</code> source tree was missing.</li>
+      </ul>
+      <p>Rebuild with Node 20+ available:</p>
+      <pre>cargo build --release -p sbol-db</pre>
+      <p>
+        Or disable the lab entirely with
+        <code>SBOL_DB_LAB_ENABLED=false</code>.
+      </p>
+    </main>
+  </body>
+</html>

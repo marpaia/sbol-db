@@ -7,3 +7,12 @@
 # Chart.lock; don't commit them. Chart.lock is committed.
 charts/*/charts/
 
+# sbol-db-ui — Vite installs node_modules in place; build artifacts go
+# to $OUT_DIR via build.rs, not the source tree.
+crates/sbol-db-ui/ui/node_modules/
+crates/sbol-db-ui/ui/dist/
+crates/sbol-db-ui/ui/.vite/
+crates/sbol-db-ui/ui/*.tsbuildinfo
+crates/sbol-db-ui/ui/vite.config.d.ts
+crates/sbol-db-ui/ui/vite.config.js
+

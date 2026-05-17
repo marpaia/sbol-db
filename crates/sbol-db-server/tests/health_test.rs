@@ -32,6 +32,8 @@ async fn state() -> AppState {
         sparql,
         metrics,
         jobs,
+        config: ServerConfig::default(),
+        schema_cache: std::sync::Arc::new(sbol_db_server::SchemaCache::new()),
     }
 }
 

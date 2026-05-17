@@ -15,6 +15,14 @@ ARG RUST_VERSION=1.93
 # Stage 1 — chef base
 ############################
 FROM rust:${RUST_VERSION}-bookworm AS chef
+# Node.js 20 is required by `sbol-db-ui`'s build.rs, which drives the
+# Vite build of the embedded TypeScript SPA. The Rust binary still
+# links statically against musl; npm runs on the host glibc.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
 RUN cargo install cargo-chef --locked --version ^0.1
 WORKDIR /work
 

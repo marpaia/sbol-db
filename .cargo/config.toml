@@ -1,0 +1,27 @@
+# Workspace-scoped cargo config.
+#
+# The [env] table runs `cargo build` etc. with these variables set —
+# which we use to feed bindgen the macOS SDK path. Without this,
+# pg_query (libpg_query bindings, used by the lab's SQL validate
+# endpoint) fails on macOS with `'sys/types.h' file not found`
+# because bindgen invokes libclang directly and doesn't pick up the
+# SDK location the way `xcrun` does.
+#
+# The key trick: bindgen consults BOTH `BINDGEN_EXTRA_CLANG_ARGS`
+# (target-agnostic) AND `BINDGEN_EXTRA_CLANG_ARGS_<target>`. The
+# per-target form is the right hook here — it's only consulted when
+# compiling for the named target, so Linux/Windows builds see nothing
+# and macOS x86_64 / aarch64 builds get the right SDK isysroot.
+#
+# If your SDK lives somewhere non-standard (e.g. Command Line Tools
+# without full Xcode, or a non-default Xcode location), override in
+# your shell with:
+#
+#   export BINDGEN_EXTRA_CLANG_ARGS="-isysroot $(xcrun --show-sdk-path)"
+#
+# The user-set env var takes precedence over the target-specific one
+# in `[env]` below — `force = false` is the default.
+
+[env]
+BINDGEN_EXTRA_CLANG_ARGS_aarch64-apple-darwin = "-isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+BINDGEN_EXTRA_CLANG_ARGS_x86_64-apple-darwin = "-isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"

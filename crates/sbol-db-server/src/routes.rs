@@ -693,6 +693,11 @@ pub async fn ontology_load(
         .ontology()
         .load_from_url(&body.prefix.to_ascii_uppercase(), &name, &url)
         .await?;
+    // The lab dashboard, the SPARQL schema sidebar, and the overview
+    // ontology count all depend on the loaded-ontologies list. Drop
+    // their TTL caches so the next read sees the new ontology
+    // immediately rather than up-to-60-seconds later.
+    state.invalidate_lab_caches();
     Ok(Json(report))
 }
 

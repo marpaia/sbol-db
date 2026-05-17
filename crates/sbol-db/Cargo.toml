@@ -11,6 +11,14 @@ description = "CLI entry point for sbol-db."
 name = "sbol-db"
 path = "src/main.rs"
 
+[features]
+default = ["lab"]
+# Mirrors `sbol-db-server`'s `lab` feature so a `#[cfg(feature = "lab")]`
+# in `main.rs` activates correctly. The binary forwards the flag rather
+# than enabling it implicitly so `cargo build --no-default-features -p sbol-db`
+# still strips the embedded UI.
+lab = ["sbol-db-server/lab"]
+
 [dependencies]
 sbol-db-core.workspace = true
 sbol-db-rdf.workspace = true

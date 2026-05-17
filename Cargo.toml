@@ -6,6 +6,7 @@ members = [
     "crates/sbol-db-postgres",
     "crates/sbol-db-sparql",
     "crates/sbol-db-jobs",
+    "crates/sbol-db-ui",
     "crates/sbol-db-server",
     "crates/sbol-db",
 ]
@@ -72,4 +73,5 @@ sbol-db-rdf = { path = "crates/sbol-db-rdf", version = "0.1.0" }
 sbol-db-postgres = { path = "crates/sbol-db-postgres", version = "0.1.0" }
 sbol-db-sparql = { path = "crates/sbol-db-sparql", version = "0.1.0" }
 sbol-db-jobs = { path = "crates/sbol-db-jobs", version = "0.1.0" }
-sbol-db-server = { path = "crates/sbol-db-server", version = "0.1.0" }
+sbol-db-ui = { path = "crates/sbol-db-ui", version = "0.1.0" }
+sbol-db-server = { path = "crates/sbol-db-server", version = "0.1.0", default-features = false }
