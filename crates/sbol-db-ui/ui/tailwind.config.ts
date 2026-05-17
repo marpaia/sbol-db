@@ -8,6 +8,7 @@ export default {
     extend: {
       fontFamily: {
         sans: [
+          "Inter",
           "ui-sans-serif",
           "system-ui",
           "-apple-system",
@@ -15,6 +16,7 @@ export default {
           "sans-serif",
         ],
         mono: [
+          "JetBrains Mono",
           "ui-monospace",
           "SFMono-Regular",
           "Menlo",
@@ -67,6 +69,12 @@ export default {
           "accent-foreground": "hsl(var(--sidebar-accent-foreground))",
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
+        },
+        sbol: {
+          promoter: "hsl(var(--sbol-promoter))",
+          cds: "hsl(var(--sbol-cds))",
+          terminator: "hsl(var(--sbol-terminator))",
+          rbs: "hsl(var(--sbol-rbs))",
         },
       },
       borderRadius: {

@@ -8,7 +8,7 @@
 import { History, Trash2 } from "lucide-react";
 
 import { type Dialect, useLabStore } from "@/lib/store";
-import { cn } from "@/lib/utils";
+import { cn, compactQuery } from "@/lib/utils";
 
 export interface QueryHistoryListProps {
   dialect: Dialect;
@@ -65,7 +65,7 @@ export function QueryHistoryList({ dialect, onLoad }: QueryHistoryListProps) {
                 </span>
               </div>
               <div className="mt-0.5 truncate font-mono text-xs text-foreground/90">
-                {h.query.split("\n").find((l) => l.trim()) ?? "(empty)"}
+                {compactQuery(h.query) || "(empty)"}
               </div>
             </button>
           </li>

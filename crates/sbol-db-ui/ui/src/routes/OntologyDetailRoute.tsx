@@ -15,7 +15,13 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Library, Search, TriangleAlert } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Library,
+  Search,
+  TriangleAlert,
+} from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
@@ -77,7 +83,10 @@ export default function OntologyDetailRoute() {
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Library size={16} className="shrink-0 text-muted-foreground/70" />
+              <Library
+                size={16}
+                className="shrink-0 text-muted-foreground/70"
+              />
               <h1 className="font-mono text-xl font-semibold tracking-tight">
                 {prefix.toLowerCase()}
               </h1>
@@ -151,11 +160,7 @@ export default function OntologyDetailRoute() {
                 <TermRow key={t.iri} term={t} />
               ))}
             </ul>
-            <Pagination
-              page={page}
-              totalPages={totalPages}
-              onPage={setPage}
-            />
+            <Pagination page={page} totalPages={totalPages} onPage={setPage} />
           </>
         )}
       </div>
@@ -178,9 +183,21 @@ function PageStatus({
   const end = Math.min((page + 1) * pageSize, total);
   return (
     <div className="text-xs text-muted-foreground">
-      Showing <span className="tabular-nums text-foreground">{start.toLocaleString()}–{end.toLocaleString()}</span>{" "}
-      of <span className="tabular-nums text-foreground">{total.toLocaleString()}</span>{" "}
-      {search ? <>matches for <code className="font-mono">{search}</code></> : "terms"}
+      Showing{" "}
+      <span className="tabular-nums text-foreground">
+        {start.toLocaleString()}–{end.toLocaleString()}
+      </span>{" "}
+      of{" "}
+      <span className="tabular-nums text-foreground">
+        {total.toLocaleString()}
+      </span>{" "}
+      {search ? (
+        <>
+          matches for <code className="font-mono">{search}</code>
+        </>
+      ) : (
+        "terms"
+      )}
     </div>
   );
 }

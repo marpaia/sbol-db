@@ -8,13 +8,22 @@
  */
 
 import { useMemo, useState } from "react";
-import { Activity, AlertTriangle, CircleCheck, CircleX, Loader2 } from "lucide-react";
+import {
+  Activity,
+  AlertTriangle,
+  CircleCheck,
+  CircleX,
+  Loader2,
+} from "lucide-react";
 
 import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { KpiTile } from "@/components/observability/KpiTile";
 import { Sparkline } from "@/components/observability/Sparkline";
-import { useObservabilitySummary, useRecentJobs } from "@/hooks/useObservability";
+import {
+  useObservabilitySummary,
+  useRecentJobs,
+} from "@/hooks/useObservability";
 import type {
   BucketSnapshot,
   JobStatus,
@@ -36,10 +45,12 @@ export default function ObservabilityRoute() {
     <div className="h-full w-full overflow-y-auto">
       <div className="mx-auto max-w-6xl space-y-8 px-8 py-10">
         <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Observability</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Observability
+          </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Live process health, request traffic, connection pools, and the
-            job runner. Sampled every 5 seconds.
+            Live process health, request traffic, connection pools, and the job
+            runner. Sampled every 5 seconds.
           </p>
         </header>
 
@@ -56,7 +67,10 @@ export default function ObservabilityRoute() {
           <>
             <HealthStrip summary={summary} />
             <Kpis summary={summary} />
-            <Charts buckets={summary.rolling.buckets} bucketSecs={summary.rolling.bucket_secs} />
+            <Charts
+              buckets={summary.rolling.buckets}
+              bucketSecs={summary.rolling.bucket_secs}
+            />
             <Pools summary={summary} />
             <JobsSection summary={summary} />
           </>
@@ -96,7 +110,13 @@ function Sep() {
   return <span className="text-muted-foreground/30">·</span>;
 }
 
-function Meta({ label, children }: { label: string; children: React.ReactNode }) {
+function Meta({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <span className="inline-flex items-center gap-1.5">
       <span className="text-muted-foreground/70">{label}</span>
@@ -109,10 +129,7 @@ function Kpis({ summary }: { summary: ObservabilitySummary }) {
   const { rps, p95, errorRate, dbUtil, dbUtilHint } = useMemo(() => {
     const buckets = summary.rolling.buckets;
     const recent = buckets.slice(-Math.max(1, Math.min(30, buckets.length)));
-    const recentSecs = Math.max(
-      1,
-      recent.length * summary.rolling.bucket_secs
-    );
+    const recentSecs = Math.max(1, recent.length * summary.rolling.bucket_secs);
     const totalCount = recent.reduce((acc, b) => acc + b.count, 0);
     const totalErrors = recent.reduce((acc, b) => acc + b.error_count, 0);
     const rps = totalCount / recentSecs;
@@ -188,12 +205,14 @@ function Charts({
         title="Requests"
         subtitle={`per ${bucketSecs}s bucket · last ${Math.round(totalWindow / 60)}m`}
       >
-        <Sparkline points={counts} height={64} color="hsl(var(--primary))" ariaLabel="Request rate" />
+        <Sparkline
+          points={counts}
+          height={64}
+          color="hsl(var(--primary))"
+          ariaLabel="Request rate"
+        />
       </ChartPanel>
-      <ChartPanel
-        title="Latency"
-        subtitle="p50 (line) · p95 (area)"
-      >
+      <ChartPanel title="Latency" subtitle="p50 (line) · p95 (area)">
         <div className="relative">
           <div className="absolute inset-0 text-muted-foreground/60">
             <Sparkline points={p95s} height={64} ariaLabel="p95 latency" />
@@ -205,7 +224,12 @@ function Charts({
       </ChartPanel>
       {errors.some((v) => v > 0) && (
         <ChartPanel title="5xx errors" subtitle="per bucket">
-          <Sparkline points={errors} height={48} color="hsl(var(--destructive))" ariaLabel="Error count" />
+          <Sparkline
+            points={errors}
+            height={48}
+            color="hsl(var(--destructive))"
+            ariaLabel="Error count"
+          />
         </ChartPanel>
       )}
     </section>
@@ -365,8 +389,7 @@ function JobsSection({ summary }: { summary: ObservabilitySummary }) {
         id: "started",
         header: "started",
         width: 110,
-        sortValue: (j) =>
-          new Date(j.started_at ?? j.created_at).getTime() || 0,
+        sortValue: (j) => new Date(j.started_at ?? j.created_at).getTime() || 0,
         cell: (j) => (
           <span className="text-muted-foreground">
             {formatRelative(j.started_at ?? j.created_at)}
@@ -400,7 +423,10 @@ function JobsSection({ summary }: { summary: ObservabilitySummary }) {
           <FilterSelect
             value={queueFilter}
             onChange={setQueueFilter}
-            options={[{ value: "", label: "all queues" }, ...queues.map((q) => ({ value: q, label: q }))]}
+            options={[
+              { value: "", label: "all queues" },
+              ...queues.map((q) => ({ value: q, label: q })),
+            ]}
           />
           <FilterSelect
             value={statusFilter}
@@ -542,7 +568,10 @@ function SummarySkeleton() {
       <div className="h-10 animate-pulse rounded-lg border bg-card" />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="h-24 animate-pulse rounded-lg border bg-card" />
+          <div
+            key={i}
+            className="h-24 animate-pulse rounded-lg border bg-card"
+          />
         ))}
       </div>
       <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">

@@ -126,11 +126,7 @@ function computeColumnSizes(
     const nameWidth = col.name.length * NAME_CHAR_PX;
     const hintWidth = col.typeHint ? col.typeHint.length * HINT_CHAR_PX : 0;
     return (
-      nameWidth +
-      hintWidth +
-      SORT_ICON_PX +
-      HEADER_GAPS_PX +
-      HORIZONTAL_PADDING
+      nameWidth + hintWidth + SORT_ICON_PX + HEADER_GAPS_PX + HORIZONTAL_PADDING
     );
   }
 
@@ -175,10 +171,7 @@ function computeColumnSizes(
   for (let pass = 0; pass < columns.length && remaining > 1; pass++) {
     const expandable = [...eligible].filter((i) => sizes[i] < FINAL_MAX);
     if (expandable.length === 0) break;
-    const expandableTotal = expandable.reduce(
-      (s, i) => s + contentSizes[i],
-      0
-    );
+    const expandableTotal = expandable.reduce((s, i) => s + contentSizes[i], 0);
     let distributed = 0;
     for (const i of expandable) {
       const share =

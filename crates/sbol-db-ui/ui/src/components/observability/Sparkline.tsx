@@ -49,7 +49,10 @@ export function Sparkline({
   };
 
   const path = points
-    .map((v, i) => `${i === 0 ? "M" : "L"}${(i * stepX).toFixed(2)},${toY(v).toFixed(2)}`)
+    .map(
+      (v, i) =>
+        `${i === 0 ? "M" : "L"}${(i * stepX).toFixed(2)},${toY(v).toFixed(2)}`
+    )
     .join(" ");
 
   const areaPath =

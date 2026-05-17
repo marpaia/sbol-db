@@ -76,11 +76,13 @@ export default function DashboardRoute() {
     <div className="h-full w-full overflow-y-auto">
       <div className="mx-auto max-w-6xl px-8 py-10 space-y-10">
         <header>
-          <h1 className="text-2xl font-semibold tracking-tight">{greeting()}! 👋</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {greeting()}! 👋
+          </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Welcome to the SBOL Data Lab. Query your corpus with SPARQL or
-            SQL, browse the schema, or load ontology packs. The panels below
-            show what's loaded, with a few templates to get you started.
+            Welcome to the SBOL Data Lab. Query your corpus with SPARQL or SQL,
+            browse the schema, or load ontology packs. The panels below show
+            what's loaded, with a few templates to get you started.
           </p>
           <p className="mt-2 text-sm text-muted-foreground">
             This UI is powered by sbol-db, a Postgres-backed data management
@@ -354,9 +356,9 @@ function CountCard({
   loading: boolean;
 }) {
   return (
-    <div className="rounded-lg border bg-card p-4">
+    <div className="rounded-lg border bg-card p-4 transition-colors hover:border-primary/40">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="text-muted-foreground/70">{icon}</span>
+        <span className="text-primary">{icon}</span>
         <span>{label}</span>
       </div>
       <div
@@ -383,9 +385,9 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-lg border bg-card">
-      <header className="flex items-center gap-2 border-b px-4 py-2.5">
-        <h3 className="text-sm font-medium">{title}</h3>
+    <section className="overflow-hidden rounded-lg border bg-card">
+      <header className="flex items-center gap-2 border-b border-primary/15 bg-primary/5 px-4 py-2.5">
+        <h3 className="text-sm font-medium text-primary">{title}</h3>
         {subtitle && (
           <span className="text-xs text-muted-foreground">{subtitle}</span>
         )}
@@ -413,14 +415,14 @@ function Template({
     <button
       type="button"
       onClick={onClick}
-      className="group rounded-lg border bg-card p-4 text-left transition-colors hover:bg-accent"
+      className="group rounded-lg border bg-card p-4 text-left transition-colors hover:border-primary/40 hover:bg-accent"
     >
-      <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
-        <span className="text-muted-foreground/70">{icon}</span>
+      <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-primary">
+        <span>{icon}</span>
         <span>{dialect}</span>
         <Play
           size={12}
-          className="ml-auto text-muted-foreground/40 transition-colors group-hover:text-foreground"
+          className="ml-auto text-muted-foreground/40 transition-colors group-hover:text-primary"
         />
       </div>
       <div className="mt-2 text-sm font-medium text-foreground">{title}</div>

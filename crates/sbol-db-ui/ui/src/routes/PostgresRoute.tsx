@@ -16,10 +16,7 @@ import { useMemo } from "react";
 import { Info } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
-import {
-  DataTable,
-  type DataTableColumn,
-} from "@/components/lab/DataTable";
+import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { KpiTile } from "@/components/observability/KpiTile";
 import {
@@ -54,9 +51,8 @@ export default function PostgresRoute() {
             Postgres Maintenance
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Sizes, autovacuum, live activity, blocking locks, and slow
-            queries. Sampled every 15 seconds. Click a table to drill in.
-            Read-only.
+            Sizes, autovacuum, live activity, blocking locks, and slow queries.
+            Sampled every 15 seconds. Click a table to drill in. Read-only.
           </p>
         </header>
 
@@ -86,7 +82,10 @@ function DatabaseOverview() {
     return (
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {Array.from({ length: 3 }).map((_, i) => (
-          <div key={i} className="h-24 animate-pulse rounded-lg border bg-card" />
+          <div
+            key={i}
+            className="h-24 animate-pulse rounded-lg border bg-card"
+          />
         ))}
       </div>
     );
@@ -249,10 +248,7 @@ function IndexesSection() {
         sortValue: (i) => i.index,
         filterValue: (i) => `${i.index} ${i.table}`,
         cell: (i) => (
-          <span
-            className="truncate font-mono text-foreground"
-            title={i.index}
-          >
+          <span className="truncate font-mono text-foreground" title={i.index}>
             {i.index}
           </span>
         ),
@@ -362,9 +358,7 @@ function ActivitySection() {
         sortValue: (a) => a.wait_event ?? "",
         cell: (a) => (
           <span className="truncate text-muted-foreground">
-            {a.wait_event
-              ? `${a.wait_event_type ?? ""}:${a.wait_event}`
-              : "—"}
+            {a.wait_event ? `${a.wait_event_type ?? ""}:${a.wait_event}` : "—"}
           </span>
         ),
       },
@@ -399,7 +393,10 @@ function ActivitySection() {
   );
 
   return (
-    <Panel title="Live activity" subtitle="pg_stat_activity · excl. our own backend">
+    <Panel
+      title="Live activity"
+      subtitle="pg_stat_activity · excl. our own backend"
+    >
       {error ? (
         <ErrorBanner
           title="Couldn't read pg_stat_activity"
@@ -503,7 +500,9 @@ function LocksSection() {
         <DataTable
           columns={columns}
           rows={data}
-          rowKey={(r) => `${r.blocker_pid}-${r.blocked_pid}-${r.locktype ?? ""}-${r.mode ?? ""}`}
+          rowKey={(r) =>
+            `${r.blocker_pid}-${r.blocked_pid}-${r.locktype ?? ""}-${r.mode ?? ""}`
+          }
         />
       )}
     </Panel>
@@ -582,7 +581,10 @@ function SlowQueriesSection() {
   );
 
   return (
-    <Panel title="Slow queries" subtitle="pg_stat_statements · top 20 by total time">
+    <Panel
+      title="Slow queries"
+      subtitle="pg_stat_statements · top 20 by total time"
+    >
       {error ? (
         <ErrorBanner
           title="Couldn't read pg_stat_statements"
@@ -648,7 +650,9 @@ function Panel({
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <div className="px-4 py-4 text-sm text-muted-foreground">{children}</div>;
+  return (
+    <div className="px-4 py-4 text-sm text-muted-foreground">{children}</div>
+  );
 }
 
 function RowSkeleton({ rows }: { rows: number }) {

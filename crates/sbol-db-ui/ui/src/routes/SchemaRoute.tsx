@@ -17,12 +17,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { ChevronRight, Copy, Database, Network, Play } from "lucide-react";
 
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useSparqlSchema, useSqlSchema } from "@/hooks/useSchema";
 import type {
   SparqlSchemaClass,

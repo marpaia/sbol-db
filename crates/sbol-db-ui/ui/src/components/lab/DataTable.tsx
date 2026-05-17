@@ -15,7 +15,14 @@
  */
 
 import { useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronRight, ChevronsUpDown, Search, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronRight,
+  ChevronsUpDown,
+  Search,
+  X,
+} from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -99,7 +106,9 @@ export function DataTable<T>({
     if (!col?.sortValue) return filtered;
     const accessor = col.sortValue;
     const mul = sort.direction === "asc" ? 1 : -1;
-    return [...filtered].sort((a, b) => mul * compare(accessor(a), accessor(b)));
+    return [...filtered].sort(
+      (a, b) => mul * compare(accessor(a), accessor(b))
+    );
   }, [filtered, sort, columns]);
 
   const totalWidth = useMemo(
@@ -136,12 +145,15 @@ export function DataTable<T>({
           totalCount={rows.length}
         />
       )}
-      <div className={cn("w-full overflow-x-auto", maxHeightClass && "overflow-y-auto", maxHeightClass)}>
+      <div
+        className={cn(
+          "w-full overflow-x-auto",
+          maxHeightClass && "overflow-y-auto",
+          maxHeightClass
+        )}
+      >
         <div role="table" style={{ minWidth: totalWidth }} className="text-xs">
-          <div
-            role="row"
-            className="sticky top-0 z-10 flex border-b bg-card"
-          >
+          <div role="row" className="sticky top-0 z-10 flex border-b bg-card">
             {columns.map((c) => {
               const isSorted = sort?.id === c.id;
               const sortable = !!c.sortValue;
@@ -216,7 +228,8 @@ export function DataTable<T>({
                         key={c.id}
                         className={cn(
                           "flex min-h-[2rem] items-center gap-1.5 border-r border-border/60 px-3 py-1.5 text-foreground/90 last:border-r-0",
-                          c.align === "right" && "justify-end text-right tabular-nums"
+                          c.align === "right" &&
+                            "justify-end text-right tabular-nums"
                         )}
                         style={colFlex(c)}
                       >

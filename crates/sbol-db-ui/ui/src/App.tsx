@@ -25,10 +25,7 @@ export default function App() {
           element={<RedirectToSchemaTable />}
         />
         <Route path="ontologies" element={<OntologyRoute />} />
-        <Route
-          path="ontologies/:prefix"
-          element={<OntologyDetailRoute />}
-        />
+        <Route path="ontologies/:prefix" element={<OntologyDetailRoute />} />
         <Route path="observability" element={<ObservabilityRoute />} />
         <Route path="observability/postgres" element={<PostgresRoute />} />
         <Route
@@ -51,9 +48,6 @@ export default function App() {
 function RedirectToSchemaTable() {
   const { name } = useParams<{ schema: string; name: string }>();
   return (
-    <Navigate
-      to={`/schema/tables/${encodeURIComponent(name ?? "")}`}
-      replace
-    />
+    <Navigate to={`/schema/tables/${encodeURIComponent(name ?? "")}`} replace />
   );
 }

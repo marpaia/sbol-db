@@ -34,6 +34,7 @@ const browserGlobals = {
   HTMLUListElement: "readonly",
   HTMLLIElement: "readonly",
   HTMLAnchorElement: "readonly",
+  SVGSVGElement: "readonly",
   KeyboardEvent: "readonly",
   MouseEvent: "readonly",
   URL: "readonly",

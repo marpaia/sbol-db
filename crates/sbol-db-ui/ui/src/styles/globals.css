@@ -2,14 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Neutral, type-driven palette. We use zinc (not slate / not blue) so
-   the chrome reads as data tooling rather than "dashboard template".
-   Borders are intentionally low-contrast — most structure comes from
-   half-tone background shifts and spacing, not lines.
-
-   Brand color is held to a single primary hue (indigo) and reserved
-   for affordances: the run button, the active nav item, the focus
-   ring. Status uses muted emerald / amber / rose. */
+/* SBOL-native palette. The chrome reads as synthetic biology tooling:
+   primary affordances use CDS-arrow teal, and the three top-level nav
+   groups carry their corresponding SBOL Visual category hues
+   (promoter / CDS / terminator). Status colors are amplified slightly
+   so success / warning / destructive read confidently against the
+   teal chrome. */
 
 @layer base {
   :root {
@@ -22,7 +20,7 @@
     --popover: 0 0% 100%;
     --popover-foreground: 240 10% 4%;
 
-    --primary: 240 6% 10%;
+    --primary: 178 60% 32%;
     --primary-foreground: 0 0% 98%;
 
     --secondary: 240 5% 96%;
@@ -31,29 +29,35 @@
     --muted: 240 5% 96%;
     --muted-foreground: 240 4% 46%;
 
-    --accent: 240 5% 96%;
-    --accent-foreground: 240 6% 10%;
+    --accent: 178 35% 93%;
+    --accent-foreground: 178 60% 22%;
 
-    --destructive: 0 84% 60%;
+    --destructive: 348 65% 52%;
     --destructive-foreground: 0 0% 98%;
 
-    --success: 142 71% 38%;
-    --warning: 38 92% 45%;
+    --success: 152 60% 40%;
+    --warning: 38 90% 50%;
 
     --border: 240 6% 90%;
     --input: 240 6% 90%;
-    --ring: 240 6% 10%;
+    --ring: 178 60% 36%;
 
     --radius: 0.5rem;
 
-    --sidebar-background: 240 5% 97%;
-    --sidebar-foreground: 240 5% 26%;
-    --sidebar-primary: 240 6% 10%;
+    /* SBOL Visual category hues. Bound to top-level nav groups. */
+    --sbol-promoter: 28 80% 50%;
+    --sbol-cds: 178 60% 32%;
+    --sbol-terminator: 348 65% 50%;
+    --sbol-rbs: 268 50% 55%;
+
+    --sidebar-background: 178 30% 97%;
+    --sidebar-foreground: 200 15% 26%;
+    --sidebar-primary: 178 60% 32%;
     --sidebar-primary-foreground: 0 0% 98%;
-    --sidebar-accent: 240 5% 92%;
-    --sidebar-accent-foreground: 240 6% 10%;
-    --sidebar-border: 240 6% 90%;
-    --sidebar-ring: 240 6% 10%;
+    --sidebar-accent: 178 55% 88%;
+    --sidebar-accent-foreground: 178 70% 18%;
+    --sidebar-border: 178 20% 88%;
+    --sidebar-ring: 178 60% 36%;
   }
 
   .dark {
@@ -66,8 +70,8 @@
     --popover: 240 5% 14%;
     --popover-foreground: 0 0% 95%;
 
-    --primary: 0 0% 95%;
-    --primary-foreground: 240 6% 10%;
+    --primary: 178 55% 60%;
+    --primary-foreground: 178 50% 10%;
 
     --secondary: 240 4% 14%;
     --secondary-foreground: 0 0% 95%;
@@ -75,27 +79,32 @@
     --muted: 240 4% 14%;
     --muted-foreground: 240 5% 64%;
 
-    --accent: 240 4% 14%;
-    --accent-foreground: 0 0% 95%;
+    --accent: 178 25% 16%;
+    --accent-foreground: 178 30% 88%;
 
-    --destructive: 0 63% 40%;
+    --destructive: 348 60% 62%;
     --destructive-foreground: 0 0% 98%;
 
-    --success: 142 64% 50%;
-    --warning: 38 92% 60%;
+    --success: 152 55% 55%;
+    --warning: 38 85% 60%;
 
     --border: 240 4% 16%;
     --input: 240 4% 16%;
-    --ring: 240 5% 64%;
+    --ring: 178 55% 60%;
 
-    --sidebar-background: 240 6% 5%;
-    --sidebar-foreground: 240 5% 70%;
-    --sidebar-primary: 0 0% 95%;
-    --sidebar-primary-foreground: 240 6% 10%;
-    --sidebar-accent: 240 4% 12%;
-    --sidebar-accent-foreground: 0 0% 95%;
-    --sidebar-border: 240 4% 14%;
-    --sidebar-ring: 240 5% 64%;
+    --sbol-promoter: 28 75% 62%;
+    --sbol-cds: 178 55% 60%;
+    --sbol-terminator: 348 60% 65%;
+    --sbol-rbs: 268 55% 70%;
+
+    --sidebar-background: 200 15% 6%;
+    --sidebar-foreground: 200 12% 72%;
+    --sidebar-primary: 178 55% 60%;
+    --sidebar-primary-foreground: 178 50% 10%;
+    --sidebar-accent: 178 45% 18%;
+    --sidebar-accent-foreground: 178 60% 90%;
+    --sidebar-border: 200 12% 14%;
+    --sidebar-ring: 178 55% 60%;
   }
 
   html,

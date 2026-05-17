@@ -12,7 +12,6 @@ import {
   Command as CommandIcon,
   Compass,
   Database,
-  FlaskConical,
   Gauge,
   HardDrive,
   Home,
@@ -45,6 +44,7 @@ import {
   SidebarRail,
   SidebarSeparator,
 } from "@/components/ui/sidebar";
+import { BrandMark } from "./BrandMark";
 import { ThemeToggle } from "./ThemeToggle";
 
 export interface AppSidebarProps {
@@ -67,7 +67,7 @@ interface NavGroup {
 const NAV_GROUPS: NavGroup[] = [
   {
     label: "Query",
-    icon: <Search />,
+    icon: <Search className="text-sbol-promoter" />,
     items: [
       { to: "/sparql", icon: <Network />, label: "SPARQL" },
       { to: "/sql", icon: <Database />, label: "SQL" },
@@ -75,7 +75,7 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     label: "Explore",
-    icon: <Compass />,
+    icon: <Compass className="text-sbol-cds" />,
     items: [
       { to: "/schema", icon: <Table2 />, label: "Schema" },
       { to: "/ontologies", icon: <Library />, label: "Ontologies" },
@@ -83,7 +83,7 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     label: "Observability",
-    icon: <Activity />,
+    icon: <Activity className="text-sbol-terminator" />,
     items: [
       { to: "/observability", end: true, icon: <Gauge />, label: "Metrics" },
       {
@@ -103,11 +103,11 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild tooltip="SBOL Data Lab">
               <NavLink to="/">
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary/15 text-primary">
-                  <FlaskConical className="size-4" />
-                </div>
+                <BrandMark />
                 <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-semibold">SBOL Data Lab</span>
+                  <span className="truncate font-semibold tracking-tight">
+                    SBOL Data Lab
+                  </span>
                   <span className="truncate text-xs text-sidebar-foreground/60">
                     Powered by sbol-db 🦀
                   </span>
@@ -123,7 +123,12 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
           <SidebarGroupLabel>Workspace</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              <NavItem to="/" end icon={<Home />} label="Overview" />
+              <NavItem
+                to="/"
+                end
+                icon={<Home className="text-primary" />}
+                label="Overview"
+              />
               {NAV_GROUPS.map((group) => (
                 <CollapsibleNavGroup key={group.label} group={group} />
               ))}
@@ -156,6 +161,9 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
   );
 }
 
+const ACTIVE_STRIPE =
+  "before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[3px] before:rounded-r before:bg-primary before:opacity-0 before:transition-opacity data-[active=true]:before:opacity-100";
+
 function NavItem({
   to,
   end,
@@ -170,7 +178,12 @@ function NavItem({
   const match = useMatch({ path: to, end: end ?? false });
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton asChild isActive={!!match} tooltip={label}>
+      <SidebarMenuButton
+        asChild
+        isActive={!!match}
+        tooltip={label}
+        className={ACTIVE_STRIPE}
+      >
         <NavLink to={to} end={end}>
           {icon}
           <span>{label}</span>
@@ -206,8 +219,12 @@ function CollapsibleNavGroup({ group }: { group: NavGroup }) {
 function SubNavItem({ to, end, icon, label }: NavLeaf) {
   const match = useMatch({ path: to, end: end ?? false });
   return (
-    <SidebarMenuSubItem>
-      <SidebarMenuSubButton asChild isActive={!!match}>
+    <SidebarMenuSubItem className="relative">
+      <SidebarMenuSubButton
+        asChild
+        isActive={!!match}
+        className={ACTIVE_STRIPE}
+      >
         <NavLink to={to} end={end}>
           {icon}
           <span>{label}</span>

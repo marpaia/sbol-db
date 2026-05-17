@@ -15,10 +15,7 @@ import { useMemo } from "react";
 import { ChevronLeft, ChevronRight, HardDrive, Key, Play } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import {
-  DataTable,
-  type DataTableColumn,
-} from "@/components/lab/DataTable";
+import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { KpiTile } from "@/components/observability/KpiTile";
 import {
@@ -261,10 +258,7 @@ function ColumnsPanel({ columns }: { columns: TableColumn[] }) {
         filterValue: (c) => c.comment ?? undefined,
         cell: (c) =>
           c.comment ? (
-            <span
-              className="truncate text-muted-foreground"
-              title={c.comment}
-            >
+            <span className="truncate text-muted-foreground" title={c.comment}>
               {c.comment}
             </span>
           ) : (
@@ -394,10 +388,7 @@ function TableKpis({ table }: { table: TableStats }) {
         value={formatBytes(table.total_bytes)}
         hint={`heap + indexes + toast`}
       />
-      <KpiTile
-        label="indexes size"
-        value={formatBytes(table.index_bytes)}
-      />
+      <KpiTile label="indexes size" value={formatBytes(table.index_bytes)} />
       <KpiTile
         label="live rows (est)"
         value={table.n_live_tup.toLocaleString()}
@@ -440,10 +431,7 @@ function IndexesPanel({
         sortValue: (i) => i.index,
         filterValue: (i) => i.index,
         cell: (i) => (
-          <span
-            className="truncate font-mono text-foreground"
-            title={i.index}
-          >
+          <span className="truncate font-mono text-foreground" title={i.index}>
             {i.index}
           </span>
         ),

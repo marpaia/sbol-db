@@ -13,9 +13,7 @@
 import { useEffect, useState } from "react";
 import { Command } from "cmdk";
 import {
-  Activity,
   Clock,
-  Compass,
   Database,
   Gauge,
   HardDrive,
@@ -29,6 +27,7 @@ import {
 import { useNavigate } from "react-router-dom";
 
 import { type Dialect, useLabStore } from "@/lib/store";
+import { cn, compactQuery, formatRelative } from "@/lib/utils";
 
 export interface CommandPaletteProps {
   open: boolean;
@@ -85,12 +84,12 @@ export function CommandPalette({
           </Command.Empty>
 
           <Command.Group
-            heading="Dialect"
-            className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground"
+            heading="Query"
+            className="px-2 py-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-muted-foreground"
           >
             <Item
               icon={<Network size={14} />}
-              label="Switch to SPARQL"
+              label="SPARQL"
               onSelect={() => {
                 onSwitchDialect("sparql");
                 onOpenChange(false);
@@ -98,7 +97,7 @@ export function CommandPalette({
             />
             <Item
               icon={<Database size={14} />}
-              label="Switch to SQL"
+              label="SQL"
               onSelect={() => {
                 onSwitchDialect("sql");
                 onOpenChange(false);
@@ -108,12 +107,16 @@ export function CommandPalette({
 
           <Command.Group
             heading="Go to"
-            className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground"
+            className="px-2 py-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-muted-foreground"
           >
-            <Item icon={<Home size={14} />} label="Overview" onSelect={() => goTo("/")} />
+            <Item
+              icon={<Home size={14} />}
+              label="Overview"
+              onSelect={() => goTo("/")}
+            />
             <Item
               icon={<Table2 size={14} />}
-              label="Schema browser"
+              label="Schema"
               onSelect={() => goTo("/schema")}
             />
             <Item
@@ -122,32 +125,21 @@ export function CommandPalette({
               onSelect={() => goTo("/ontologies")}
             />
             <Item
-              icon={<Activity size={14} />}
-              label="Observability"
-              trailing="metrics + jobs"
-              onSelect={() => goTo("/observability")}
-            />
-            <Item
               icon={<Gauge size={14} />}
-              label="App metrics"
+              label="Metrics"
               onSelect={() => goTo("/observability")}
             />
             <Item
               icon={<HardDrive size={14} />}
-              label="Postgres Maintenance"
+              label="Postgres"
               onSelect={() => goTo("/observability/postgres")}
-            />
-            <Item
-              icon={<Compass size={14} />}
-              label="Explore"
-              onSelect={() => goTo("/schema")}
             />
           </Command.Group>
 
           {saved.length > 0 && (
             <Command.Group
               heading="Saved queries"
-              className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground"
+              className="px-2 py-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-muted-foreground"
             >
               {saved.map((q) => (
                 <Item
@@ -167,7 +159,7 @@ export function CommandPalette({
           {history.length > 0 && (
             <Command.Group
               heading="History"
-              className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground"
+              className="px-2 py-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-muted-foreground"
             >
               {history.slice(0, 20).map((h) => (
                 <Item
@@ -179,8 +171,9 @@ export function CommandPalette({
                       <Clock size={14} className="text-destructive" />
                     )
                   }
-                  label={firstLine(h.query)}
-                  trailing={`${h.dialect.toUpperCase()} · ${h.elapsedMs} ms`}
+                  label={compactQuery(h.query)}
+                  mono
+                  trailing={`${h.dialect.toUpperCase()} · ${formatRelative(h.ranAt)}`}
                   onSelect={() => {
                     onLoadQuery(h.dialect, h.query);
                     onOpenChange(false);
@@ -204,11 +197,13 @@ function Item({
   icon,
   label,
   trailing,
+  mono = false,
   onSelect,
 }: {
   icon: React.ReactNode;
   label: string;
   trailing?: string;
+  mono?: boolean;
   onSelect: () => void;
 }) {
   return (
@@ -217,7 +212,9 @@ function Item({
       className="mx-1 flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm text-foreground aria-selected:bg-accent"
     >
       <span className="text-muted-foreground">{icon}</span>
-      <span className="flex-1 truncate">{label}</span>
+      <span className={cn("flex-1 truncate", mono && "font-mono text-xs")}>
+        {label}
+      </span>
       {trailing && (
         <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
           {trailing}
@@ -225,9 +222,4 @@ function Item({
       )}
     </Command.Item>
   );
-}
-
-function firstLine(q: string): string {
-  const line = q.split("\n").find((l) => l.trim().length > 0) ?? q;
-  return line.length > 80 ? `${line.slice(0, 80)}…` : line;
 }

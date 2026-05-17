@@ -57,9 +57,8 @@ export default function OntologyRoute() {
               Ontologies
             </h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              Browse the OBO ontologies loaded into this database, look up
-              terms by CURIE or IRI, and explore their <code>is_a</code>{" "}
-              descendants.
+              Browse the OBO ontologies loaded into this database, look up terms
+              by CURIE or IRI, and explore their <code>is_a</code> descendants.
             </p>
           </div>
           <button
@@ -382,9 +381,7 @@ function LookupError({ iri, error }: { iri: string; error: unknown }) {
       </div>
     );
   }
-  return (
-    <ErrorBanner title="Lookup failed" body={(error as Error).message} />
-  );
+  return <ErrorBanner title="Lookup failed" body={(error as Error).message} />;
 }
 
 function Pending({ label }: { label: string }) {
@@ -440,4 +437,3 @@ function formatRelative(iso: string): string {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
 }
-

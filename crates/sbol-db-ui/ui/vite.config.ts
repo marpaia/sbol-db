@@ -1,5 +1,6 @@
 import { defineConfig, type PluginOption } from "vite";
 import react from "@vitejs/plugin-react";
+import svgr from "vite-plugin-svgr";
 import http from "node:http";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -84,7 +85,7 @@ const forwardRootApi: PluginOption = {
 // forwards backend traffic to the Rust server on port 8080.
 export default defineConfig({
   base: "/lab/",
-  plugins: [react(), redirectBareLab, forwardRootApi],
+  plugins: [react(), svgr(), redirectBareLab, forwardRootApi],
   resolve: {
     alias: { "@": path.resolve(__dirname, "src") },
   },
