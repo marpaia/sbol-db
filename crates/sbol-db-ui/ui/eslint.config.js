@@ -38,7 +38,10 @@ const browserGlobals = {
   KeyboardEvent: "readonly",
   MouseEvent: "readonly",
   URL: "readonly",
+  URLSearchParams: "readonly",
   Blob: "readonly",
+  File: "readonly",
+  FormData: "readonly",
 };
 
 const nodeGlobals = {

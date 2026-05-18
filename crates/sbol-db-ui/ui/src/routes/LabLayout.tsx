@@ -100,43 +100,97 @@ const ROOT_CRUMB = "SBOL Data Lab";
 
 type Crumb = { label: string; to?: string; mono?: boolean };
 
+/**
+ * Each top-level route belongs to a sidebar section. The breadcrumb
+ * prepends the section as a non-clickable crumb so the user can see
+ * at a glance which group of features the current page lives in,
+ * matching how the sidebar is organized.
+ */
+const TOP_LEVEL_SECTIONS: Array<{
+  prefix: string;
+  section: string;
+  page: string;
+}> = [
+  { prefix: "/documents", section: "Data", page: "Documents" },
+  { prefix: "/objects", section: "Data", page: "Objects" },
+  { prefix: "/sequences", section: "Data", page: "Sequences" },
+  { prefix: "/ontologies", section: "Data", page: "Ontologies" },
+  { prefix: "/neighborhood", section: "Data", page: "Neighborhood" },
+  { prefix: "/schema", section: "Query", page: "Schema" },
+  { prefix: "/sparql", section: "Query", page: "SPARQL" },
+  { prefix: "/sql", section: "Query", page: "SQL" },
+  { prefix: "/observability/postgres", section: "Operations", page: "Postgres" },
+  { prefix: "/observability", section: "Operations", page: "Metrics" },
+];
+
+function topLevelFor(
+  pathname: string
+): { section: string; page: string; root: string } | null {
+  for (const entry of TOP_LEVEL_SECTIONS) {
+    if (
+      pathname === entry.prefix ||
+      pathname.startsWith(`${entry.prefix}/`)
+    ) {
+      return { section: entry.section, page: entry.page, root: entry.prefix };
+    }
+  }
+  return null;
+}
+
 function buildTrail(pathname: string): Crumb[] {
+  const top = topLevelFor(pathname);
+  if (!top) return [{ label: "Overview" }];
+
+  const trail: Crumb[] = [
+    { label: top.section },
+    { label: top.page, to: top.root },
+  ];
+
   const ontologyMatch = pathname.match(/^\/ontologies\/([^/]+)\/?$/);
   if (ontologyMatch) {
-    const prefix = decodeURIComponent(ontologyMatch[1]).toLowerCase();
-    return [
-      { label: "Ontologies", to: "/ontologies" },
-      { label: prefix, mono: true },
-    ];
+    trail.push({
+      label: decodeURIComponent(ontologyMatch[1]).toLowerCase(),
+      mono: true,
+    });
+    return trail;
   }
   const tableMatch = pathname.match(/^\/schema\/tables\/([^/]+)\/?$/);
   if (tableMatch) {
-    const name = decodeURIComponent(tableMatch[1]);
-    return [
-      { label: "Schema", to: "/schema" },
-      { label: name, mono: true },
-    ];
+    trail.push({ label: decodeURIComponent(tableMatch[1]), mono: true });
+    return trail;
   }
-  if (pathname.startsWith("/observability/")) {
-    const tail = pathname.replace(/^\/observability\//, "");
-    const sub =
-      tail === "postgres"
-        ? "Postgres"
-        : tail.charAt(0).toUpperCase() + tail.slice(1);
-    return [{ label: "Observability", to: "/observability" }, { label: sub }];
+  const documentMatch = pathname.match(/^\/documents\/([^/]+)\/?$/);
+  if (documentMatch) {
+    trail.push({
+      label: shortId(decodeURIComponent(documentMatch[1])),
+      mono: true,
+    });
+    return trail;
   }
-  const segment = pathname.startsWith("/sparql")
-    ? "SPARQL"
-    : pathname.startsWith("/sql")
-      ? "SQL"
-      : pathname.startsWith("/schema")
-        ? "Schema"
-        : pathname.startsWith("/ontologies")
-          ? "Ontologies"
-          : pathname.startsWith("/observability")
-            ? "Observability"
-            : "Overview";
-  return [{ label: segment }];
+  if (pathname === "/objects/lookup") {
+    trail.push({ label: "Bulk lookup" });
+    return trail;
+  }
+  const objectMatch = pathname.match(/^\/objects\/([^/]+)\/?$/);
+  if (objectMatch) {
+    trail.push({
+      label: shortLabel(decodeURIComponent(objectMatch[1])),
+      mono: true,
+    });
+    return trail;
+  }
+
+  return trail;
+}
+
+function shortId(id: string): string {
+  if (id.length <= 12) return id;
+  return `${id.slice(0, 8)}…`;
+}
+
+function shortLabel(iri: string): string {
+  const m = iri.match(/[#/]([^#/]+)$/);
+  return m ? m[1] : iri.length > 32 ? `${iri.slice(0, 32)}…` : iri;
 }
 
 function Breadcrumb({ pathname }: { pathname: string }) {
@@ -156,6 +210,8 @@ function Breadcrumb({ pathname }: { pathname: string }) {
               >
                 {crumb.label}
               </Link>
+            ) : !crumb.to && !isLast ? (
+              <span className="text-muted-foreground">{crumb.label}</span>
             ) : (
               <span
                 className={

@@ -34,7 +34,13 @@ const redirectBareLab: PluginOption = {
 // configureServer middleware puts it ahead of base handling and
 // guarantees the forward. Production (Rust server, same origin)
 // doesn't need this — there's no proxy hop at all.
-const ROOT_API_PREFIXES = ["/ontology", "/openapi.json"];
+const ROOT_API_PREFIXES = [
+  "/ontology",
+  "/openapi.json",
+  "/objects",
+  "/documents",
+  "/sequences",
+];
 const BACKEND_HOST = "localhost";
 const BACKEND_PORT = 8080;
 

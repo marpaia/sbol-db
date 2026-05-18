@@ -686,3 +686,400 @@ export async function fetchRecentJobs(
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as RecentJob[];
 }
+
+// ---------- Documents ----------
+
+export interface DocumentSummary {
+  id: string;
+  document_iri: string | null;
+  name: string | null;
+  description: string | null;
+  serialization_format: string;
+  source_uri: string | null;
+  created_by: string | null;
+  created_at: string;
+  object_count: number;
+}
+
+export interface DocumentsPage {
+  total: number;
+  limit: number;
+  offset: number;
+  documents: DocumentSummary[];
+}
+
+export interface DocumentsListQuery {
+  limit?: number;
+  offset?: number;
+}
+
+export async function listDocuments(
+  query: DocumentsListQuery = {},
+  signal?: AbortSignal
+): Promise<DocumentsPage> {
+  const qs = new URLSearchParams();
+  if (typeof query.limit === "number") qs.set("limit", String(query.limit));
+  if (typeof query.offset === "number") qs.set("offset", String(query.offset));
+  const tail = qs.toString();
+  const res = await fetch(`/lab/api/documents${tail ? `?${tail}` : ""}`, {
+    signal,
+  });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as DocumentsPage;
+}
+
+export type SerializationFormat = "turtle" | "jsonld" | "rdfxml" | "ntriples";
+
+export const SERIALIZATION_FORMATS: SerializationFormat[] = [
+  "turtle",
+  "jsonld",
+  "rdfxml",
+  "ntriples",
+];
+
+export function serializationLabel(format: SerializationFormat): string {
+  switch (format) {
+    case "turtle":
+      return "Turtle";
+    case "jsonld":
+      return "JSON-LD";
+    case "rdfxml":
+      return "RDF/XML";
+    case "ntriples":
+      return "N-Triples";
+  }
+}
+
+export function serializationContentType(format: SerializationFormat): string {
+  switch (format) {
+    case "turtle":
+      return "text/turtle";
+    case "jsonld":
+      return "application/ld+json";
+    case "rdfxml":
+      return "application/rdf+xml";
+    case "ntriples":
+      return "application/n-triples";
+  }
+}
+
+export interface ImportReport {
+  document_id: string;
+  object_count: number;
+  quad_count: number;
+  validation_status: "passed" | "failed";
+  validation_issue_count: number;
+}
+
+export interface DocumentDetail {
+  id: string;
+  document_iri: string | null;
+  name: string | null;
+  description: string | null;
+  serialization_format: string;
+  source_uri: string | null;
+  created_by: string | null;
+  created_at: string;
+  object_count: number;
+  quad_count: number;
+}
+
+export interface ImportDocumentParams {
+  format: SerializationFormat;
+  body: string;
+  name?: string;
+  description?: string;
+  source_uri?: string;
+  document_iri?: string;
+  created_by?: string;
+}
+
+export async function importDocument(
+  params: ImportDocumentParams,
+  signal?: AbortSignal
+): Promise<ImportReport> {
+  const qs = new URLSearchParams({ format: params.format });
+  if (params.name) qs.set("name", params.name);
+  if (params.description) qs.set("description", params.description);
+  if (params.source_uri) qs.set("source_uri", params.source_uri);
+  if (params.document_iri) qs.set("document_iri", params.document_iri);
+  if (params.created_by) qs.set("created_by", params.created_by);
+  const res = await fetch(`/documents?${qs.toString()}`, {
+    method: "POST",
+    headers: { "Content-Type": serializationContentType(params.format) },
+    body: params.body,
+    signal,
+  });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as ImportReport;
+}
+
+export async function getDocument(
+  id: string,
+  signal?: AbortSignal
+): Promise<DocumentDetail> {
+  const res = await fetch(`/lab/api/documents/${encodeURIComponent(id)}`, {
+    signal,
+  });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as DocumentDetail;
+}
+
+export interface BulkImportDocument {
+  format: SerializationFormat;
+  body: string;
+  name?: string;
+  description?: string;
+  source_uri?: string;
+  document_iri?: string;
+  created_by?: string;
+}
+
+export interface BulkImportResponse {
+  imported: number;
+  reports: ImportReport[];
+}
+
+export async function createDocumentsBulk(
+  documents: BulkImportDocument[],
+  signal?: AbortSignal
+): Promise<BulkImportResponse> {
+  const res = await fetch("/documents/bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ documents }),
+    signal,
+  });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as BulkImportResponse;
+}
+
+// ---------- Objects ----------
+
+export interface SbolObjectRecord {
+  id: string;
+  iri: string;
+  sbol_class?: string | null;
+  display_id?: string | null;
+  name?: string | null;
+  persistent_identity?: string | null;
+  version?: string | null;
+  types?: string[] | null;
+  roles?: string[] | null;
+  data?: Record<string, unknown> | null;
+  created_at?: string | null;
+}
+
+export interface ListObjectsQuery {
+  sbol_class?: string;
+  role?: string;
+  document_id?: string;
+  after?: string;
+  limit?: number;
+}
+
+export interface ListObjectsResponse {
+  objects: SbolObjectRecord[];
+  next_cursor: string | null;
+}
+
+export async function listObjects(
+  query: ListObjectsQuery = {},
+  signal?: AbortSignal
+): Promise<ListObjectsResponse> {
+  const qs = new URLSearchParams();
+  if (query.sbol_class) qs.set("sbol_class", query.sbol_class);
+  if (query.role) qs.set("role", query.role);
+  if (query.document_id) qs.set("document_id", query.document_id);
+  if (query.after) qs.set("after", query.after);
+  if (typeof query.limit === "number") qs.set("limit", String(query.limit));
+  const tail = qs.toString();
+  const res = await fetch(`/objects/list${tail ? `?${tail}` : ""}`, { signal });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as ListObjectsResponse;
+}
+
+export async function getObjectByIri(
+  iri: string,
+  signal?: AbortSignal
+): Promise<SbolObjectRecord> {
+  const res = await fetch(`/objects?iri=${encodeURIComponent(iri)}`, {
+    signal,
+  });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as SbolObjectRecord;
+}
+
+export interface LookupObjectsResponse {
+  found: SbolObjectRecord[];
+  missing: string[];
+}
+
+export async function lookupObjects(
+  iris: string[],
+  signal?: AbortSignal
+): Promise<LookupObjectsResponse> {
+  const res = await fetch("/objects/lookup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ iris }),
+    signal,
+  });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as LookupObjectsResponse;
+}
+
+export async function exportObjectRdf(
+  id: string,
+  format: SerializationFormat,
+  signal?: AbortSignal
+): Promise<string> {
+  const res = await fetch(
+    `/objects/${encodeURIComponent(id)}/rdf?format=${format}`,
+    { signal }
+  );
+  if (!res.ok) throw await asApiError(res);
+  return await res.text();
+}
+
+// ---------- Neighborhood ----------
+
+export type NeighborhoodDirection = "forward" | "backward" | "both";
+
+export interface NeighborhoodQuery {
+  iri: string;
+  depth?: number;
+  direction?: NeighborhoodDirection;
+  predicates?: string[];
+  max_nodes?: number;
+  literals?: boolean;
+}
+
+export interface NeighborhoodNode {
+  id: string;
+  depth: number;
+  blank_node?: boolean;
+  sbol_class?: string | null;
+  display_id?: string | null;
+  name?: string | null;
+}
+
+export type NeighborhoodObject =
+  | { iri: string }
+  | { blank: string }
+  | { literal: string; datatype: string; language?: string };
+
+export interface NeighborhoodEdge {
+  subject: string;
+  predicate: string;
+  depth: number;
+  object: NeighborhoodObject;
+}
+
+export interface NeighborhoodResult {
+  root_iri: string;
+  nodes: NeighborhoodNode[];
+  edges: NeighborhoodEdge[];
+  max_depth_reached: number;
+  truncated: boolean;
+}
+
+function neighborhoodQueryString(q: NeighborhoodQuery): string {
+  const qs = new URLSearchParams();
+  qs.set("iri", q.iri);
+  if (typeof q.depth === "number") qs.set("depth", String(q.depth));
+  if (q.direction) qs.set("direction", q.direction);
+  if (q.predicates && q.predicates.length > 0) {
+    qs.set("predicates", q.predicates.join(","));
+  }
+  if (typeof q.max_nodes === "number") {
+    qs.set("max_nodes", String(q.max_nodes));
+  }
+  if (typeof q.literals === "boolean") {
+    qs.set("literals", String(q.literals));
+  }
+  return qs.toString();
+}
+
+export async function fetchNeighborhood(
+  q: NeighborhoodQuery,
+  signal?: AbortSignal
+): Promise<NeighborhoodResult> {
+  const res = await fetch(
+    `/objects/neighborhood?${neighborhoodQueryString(q)}`,
+    {
+      signal,
+    }
+  );
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as NeighborhoodResult;
+}
+
+export async function fetchNeighborhoodRdf(
+  q: NeighborhoodQuery,
+  format: SerializationFormat,
+  signal?: AbortSignal
+): Promise<string> {
+  const qs = `${neighborhoodQueryString(q)}&format=${format}`;
+  const res = await fetch(`/objects/neighborhood.rdf?${qs}`, { signal });
+  if (!res.ok) throw await asApiError(res);
+  return await res.text();
+}
+
+// ---------- Sequences ----------
+
+export type SequenceStrand = "+" | "-";
+
+export interface SequenceMatch {
+  sequence_iri: string;
+  start: number;
+  length: number;
+  strand: SequenceStrand;
+}
+
+export interface SequenceSearchParams {
+  pattern: string;
+  max_hits?: number;
+  forward_only?: boolean;
+}
+
+export async function sequenceSearch(
+  params: SequenceSearchParams,
+  signal?: AbortSignal
+): Promise<SequenceMatch[]> {
+  const qs = new URLSearchParams({ pattern: params.pattern });
+  if (typeof params.max_hits === "number") {
+    qs.set("max_hits", String(params.max_hits));
+  }
+  if (typeof params.forward_only === "boolean") {
+    qs.set("forward_only", String(params.forward_only));
+  }
+  const res = await fetch(`/sequences/search?${qs.toString()}`, { signal });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as SequenceMatch[];
+}
+
+export interface BatchSequenceMatch {
+  pattern: string;
+  matches: SequenceMatch[];
+}
+
+export interface SequenceSearchBatchRequest {
+  patterns: string[];
+  max_hits?: number;
+  forward_only?: boolean;
+}
+
+export async function sequenceSearchBatch(
+  req: SequenceSearchBatchRequest,
+  signal?: AbortSignal
+): Promise<BatchSequenceMatch[]> {
+  const res = await fetch("/sequences/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+    signal,
+  });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as BatchSequenceMatch[];
+}

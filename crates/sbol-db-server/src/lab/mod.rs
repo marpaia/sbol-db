@@ -11,6 +11,7 @@
 
 mod cancel;
 mod convert;
+mod documents;
 mod observability;
 mod overview;
 mod schema;
@@ -37,5 +38,7 @@ pub fn router() -> Router<AppState> {
         .route("/sparql/validate", post(sparql::validate))
         .route("/schema/sql", get(schema::sql))
         .route("/schema/sparql", get(schema::sparql))
+        .route("/documents", get(documents::list_documents))
+        .route("/documents/:id", get(documents::get_document_detail))
         .nest("/observability", observability::router())
 }

@@ -1,16 +1,21 @@
 /**
- * Right-click context menu for IRI cells in the results table.
- * Offers cross-dialect actions (open in SPARQL/SQL, walk neighborhood)
- * plus a Copy IRI shortcut. The menu is positioned at the click point
- * and dismissed on outside-click, Escape, or any action.
+ * Right-click context menu for IRI cells in results tables.
+ *
+ * Pivots: every IRI grows actions that span the typed-object surface
+ * ("Open object", "Walk neighborhood"), the dialect workbenches
+ * ("Open in SPARQL", "Open in SQL"), and the ontology lookup tool. The
+ * menu is positioned at the click point and dismissed on outside-click,
+ * Escape, or any selection.
  */
 
 import { useEffect } from "react";
 import {
+  Boxes,
   ClipboardCopy,
+  Database,
   ExternalLink,
   GitBranch,
-  Database,
+  Library,
   Network,
 } from "lucide-react";
 
@@ -41,6 +46,18 @@ export function IriContextMenu({ x, y, iri, onClose }: IriContextMenuProps) {
     };
   }, [onClose]);
 
+  const openObject = () => {
+    navigate(`/objects/${encodeURIComponent(iri)}`);
+    onClose();
+  };
+  const walkNeighborhood = () => {
+    navigate(`/neighborhood?iri=${encodeURIComponent(iri)}`);
+    onClose();
+  };
+  const lookupTerm = () => {
+    navigate(`/ontologies?lookup=${encodeURIComponent(iri)}`);
+    onClose();
+  };
   const openInSparql = () => {
     const q = `SELECT ?p ?o WHERE {\n  <${iri}> ?p ?o .\n}\nLIMIT 100\n`;
     setBuffer("sparql", q);
@@ -52,12 +69,6 @@ export function IriContextMenu({ x, y, iri, onClose }: IriContextMenuProps) {
     const q = `SELECT *\nFROM sbol_objects\nWHERE iri = '${escaped}';\n`;
     setBuffer("sql", q);
     navigate("/sql");
-    onClose();
-  };
-  const walkNeighborhood = () => {
-    const q = `PREFIX sbol: <http://sbols.org/v3#>\nSELECT ?p ?o\nWHERE {\n  <${iri}> (sbol:|!sbol:)* ?o .\n  <${iri}> ?p ?o .\n}\nLIMIT 100\n`;
-    setBuffer("sparql", q);
-    navigate("/sparql");
     onClose();
   };
   const openHttp = () => {
@@ -99,6 +110,22 @@ export function IriContextMenu({ x, y, iri, onClose }: IriContextMenuProps) {
         onClick={copy}
       />
       <MenuButton
+        icon={<Boxes size={14} />}
+        label="Open object"
+        onClick={openObject}
+      />
+      <MenuButton
+        icon={<GitBranch size={14} />}
+        label="Walk neighborhood"
+        onClick={walkNeighborhood}
+      />
+      <MenuButton
+        icon={<Library size={14} />}
+        label="Look up in ontologies"
+        onClick={lookupTerm}
+      />
+      <Divider />
+      <MenuButton
         icon={<Network size={14} />}
         label="Open in SPARQL"
         onClick={openInSparql}
@@ -108,20 +135,22 @@ export function IriContextMenu({ x, y, iri, onClose }: IriContextMenuProps) {
         label="Open in SQL"
         onClick={openInSql}
       />
-      <MenuButton
-        icon={<GitBranch size={14} />}
-        label="Walk neighborhood"
-        onClick={walkNeighborhood}
-      />
       {isHttp && (
-        <MenuButton
-          icon={<ExternalLink size={14} />}
-          label="Open in new tab"
-          onClick={openHttp}
-        />
+        <>
+          <Divider />
+          <MenuButton
+            icon={<ExternalLink size={14} />}
+            label="Open in new tab"
+            onClick={openHttp}
+          />
+        </>
       )}
     </div>
   );
+}
+
+function Divider() {
+  return <div className="my-1 h-px bg-border" />;
 }
 
 function MenuButton({

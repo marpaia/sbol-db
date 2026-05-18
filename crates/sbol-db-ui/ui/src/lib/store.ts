@@ -40,6 +40,8 @@ interface LabState {
   history: HistoryEntry[];
   /** Named saved queries. */
   saved: SavedQuery[];
+  /** Recent sequence-search motifs, newest first. */
+  recentSeqPatterns: string[];
 
   setDialect: (d: Dialect) => void;
   setBuffer: (d: Dialect, text: string) => void;
@@ -49,9 +51,11 @@ interface LabState {
     q: Omit<SavedQuery, "id" | "updatedAt"> & { id?: string }
   ) => SavedQuery;
   deleteSaved: (id: string) => void;
+  rememberSeqPattern: (pattern: string) => void;
 }
 
 const HISTORY_CAP = 50;
+const SEQ_PATTERN_CAP = 20;
 
 const DEFAULT_SPARQL = `PREFIX sbol: <http://sbols.org/v3#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -87,6 +91,7 @@ export const useLabStore = create<LabState>()(
       buffers: { sql: DEFAULT_SQL, sparql: DEFAULT_SPARQL },
       history: [],
       saved: [],
+      recentSeqPatterns: [],
 
       setDialect: (d) => set({ lastDialect: d }),
       setBuffer: (d, text) =>
@@ -117,6 +122,16 @@ export const useLabStore = create<LabState>()(
       },
       deleteSaved: (id) =>
         set((s) => ({ saved: s.saved.filter((x) => x.id !== id) })),
+      rememberSeqPattern: (pattern) => {
+        const trimmed = pattern.trim();
+        if (!trimmed) return;
+        set((s) => ({
+          recentSeqPatterns: [
+            trimmed,
+            ...s.recentSeqPatterns.filter((p) => p !== trimmed),
+          ].slice(0, SEQ_PATTERN_CAP),
+        }));
+      },
     }),
     {
       name: "sbol-lab-state-v1",

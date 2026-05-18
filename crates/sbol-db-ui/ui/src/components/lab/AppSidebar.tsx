@@ -8,10 +8,13 @@
 
 import {
   Activity,
+  BookOpen,
+  Boxes,
   ChevronRight,
   Command as CommandIcon,
-  Compass,
   Database,
+  Dna,
+  FileText,
   Gauge,
   HardDrive,
   Home,
@@ -66,23 +69,26 @@ interface NavGroup {
 
 const NAV_GROUPS: NavGroup[] = [
   {
+    label: "Data",
+    icon: <Boxes className="text-sbol-rbs" />,
+    items: [
+      { to: "/documents", icon: <FileText />, label: "Documents" },
+      { to: "/objects", icon: <Boxes />, label: "Objects" },
+      { to: "/sequences", icon: <Dna />, label: "Sequences" },
+      { to: "/ontologies", icon: <Library />, label: "Ontologies" },
+    ],
+  },
+  {
     label: "Query",
     icon: <Search className="text-sbol-promoter" />,
     items: [
+      { to: "/schema", icon: <Table2 />, label: "Schema" },
       { to: "/sparql", icon: <Network />, label: "SPARQL" },
       { to: "/sql", icon: <Database />, label: "SQL" },
     ],
   },
   {
-    label: "Explore",
-    icon: <Compass className="text-sbol-cds" />,
-    items: [
-      { to: "/schema", icon: <Table2 />, label: "Schema" },
-      { to: "/ontologies", icon: <Library />, label: "Ontologies" },
-    ],
-  },
-  {
-    label: "Observability",
+    label: "Operations",
     icon: <Activity className="text-sbol-terminator" />,
     items: [
       { to: "/observability", end: true, icon: <Gauge />, label: "Metrics" },
@@ -149,6 +155,14 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
               <kbd className="ml-auto text-[10px] text-sidebar-foreground/50">
                 ⌘K
               </kbd>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild tooltip="API docs">
+              <a href="/docs" target="_blank" rel="noopener noreferrer">
+                <BookOpen />
+                <span>API docs</span>
+              </a>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarSeparator className="my-1" />

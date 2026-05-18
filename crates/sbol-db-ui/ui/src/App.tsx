@@ -1,13 +1,20 @@
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 
 import DashboardRoute from "@/routes/DashboardRoute";
+import DocumentDetailRoute from "@/routes/DocumentDetailRoute";
+import DocumentsRoute from "@/routes/DocumentsRoute";
 import LabLayout from "@/routes/LabLayout";
+import NeighborhoodRoute from "@/routes/NeighborhoodRoute";
+import ObjectDetailRoute from "@/routes/ObjectDetailRoute";
+import ObjectLookupRoute from "@/routes/ObjectLookupRoute";
+import ObjectsRoute from "@/routes/ObjectsRoute";
 import ObservabilityRoute from "@/routes/ObservabilityRoute";
 import OntologyDetailRoute from "@/routes/OntologyDetailRoute";
 import OntologyRoute from "@/routes/OntologyRoute";
 import PgTableDetailRoute from "@/routes/PgTableDetailRoute";
 import PostgresRoute from "@/routes/PostgresRoute";
 import SchemaRoute from "@/routes/SchemaRoute";
+import SequencesRoute from "@/routes/SequencesRoute";
 import SparqlRoute from "@/routes/SparqlRoute";
 import SqlRoute from "@/routes/SqlRoute";
 
@@ -24,6 +31,13 @@ export default function App() {
           path="schema/tables/:schema/:name"
           element={<RedirectToSchemaTable />}
         />
+        <Route path="documents" element={<DocumentsRoute />} />
+        <Route path="documents/:id" element={<DocumentDetailRoute />} />
+        <Route path="objects" element={<ObjectsRoute />} />
+        <Route path="objects/lookup" element={<ObjectLookupRoute />} />
+        <Route path="objects/:iri" element={<ObjectDetailRoute />} />
+        <Route path="neighborhood" element={<NeighborhoodRoute />} />
+        <Route path="sequences" element={<SequencesRoute />} />
         <Route path="ontologies" element={<OntologyRoute />} />
         <Route path="ontologies/:prefix" element={<OntologyDetailRoute />} />
         <Route path="observability" element={<ObservabilityRoute />} />

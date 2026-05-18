@@ -15,7 +15,7 @@
 
 import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   Boxes,
   Database,
@@ -249,23 +249,28 @@ export default function DashboardRoute() {
           ) : (
             <ul className="divide-y">
               {data?.recent_documents.map((d) => (
-                <li key={d.id} className="py-2 text-sm">
-                  <div className="flex items-center gap-3">
-                    <span className="flex-1 truncate font-mono text-foreground">
-                      {displayName(d)}
-                    </span>
-                    <span className="text-xs tabular-nums text-muted-foreground">
-                      {d.object_count.toLocaleString()} objects
-                    </span>
-                    <span className="w-28 shrink-0 text-right text-xs text-muted-foreground">
-                      {formatRelative(d.created_at)}
-                    </span>
-                  </div>
-                  {d.source_uri && (
-                    <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground/70">
-                      {d.source_uri}
+                <li key={d.id}>
+                  <Link
+                    to={`/documents/${d.id}`}
+                    className="block py-2 text-sm transition-colors hover:bg-accent/40"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="flex-1 truncate font-mono text-foreground">
+                        {displayName(d)}
+                      </span>
+                      <span className="text-xs tabular-nums text-muted-foreground">
+                        {d.object_count.toLocaleString()} objects
+                      </span>
+                      <span className="w-28 shrink-0 text-right text-xs text-muted-foreground">
+                        {formatRelative(d.created_at)}
+                      </span>
                     </div>
-                  )}
+                    {d.source_uri && (
+                      <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground/70">
+                        {d.source_uri}
+                      </div>
+                    )}
+                  </Link>
                 </li>
               ))}
             </ul>

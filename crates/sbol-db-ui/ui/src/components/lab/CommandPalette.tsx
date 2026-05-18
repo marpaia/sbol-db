@@ -13,9 +13,13 @@
 import { useEffect, useState } from "react";
 import { Command } from "cmdk";
 import {
+  Boxes,
   Clock,
   Database,
+  Dna,
+  FileText,
   Gauge,
+  GitBranch,
   HardDrive,
   History,
   Home,
@@ -115,14 +119,39 @@ export function CommandPalette({
               onSelect={() => goTo("/")}
             />
             <Item
-              icon={<Table2 size={14} />}
-              label="Schema"
-              onSelect={() => goTo("/schema")}
+              icon={<FileText size={14} />}
+              label="Documents"
+              onSelect={() => goTo("/documents")}
+            />
+            <Item
+              icon={<Boxes size={14} />}
+              label="Objects"
+              onSelect={() => goTo("/objects")}
+            />
+            <Item
+              icon={<Boxes size={14} />}
+              label="Bulk object lookup"
+              onSelect={() => goTo("/objects/lookup")}
+            />
+            <Item
+              icon={<GitBranch size={14} />}
+              label="Walk neighborhood"
+              onSelect={() => goTo("/neighborhood")}
+            />
+            <Item
+              icon={<Dna size={14} />}
+              label="Sequence search"
+              onSelect={() => goTo("/sequences")}
             />
             <Item
               icon={<Library size={14} />}
               label="Ontologies"
               onSelect={() => goTo("/ontologies")}
+            />
+            <Item
+              icon={<Table2 size={14} />}
+              label="Schema"
+              onSelect={() => goTo("/schema")}
             />
             <Item
               icon={<Gauge size={14} />}
