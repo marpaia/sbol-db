@@ -693,6 +693,28 @@ export async function getJob(id: string, signal?: AbortSignal): Promise<RecentJo
   return (await res.json()) as RecentJob;
 }
 
+export interface JobAttempt {
+  id: number;
+  job_id: string;
+  attempt_no: number;
+  worker_id: string;
+  started_at: string;
+  finished_at: string | null;
+  status: JobStatus;
+  error: string | null;
+}
+
+export async function fetchJobAttempts(
+  id: string,
+  signal?: AbortSignal
+): Promise<JobAttempt[]> {
+  const res = await fetch(`/jobs/${encodeURIComponent(id)}/attempts`, {
+    signal,
+  });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as JobAttempt[];
+}
+
 export interface EnqueueJobRequest {
   kind: string;
   payload: unknown;

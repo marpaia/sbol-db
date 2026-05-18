@@ -163,6 +163,7 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route("/ontology/descendants", get(routes::ontology_descendants))
         .route("/jobs", get(routes::list_jobs).post(routes::enqueue_job))
         .route("/jobs/:id", get(routes::get_job))
+        .route("/jobs/:id/attempts", get(routes::list_job_attempts))
         .route("/jobs/:id/cancel", post(routes::cancel_job))
         .route_layer(axum::middleware::from_fn(metrics::track_metrics));
 

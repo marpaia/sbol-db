@@ -12,7 +12,7 @@ pub mod validation;
 
 pub use document::DocumentRepository;
 pub use job::{
-    EnqueueOutcome, JobRepository, JobStatus, ListJobsFilter, NewJob, OldestQueuedAge,
+    EnqueueOutcome, JobAttempt, JobRepository, JobStatus, ListJobsFilter, NewJob, OldestQueuedAge,
     QueueDepthRow, SbolJob, DEFAULT_QUEUE,
 };
 pub use neighborhood::NeighborhoodRepository;

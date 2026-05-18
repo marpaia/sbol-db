@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   cancelJob,
+  fetchJobAttempts,
   fetchObservabilitySummary,
   fetchPgActivity,
   fetchPgDatabase,
@@ -149,8 +150,25 @@ export function useCancelJob() {
     mutationFn: (id: string) => cancelJob(id),
     onSuccess: (_data, id) => {
       qc.invalidateQueries({ queryKey: ["job", id] });
+      qc.invalidateQueries({ queryKey: ["job", id, "attempts"] });
       qc.invalidateQueries({ queryKey: ["lab", "obs", "jobs", "recent"] });
       qc.invalidateQueries({ queryKey: ["lab", "obs", "summary"] });
     },
+  });
+}
+
+/**
+ * Per-attempt audit log for a job. Like `useJob`, polls every 5 s while
+ * the parent job is still pending so a re-tried attempt becomes visible
+ * without manual refresh.
+ */
+export function useJobAttempts(id: string, parentStatus: RecentJob["status"] | undefined) {
+  return useQuery({
+    queryKey: ["job", id, "attempts"],
+    queryFn: ({ signal }) => fetchJobAttempts(id, signal),
+    enabled: id.length > 0,
+    refetchInterval:
+      parentStatus === "queued" || parentStatus === "running" ? 5_000 : false,
+    placeholderData: (prev) => prev,
   });
 }

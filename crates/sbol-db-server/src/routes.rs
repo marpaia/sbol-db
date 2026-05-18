@@ -10,8 +10,8 @@ use sbol_db_core::{
     NeighborhoodResult, ObjectId, SbolObjectRecord, SerializationFormat,
 };
 use sbol_db_postgres::{
-    BatchSequenceMatch, ImportInput, JobStatus, ListJobsFilter, ListObjectsFilter, NewJob,
-    OntologyLoadReport, OntologyRecord, OntologyTermRecord, SbolJob, SequenceMatch,
+    BatchSequenceMatch, ImportInput, JobAttempt, JobStatus, ListJobsFilter, ListObjectsFilter,
+    NewJob, OntologyLoadReport, OntologyRecord, OntologyTermRecord, SbolJob, SequenceMatch,
     SequenceSearchOptions,
 };
 use sbol_db_sparql::{ResultFormat, SparqlOptions};
@@ -911,6 +911,20 @@ pub async fn cancel_job(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let cancelled = state.jobs.cancel(JobId(id)).await?;
     Ok(Json(json!({ "cancelled": cancelled })))
+}
+
+pub async fn list_job_attempts(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<JobAttempt>>, ApiError> {
+    // 404 if the job itself doesn't exist; an empty attempts list for an
+    // existing-but-never-dequeued job is a legitimate 200.
+    let job = state.jobs.get(JobId(id)).await?;
+    if job.is_none() {
+        return Err(ApiError::NotFound(format!("job {id}")));
+    }
+    let attempts = state.jobs.list_attempts(JobId(id)).await?;
+    Ok(Json(attempts))
 }
 
 fn parse_job_status(s: &str) -> Result<JobStatus, ApiError> {

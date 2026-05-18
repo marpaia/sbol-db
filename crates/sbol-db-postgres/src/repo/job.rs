@@ -147,6 +147,21 @@ pub struct OldestQueuedAge {
     pub age_secs: f64,
 }
 
+/// One row in `sbol_job_attempts`. Each dequeue records a new attempt;
+/// failures finalise the attempt with the error text before the parent
+/// job either re-queues or transitions to `dead`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct JobAttempt {
+    pub id: i64,
+    pub job_id: JobId,
+    pub attempt_no: i32,
+    pub worker_id: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub status: JobStatus,
+    pub error: Option<String>,
+}
+
 /// Outcome of [`JobRepository::enqueue`] when the row already existed
 /// under a matching `idempotency_key`. Callers usually treat both arms
 /// identically — the existing row is what they wanted anyway.
@@ -526,6 +541,42 @@ impl JobRepository {
         .await
         .map_err(db_err)?;
         row.map(row_to_job).transpose()
+    }
+
+    /// Per-attempt audit log for a job, newest first. Returns an empty
+    /// vector when the job exists but has not been dequeued yet, and
+    /// also when the job id does not exist — callers that care about
+    /// existence should pair this with [`Self::get`].
+    pub async fn list_attempts(&self, id: JobId) -> Result<Vec<JobAttempt>, DomainError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, job_id, attempt_no, worker_id, started_at,
+                   finished_at, status::text AS status, error
+            FROM sbol_job_attempts
+            WHERE job_id = $1
+            ORDER BY attempt_no DESC
+            "#,
+        )
+        .bind(id.as_uuid())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(JobAttempt {
+                    id: row.try_get("id").map_err(db_err)?,
+                    job_id: JobId(row.try_get("job_id").map_err(db_err)?),
+                    attempt_no: row.try_get("attempt_no").map_err(db_err)?,
+                    worker_id: row.try_get("worker_id").map_err(db_err)?,
+                    started_at: row.try_get("started_at").map_err(db_err)?,
+                    finished_at: row.try_get("finished_at").map_err(db_err)?,
+                    status: JobStatus::from_db_str(
+                        row.try_get::<String, _>("status").map_err(db_err)?.as_str(),
+                    )?,
+                    error: row.try_get("error").map_err(db_err)?,
+                })
+            })
+            .collect()
     }
 
     pub async fn list(&self, filter: &ListJobsFilter) -> Result<Vec<SbolJob>, DomainError> {

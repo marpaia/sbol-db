@@ -666,6 +666,28 @@
         }
       }
     },
+    "/jobs/{id}/attempts": {
+      "get": {
+        "tags": ["Jobs"],
+        "summary": "Per-attempt audit log for a job",
+        "description": "Returns each row in `sbol_job_attempts` for the given job, newest first. Useful for inspecting a failed job's retry history, including the worker that ran each attempt and its error message. Returns 404 when the job id does not exist; returns 200 with an empty array when the job exists but has not yet been dequeued.",
+        "operationId": "jobAttempts",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Attempts ordered by `attempt_no` descending.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/JobAttempt" } }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
     "/jobs/{id}/cancel": {
       "post": {
         "tags": ["Jobs"],
@@ -1204,6 +1226,20 @@
           "max_attempts":    { "type": "integer", "minimum": 1 },
           "idempotency_key": { "type": "string", "description": "When set, deduplicates against any non-terminal or succeeded job with the same `(kind, idempotency_key)`." },
           "correlation_id":  { "type": "string", "format": "uuid" }
+        }
+      },
+      "JobAttempt": {
+        "type": "object",
+        "required": ["id","job_id","attempt_no","worker_id","started_at","status"],
+        "properties": {
+          "id":          { "type": "integer", "format": "int64", "description": "Auto-increment row id in `sbol_job_attempts`." },
+          "job_id":      { "type": "string", "format": "uuid" },
+          "attempt_no":  { "type": "integer", "minimum": 1 },
+          "worker_id":   { "type": "string" },
+          "started_at":  { "type": "string", "format": "date-time" },
+          "finished_at": { "type": "string", "format": "date-time", "nullable": true, "description": "Null while the attempt is still in-flight." },
+          "status":      { "$ref": "#/components/schemas/JobStatus" },
+          "error":       { "type": "string", "nullable": true }
         }
       },
       "EnqueueJobResponse": {

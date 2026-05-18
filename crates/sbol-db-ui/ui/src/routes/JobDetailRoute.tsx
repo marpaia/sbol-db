@@ -15,14 +15,19 @@ import { Link, useParams } from "react-router-dom";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { JobStatusBadge } from "@/components/observability/JobStatusBadge";
 import { KpiTile } from "@/components/observability/KpiTile";
-import { useCancelJob, useJob } from "@/hooks/useObservability";
-import type { RecentJob } from "@/lib/api";
+import {
+  useCancelJob,
+  useJob,
+  useJobAttempts,
+} from "@/hooks/useObservability";
+import type { JobAttempt, RecentJob } from "@/lib/api";
 import { describeError, formatMs, formatRelative } from "@/lib/utils";
 
 export default function JobDetailRoute() {
   const params = useParams<{ id: string }>();
   const id = params.id ?? "";
   const { data: job, isLoading, error } = useJob(id);
+  const attemptsQuery = useJobAttempts(id, job?.status);
   const cancel = useCancelJob();
 
   const cancelMessage = useMemo(() => {
@@ -37,11 +42,11 @@ export default function JobDetailRoute() {
     <div className="h-full w-full overflow-y-auto">
       <div className="mx-auto max-w-6xl space-y-6 px-8 py-10">
         <Link
-          to="/observability"
+          to="/observability/jobs"
           className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           <ChevronLeft size={12} />
-          Observability
+          Jobs
         </Link>
 
         {error ? (
@@ -72,10 +77,106 @@ export default function JobDetailRoute() {
               <ResultPanel result={job.result} />
             )}
             {job.error && <ErrorPanel error={job.error} />}
+            <AttemptsPanel
+              loading={attemptsQuery.isLoading && !attemptsQuery.data}
+              error={attemptsQuery.error}
+              attempts={attemptsQuery.data ?? null}
+            />
           </>
         )}
       </div>
     </div>
+  );
+}
+
+function AttemptsPanel({
+  loading,
+  error,
+  attempts,
+}: {
+  loading: boolean;
+  error: unknown;
+  attempts: JobAttempt[] | null;
+}) {
+  if (error) {
+    return (
+      <ErrorBanner
+        title="Couldn't load attempts"
+        body={describeError(error)}
+      />
+    );
+  }
+  return (
+    <section className="overflow-hidden rounded-lg border bg-card">
+      <header className="flex items-center gap-2 border-b px-4 py-2">
+        <h2 className="text-sm font-medium">Attempts</h2>
+        {attempts && (
+          <span className="text-xs text-muted-foreground">
+            {attempts.length}{" "}
+            {attempts.length === 1 ? "attempt" : "attempts"} recorded
+          </span>
+        )}
+      </header>
+      {loading ? (
+        <div className="px-4 py-4 text-sm text-muted-foreground">
+          Loading attempts…
+        </div>
+      ) : !attempts || attempts.length === 0 ? (
+        <div className="px-4 py-4 text-sm text-muted-foreground">
+          No attempts recorded yet. Attempts are written when a worker
+          dequeues the job.
+        </div>
+      ) : (
+        <ul className="divide-y">
+          {attempts.map((a) => (
+            <AttemptRow key={a.id} attempt={a} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function AttemptRow({ attempt }: { attempt: JobAttempt }) {
+  const duration =
+    attempt.finished_at && attempt.started_at
+      ? new Date(attempt.finished_at).getTime() -
+        new Date(attempt.started_at).getTime()
+      : attempt.started_at
+        ? Date.now() - new Date(attempt.started_at).getTime()
+        : null;
+  return (
+    <li className="space-y-2 px-4 py-3 text-xs">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="font-mono text-muted-foreground">
+          #{attempt.attempt_no}
+        </span>
+        <JobStatusBadge status={attempt.status} />
+        <span className="text-muted-foreground/60">·</span>
+        <span className="text-muted-foreground">
+          {formatRelative(attempt.started_at)}
+        </span>
+        <span className="text-muted-foreground/60">·</span>
+        <span className="tabular-nums text-muted-foreground">
+          {duration !== null
+            ? attempt.finished_at
+              ? formatMs(duration)
+              : `${formatMs(duration)} (running)`
+            : "—"}
+        </span>
+        <span
+          className="ml-auto truncate font-mono text-[10px] text-muted-foreground/70"
+          title={attempt.worker_id}
+        >
+          {attempt.worker_id}
+        </span>
+      </div>
+      {attempt.error && (
+        <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-md border border-destructive/20 bg-destructive/5 px-2 py-1.5 font-mono text-[11px] leading-snug text-destructive/90">
+          {attempt.error}
+        </pre>
+      )}
+    </li>
   );
 }
 
