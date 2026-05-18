@@ -3,6 +3,8 @@ import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import DashboardRoute from "@/routes/DashboardRoute";
 import DocumentDetailRoute from "@/routes/DocumentDetailRoute";
 import DocumentsRoute from "@/routes/DocumentsRoute";
+import JobDetailRoute from "@/routes/JobDetailRoute";
+import JobsRoute from "@/routes/JobsRoute";
 import LabLayout from "@/routes/LabLayout";
 import NeighborhoodRoute from "@/routes/NeighborhoodRoute";
 import ObjectDetailRoute from "@/routes/ObjectDetailRoute";
@@ -41,6 +43,8 @@ export default function App() {
         <Route path="ontologies" element={<OntologyRoute />} />
         <Route path="ontologies/:prefix" element={<OntologyDetailRoute />} />
         <Route path="observability" element={<ObservabilityRoute />} />
+        <Route path="observability/jobs" element={<JobsRoute />} />
+        <Route path="observability/jobs/:id" element={<JobDetailRoute />} />
         <Route path="observability/postgres" element={<PostgresRoute />} />
         <Route
           path="observability/postgres/tables/:schema/:name"

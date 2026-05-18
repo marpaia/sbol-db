@@ -687,6 +687,57 @@ export async function fetchRecentJobs(
   return (await res.json()) as RecentJob[];
 }
 
+export async function getJob(id: string, signal?: AbortSignal): Promise<RecentJob> {
+  const res = await fetch(`/jobs/${encodeURIComponent(id)}`, { signal });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as RecentJob;
+}
+
+export interface EnqueueJobRequest {
+  kind: string;
+  payload: unknown;
+  queue?: string;
+  priority?: number;
+  max_attempts?: number;
+  idempotency_key?: string;
+  correlation_id?: string;
+}
+
+export interface EnqueueJobResult {
+  job: RecentJob;
+  deduplicated: boolean;
+}
+
+export async function enqueueJob(
+  req: EnqueueJobRequest,
+  signal?: AbortSignal
+): Promise<EnqueueJobResult> {
+  const res = await fetch(`/jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+    signal,
+  });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as EnqueueJobResult;
+}
+
+export interface CancelJobResponse {
+  cancelled: boolean;
+}
+
+export async function cancelJob(
+  id: string,
+  signal?: AbortSignal
+): Promise<CancelJobResponse> {
+  const res = await fetch(`/jobs/${encodeURIComponent(id)}/cancel`, {
+    method: "POST",
+    signal,
+  });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as CancelJobResponse;
+}
+
 // ---------- Documents ----------
 
 export interface DocumentSummary {

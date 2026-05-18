@@ -25,6 +25,7 @@
     { "name": "SPARQL",       "description": "Read-only SPARQL 1.1 evaluator (SELECT / ASK / CONSTRUCT / DESCRIBE)." },
     { "name": "Sequences",    "description": "Nucleotide substring + reverse-complement search backed by the k-mer seed index." },
     { "name": "Ontology",     "description": "Load OBO ontologies (SO, SBO, ...) and resolve transitive `is_a` closure." },
+    { "name": "Jobs",         "description": "Background work queue: enqueue, inspect, and cancel async jobs (e.g. document imports). Workers claim with `FOR UPDATE SKIP LOCKED`, leases auto-renew, retries are exponentially backed off." },
     { "name": "Meta",         "description": "Liveness, readiness, metrics, OpenAPI schema, and this docs page." }
   ],
   "paths": {
@@ -593,6 +594,104 @@
       }
     },
 
+    "/jobs": {
+      "post": {
+        "tags": ["Jobs"],
+        "summary": "Enqueue a background job",
+        "description": "Inserts a row in `sbol_jobs`. If `idempotency_key` is set and a non-terminal or succeeded job already exists for the same `(kind, idempotency_key)` pair, the existing job is returned with `deduplicated: true` rather than re-queued.",
+        "operationId": "enqueueJob",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EnqueueJobRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The job row, plus a flag indicating whether it was deduplicated against an existing entry.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EnqueueJobResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      },
+      "get": {
+        "tags": ["Jobs"],
+        "summary": "List jobs with optional filters",
+        "description": "Filters compose with AND. The default `limit` is 100; values above 1000 are clamped. Results are ordered most-recent-first.",
+        "operationId": "listJobs",
+        "parameters": [
+          { "name": "kind",           "in": "query", "schema": { "type": "string" } },
+          { "name": "status",         "in": "query", "schema": { "type": "string", "enum": ["queued","running","succeeded","failed","cancelled","dead"] } },
+          { "name": "queue",          "in": "query", "schema": { "type": "string" } },
+          { "name": "correlation_id", "in": "query", "schema": { "type": "string", "format": "uuid" } },
+          { "name": "limit",          "in": "query", "schema": { "type": "integer", "default": 100, "minimum": 1, "maximum": 1000 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching `sbol_jobs` rows.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/SbolJob" } }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/jobs/{id}": {
+      "get": {
+        "tags": ["Jobs"],
+        "summary": "Fetch a job by id",
+        "operationId": "getJob",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The job row.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SbolJob" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/jobs/{id}/cancel": {
+      "post": {
+        "tags": ["Jobs"],
+        "summary": "Cancel a queued or running job",
+        "description": "Idempotent: transitions `queued` or `running` jobs to `cancelled` and returns `{ cancelled: true }`. Terminal jobs (succeeded / failed / dead / already cancelled) are left alone and return `{ cancelled: false }`.",
+        "operationId": "cancelJob",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether this call transitioned the job.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["cancelled"],
+                  "properties": { "cancelled": { "type": "boolean" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
     "/lab/api/observability/summary": {
       "get": {
         "tags": ["Lab Observability"],
@@ -730,7 +829,7 @@
         "responses": {
           "200": {
             "description": "Most-recent-first sbol_jobs rows.",
-            "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/SbolJob" } } } }
           }
         }
       }
@@ -1063,6 +1162,56 @@
           "term_count":    { "type": "integer", "minimum": 0 },
           "closure_count": { "type": "integer", "minimum": 0 },
           "alias_count":   { "type": "integer", "minimum": 0 }
+        }
+      },
+      "JobStatus": {
+        "type": "string",
+        "enum": ["queued","running","succeeded","failed","cancelled","dead"]
+      },
+      "SbolJob": {
+        "type": "object",
+        "required": ["id","kind","status","priority","queue","payload","attempts","max_attempts","available_at","created_at"],
+        "properties": {
+          "id":               { "type": "string", "format": "uuid" },
+          "kind":             { "type": "string", "description": "Handler name. Currently only `import_document` is registered." },
+          "status":           { "$ref": "#/components/schemas/JobStatus" },
+          "priority":         { "type": "integer", "description": "Higher dequeues first." },
+          "queue":            { "type": "string", "default": "default" },
+          "payload":          { "description": "Handler-specific JSON payload." },
+          "result":           { "description": "Handler-specific JSON result; populated after success.", "nullable": true },
+          "error":            { "type": "string", "nullable": true, "description": "Last error message; populated after failure." },
+          "idempotency_key":  { "type": "string", "nullable": true },
+          "attempts":         { "type": "integer", "minimum": 0 },
+          "max_attempts":     { "type": "integer", "minimum": 1 },
+          "available_at":     { "type": "string", "format": "date-time", "description": "Earliest time the job is eligible for dequeue (used by retry backoff)." },
+          "leased_by":        { "type": "string", "nullable": true, "description": "Worker id holding the lease while `status = running`." },
+          "lease_expires_at": { "type": "string", "format": "date-time", "nullable": true },
+          "parent_job_id":    { "type": "string", "format": "uuid", "nullable": true },
+          "correlation_id":   { "type": "string", "format": "uuid", "nullable": true },
+          "created_at":       { "type": "string", "format": "date-time" },
+          "started_at":       { "type": "string", "format": "date-time", "nullable": true },
+          "finished_at":      { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "EnqueueJobRequest": {
+        "type": "object",
+        "required": ["kind","payload"],
+        "properties": {
+          "kind":            { "type": "string" },
+          "payload":         { "description": "Handler-specific JSON payload." },
+          "queue":           { "type": "string" },
+          "priority":        { "type": "integer" },
+          "max_attempts":    { "type": "integer", "minimum": 1 },
+          "idempotency_key": { "type": "string", "description": "When set, deduplicates against any non-terminal or succeeded job with the same `(kind, idempotency_key)`." },
+          "correlation_id":  { "type": "string", "format": "uuid" }
+        }
+      },
+      "EnqueueJobResponse": {
+        "type": "object",
+        "required": ["job","deduplicated"],
+        "properties": {
+          "job":          { "$ref": "#/components/schemas/SbolJob" },
+          "deduplicated": { "type": "boolean", "description": "True when an existing job was returned instead of inserting a new one." }
         }
       }
     }

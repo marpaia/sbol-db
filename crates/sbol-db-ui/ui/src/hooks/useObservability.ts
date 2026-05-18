@@ -1,8 +1,9 @@
 /** TanStack Query wrappers for the lab observability endpoints. */
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  cancelJob,
   fetchObservabilitySummary,
   fetchPgActivity,
   fetchPgDatabase,
@@ -12,6 +13,8 @@ import {
   fetchPgTables,
   fetchPgTableSchema,
   fetchRecentJobs,
+  getJob,
+  type RecentJob,
   type RecentJobsQuery,
 } from "@/lib/api";
 
@@ -115,5 +118,39 @@ export function useRecentJobs(query: RecentJobsQuery = {}) {
     staleTime: JOBS_MS,
     refetchInterval: JOBS_MS,
     placeholderData: (prev) => prev,
+  });
+}
+
+/**
+ * Single-job detail fetch. While the job is still pending (queued or
+ * running), poll on a short interval so the page reflects worker
+ * progress without a manual refresh; stop polling once the job
+ * reaches a terminal state.
+ */
+export function useJob(id: string) {
+  return useQuery({
+    queryKey: ["job", id],
+    queryFn: ({ signal }) => getJob(id, signal),
+    enabled: id.length > 0,
+    refetchInterval: (q) => {
+      const job = q.state.data as RecentJob | undefined;
+      if (!job) return 5_000;
+      return job.status === "queued" || job.status === "running"
+        ? 5_000
+        : false;
+    },
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useCancelJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => cancelJob(id),
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ["job", id] });
+      qc.invalidateQueries({ queryKey: ["lab", "obs", "jobs", "recent"] });
+      qc.invalidateQueries({ queryKey: ["lab", "obs", "summary"] });
+    },
   });
 }

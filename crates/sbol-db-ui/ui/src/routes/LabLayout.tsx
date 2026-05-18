@@ -120,6 +120,7 @@ const TOP_LEVEL_SECTIONS: Array<{
   { prefix: "/sparql", section: "Query", page: "SPARQL" },
   { prefix: "/sql", section: "Query", page: "SQL" },
   { prefix: "/observability/postgres", section: "Operations", page: "Postgres" },
+  { prefix: "/observability/jobs", section: "Operations", page: "Jobs" },
   { prefix: "/observability", section: "Operations", page: "Metrics" },
 ];
 
@@ -163,6 +164,14 @@ function buildTrail(pathname: string): Crumb[] {
   if (documentMatch) {
     trail.push({
       label: shortId(decodeURIComponent(documentMatch[1])),
+      mono: true,
+    });
+    return trail;
+  }
+  const jobMatch = pathname.match(/^\/observability\/jobs\/([^/]+)\/?$/);
+  if (jobMatch) {
+    trail.push({
+      label: shortId(decodeURIComponent(jobMatch[1])),
       mono: true,
     });
     return trail;

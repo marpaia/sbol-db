@@ -19,6 +19,7 @@ import {
   HardDrive,
   Home,
   Library,
+  ListChecks,
   Network,
   Search,
   Table2,
@@ -92,6 +93,12 @@ const NAV_GROUPS: NavGroup[] = [
     icon: <Activity className="text-sbol-terminator" />,
     items: [
       { to: "/observability", end: true, icon: <Gauge />, label: "Metrics" },
+      {
+        to: "/observability/jobs",
+        end: true,
+        icon: <ListChecks />,
+        label: "Jobs",
+      },
       {
         to: "/observability/postgres",
         icon: <HardDrive />,

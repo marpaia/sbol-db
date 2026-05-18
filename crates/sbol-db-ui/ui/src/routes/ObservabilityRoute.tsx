@@ -7,7 +7,7 @@
  * and polled every 5 s (summary) / 30 s (jobs).
  */
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -15,21 +15,11 @@ import {
   CircleX,
   Loader2,
 } from "lucide-react";
-
-import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { KpiTile } from "@/components/observability/KpiTile";
 import { Sparkline } from "@/components/observability/Sparkline";
-import {
-  useObservabilitySummary,
-  useRecentJobs,
-} from "@/hooks/useObservability";
-import type {
-  BucketSnapshot,
-  JobStatus,
-  ObservabilitySummary,
-  RecentJob,
-} from "@/lib/api";
+import { useObservabilitySummary } from "@/hooks/useObservability";
+import type { BucketSnapshot, ObservabilitySummary } from "@/lib/api";
 import {
   cn,
   describeError,
@@ -72,7 +62,6 @@ export default function ObservabilityRoute() {
               bucketSecs={summary.rolling.bucket_secs}
             />
             <Pools summary={summary} />
-            <JobsSection summary={summary} />
           </>
         )}
       </div>
@@ -303,265 +292,6 @@ function PoolCard({
   );
 }
 
-function JobsSection({ summary }: { summary: ObservabilitySummary }) {
-  const [queueFilter, setQueueFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "">("");
-
-  const queues = useMemo(() => {
-    const set = new Set<string>();
-    for (const r of summary.jobs.queue_depth) set.add(r.queue);
-    for (const r of summary.jobs.oldest_age) set.add(r.queue);
-    return [...set].sort();
-  }, [summary]);
-
-  const { data: jobs, isLoading } = useRecentJobs({
-    limit: 50,
-    queue: queueFilter || undefined,
-    status: statusFilter || undefined,
-  });
-
-  const columns = useMemo<DataTableColumn<RecentJob>[]>(
-    () => [
-      {
-        id: "kind",
-        header: "kind",
-        width: 200,
-        sortValue: (j) => j.kind,
-        filterValue: (j) => `${j.kind} ${j.id}`,
-        cell: (j) => (
-          <div className="min-w-0">
-            <div className="truncate text-foreground">{j.kind}</div>
-            <div className="truncate font-mono text-[10px] text-muted-foreground/70">
-              {j.id}
-            </div>
-          </div>
-        ),
-      },
-      {
-        id: "queue",
-        header: "queue",
-        width: 120,
-        sortValue: (j) => j.queue,
-        filterValue: (j) => j.queue,
-        cell: (j) => (
-          <span className="truncate font-mono text-[11px] text-muted-foreground">
-            {j.queue}
-          </span>
-        ),
-      },
-      {
-        id: "status",
-        header: "status",
-        width: 110,
-        sortValue: (j) => j.status,
-        filterValue: (j) => j.status,
-        cell: (j) => <StatusPill status={j.status} />,
-      },
-      {
-        id: "attempts",
-        header: "attempts",
-        width: 90,
-        align: "right",
-        sortValue: (j) => j.attempts,
-        cell: (j) => (
-          <span className="tabular-nums text-muted-foreground">
-            {j.attempts}
-            <span className="text-muted-foreground/40">/{j.max_attempts}</span>
-          </span>
-        ),
-      },
-      {
-        id: "duration",
-        header: "duration",
-        width: 110,
-        align: "right",
-        sortValue: (j) => jobDurationMs(j) ?? -1,
-        cell: (j) => {
-          const ms = jobDurationMs(j);
-          return (
-            <span className="tabular-nums text-muted-foreground">
-              {ms !== null ? formatMs(ms) : "—"}
-            </span>
-          );
-        },
-      },
-      {
-        id: "started",
-        header: "started",
-        width: 110,
-        sortValue: (j) => new Date(j.started_at ?? j.created_at).getTime() || 0,
-        cell: (j) => (
-          <span className="text-muted-foreground">
-            {formatRelative(j.started_at ?? j.created_at)}
-          </span>
-        ),
-      },
-      {
-        id: "error",
-        header: "error",
-        width: 280,
-        filterValue: (j) => j.error ?? undefined,
-        cell: (j) =>
-          j.error ? (
-            <span className="truncate text-destructive/80" title={j.error}>
-              {j.error}
-            </span>
-          ) : (
-            <span className="text-muted-foreground/40">—</span>
-          ),
-      },
-    ],
-    []
-  );
-
-  return (
-    <section className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-sm font-medium">Recent jobs</h2>
-        <span className="text-xs text-muted-foreground">last 50</span>
-        <div className="ml-auto flex items-center gap-2">
-          <FilterSelect
-            value={queueFilter}
-            onChange={setQueueFilter}
-            options={[
-              { value: "", label: "all queues" },
-              ...queues.map((q) => ({ value: q, label: q })),
-            ]}
-          />
-          <FilterSelect
-            value={statusFilter}
-            onChange={(v) => setStatusFilter(v as JobStatus | "")}
-            options={[
-              { value: "", label: "all status" },
-              { value: "queued", label: "queued" },
-              { value: "running", label: "running" },
-              { value: "succeeded", label: "succeeded" },
-              { value: "failed", label: "failed" },
-              { value: "cancelled", label: "cancelled" },
-              { value: "dead", label: "dead" },
-            ]}
-          />
-        </div>
-      </div>
-
-      <div className="overflow-hidden rounded-lg border bg-card">
-        {isLoading && !jobs ? (
-          <JobsSkeleton />
-        ) : !jobs ? null : (
-          <DataTable
-            columns={columns}
-            rows={jobs}
-            rowKey={(j) => j.id}
-            filterable
-            defaultSort={{ id: "started", direction: "desc" }}
-            emptyMessage="No jobs match the current filters."
-          />
-        )}
-      </div>
-
-      <QueueHealth summary={summary} />
-    </section>
-  );
-}
-
-function FilterSelect({
-  value,
-  onChange,
-  options,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-}) {
-  return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="rounded-md border bg-background px-2 py-1 text-xs text-foreground outline-none focus:ring-1 focus:ring-ring"
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-function jobDurationMs(job: RecentJob): number | null {
-  if (job.started_at && job.finished_at) {
-    return (
-      new Date(job.finished_at).getTime() - new Date(job.started_at).getTime()
-    );
-  }
-  if (job.started_at) {
-    return Date.now() - new Date(job.started_at).getTime();
-  }
-  return null;
-}
-
-function StatusPill({ status }: { status: JobStatus }) {
-  const tone =
-    status === "succeeded"
-      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-      : status === "running"
-        ? "bg-primary/10 text-primary"
-        : status === "queued"
-          ? "bg-muted text-muted-foreground"
-          : status === "cancelled"
-            ? "bg-muted text-muted-foreground"
-            : "bg-destructive/10 text-destructive";
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] uppercase tracking-wide",
-        tone
-      )}
-    >
-      {status}
-    </span>
-  );
-}
-
-function QueueHealth({ summary }: { summary: ObservabilitySummary }) {
-  if (
-    summary.jobs.queue_depth.length === 0 &&
-    summary.jobs.oldest_age.length === 0
-  ) {
-    return null;
-  }
-  return (
-    <section className="rounded-lg border bg-card">
-      <header className="flex items-center gap-2 border-b px-4 py-2">
-        <h3 className="text-sm font-medium">Queue health</h3>
-        <span className="text-xs text-muted-foreground">
-          live snapshot · {summary.jobs.failures_24h} failure
-          {summary.jobs.failures_24h === 1 ? "" : "s"} in last 24h
-        </span>
-      </header>
-      <div className="grid gap-x-4 gap-y-1 px-4 py-3 text-xs sm:grid-cols-2">
-        {summary.jobs.queue_depth.length === 0 ? (
-          <div className="text-muted-foreground">all queues empty</div>
-        ) : (
-          summary.jobs.queue_depth.map((r) => (
-            <div
-              key={`${r.queue}-${r.status}`}
-              className="flex items-center gap-2"
-            >
-              <span className="font-mono text-muted-foreground">{r.queue}</span>
-              <span className="text-muted-foreground/60">·</span>
-              <span className="text-foreground">{r.status}</span>
-              <span className="ml-auto tabular-nums text-foreground">
-                {r.count.toLocaleString()}
-              </span>
-            </div>
-          ))
-        )}
-      </div>
-    </section>
-  );
-}
-
 function SummarySkeleton() {
   return (
     <div className="space-y-4">
@@ -584,16 +314,3 @@ function SummarySkeleton() {
   );
 }
 
-function JobsSkeleton() {
-  return (
-    <div className="divide-y">
-      {Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className="flex items-center gap-3 px-4 py-3">
-          <div className="h-3 w-32 animate-pulse rounded bg-muted" />
-          <div className="h-3 w-16 animate-pulse rounded bg-muted" />
-          <div className="h-3 flex-1 animate-pulse rounded bg-muted" />
-        </div>
-      ))}
-    </div>
-  );
-}

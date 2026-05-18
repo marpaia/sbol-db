@@ -40,6 +40,7 @@ const ROOT_API_PREFIXES = [
   "/objects",
   "/documents",
   "/sequences",
+  "/jobs",
 ];
 const BACKEND_HOST = "localhost";
 const BACKEND_PORT = 8080;
