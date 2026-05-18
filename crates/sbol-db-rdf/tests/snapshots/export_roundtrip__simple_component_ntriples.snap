@@ -1,0 +1,17 @@
+---
+source: crates/sbol-db-rdf/tests/export_roundtrip.rs
+expression: nt
+---
+<https://example.org/sbol-db/test/promoter_j23119> <http://sbols.org/v3#description> "Strong constitutive promoter"^^<http://www.w3.org/2001/XMLSchema#string> .
+<https://example.org/sbol-db/test/promoter_j23119> <http://sbols.org/v3#displayId> "promoter_j23119"^^<http://www.w3.org/2001/XMLSchema#string> .
+<https://example.org/sbol-db/test/promoter_j23119> <http://sbols.org/v3#hasNamespace> <https://example.org/sbol-db/test> .
+<https://example.org/sbol-db/test/promoter_j23119> <http://sbols.org/v3#hasSequence> <https://example.org/sbol-db/test/promoter_j23119_seq> .
+<https://example.org/sbol-db/test/promoter_j23119> <http://sbols.org/v3#name> "J23119 promoter"^^<http://www.w3.org/2001/XMLSchema#string> .
+<https://example.org/sbol-db/test/promoter_j23119> <http://sbols.org/v3#role> <https://identifiers.org/SO:0000167> .
+<https://example.org/sbol-db/test/promoter_j23119> <http://sbols.org/v3#type> <https://identifiers.org/SBO:0000251> .
+<https://example.org/sbol-db/test/promoter_j23119> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://sbols.org/v3#Component> .
+<https://example.org/sbol-db/test/promoter_j23119_seq> <http://sbols.org/v3#displayId> "promoter_j23119_seq"^^<http://www.w3.org/2001/XMLSchema#string> .
+<https://example.org/sbol-db/test/promoter_j23119_seq> <http://sbols.org/v3#elements> "ttgacagctagctcagtcctaggtataatgctagc"^^<http://www.w3.org/2001/XMLSchema#string> .
+<https://example.org/sbol-db/test/promoter_j23119_seq> <http://sbols.org/v3#encoding> <https://identifiers.org/edam:format_1207> .
+<https://example.org/sbol-db/test/promoter_j23119_seq> <http://sbols.org/v3#hasNamespace> <https://example.org/sbol-db/test> .
+<https://example.org/sbol-db/test/promoter_j23119_seq> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://sbols.org/v3#Sequence> .

@@ -1,0 +1,100 @@
+---
+source: crates/sbol-db-rdf/tests/summary_snapshot.rs
+expression: view
+---
+[
+  {
+    "data": {
+      "@id": "https://example.org/sbol-db/test/promoter_j23119",
+      "@type": [
+        "http://sbols.org/v3#Component"
+      ],
+      "http://sbols.org/v3#description": [
+        {
+          "@type": "http://www.w3.org/2001/XMLSchema#string",
+          "@value": "Strong constitutive promoter"
+        }
+      ],
+      "http://sbols.org/v3#displayId": [
+        {
+          "@type": "http://www.w3.org/2001/XMLSchema#string",
+          "@value": "promoter_j23119"
+        }
+      ],
+      "http://sbols.org/v3#hasNamespace": [
+        {
+          "@id": "https://example.org/sbol-db/test"
+        }
+      ],
+      "http://sbols.org/v3#hasSequence": [
+        {
+          "@id": "https://example.org/sbol-db/test/promoter_j23119_seq"
+        }
+      ],
+      "http://sbols.org/v3#name": [
+        {
+          "@type": "http://www.w3.org/2001/XMLSchema#string",
+          "@value": "J23119 promoter"
+        }
+      ],
+      "http://sbols.org/v3#role": [
+        {
+          "@id": "https://identifiers.org/SO:0000167"
+        }
+      ],
+      "http://sbols.org/v3#type": [
+        {
+          "@id": "https://identifiers.org/SBO:0000251"
+        }
+      ]
+    },
+    "description": "Strong constitutive promoter",
+    "display_id": "promoter_j23119",
+    "iri": "https://example.org/sbol-db/test/promoter_j23119",
+    "name": "J23119 promoter",
+    "roles": [
+      "https://identifiers.org/SO:0000167"
+    ],
+    "sbol_class": "http://sbols.org/v3#Component",
+    "types": [
+      "https://identifiers.org/SBO:0000251"
+    ]
+  },
+  {
+    "data": {
+      "@id": "https://example.org/sbol-db/test/promoter_j23119_seq",
+      "@type": [
+        "http://sbols.org/v3#Sequence"
+      ],
+      "http://sbols.org/v3#displayId": [
+        {
+          "@type": "http://www.w3.org/2001/XMLSchema#string",
+          "@value": "promoter_j23119_seq"
+        }
+      ],
+      "http://sbols.org/v3#elements": [
+        {
+          "@type": "http://www.w3.org/2001/XMLSchema#string",
+          "@value": "ttgacagctagctcagtcctaggtataatgctagc"
+        }
+      ],
+      "http://sbols.org/v3#encoding": [
+        {
+          "@id": "https://identifiers.org/edam:format_1207"
+        }
+      ],
+      "http://sbols.org/v3#hasNamespace": [
+        {
+          "@id": "https://example.org/sbol-db/test"
+        }
+      ]
+    },
+    "description": null,
+    "display_id": "promoter_j23119_seq",
+    "iri": "https://example.org/sbol-db/test/promoter_j23119_seq",
+    "name": null,
+    "roles": [],
+    "sbol_class": "http://sbols.org/v3#Sequence",
+    "types": []
+  }
+]

@@ -1,0 +1,5 @@
+---
+source: crates/sbol-db-rdf/tests/hash_determinism.rs
+expression: "hex::encode(&h)"
+---
+56638c57be589bfa614f58fb9a19c8bd1c309e908ff54ddfa92f92dcba676c7d
