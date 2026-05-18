@@ -11,13 +11,13 @@
 
 import type { ReactNode } from "react";
 
+import { ImportDocumentForm } from "./ImportDocumentForm";
 import {
-  ImportDocumentForm,
   importDocumentEmpty,
   importDocumentToPayload,
   importDocumentValidate,
   type ImportDocumentValue,
-} from "./ImportDocumentForm";
+} from "./importDocument";
 
 export interface JobKindForm<V> {
   kind: string;

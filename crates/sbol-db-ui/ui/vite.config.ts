@@ -72,7 +72,6 @@ const forwardRootApi: PluginOption = {
           }
         );
         upstream.on("error", (err) => {
-          // eslint-disable-next-line no-console
           console.error(
             `[sbol-forward-root-api] ${req.method} ${url} -> ${BACKEND_HOST}:${BACKEND_PORT}: ${err.message}`
           );
