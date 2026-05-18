@@ -149,7 +149,6 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route("/objects/:id/rdf", get(routes::export_object))
         .route("/objects/neighborhood", get(routes::neighborhood))
         .route("/objects/neighborhood.rdf", get(routes::neighborhood_rdf))
-        .route("/validation-runs", post(routes::revalidate_document))
         .route("/sparql", get(routes::sparql_get).post(routes::sparql_post))
         .route(
             "/sequences/search",

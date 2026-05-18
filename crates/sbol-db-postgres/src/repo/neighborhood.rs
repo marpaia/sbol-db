@@ -7,8 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use sbol_db_core::{
-    Direction, DomainError, EdgeInfo, EdgeObject, IriString, NeighborhoodQuery, NeighborhoodResult,
-    NodeInfo,
+    Direction, DomainError, EdgeInfo, EdgeObject, NeighborhoodQuery, NeighborhoodResult, NodeInfo,
 };
 use sqlx::Row;
 
@@ -310,8 +309,3 @@ FROM sbol_objects
 WHERE iri::text = ANY($1::text[])
   AND is_deleted = false
 "#;
-
-#[allow(dead_code)]
-fn opt_str(value: Option<&IriString>) -> Option<&str> {
-    value.map(|i| i.as_str())
-}

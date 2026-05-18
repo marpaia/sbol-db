@@ -541,25 +541,6 @@ fn resolve_sparql_format(
     Ok(None)
 }
 
-#[derive(Deserialize)]
-#[allow(dead_code)]
-pub struct RevalidateBody {
-    pub document_id: Option<Uuid>,
-}
-
-pub async fn revalidate_document(
-    State(_state): State<AppState>,
-    Json(_body): Json<RevalidateBody>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    // Phase 1 stub: revalidation requires the raw payload, which we currently
-    // store in `sbol_documents.raw_payload` as a snapshot rather than as
-    // re-parseable serialized form. Wire this up in Phase 2 when we round-trip
-    // the JSON-LD payload.
-    Err(ApiError::BadRequest(
-        "revalidate is not yet implemented in Phase 1".to_owned(),
-    ))
-}
-
 fn resolve_format(
     query_format: Option<&str>,
     headers: &HeaderMap,
