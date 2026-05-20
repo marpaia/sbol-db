@@ -28,7 +28,7 @@ fn import_get_export_round_trip() {
     // Migrate first.
     let migrate = Command::cargo_bin("sbol-db")
         .unwrap()
-        .args(["migrate", "up"])
+        .args(["db", "migrate"])
         .env("DATABASE_URL", &url)
         .output()
         .expect("run migrate");
@@ -37,7 +37,7 @@ fn import_get_export_round_trip() {
     // Import.
     let import = Command::cargo_bin("sbol-db")
         .unwrap()
-        .args(["import", fixture_path().to_str().unwrap()])
+        .args(["doc", "import", fixture_path().to_str().unwrap()])
         .env("DATABASE_URL", &url)
         .output()
         .expect("run import");
@@ -51,7 +51,7 @@ fn import_get_export_round_trip() {
     let iri = "https://example.org/sbol-db/test/promoter_j23119";
     let get = Command::cargo_bin("sbol-db")
         .unwrap()
-        .args(["get", iri])
+        .args(["object", "get", iri])
         .env("DATABASE_URL", &url)
         .output()
         .expect("run get");
@@ -62,7 +62,7 @@ fn import_get_export_round_trip() {
     // Export.
     let export = Command::cargo_bin("sbol-db")
         .unwrap()
-        .args(["export", iri, "--format", "turtle"])
+        .args(["object", "export", iri, "--format", "turtle"])
         .env("DATABASE_URL", &url)
         .output()
         .expect("run export");

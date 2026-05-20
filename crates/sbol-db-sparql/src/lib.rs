@@ -16,6 +16,6 @@ mod error;
 mod results;
 
 pub use dataset::PostgresDataset;
-pub use engine::{QueryForm, SparqlEngine, SparqlOptions, SparqlOutcome};
+pub use engine::{parse_query, ParsedQuery, QueryForm, SparqlEngine, SparqlOptions, SparqlOutcome};
 pub use error::SparqlError;
 pub use results::{ResultFormat, ResultPayload};

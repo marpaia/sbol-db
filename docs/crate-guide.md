@@ -211,18 +211,18 @@ amortise round-trips:
   `POST /objects/lookup`. One `WHERE iri = ANY($1)` scan; capped at
   1000 IRIs per call.
 - **Corpus listing** — `SbolObjectRepository::list(&ListObjectsFilter)`
-  / `GET /objects/list` / `sbol-db export-all`. Keyset cursor on `iri`,
+  / `GET /objects/list` / `sbol-db object export-all`. Keyset cursor on `iri`,
   page size capped at 5000; filters by `sbol_class`, `role`, and
   `document_id` compose.
 - **Bulk sequence search** — `SequenceSearchRepository::search_many` /
   `POST /sequences/search`. Loops over patterns; capped at 256 per call.
 - **Atomic bulk import** — `SbolObjectService::import_documents` /
-  `POST /documents/bulk` / `sbol-db import <dir>` (default). The entire
+  `POST /documents/bulk` / `sbol-db doc import <dir>` (default). The entire
   batch runs inside one Postgres transaction; either every document
   commits or none do. The HTTP endpoint caps at 100 documents per call;
   the CLI directory walker has no hard cap. Use this whenever the batch
   is a coherent unit and partial-import state is unacceptable.
-- **Per-file directory import** — `sbol-db import <dir> --continue-on-error`
+- **Per-file directory import** — `sbol-db doc import <dir> --continue-on-error`
   is the escape hatch: each file runs in its own transaction, failures
   are logged and reported but don't abort the batch, and `--parallel N`
   enables concurrent imports. This is the right shape for corpus-scale
@@ -310,7 +310,7 @@ Postgres in `docker-compose.yaml` is the only dependency.
 `localhost:5432` with credentials `sbol/sbol/sbol`. The CLI defaults
 to this connection string; export `DATABASE_URL` to override.
 
-`sbol-db migrate up` applies pending migrations. The
+`sbol-db db migrate` applies pending migrations. The
 migrator is `sqlx::migrate!` pointed at
 `crates/sbol-db-postgres/migrations/`, which is the only place
 migrations live.

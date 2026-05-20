@@ -8,7 +8,7 @@ and queries always see the latest committed state.
 The endpoint is implemented in the `sbol-db-sparql` crate on top of
 [`spareval`](https://crates.io/crates/spareval), the standalone SPARQL
 evaluator from the Oxigraph project. It is reachable via both the HTTP
-server (`POST`/`GET /sparql`) and the CLI (`sbol-db sparql`).
+server (`POST`/`GET /sparql`) and the CLI (`sbol-db query sparql`).
 
 ## Supported query forms
 
@@ -26,7 +26,7 @@ with `400 Bad Request` and a `sparql_update_not_allowed` error code.
 ## CLI
 
 ```sh
-sbol-db sparql <path-or-->
+sbol-db query sparql <path-or-->
   [--format json|xml|csv|tsv|turtle|ntriples|jsonld|rdfxml]
   [--timeout-secs 30]
   [--max-rows 100000]
@@ -39,8 +39,12 @@ truncation notice (if `--max-rows` was hit) goes to stderr.
 ```sh
 echo 'PREFIX sbol: <http://sbols.org/v3#>
 SELECT ?s WHERE { ?s a sbol:Component } LIMIT 10' \
-  | sbol-db sparql -
+  | sbol-db query sparql -
 ```
+
+Use `sbol-db query explain <path-or-->` to parse a query without
+executing it; the command prints the detected form and AST without
+hitting the database.
 
 ## HTTP
 

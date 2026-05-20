@@ -2668,6 +2668,7 @@ dependencies = [
  "sbol-db-server",
  "sbol-db-sparql",
  "sbol-rdf",
+ "serde",
  "serde_json",
  "sqlx",
  "tokio",

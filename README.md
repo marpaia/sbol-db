@@ -41,35 +41,35 @@ Build and install the CLI, then apply migrations:
 
 ```sh
 cargo install --path crates/sbol-db
-sbol-db migrate up
+sbol-db db migrate
 ```
 
 ## Quickstart — CLI
 
 ```sh
 # Import a single document.
-sbol-db import path/to/design.ttl
+sbol-db doc import path/to/design.ttl
 
 # Import an entire directory as one atomic transaction (commits all or none).
-sbol-db import path/to/designs/ --skip-existing
+sbol-db doc import path/to/designs/ --skip-existing
 
 # Corpus-scale onboarding: per-file txs, parallel, tolerate bad files.
-sbol-db import path/to/corpus/ --continue-on-error --parallel 4 --skip-existing
+sbol-db doc import path/to/corpus/ --continue-on-error --parallel 4 --skip-existing
 
 # Resolve an object by IRI.
-sbol-db get https://synbiohub.org/public/igem/i13504
+sbol-db object get https://synbiohub.org/public/igem/i13504
 
 # Stream every stored object as newline-delimited JSON (corpus dump).
-sbol-db export-all --sbol-class http://sbols.org/v3#Component > components.jsonl
+sbol-db object export-all --sbol-class http://sbols.org/v3#Component > components.jsonl
 
 # Re-emit a single object as RDF.
-sbol-db export <iri> --format turtle
+sbol-db object export <iri> --format turtle
 
 # Walk the bounded forward/backward neighborhood of an IRI.
-sbol-db neighborhood <iri> --depth 2 --direction both
+sbol-db query neighborhood <iri> --depth 2 --direction both
 
 # Find every occurrence of an EcoRI site (forward + reverse complement).
-sbol-db sequences search GAATTC
+sbol-db query sequence-search GAATTC
 
 # Load the Sequence Ontology, then list its descendants of "promoter".
 sbol-db ontology fetch so
@@ -78,10 +78,10 @@ sbol-db ontology descendants SO:0000167
 # Run a SPARQL query from stdin.
 echo 'PREFIX sbol: <http://sbols.org/v3#>
 SELECT ?s WHERE { ?s a sbol:Component } LIMIT 10' \
-  | sbol-db sparql -
+  | sbol-db query sparql -
 
 # Start the HTTP server.
-sbol-db serve
+sbol-db server
 # Then visit http://127.0.0.1:8080/docs for the Scalar-rendered API
 # reference, or http://127.0.0.1:8080/openapi.json for the raw schema.
 ```
@@ -132,7 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## REST surface
 
-`sbol-db serve` starts an axum server. Routes mirror the CLI:
+`sbol-db server` starts an axum server. Routes mirror the CLI:
 
 | Method | Path                              | Purpose                                |
 | ------ | --------------------------------- | -------------------------------------- |
@@ -171,16 +171,16 @@ See [`docs/sparql.md`](docs/sparql.md) for the SPARQL Protocol shape,
 For corpus-scale imports and background work, `sbol-db` ships a
 Postgres-backed async job runtime that distributes work across every
 node in the cluster — no sidecar broker, no leader election, no extra
-infra. Each `sbol-db serve` pod embeds a worker by default; multiple
+infra. Each `sbol-db server` pod embeds a worker by default; multiple
 pods share the database safely via `FOR UPDATE SKIP LOCKED`.
 
 - **`POST /jobs`** and `sbol-db jobs enqueue` for fire-and-poll bulk
   imports.
 - **At-least-once delivery** with idempotency keys, exponential
   backoff, and a dead-letter queue.
-- **Embedded or dedicated** workers — run `sbol-db serve` everywhere,
+- **Embedded or dedicated** workers — run `sbol-db server` everywhere,
   or split the API and worker fleets with `--no-worker` and
-  `sbol-db worker run`.
+  `sbol-db worker`.
 - **Observable** via Prometheus: queue depth, oldest-queued age,
   per-kind throughput and durations, worker heartbeats. See the
   [deployment guide](docs/deployment.md#metrics).

@@ -1,6 +1,6 @@
 sbol-db {{ .Chart.AppVersion }} is starting up.
 
-The pre-install/upgrade Job has applied `sbol-db migrate up` and the
+The pre-install/upgrade Job has applied `sbol-db db migrate` and the
 Deployment is rolling. Watch progress with:
 
   kubectl --namespace {{ .Release.Namespace }} rollout status deploy/{{ include "sbol-db.fullname" . }}
@@ -23,7 +23,7 @@ Then open http://127.0.0.1:8080/docs for the interactive API reference.
 
 Import an SBOL document from your workstation against the port-forward:
 
-  sbol-db --database-url <your-dsn> import path/to/design.ttl
+  sbol-db --database-url <your-dsn> doc import path/to/design.ttl
 
 Or POST it to /documents via curl:
 

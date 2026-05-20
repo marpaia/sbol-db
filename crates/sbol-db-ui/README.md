@@ -47,7 +47,7 @@ For an HMR loop, run the Vite dev server alongside the Rust server:
 
 ```sh
 # terminal 1
-cargo run -p sbol-db -- serve
+cargo run -p sbol-db -- server
 # terminal 2
 cd crates/sbol-db-ui/ui && npm run dev
 ```
@@ -59,6 +59,6 @@ while still getting React Refresh on every save.
 For production-shape testing, build once and visit the embed:
 
 ```sh
-cargo run -p sbol-db -- serve
+cargo run -p sbol-db -- server
 # open http://localhost:8080/lab
 ```

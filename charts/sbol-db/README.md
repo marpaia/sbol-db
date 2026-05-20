@@ -3,8 +3,8 @@
 Deploys the [sbol-db](https://github.com/marpaia/sbol-db) HTTP server on
 Kubernetes. Wraps the `ghcr.io/marpaia/sbol-db` container image with:
 
-- A `Deployment` running `sbol-db serve --bind 0.0.0.0:8080`.
-- A pre-install / pre-upgrade `Job` running `sbol-db migrate up` so the
+- A `Deployment` running `sbol-db server --bind 0.0.0.0:8080`.
+- A pre-install / pre-upgrade `Job` running `sbol-db db migrate` so the
   schema is current before the Deployment rolls.
 - Probes wired to `/healthz` (liveness) and `/readyz` (readiness — hits
   Postgres).
@@ -31,7 +31,7 @@ brings up sbol-db. Forward and import:
 ```sh
 kubectl port-forward svc/sbol-db 8080:80
 sbol-db --database-url postgres://sbol:changeme@localhost:5432/sbol \
-  import path/to/design.ttl
+  doc import path/to/design.ttl
 ```
 
 ## Production

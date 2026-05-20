@@ -81,6 +81,60 @@ impl DocumentRepository {
 
         row.map(row_to_record).transpose()
     }
+
+    /// Paginated newest-first listing for the CLI / lab UI. Filters are
+    /// optional and ANDed; cardinality is small so we don't expose a
+    /// keyset cursor here.
+    pub async fn list(
+        &self,
+        filter: &ListDocumentsFilter,
+    ) -> Result<Vec<DocumentRecord>, DomainError> {
+        let format_value = filter.format.map(|f| f.as_db_str().to_owned());
+        let rows = sqlx::query(
+            r#"
+            SELECT id, document_iri, name, description, serialization_format,
+                   source_uri, content_hash, created_at, updated_at
+            FROM sbol_documents
+            WHERE ($1::text IS NULL OR name ILIKE '%' || $1 || '%')
+              AND ($2::text IS NULL OR serialization_format = $2)
+            ORDER BY created_at DESC
+            LIMIT $3
+            "#,
+        )
+        .bind(filter.name.as_deref())
+        .bind(format_value)
+        .bind(filter.limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        rows.into_iter().map(row_to_record).collect()
+    }
+
+    /// Delete one document. The `sbol_quads` FK is `ON DELETE CASCADE`, so
+    /// all quads in the document's graph go with it; the `sbol_objects` FK
+    /// is `ON DELETE SET NULL`, so objects survive but lose their
+    /// `document_id`. Returns `true` if a row was actually deleted.
+    pub async fn delete(&self, id: DocumentId) -> Result<bool, DomainError> {
+        let affected = sqlx::query("DELETE FROM sbol_documents WHERE id = $1")
+            .bind(id.0)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?
+            .rows_affected();
+        Ok(affected > 0)
+    }
+}
+
+/// Filter for [`DocumentRepository::list`]. Empty fields mean no
+/// restriction; the limit is required and applied last.
+#[derive(Clone, Debug, Default)]
+pub struct ListDocumentsFilter {
+    /// Case-insensitive substring match against `sbol_documents.name`.
+    pub name: Option<String>,
+    /// Exact match on the serialization format.
+    pub format: Option<SerializationFormat>,
+    /// Hard cap on the rows returned.
+    pub limit: u32,
 }
 
 fn row_to_record(row: sqlx::postgres::PgRow) -> Result<DocumentRecord, DomainError> {

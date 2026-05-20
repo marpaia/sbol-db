@@ -15,25 +15,29 @@ plus one Postgres table.
 ## CLI
 
 ```sh
-sbol-db sequences search <pattern>
+sbol-db query sequence-search <pattern>
   [--max-hits 1024]
   [--forward-only]
 ```
 
 ```sh
 # Find every occurrence of the EcoRI site (forward + RC).
-sbol-db sequences search GAATTC
+sbol-db query sequence-search GAATTC
 
 # Exact primer match on the forward strand only.
-sbol-db sequences search ATGGCAGCAGCC --forward-only
+sbol-db query sequence-search ATGGCAGCAGCC --forward-only
 
 # Longer motif; the seed index dominates the cost.
-sbol-db sequences search CCAGGCATCAAATAAAACGAAAG
+sbol-db query sequence-search CCAGGCATCAAATAAAACGAAAG
 ```
 
 Output is JSON: an array of `{sequence_iri, start, length, strand}`,
 where `strand` is `+` for forward matches and `-` for reverse-complement
 matches. `start` is 0-indexed against the stored `elements` string.
+
+Use `sbol-db query sequence-batch <path-or-->` to run many patterns
+in one shot. The command reads newline-delimited patterns from a file
+or stdin and emits one JSON object per line keyed by query.
 
 ## HTTP
 

@@ -75,7 +75,7 @@ is unaffected.
 ## CLI
 
 ```sh
-sbol-db neighborhood <iri>
+sbol-db query neighborhood <iri>
   [--depth 2]
   [--direction forward|backward|both]
   [--predicate <iri>]...         # repeatable
@@ -86,19 +86,19 @@ sbol-db neighborhood <iri>
 
 ```sh
 # What does this Component contain?
-sbol-db neighborhood https://synbiohub.org/public/igem/i13504 --depth 2
+sbol-db query neighborhood https://synbiohub.org/public/igem/i13504 --depth 2
 
 # What designs use this Sequence?
-sbol-db neighborhood https://synbiohub.org/public/igem/B0015 \
+sbol-db query neighborhood https://synbiohub.org/public/igem/B0015 \
   --direction backward --depth 2
 
 # Same, but restrict to structural composition.
-sbol-db neighborhood https://synbiohub.org/public/igem/i13504 \
+sbol-db query neighborhood https://synbiohub.org/public/igem/i13504 \
   --predicate http://sbols.org/v3#hasFeature \
   --depth 3
 
 # Emit the reached subgraph as Turtle.
-sbol-db neighborhood https://synbiohub.org/public/igem/i13504 \
+sbol-db query neighborhood https://synbiohub.org/public/igem/i13504 \
   --depth 2 --rdf turtle
 ```
 

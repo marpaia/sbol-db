@@ -21,7 +21,7 @@ you're deploying; reach for the later sections to do the actual work.
 
 ### Topology
 
-`sbol-db serve` is a single stateless binary that talks to one
+`sbol-db server` is a single stateless binary that talks to one
 Postgres instance. Each pod runs both an HTTP listener **and** an
 embedded async-job worker by default — the worker subscribes to every
 registered queue and shares the database (but not the connection
@@ -49,9 +49,9 @@ not a general-purpose workflow engine.
 
 | Shape | When | How |
 |---|---|---|
-| **Single-node** | Dev / small prod | `sbol-db serve` on one pod. HTTP and worker share a process. |
-| **Two-node HA** | Most production | `sbol-db serve` on two pods behind an L7 load balancer, both pointed at the same Postgres. SKIP LOCKED splits work; a dead pod's leases expire and the other picks up. |
-| **Dedicated worker fleet** | When async capacity has to scale independently of API throughput | `sbol-db serve --no-worker` on API nodes; a separate `sbol-db worker run` Deployment for workers. |
+| **Single-node** | Dev / small prod | `sbol-db server` on one pod. HTTP and worker share a process. |
+| **Two-node HA** | Most production | `sbol-db server` on two pods behind an L7 load balancer, both pointed at the same Postgres. SKIP LOCKED splits work; a dead pod's leases expire and the other picks up. |
+| **Dedicated worker fleet** | When async capacity has to scale independently of API throughput | `sbol-db server --no-worker` on API nodes; a separate `sbol-db worker` Deployment for workers. |
 
 There is no leader election, no external broker, and no in-process
 state shared between pods.
@@ -119,8 +119,8 @@ sbol-db jobs status <uuid>
 sbol-db jobs list --kind import_document --status failed --limit 50
 sbol-db jobs cancel <uuid>
 
-# Dedicated worker fleet (alternative to `serve --no-worker` + standalone API):
-sbol-db worker run --concurrency 8 --queues default
+# Dedicated worker fleet (alternative to `server --no-worker` + standalone API):
+sbol-db worker --concurrency 8 --queues default
 ```
 
 The `/jobs` routes inherit the same `SBOL_DB_MAX_BODY_BYTES` and
@@ -168,7 +168,7 @@ Kubernetes pod termination sequence:
 
 1. Pod marked Terminating; removed from Service endpoints; SIGTERM
    sent to PID 1.
-2. sbol-db enters drain mode.
+2. sbol-db server enters drain mode.
 3. After `terminationGracePeriodSeconds` (default 65s in the chart),
    kubelet sends SIGKILL.
 
@@ -223,7 +223,7 @@ dispatch. It does **not** run on every push to `master`; uncomment the
 - Runs as `nonroot:nonroot` (UID/GID 65532). Compatible with strict
   pod security: `runAsNonRoot: true`, `readOnlyRootFilesystem: true`,
   `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`.
-- `ENTRYPOINT ["/usr/local/bin/sbol-db"]`, default `CMD ["serve",
+- `ENTRYPOINT ["/usr/local/bin/sbol-db"]`, default `CMD ["server",
   "--bind", "0.0.0.0:8080"]`. Subcommands are passed via Kubernetes
   `args:`.
 - Exposes port `8080`.
@@ -304,7 +304,7 @@ Exactly one of these must be set; the chart fails to render otherwise.
 
 ### Migration semantics
 
-`sbol-db migrate up` runs as a Helm hook:
+`sbol-db db migrate` runs as a Helm hook:
 
 | | |
 |---|---|
@@ -366,8 +366,8 @@ These knobs apply to the API pool. They also apply to the worker pool
 
 #### Async-job worker
 
-These knobs apply to the embedded worker spawned by `sbol-db serve`
-and to the standalone `sbol-db worker run` process. All take effect at
+These knobs apply to the embedded worker spawned by `sbol-db server`
+and to the standalone `sbol-db worker` process. All take effect at
 process start; there is no live-reload.
 
 | Chart value | Env / CLI flag | Default | Purpose |
@@ -396,7 +396,7 @@ correspond to env vars on the binary.
 
 | Chart value | Default | Purpose |
 |---|---|---|
-| `replicaCount` | `1` | sbol-db serve replicas. Set `≥ 2` for production. |
+| `replicaCount` | `1` | sbol-db server replicas. Set `≥ 2` for production. |
 | `strategy` | `RollingUpdate{maxSurge: 1, maxUnavailable: 0}` | Deployment update strategy. |
 | `terminationGracePeriodSeconds` | `65` | SIGTERM-to-SIGKILL window. Must be ≥ `config.server.requestTimeoutSecs` + worker grace + headroom or in-flight work gets killed on rollouts. |
 | `resources` | `requests: {100m, 128Mi}, limits: {1, 512Mi}` | Container resource requests/limits. |
@@ -663,13 +663,13 @@ mount a per-route trace layer; this is preparatory for that change).
 - `reaped expired job leases` (warn, with `reclaimed = N`) — the
   reaper re-queued N rows. Investigate alongside `lease lost`.
 - `shutdown signal received` (info) — emitted when SIGTERM or SIGINT
-  arrives. Followed by `sbol-db serve loop exited cleanly` when the
+  arrives. Followed by `sbol-db server loop exited cleanly` when the
   drain completes; if you don't see that, in-flight work didn't finish
   before `terminationGracePeriodSeconds` elapsed.
 
 ## Capacity planning
 
-`sbol-db serve` is stateless and CPU-light for typical query
+`sbol-db server` is stateless and CPU-light for typical query
 workloads; Postgres does the work. Defaults:
 
 | Resource | Default request | Default limit |
@@ -713,7 +713,7 @@ Three signals to watch:
 
 Workers are stateless. To shift load from API pods to dedicated
 worker pods, set `config.worker.disabled=true` on the API Deployment
-and run a second Deployment using `sbol-db worker run`. Either fleet
+and run a second Deployment using `sbol-db worker`. Either fleet
 can scale horizontally without coordinating with the other; SKIP
 LOCKED handles distribution.
 
@@ -888,7 +888,7 @@ Before declaring a deployment production-ready:
       - Listener disconnected: `sbol_db_jobs_listener_connected == 0` for > 5 min
 - [ ] `config.worker.disabled` set consistently across the fleet (either
       every pod embeds a worker, or API-only pods set it and a dedicated
-      worker Deployment runs `sbol-db worker run`).
+      worker Deployment runs `sbol-db worker`).
 - [ ] `podDisruptionBudget.enabled=true` with `minAvailable: 1` (or
       `maxUnavailable: 25%` for `replicaCount > 1`).
 - [ ] `replicaCount ≥ 2` for redundancy.

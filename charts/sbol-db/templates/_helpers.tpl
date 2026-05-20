@@ -96,7 +96,7 @@ Always reads from a Secret; never inlines the DSN into the manifest.
 
 {{/*
 Database-related env vars shared by every workload that talks to
-Postgres (serve Deployment + migrate Job). Pulls all knobs from
+Postgres (server Deployment + migrate Job). Pulls all knobs from
 `.Values.config.database` and translates `0` into the env-var contract
 the binary expects (`0` disables idle_timeout / max_lifetime).
 */}}
@@ -134,7 +134,7 @@ benefits from JSON output in container log aggregators.
 {{- end -}}
 
 {{/*
-Env vars specific to the long-running serve process. Body limit + outer
+Env vars specific to the long-running server process. Body limit + outer
 request timeout are server-only; the migrate Job doesn't serve HTTP.
 */}}
 {{- define "sbol-db.serveEnv" -}}

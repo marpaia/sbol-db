@@ -10,7 +10,7 @@ pub mod quad;
 pub mod sequence_search;
 pub mod validation;
 
-pub use document::DocumentRepository;
+pub use document::{DocumentRepository, ListDocumentsFilter};
 pub use job::{
     EnqueueOutcome, JobAttempt, JobRepository, JobStatus, ListJobsFilter, NewJob, OldestQueuedAge,
     QueueDepthRow, SbolJob, DEFAULT_QUEUE,

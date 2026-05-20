@@ -51,7 +51,7 @@ pub struct SparqlOutcome {
     pub query_form: QueryForm,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum QueryForm {
     Select,
     Ask,
@@ -129,6 +129,32 @@ impl SparqlEngine {
             query_form,
         })
     }
+}
+
+/// Result of parsing without executing a query — what the `sbol-db explain`
+/// CLI subcommand prints and what HTTP clients can use for client-side
+/// validation. Holds the structural classification plus the AST's `Debug`
+/// rendering so callers can drill in without pulling in `spargebra`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ParsedQuery {
+    /// Which of the four read-only forms this is.
+    pub form: QueryForm,
+    /// Byte length of the input query string.
+    pub query_size_bytes: usize,
+    /// Debug-formatted AST. Useful for inspection; not a stable format.
+    pub ast: String,
+}
+
+/// Parse a SPARQL query string without executing it. Rejects `UPDATE`
+/// queries the same way `SparqlEngine::execute` does so client-side
+/// validation surfaces the same error as the server would.
+pub fn parse_query(query_str: &str) -> Result<ParsedQuery, SparqlError> {
+    let query = parse_query_strict(query_str)?;
+    Ok(ParsedQuery {
+        form: classify_query(&query),
+        query_size_bytes: query_str.len(),
+        ast: format!("{query:#?}"),
+    })
 }
 
 fn parse_query_strict(query_str: &str) -> Result<spargebra::Query, SparqlError> {

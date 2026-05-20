@@ -40,7 +40,7 @@ spec:
           image: {{ include "sbol-db.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- /* The container's ENTRYPOINT is `sbol-db`; subcommand goes in args. */}}
-          args: ["serve"]
+          args: ["server"]
           ports:
             - name: http
               containerPort: 8080

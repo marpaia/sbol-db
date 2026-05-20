@@ -26,7 +26,7 @@ backend while you iterate on the frontend.
 ```sh
 # Terminal 1 — Rust server (also serves the embedded UI at :8080/lab,
 # but during dev you'll point your browser at the Vite server below).
-cargo run -p sbol-db -- serve
+cargo run -p sbol-db -- server
 
 # Terminal 2 — Vite dev server with React Refresh.
 cd crates/sbol-db-ui/ui
@@ -73,7 +73,7 @@ in a container image — skip the Vite dev server and visit the Rust
 server directly:
 
 ```sh
-cargo run -p sbol-db -- serve
+cargo run -p sbol-db -- server
 # open http://localhost:8080/lab
 ```
 
@@ -102,5 +102,5 @@ All run from `crates/sbol-db-ui/ui/`:
   `SBOL_DB_SKIP_UI_BUILD=1` in the build environment; `build.rs`
   becomes a no-op and the stub page is embedded instead.
 - **Want to disable the lab at runtime?** Set
-  `SBOL_DB_LAB_ENABLED=false` before `sbol-db serve`. The `/lab`
+  `SBOL_DB_LAB_ENABLED=false` before `sbol-db server`. The `/lab`
   routes aren't mounted; the rest of the API is unaffected.

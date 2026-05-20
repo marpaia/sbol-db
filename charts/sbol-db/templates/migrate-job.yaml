@@ -31,7 +31,7 @@ spec:
         - name: migrate
           image: {{ include "sbol-db.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: ["migrate", "up"]
+          args: ["db", "migrate"]
           env:
             {{- include "sbol-db.databaseEnv"       . | nindent 12 }}
             {{- include "sbol-db.databaseConfigEnv" . | nindent 12 }}

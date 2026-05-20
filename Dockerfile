@@ -68,4 +68,4 @@ COPY --from=builder /usr/local/bin/sbol-db /usr/local/bin/sbol-db
 EXPOSE 8080
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/sbol-db"]
-CMD ["serve", "--bind", "0.0.0.0:8080"]
+CMD ["server", "--bind", "0.0.0.0:8080"]

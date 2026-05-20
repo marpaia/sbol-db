@@ -2,7 +2,7 @@ apiVersion: v2
 name: sbol-db
 description: |
   Postgres-backed query database for SBOL 3 synthetic biology data. Ships
-  the sbol-db HTTP API, runs `sbol-db migrate up` as a pre-install/upgrade
+  the sbol-db HTTP API, runs `sbol-db db migrate` as a pre-install/upgrade
   hook, and exposes /healthz, /readyz, and /metrics for probes and
   Prometheus scraping.
 type: application

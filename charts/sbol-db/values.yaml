@@ -25,7 +25,7 @@ image:
 imagePullSecrets: []
 # - name: ghcr-pull
 
-# -- Number of sbol-db serve replicas. SBOL queries are read-mostly and
+# -- Number of sbol-db server replicas. SBOL queries are read-mostly and
 # imports are single Postgres transactions, so horizontal scale-out is
 # safe with no leader election.
 replicaCount: 1
@@ -90,7 +90,7 @@ postgresql:
     password: ""
 
 migrate:
-  # -- Run `sbol-db migrate up` as a Helm pre-install/pre-upgrade hook
+  # -- Run `sbol-db db migrate` as a Helm pre-install/pre-upgrade hook
   # before the Deployment rolls.
   enabled: true
   # -- Pod labels for the migration Job.
@@ -111,7 +111,7 @@ service:
   portName: http
 
 ## Application configuration. The chart serializes these into env vars
-## on both the serve Deployment and (where applicable) the migration
+## on both the server Deployment and (where applicable) the migration
 ## Job. CLI flags are not used; everything goes through the binary's
 ## env-var fallbacks so the chart owns one source of truth.
 config:

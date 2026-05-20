@@ -3,7 +3,7 @@
 `sbol-db` ships eight embedded migrations under
 `crates/sbol-db-postgres/migrations/`. They're applied via
 `sqlx::migrate!` either through the library
-(`sbol_db_postgres::run_migrations`) or the CLI (`sbol-db migrate up`).
+(`sbol_db_postgres::run_migrations`) or the CLI (`sbol-db db migrate`).
 
 This document is the table-by-table reference; rationale and the
 "why this shape" lives in [`crate-guide.md`](crate-guide.md).
