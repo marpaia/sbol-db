@@ -24,7 +24,8 @@ query surface for SBOL itself, not the surrounding lab pipeline.
 
 The focused scope is:
 
-- Ingest SBOL documents in any spec-listed RDF serialization.
+- Ingest SBOL 3 RDF, upgrade SBOL 2 RDF, and import GenBank or FASTA
+  through the same document pipeline.
 - Preserve the document losslessly (per-object JSON-LD slice + the
   full quad set under a named graph).
 - Project the design into typed relational tables for SQL-shaped
@@ -105,11 +106,13 @@ The common flow is read → validate → persist → query.
 
 ### Read
 
-`sbol::Document::read(input, RdfFormat::*)` parses the input.
-`sbol-db` lets the caller specify the format explicitly (CLI infers
-from the file extension; the HTTP endpoint takes a Content-Type or a
-`?format=` query parameter). The parser produces a typed `Document`
-even if validation will fail.
+`sbol-db` first normalizes imports to a native SBOL 3
+`sbol::Document`. SBOL 3 RDF uses `sbol::Document::read(input,
+RdfFormat::*)`; SBOL 2 RDF is detected by the SBOL 2 namespace and
+upgraded with `Document::upgrade_from_sbol2_with`; GenBank and FASTA
+go through `sbol-genbank` and `sbol-fasta`. The CLI infers the format
+from the file extension, while the HTTP endpoint takes a Content-Type
+or a `?format=` query parameter.
 
 ### Validate
 
@@ -336,8 +339,9 @@ gate; it's clean on `main`.
   awareness ships via the k-mer index — see
   [`sequences.md`](sequences.md). Approximate alignment, embeddings,
   and richer full-text search are deferred.
-- **SBOL 1 / SBOL 2 ingest.** `sbol-rs` is SBOL 3 only. Migration
-  tooling lives there if it ever exists.
+- **SBOL 1 ingest.** SBOL 2 RDF, GenBank, and FASTA enter through the
+  normal document import path. SBOL 1 remains deferred until there is
+  an explicit converter and test corpus.
 - **Multi-tenancy / auth.** No `organization_id` columns, no auth
   middleware. Repositories should still avoid global mutable state
   so a tenancy layer can be added without rewriting the data access

@@ -10,9 +10,9 @@ use sbol_db_core::{
     NeighborhoodResult, ObjectId, SbolObjectRecord, SerializationFormat,
 };
 use sbol_db_postgres::{
-    BatchSequenceMatch, ImportInput, JobAttempt, JobStatus, ListJobsFilter, ListObjectsFilter,
-    NewJob, OntologyLoadReport, OntologyRecord, OntologyTermRecord, SbolJob, SequenceMatch,
-    SequenceSearchOptions,
+    BatchSequenceMatch, ImportInput, JobAttempt, JobLogRecord, JobStatus, ListJobsFilter,
+    ListObjectsFilter, NewJob, OntologyLoadReport, OntologyRecord, OntologyTermRecord, SbolJob,
+    SequenceMatch, SequenceSearchOptions,
 };
 use sbol_db_sparql::{ResultFormat, SparqlOptions};
 use serde::Deserialize;
@@ -46,6 +46,7 @@ pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
 #[derive(Deserialize)]
 pub struct CreateDocumentParams {
     pub format: Option<String>,
+    pub namespace: Option<String>,
     pub source_uri: Option<String>,
     pub document_iri: Option<String>,
     pub name: Option<String>,
@@ -70,6 +71,7 @@ pub async fn create_document(
         .import_document(ImportInput {
             body,
             format,
+            namespace: params.namespace,
             source_uri: params.source_uri,
             document_iri,
             created_by: params.created_by,
@@ -91,6 +93,8 @@ pub struct BulkImportBody {
 pub struct BulkImportItem {
     pub body: String,
     pub format: String,
+    #[serde(default)]
+    pub namespace: Option<String>,
     #[serde(default)]
     pub source_uri: Option<String>,
     #[serde(default)]
@@ -140,6 +144,7 @@ pub async fn create_documents_bulk(
         inputs.push(ImportInput {
             body: item.body,
             format,
+            namespace: item.namespace,
             source_uri: item.source_uri,
             document_iri,
             created_by: item.created_by,
@@ -414,7 +419,7 @@ pub async fn neighborhood_rdf(
     State(state): State<AppState>,
     Query(params): Query<NeighborhoodRdfParams>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let format = parse_format(&params.format)
+    let format = parse_export_format(&params.format)
         .ok_or_else(|| ApiError::BadRequest(format!("unknown format: {}", params.format)))?;
     let query = build_neighborhood_query(NeighborhoodParams {
         iri: params.iri,
@@ -557,9 +562,11 @@ fn resolve_format(
         "application/ld+json" => SerializationFormat::JsonLd,
         "application/rdf+xml" | "text/xml" => SerializationFormat::RdfXml,
         "application/n-triples" => SerializationFormat::NTriples,
+        "chemical/x-genbank" | "application/x-genbank" => SerializationFormat::GenBank,
+        "chemical/x-fasta" | "text/x-fasta" | "application/x-fasta" => SerializationFormat::Fasta,
         _ => {
             return Err(ApiError::BadRequest(
-                "specify ?format= or set Content-Type to a supported RDF media type".to_owned(),
+                "specify ?format= or set Content-Type to a supported import media type".to_owned(),
             ))
         }
     };
@@ -575,12 +582,17 @@ fn parse_format(s: &str) -> Option<SerializationFormat> {
         "nquads" | "nq" => Some(SerializationFormat::NQuads),
         "trig" => Some(SerializationFormat::TriG),
         "json" => Some(SerializationFormat::Json),
+        "genbank" | "gb" | "gbk" => Some(SerializationFormat::GenBank),
+        "fasta" | "fa" | "fna" | "faa" => Some(SerializationFormat::Fasta),
         _ => None,
     }
 }
 
 fn parse_export_format(s: &str) -> Option<SerializationFormat> {
-    parse_format(s)
+    match parse_format(s) {
+        Some(SerializationFormat::GenBank) | Some(SerializationFormat::Fasta) | None => None,
+        Some(format) => Some(format),
+    }
 }
 
 #[derive(Deserialize)]
@@ -925,6 +937,32 @@ pub async fn list_job_attempts(
     }
     let attempts = state.jobs.list_attempts(JobId(id)).await?;
     Ok(Json(attempts))
+}
+
+#[derive(Deserialize)]
+pub struct ListJobLogsQuery {
+    #[serde(default)]
+    pub after_id: Option<i64>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+pub async fn list_job_logs(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<ListJobLogsQuery>,
+) -> Result<Json<Vec<JobLogRecord>>, ApiError> {
+    let job_id = JobId(id);
+    state
+        .jobs
+        .get(job_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("job {id}")))?;
+    let logs = state
+        .jobs
+        .list_logs(job_id, query.after_id, query.limit.unwrap_or(500))
+        .await?;
+    Ok(Json(logs))
 }
 
 fn parse_job_status(s: &str) -> Result<JobStatus, ApiError> {

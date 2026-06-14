@@ -170,6 +170,8 @@ fn parse_serialization_format(value: &str) -> Result<SerializationFormat, Domain
         "trig" => SerializationFormat::TriG,
         "ntriples" => SerializationFormat::NTriples,
         "nquads" => SerializationFormat::NQuads,
+        "genbank" => SerializationFormat::GenBank,
+        "fasta" => SerializationFormat::Fasta,
         other => {
             return Err(DomainError::Database(format!(
                 "unknown serialization_format: {other}"

@@ -31,6 +31,8 @@ pub fn parse_format(s: &str) -> Option<SerializationFormat> {
         "nquads" | "nq" => Some(SerializationFormat::NQuads),
         "trig" => Some(SerializationFormat::TriG),
         "json" => Some(SerializationFormat::Json),
+        "genbank" | "gb" | "gbk" => Some(SerializationFormat::GenBank),
+        "fasta" | "fa" | "fna" | "faa" => Some(SerializationFormat::Fasta),
         _ => None,
     }
 }

@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import DashboardRoute from "@/routes/DashboardRoute";
 import DocumentDetailRoute from "@/routes/DocumentDetailRoute";
 import DocumentsRoute from "@/routes/DocumentsRoute";
+import ImportRoute from "@/routes/ImportRoute";
 import JobDetailRoute from "@/routes/JobDetailRoute";
 import JobsRoute from "@/routes/JobsRoute";
 import LabLayout from "@/routes/LabLayout";
@@ -35,6 +36,7 @@ export default function App() {
         />
         <Route path="documents" element={<DocumentsRoute />} />
         <Route path="documents/:id" element={<DocumentDetailRoute />} />
+        <Route path="import" element={<ImportRoute />} />
         <Route path="objects" element={<ObjectsRoute />} />
         <Route path="objects/lookup" element={<ObjectLookupRoute />} />
         <Route path="objects/:iri" element={<ObjectDetailRoute />} />

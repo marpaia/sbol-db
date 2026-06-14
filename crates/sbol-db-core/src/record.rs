@@ -5,8 +5,10 @@ use crate::ids::{DocumentId, ObjectId};
 use crate::iri::IriString;
 use crate::validation::ValidationStatus;
 
-/// RDF serialization formats `sbol-db` understands. Matches the
-/// `serialization_format` CHECK in `sbol_documents`.
+/// Document import formats `sbol-db` understands. The RDF variants are
+/// accepted as SBOL 3 input and can also carry SBOL 2 graphs that are
+/// upgraded on import. Matches the `serialization_format` CHECK in
+/// `sbol_documents`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SerializationFormat {
@@ -17,6 +19,8 @@ pub enum SerializationFormat {
     TriG,
     NTriples,
     NQuads,
+    GenBank,
+    Fasta,
 }
 
 impl SerializationFormat {
@@ -29,6 +33,8 @@ impl SerializationFormat {
             Self::TriG => "trig",
             Self::NTriples => "ntriples",
             Self::NQuads => "nquads",
+            Self::GenBank => "genbank",
+            Self::Fasta => "fasta",
         }
     }
 
@@ -41,6 +47,8 @@ impl SerializationFormat {
             "trig" => Some(Self::TriG),
             "nt" | "ntriples" => Some(Self::NTriples),
             "nq" | "nquads" => Some(Self::NQuads),
+            "gb" | "gbk" | "genbank" => Some(Self::GenBank),
+            "fa" | "fasta" | "fna" | "faa" => Some(Self::Fasta),
             _ => None,
         }
     }

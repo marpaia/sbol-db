@@ -95,7 +95,8 @@ Built-in handlers ship in `sbol-db-jobs::handlers`. Today:
 
 | `kind` | Purpose |
 |---|---|
-| `import_document` | Async equivalent of `POST /documents`. Payload is the inline RDF body + format + optional metadata; `result` is the `ImportReport`. |
+| `import_document` | Async equivalent of `POST /documents`. Payload is the inline import body, format (`turtle`, `jsonld`, `rdfxml`, `ntriples`, `genbank`, or `fasta`), optional namespace, and metadata; `result` is the `ImportReport`. |
+| `import_remote_document` | Worker-side public HTTPS fetch followed by the same import pipeline. Payload is `{url, format, namespace?, document_iri?, name?, description?, created_by?}`; the worker rejects non-HTTPS, local, and private-address URLs before fetching. |
 
 Future handlers (projection worker, ontology fetch, index rebuild)
 will land here as new modules without schema changes.
@@ -115,6 +116,7 @@ CLI:
 
 ```sh
 sbol-db jobs enqueue import_document @payload.json --idempotency-key=doc:42
+sbol-db jobs enqueue import_remote_document @remote-payload.json
 sbol-db jobs status <uuid>
 sbol-db jobs list --kind import_document --status failed --limit 50
 sbol-db jobs cancel <uuid>
@@ -127,7 +129,9 @@ The `/jobs` routes inherit the same `SBOL_DB_MAX_BODY_BYTES` and
 `SBOL_DB_REQUEST_TIMEOUT_SECS` limits as the rest of the HTTP surface;
 keep that in mind when enqueueing large `import_document` bodies (split
 into multiple jobs, or use synchronous `POST /documents` with a higher
-body cap if you really need a single 200 MB import).
+body cap if you really need a single 200 MB import). Remote imports keep
+large source bodies out of the enqueue request, but the fetched response
+still runs inside the worker's request and shutdown budgets.
 
 ### Process lifecycle
 

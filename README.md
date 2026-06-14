@@ -2,11 +2,13 @@
 
 `sbol-db` is a Postgres-backed data management system for
 synthetic biology data. It ingests [SBOL 3](https://sbolstandard.org/)
-documents in any spec-listed RDF serialization, projects them into
-a typed relational schema *and* an RDF quad store inside the same
-Postgres instance, then exposes the result through three composable
-query primitives: typed lookup by IRI, bounded graph neighborhood
-traversal, and read-only SPARQL 1.1.
+RDF, upgrades SBOL 2 RDF, and imports GenBank or FASTA into SBOL 3
+before projecting designs into a typed relational schema *and* an
+RDF quad store inside the same Postgres instance. It then exposes
+the result through five composable query primitives: typed lookup by
+IRI, bounded graph neighborhood traversal, read-only SPARQL 1.1,
+nucleotide substring + reverse-complement search, and ontology-aware
+role expansion.
 
 New to the codebase? Start with the [**crate guide**](docs/crate-guide.md).
 Deploying it? See [**docs/deployment.md**](docs/deployment.md).
@@ -49,6 +51,13 @@ sbol-db db migrate
 ```sh
 # Import a single document.
 sbol-db doc import path/to/design.ttl
+
+# SBOL 2 RDF is upgraded to SBOL 3 on import.
+sbol-db doc import path/to/legacy-sbol2.xml
+
+# GenBank and FASTA are converted to SBOL 3 on import.
+sbol-db doc import path/to/design.gbk --namespace https://example.org/lab
+sbol-db doc import path/to/sequences.fasta --namespace https://example.org/lab
 
 # Import an entire directory as one atomic transaction (commits all or none).
 sbol-db doc import path/to/designs/ --skip-existing
@@ -108,6 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     svc.import_document(ImportInput {
         body: std::fs::read_to_string("design.ttl")?,
         format: SerializationFormat::Turtle,
+        namespace: None,
         source_uri: Some("design.ttl".into()),
         document_iri: None,
         created_by: None,
@@ -136,7 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Method | Path                              | Purpose                                |
 | ------ | --------------------------------- | -------------------------------------- |
-| `POST` | `/documents`                      | Import an SBOL document                |
+| `POST` | `/documents`                      | Import SBOL RDF, GenBank, or FASTA     |
 | `POST` | `/documents/bulk`                 | Atomic bulk import (≤ 100, one txn)    |
 | `GET`  | `/documents/{id}`                 | Document metadata                      |
 | `GET`  | `/objects?iri=...`                | Resolve a stored object by IRI         |
@@ -175,7 +185,8 @@ infra. Each `sbol-db server` pod embeds a worker by default; multiple
 pods share the database safely via `FOR UPDATE SKIP LOCKED`.
 
 - **`POST /jobs`** and `sbol-db jobs enqueue` for fire-and-poll bulk
-  imports.
+  imports, including worker-side public HTTPS imports for remote SBOL,
+  GenBank, and FASTA sources.
 - **At-least-once delivery** with idempotency keys, exponential
   backoff, and a dead-letter queue.
 - **Embedded or dedicated** workers — run `sbol-db server` everywhere,
@@ -189,6 +200,7 @@ pods share the database safely via `FOR UPDATE SKIP LOCKED`.
 # Enqueue an import job (returns a UUID immediately).
 sbol-db jobs enqueue import_document @payload.json \
   --idempotency-key=doc:42
+sbol-db jobs enqueue import_remote_document @remote-payload.json
 
 # Poll until done.
 sbol-db jobs status <uuid>

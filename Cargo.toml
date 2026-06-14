@@ -18,9 +18,11 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/marpaia/sbol-db"
 
 [workspace.dependencies]
-sbol = "0.1.0"
-sbol-rdf = "0.1.0"
-sbol-ontology = "0.1.0"
+sbol = "0.2.0"
+sbol-rdf = "0.2.0"
+sbol-ontology = "0.2.0"
+sbol-genbank = "0.2.0"
+sbol-fasta = "0.2.0"
 
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio-rustls",

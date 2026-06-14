@@ -40,6 +40,7 @@ async fn imports_simple_component_fixture() {
         .import_document(ImportInput {
             body: FIXTURE.to_owned(),
             format: SerializationFormat::Turtle,
+            namespace: None,
             source_uri: Some("test://simple_component.ttl".to_owned()),
             document_iri: None,
             created_by: Some("test".to_owned()),
@@ -75,6 +76,7 @@ async fn reimport_is_idempotent_and_bumps_revision() {
     let input = || ImportInput {
         body: FIXTURE.to_owned(),
         format: SerializationFormat::Turtle,
+        namespace: None,
         source_uri: None,
         document_iri: None,
         created_by: None,
@@ -113,6 +115,7 @@ async fn validation_findings_are_persisted() {
         .import_document(ImportInput {
             body: FIXTURE.to_owned(),
             format: SerializationFormat::Turtle,
+            namespace: None,
             source_uri: None,
             document_iri: Some(IriString::new("https://example.org/sbol-db/test/doc/1").unwrap()),
             created_by: None,
@@ -149,6 +152,7 @@ async fn quads_round_trip_through_export() {
         .import_document(ImportInput {
             body: FIXTURE.to_owned(),
             format: SerializationFormat::Turtle,
+            namespace: None,
             source_uri: None,
             document_iri: None,
             created_by: None,
@@ -178,6 +182,7 @@ async fn nested_fixture_populates_typed_projections() {
         .import_document(ImportInput {
             body: NESTED.to_owned(),
             format: SerializationFormat::Turtle,
+            namespace: None,
             source_uri: Some("test://nested_construct.ttl".to_owned()),
             document_iri: None,
             created_by: None,

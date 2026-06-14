@@ -6,5 +6,11 @@
 //! a custom registry can pick whichever subset they need.
 
 pub mod import_document;
+pub mod import_remote_document;
+pub mod import_synbiohub_collection;
 
 pub use import_document::{ImportDocumentHandler, ImportDocumentPayload};
+pub use import_remote_document::{ImportRemoteDocumentHandler, ImportRemoteDocumentPayload};
+pub use import_synbiohub_collection::{
+    ImportSynBioHubCollectionHandler, ImportSynBioHubCollectionPayload,
+};

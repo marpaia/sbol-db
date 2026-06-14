@@ -12,12 +12,19 @@
 import type { ReactNode } from "react";
 
 import { ImportDocumentForm } from "./ImportDocumentForm";
+import { ImportRemoteDocumentForm } from "./ImportRemoteDocumentForm";
 import {
   importDocumentEmpty,
   importDocumentToPayload,
   importDocumentValidate,
   type ImportDocumentValue,
 } from "./importDocument";
+import {
+  importRemoteDocumentEmpty,
+  importRemoteDocumentToPayload,
+  importRemoteDocumentValidate,
+  type ImportRemoteDocumentValue,
+} from "./importRemoteDocument";
 
 export interface JobKindForm<V> {
   kind: string;
@@ -45,6 +52,24 @@ export const JOB_KINDS: ReadonlyArray<JobKindForm<unknown>> = [
     Component: ({ value, onChange, disabled }) => (
       <ImportDocumentForm
         value={value as ImportDocumentValue}
+        onChange={(next) => onChange(next)}
+        disabled={disabled}
+      />
+    ),
+  } as JobKindForm<unknown>,
+  {
+    kind: "import_remote_document",
+    label: "Import remote document",
+    description:
+      "Fetch a public HTTPS SBOL, GenBank, or FASTA source and import it through the worker.",
+    emptyValue: importRemoteDocumentEmpty,
+    validate: (v) =>
+      importRemoteDocumentValidate(v as ImportRemoteDocumentValue),
+    toPayload: (v) =>
+      importRemoteDocumentToPayload(v as ImportRemoteDocumentValue),
+    Component: ({ value, onChange, disabled }) => (
+      <ImportRemoteDocumentForm
+        value={value as ImportRemoteDocumentValue}
         onChange={(next) => onChange(next)}
         disabled={disabled}
       />

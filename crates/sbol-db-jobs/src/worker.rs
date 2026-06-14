@@ -268,6 +268,7 @@ impl Worker {
                 worker_id: self.config.worker_id.clone(),
                 attempt: job.attempts,
                 service: self.service.clone(),
+                jobs: self.repo.clone(),
                 cancel: cancel.clone(),
             };
             let repo = self.repo.clone();
@@ -393,6 +394,19 @@ async fn run_one_job(
 
         tracing::info!("job started");
         let started = Instant::now();
+        append_job_log(
+            &repo,
+            job_id,
+            Some(attempt),
+            "info",
+            "job started",
+            serde_json::json!({
+                "kind": job_kind.as_str(),
+                "queue": job_queue.as_str(),
+                "worker_id": worker_id.to_string(),
+            }),
+        )
+        .await;
         let outcome = handler.dispatch(ctx, payload).await;
         let elapsed = started.elapsed().as_secs_f64();
 
@@ -404,6 +418,15 @@ async fn run_one_job(
                 if let Err(err) = repo.mark_succeeded(job_id, &worker_id, out.result).await {
                     tracing::error!(error = %err, "failed to mark job succeeded");
                 } else {
+                    append_job_log(
+                        &repo,
+                        job_id,
+                        Some(attempt),
+                        "info",
+                        "job succeeded",
+                        serde_json::json!({ "elapsed_secs": elapsed }),
+                    )
+                    .await;
                     tracing::info!(elapsed_secs = elapsed, "job succeeded");
                 }
                 metrics::counter!(
@@ -428,6 +451,27 @@ async fn run_one_job(
                 };
                 let terminal = match repo.mark_failed(job_id, &worker_id, &msg).await {
                     Ok(status) => {
+                        append_job_log(
+                            &repo,
+                            job_id,
+                            Some(attempt),
+                            if status == sbol_db_postgres::JobStatus::Queued {
+                                "warn"
+                            } else {
+                                "error"
+                            },
+                            if status == sbol_db_postgres::JobStatus::Queued {
+                                "job failed; retry scheduled"
+                            } else {
+                                "job failed permanently"
+                            },
+                            serde_json::json!({
+                                "elapsed_secs": elapsed,
+                                "error": msg,
+                                "next_status": status,
+                            }),
+                        )
+                        .await;
                         tracing::warn!(error = %msg, next_status = ?status, elapsed_secs = elapsed, "job failed");
                         status
                     }
@@ -458,6 +502,22 @@ async fn run_one_job(
     }
     .instrument(span)
     .await;
+}
+
+async fn append_job_log(
+    repo: &JobRepository,
+    job_id: JobId,
+    attempt_no: Option<i32>,
+    level: &str,
+    message: &str,
+    fields: serde_json::Value,
+) {
+    if let Err(err) = repo
+        .append_log(job_id, attempt_no, level, message, fields)
+        .await
+    {
+        tracing::warn!(error = %err, job_id = %job_id, "failed to append job log");
+    }
 }
 
 fn spawn_renewer(

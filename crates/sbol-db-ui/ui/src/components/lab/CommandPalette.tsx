@@ -23,6 +23,7 @@ import {
   HardDrive,
   History,
   Home,
+  Import,
   Library,
   Network,
   Star,
@@ -122,6 +123,11 @@ export function CommandPalette({
               icon={<FileText size={14} />}
               label="Documents"
               onSelect={() => goTo("/documents")}
+            />
+            <Item
+              icon={<Import size={14} />}
+              label="Import"
+              onSelect={() => goTo("/import")}
             />
             <Item
               icon={<Boxes size={14} />}

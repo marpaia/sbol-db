@@ -162,6 +162,17 @@ pub struct JobAttempt {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct JobLogRecord {
+    pub id: i64,
+    pub job_id: JobId,
+    pub attempt_no: Option<i32>,
+    pub level: String,
+    pub message: String,
+    pub fields: Value,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Outcome of [`JobRepository::enqueue`] when the row already existed
 /// under a matching `idempotency_key`. Callers usually treat both arms
 /// identically — the existing row is what they wanted anyway.
@@ -242,6 +253,59 @@ impl JobRepository {
         .map_err(db_err)?;
 
         Ok(EnqueueOutcome::Inserted(row_to_job(row)?))
+    }
+
+    pub async fn append_log(
+        &self,
+        job_id: JobId,
+        attempt_no: Option<i32>,
+        level: &str,
+        message: &str,
+        fields: Value,
+    ) -> Result<JobLogRecord, DomainError> {
+        let level = normalize_log_level(level);
+        let row = sqlx::query(
+            r#"
+            INSERT INTO sbol_job_logs (job_id, attempt_no, level, message, fields)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, job_id, attempt_no, level, message, fields, created_at
+            "#,
+        )
+        .bind(job_id.as_uuid())
+        .bind(attempt_no)
+        .bind(level)
+        .bind(message)
+        .bind(fields)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db_err)?;
+        row_to_job_log(row)
+    }
+
+    pub async fn list_logs(
+        &self,
+        id: JobId,
+        after_id: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<JobLogRecord>, DomainError> {
+        let limit = limit.clamp(1, 1000) as i64;
+        let after_id = after_id.unwrap_or(0);
+        let rows = sqlx::query(
+            r#"
+            SELECT id, job_id, attempt_no, level, message, fields, created_at
+            FROM sbol_job_logs
+            WHERE job_id = $1 AND id > $2
+            ORDER BY id ASC
+            LIMIT $3
+            "#,
+        )
+        .bind(id.as_uuid())
+        .bind(after_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        rows.into_iter().map(row_to_job_log).collect()
     }
 
     async fn find_by_idempotency(
@@ -736,6 +800,15 @@ fn backoff_seconds(attempts: i32) -> i64 {
     base.saturating_mul(1i64 << shift).min(cap)
 }
 
+fn normalize_log_level(level: &str) -> &'static str {
+    match level {
+        "debug" => "debug",
+        "warn" => "warn",
+        "error" => "error",
+        _ => "info",
+    }
+}
+
 fn row_to_job(row: sqlx::postgres::PgRow) -> Result<SbolJob, DomainError> {
     let id: Uuid = row.try_get("id").map_err(db_err)?;
     let kind: String = row.try_get("kind").map_err(db_err)?;
@@ -778,5 +851,24 @@ fn row_to_job(row: sqlx::postgres::PgRow) -> Result<SbolJob, DomainError> {
         created_at,
         started_at,
         finished_at,
+    })
+}
+
+fn row_to_job_log(row: sqlx::postgres::PgRow) -> Result<JobLogRecord, DomainError> {
+    let id: i64 = row.try_get("id").map_err(db_err)?;
+    let job_id: Uuid = row.try_get("job_id").map_err(db_err)?;
+    let attempt_no: Option<i32> = row.try_get("attempt_no").map_err(db_err)?;
+    let level: String = row.try_get("level").map_err(db_err)?;
+    let message: String = row.try_get("message").map_err(db_err)?;
+    let fields: Value = row.try_get("fields").map_err(db_err)?;
+    let created_at: DateTime<Utc> = row.try_get("created_at").map_err(db_err)?;
+    Ok(JobLogRecord {
+        id,
+        job_id: JobId(job_id),
+        attempt_no,
+        level,
+        message,
+        fields,
+        created_at,
     })
 }

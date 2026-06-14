@@ -18,6 +18,7 @@ import {
   Gauge,
   HardDrive,
   Home,
+  Import,
   Library,
   ListChecks,
   Network,
@@ -73,6 +74,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Data",
     icon: <Boxes className="text-sbol-rbs" />,
     items: [
+      { to: "/import", icon: <Import />, label: "Import" },
       { to: "/documents", icon: <FileText />, label: "Documents" },
       { to: "/objects", icon: <Boxes />, label: "Objects" },
       { to: "/sequences", icon: <Dna />, label: "Sequences" },

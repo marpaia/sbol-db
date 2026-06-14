@@ -3,7 +3,7 @@
   "info": {
     "title": "sbol-db",
     "version": "0.1.0",
-    "description": "A Postgres-backed data management system for synthetic biology data. It ingests SBOL documents in any spec-listed RDF serialization, projects them into a typed relational schema *and* an RDF quad store inside the same Postgres instance, then exposes the result through five composable query primitives: typed lookup by IRI, bounded graph neighborhood traversal, read-only SPARQL 1.1, nucleotide substring + reverse-complement search, and ontology-aware role expansion.\n\nSee [`docs/crate-guide.md`](https://github.com/marpaia/sbol-db/blob/master/docs/crate-guide.md) for an architectural tour.",
+    "description": "A Postgres-backed data management system for synthetic biology data. It ingests SBOL 3 RDF, upgrades SBOL 2 RDF, and imports GenBank or FASTA into SBOL 3 before projecting designs into a typed relational schema *and* an RDF quad store inside the same Postgres instance. It then exposes the result through five composable query primitives: typed lookup by IRI, bounded graph neighborhood traversal, read-only SPARQL 1.1, nucleotide substring + reverse-complement search, and ontology-aware role expansion.\n\nSee [`docs/crate-guide.md`](https://github.com/marpaia/sbol-db/blob/master/docs/crate-guide.md) for an architectural tour.",
     "contact": {
       "name": "sbol-db",
       "url": "https://github.com/marpaia/sbol-db"
@@ -109,11 +109,12 @@
     "/documents": {
       "post": {
         "tags": ["Documents"],
-        "summary": "Import an SBOL document",
-        "description": "Parses the request body as an SBOL document in the format derived from the `format` query parameter or the `Content-Type` header, persists it inside one transaction (objects + quads + typed projections + validation), and returns an import report.",
+        "summary": "Import a design document",
+        "description": "Parses the request body as SBOL 3 RDF, SBOL 2 RDF, GenBank, or FASTA in the format derived from the `format` query parameter or the `Content-Type` header. Non-SBOL-3 inputs are converted to SBOL 3, then persisted inside one transaction (objects + quads + typed projections + validation) and returned as an import report.",
         "operationId": "importDocument",
         "parameters": [
           { "$ref": "#/components/parameters/SerializationFormat" },
+          { "name": "namespace",    "in": "query", "schema": { "type": "string", "format": "uri" }, "description": "Namespace IRI for formats that need one. SBOL 2 uses it only as an upgrade fallback; GenBank and FASTA use it for emitted SBOL 3 object identities." },
           { "name": "source_uri",   "in": "query", "schema": { "type": "string" } },
           { "name": "document_iri", "in": "query", "schema": { "type": "string", "format": "uri" } },
           { "name": "name",         "in": "query", "schema": { "type": "string" } },
@@ -122,12 +123,14 @@
         ],
         "requestBody": {
           "required": true,
-          "description": "The serialized RDF body for the SBOL document.",
+          "description": "The serialized import body.",
           "content": {
             "text/turtle":        { "schema": { "type": "string" } },
             "application/ld+json":{ "schema": { "type": "string" } },
             "application/rdf+xml":{ "schema": { "type": "string" } },
-            "application/n-triples": { "schema": { "type": "string" } }
+            "application/n-triples": { "schema": { "type": "string" } },
+            "chemical/x-genbank": { "schema": { "type": "string" } },
+            "chemical/x-fasta": { "schema": { "type": "string" } }
           }
         },
         "responses": {
@@ -897,7 +900,7 @@
         "name": "format",
         "in": "query",
         "description": "Override the format inferred from `Content-Type`.",
-        "schema": { "type": "string", "enum": ["turtle","jsonld","rdfxml","ntriples"] }
+        "schema": { "type": "string", "enum": ["turtle","jsonld","rdfxml","ntriples","genbank","fasta"] }
       },
       "NeighborhoodIri": {
         "name": "iri",
@@ -1097,8 +1100,9 @@
               "type": "object",
               "required": ["body","format"],
               "properties": {
-                "body":         { "type": "string", "description": "RDF payload in the format named by `format`." },
-                "format":       { "type": "string", "enum": ["turtle","jsonld","rdfxml","ntriples"] },
+                "body":         { "type": "string", "description": "Payload in the format named by `format`." },
+                "format":       { "type": "string", "enum": ["turtle","jsonld","rdfxml","ntriples","genbank","fasta"] },
+                "namespace":    { "type": "string", "format": "uri" },
                 "source_uri":   { "type": "string" },
                 "document_iri": { "type": "string", "format": "uri" },
                 "name":         { "type": "string" },
@@ -1195,7 +1199,7 @@
         "required": ["id","kind","status","priority","queue","payload","attempts","max_attempts","available_at","created_at"],
         "properties": {
           "id":               { "type": "string", "format": "uuid" },
-          "kind":             { "type": "string", "description": "Handler name. Currently only `import_document` is registered." },
+          "kind":             { "type": "string", "description": "Handler name. Built-in handlers include `import_document`, `import_remote_document`, and `import_synbiohub_collection`." },
           "status":           { "$ref": "#/components/schemas/JobStatus" },
           "priority":         { "type": "integer", "description": "Higher dequeues first." },
           "queue":            { "type": "string", "default": "default" },

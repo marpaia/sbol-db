@@ -24,5 +24,8 @@ pub use worker::{Worker, WorkerConfig};
 /// building a bespoke registry can call [`JobRegistry::new()`] and
 /// register only what they need.
 pub fn default_registry() -> JobRegistry {
-    JobRegistry::new().register(handlers::ImportDocumentHandler)
+    JobRegistry::new()
+        .register(handlers::ImportDocumentHandler)
+        .register(handlers::ImportRemoteDocumentHandler)
+        .register(handlers::ImportSynBioHubCollectionHandler)
 }

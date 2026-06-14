@@ -299,6 +299,13 @@ fn documented_aliases() -> &'static [(&'static str, SerializationFormat)] {
         ("ntriples", SerializationFormat::NTriples),
         ("nq", SerializationFormat::NQuads),
         ("nquads", SerializationFormat::NQuads),
+        ("gb", SerializationFormat::GenBank),
+        ("gbk", SerializationFormat::GenBank),
+        ("genbank", SerializationFormat::GenBank),
+        ("fa", SerializationFormat::Fasta),
+        ("fasta", SerializationFormat::Fasta),
+        ("fna", SerializationFormat::Fasta),
+        ("faa", SerializationFormat::Fasta),
     ]
 }
 
@@ -359,6 +366,8 @@ fn as_db_str_distinct_per_variant() {
         SerializationFormat::TriG,
         SerializationFormat::NTriples,
         SerializationFormat::NQuads,
+        SerializationFormat::GenBank,
+        SerializationFormat::Fasta,
     ] {
         assert!(
             seen.insert(f.as_db_str()),

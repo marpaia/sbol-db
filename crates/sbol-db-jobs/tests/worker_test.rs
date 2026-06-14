@@ -97,6 +97,7 @@ async fn embedded_worker_drains_import_document_job() {
     let payload = serde_json::to_value(ImportDocumentPayload {
         body: FIXTURE.to_owned(),
         format: SerializationFormat::Turtle,
+        namespace: None,
         source_uri: Some("test://embedded_worker.ttl".to_owned()),
         document_iri: None,
         name: None,

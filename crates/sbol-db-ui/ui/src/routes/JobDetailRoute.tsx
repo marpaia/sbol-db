@@ -3,12 +3,12 @@
  * table on `/observability` at `/observability/jobs/:id`.
  *
  * Shows job-level metadata (kind, queue, status, attempts), timing,
- * the inbound payload, and the result or error. Polls every 5 s while
- * the job is still pending so the page reflects worker progress
+ * the inbound payload, and the result or error. Polls every second
+ * while the job is still pending so the page reflects worker progress
  * without manual refresh.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, Octagon } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
@@ -19,16 +19,19 @@ import {
   useCancelJob,
   useJob,
   useJobAttempts,
+  useJobLogs,
 } from "@/hooks/useObservability";
-import type { JobAttempt, RecentJob } from "@/lib/api";
-import { describeError, formatMs, formatRelative } from "@/lib/utils";
+import type { JobAttempt, JobLogRecord, RecentJob } from "@/lib/api";
+import { describeError, formatMs } from "@/lib/utils";
 
 export default function JobDetailRoute() {
   const params = useParams<{ id: string }>();
   const id = params.id ?? "";
   const { data: job, isLoading, error } = useJob(id);
   const attemptsQuery = useJobAttempts(id, job?.status);
+  const logsQuery = useJobLogs(id, job?.status);
   const cancel = useCancelJob();
+  const now = useLiveNow(job?.status);
 
   const cancelMessage = useMemo(() => {
     if (cancel.isError) return describeError(cancel.error);
@@ -50,10 +53,7 @@ export default function JobDetailRoute() {
         </Link>
 
         {error ? (
-          <ErrorBanner
-            title="Couldn't load job"
-            body={describeError(error)}
-          />
+          <ErrorBanner title="Couldn't load job" body={describeError(error)} />
         ) : isLoading && !job ? (
           <Skeleton />
         ) : !job ? (
@@ -70,17 +70,23 @@ export default function JobDetailRoute() {
               cancelling={cancel.isPending}
               cancelMessage={cancelMessage}
             />
-            <JobKpis job={job} />
-            <TimingPanel job={job} />
+            <JobKpis job={job} now={now} />
+            <TimingPanel job={job} now={now} />
             <PayloadPanel payload={job.payload} />
             {job.status === "succeeded" && job.result !== null && (
               <ResultPanel result={job.result} />
             )}
             {job.error && <ErrorPanel error={job.error} />}
+            <LogsPanel
+              loading={logsQuery.isLoading && !logsQuery.data}
+              error={logsQuery.error}
+              logs={logsQuery.data ?? null}
+            />
             <AttemptsPanel
               loading={attemptsQuery.isLoading && !attemptsQuery.data}
               error={attemptsQuery.error}
               attempts={attemptsQuery.data ?? null}
+              now={now}
             />
           </>
         )}
@@ -93,17 +99,16 @@ function AttemptsPanel({
   loading,
   error,
   attempts,
+  now,
 }: {
   loading: boolean;
   error: unknown;
   attempts: JobAttempt[] | null;
+  now: number;
 }) {
   if (error) {
     return (
-      <ErrorBanner
-        title="Couldn't load attempts"
-        body={describeError(error)}
-      />
+      <ErrorBanner title="Couldn't load attempts" body={describeError(error)} />
     );
   }
   return (
@@ -112,8 +117,8 @@ function AttemptsPanel({
         <h2 className="text-sm font-medium">Attempts</h2>
         {attempts && (
           <span className="text-xs text-muted-foreground">
-            {attempts.length}{" "}
-            {attempts.length === 1 ? "attempt" : "attempts"} recorded
+            {attempts.length} {attempts.length === 1 ? "attempt" : "attempts"}{" "}
+            recorded
           </span>
         )}
       </header>
@@ -123,13 +128,13 @@ function AttemptsPanel({
         </div>
       ) : !attempts || attempts.length === 0 ? (
         <div className="px-4 py-4 text-sm text-muted-foreground">
-          No attempts recorded yet. Attempts are written when a worker
-          dequeues the job.
+          No attempts recorded yet. Attempts are written when a worker dequeues
+          the job.
         </div>
       ) : (
         <ul className="divide-y">
           {attempts.map((a) => (
-            <AttemptRow key={a.id} attempt={a} />
+            <AttemptRow key={a.id} attempt={a} now={now} />
           ))}
         </ul>
       )}
@@ -137,13 +142,79 @@ function AttemptsPanel({
   );
 }
 
-function AttemptRow({ attempt }: { attempt: JobAttempt }) {
+function LogsPanel({
+  loading,
+  error,
+  logs,
+}: {
+  loading: boolean;
+  error: unknown;
+  logs: JobLogRecord[] | null;
+}) {
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: "end" });
+  }, [logs?.length]);
+
+  if (error) {
+    return (
+      <ErrorBanner title="Couldn't load job logs" body={describeError(error)} />
+    );
+  }
+  return (
+    <section className="overflow-hidden rounded-lg border bg-card">
+      <header className="flex items-center gap-2 border-b px-4 py-2">
+        <h2 className="text-sm font-medium">Logs</h2>
+        {logs && (
+          <span className="text-xs text-muted-foreground">
+            {logs.length} {logs.length === 1 ? "event" : "events"}
+          </span>
+        )}
+      </header>
+      <div className="max-h-80 overflow-auto bg-zinc-950 px-4 py-3 font-mono text-[11px] leading-relaxed text-zinc-100">
+        {loading ? (
+          <div className="text-zinc-400">Waiting for log events…</div>
+        ) : !logs || logs.length === 0 ? (
+          <div className="text-zinc-400">
+            No job logs recorded yet. New worker events will appear here.
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {logs.map((log) => (
+              <LogLine key={log.id} log={log} />
+            ))}
+            <div ref={bottomRef} />
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function LogLine({ log }: { log: JobLogRecord }) {
+  const fields = formatLogFields(log.fields);
+  return (
+    <div className="grid gap-2 sm:grid-cols-[170px_52px_1fr]">
+      <span className="text-zinc-500">{formatLogTime(log.created_at)}</span>
+      <span className={logLevelClass(log.level)}>{log.level}</span>
+      <span className="min-w-0 break-words">
+        {log.attempt_no !== null && (
+          <span className="mr-2 text-zinc-500">attempt={log.attempt_no}</span>
+        )}
+        <span>{log.message}</span>
+        {fields && <span className="ml-2 text-zinc-400">{fields}</span>}
+      </span>
+    </div>
+  );
+}
+
+function AttemptRow({ attempt, now }: { attempt: JobAttempt; now: number }) {
   const duration =
     attempt.finished_at && attempt.started_at
       ? new Date(attempt.finished_at).getTime() -
         new Date(attempt.started_at).getTime()
       : attempt.started_at
-        ? Date.now() - new Date(attempt.started_at).getTime()
+        ? now - new Date(attempt.started_at).getTime()
         : null;
   return (
     <li className="space-y-2 px-4 py-3 text-xs">
@@ -154,7 +225,7 @@ function AttemptRow({ attempt }: { attempt: JobAttempt }) {
         <JobStatusBadge status={attempt.status} />
         <span className="text-muted-foreground/60">·</span>
         <span className="text-muted-foreground">
-          {formatRelative(attempt.started_at)}
+          {formatRelativeAt(attempt.started_at, now)}
         </span>
         <span className="text-muted-foreground/60">·</span>
         <span className="tabular-nums text-muted-foreground">
@@ -228,8 +299,8 @@ function Header({
   );
 }
 
-function JobKpis({ job }: { job: RecentJob }) {
-  const duration = jobDurationMs(job);
+function JobKpis({ job, now }: { job: RecentJob; now: number }) {
+  const duration = jobDurationMs(job, now);
   const durationValue =
     duration === null
       ? "—"
@@ -250,13 +321,13 @@ function JobKpis({ job }: { job: RecentJob }) {
   );
 }
 
-function TimingPanel({ job }: { job: RecentJob }) {
+function TimingPanel({ job, now }: { job: RecentJob; now: number }) {
   const rows: { label: string; value: string }[] = [
-    { label: "created", value: formatTime(job.created_at) },
-    { label: "started", value: formatTime(job.started_at) },
-    { label: "finished", value: formatTime(job.finished_at) },
-    { label: "available at", value: formatTime(job.available_at) },
-    { label: "lease expires", value: formatTime(job.lease_expires_at) },
+    { label: "created", value: formatTime(job.created_at, now) },
+    { label: "started", value: formatTime(job.started_at, now) },
+    { label: "finished", value: formatTime(job.finished_at, now) },
+    { label: "available at", value: formatTime(job.available_at, now) },
+    { label: "lease expires", value: formatTime(job.lease_expires_at, now) },
     { label: "leased by", value: job.leased_by ?? "—" },
     { label: "priority", value: String(job.priority) },
     { label: "correlation id", value: job.correlation_id ?? "—" },
@@ -329,7 +400,10 @@ function Skeleton() {
       <div className="h-12 animate-pulse rounded-lg bg-card" />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="h-24 animate-pulse rounded-lg border bg-card" />
+          <div
+            key={i}
+            className="h-24 animate-pulse rounded-lg border bg-card"
+          />
         ))}
       </div>
       <div className="h-48 animate-pulse rounded-lg border bg-card" />
@@ -347,23 +421,26 @@ function NotFound({ id }: { id: string }) {
   );
 }
 
-function jobDurationMs(job: RecentJob): number | null {
+function jobDurationMs(job: RecentJob, now: number): number | null {
   if (job.started_at && job.finished_at) {
     return (
       new Date(job.finished_at).getTime() - new Date(job.started_at).getTime()
     );
   }
   if (job.started_at) {
-    return Date.now() - new Date(job.started_at).getTime();
+    return now - new Date(job.started_at).getTime();
   }
   return null;
 }
 
-function formatTime(when: string | null | undefined): string {
+function formatTime(when: string | null | undefined, now: number): string {
   if (!when) return "—";
   const date = new Date(when);
   if (Number.isNaN(date.getTime())) return "—";
-  return `${date.toISOString().replace("T", " ").replace(/\.\d+Z$/, "Z")}  ·  ${formatRelative(date)}`;
+  return `${date
+    .toISOString()
+    .replace("T", " ")
+    .replace(/\.\d+Z$/, "Z")}  ·  ${formatRelativeAt(date, now)}`;
 }
 
 function formatJson(value: unknown): string {
@@ -373,4 +450,74 @@ function formatJson(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function formatLogTime(when: string): string {
+  const date = new Date(when);
+  if (Number.isNaN(date.getTime())) return when;
+  return date
+    .toISOString()
+    .replace("T", " ")
+    .replace(/\.\d+Z$/, "Z");
+}
+
+function formatLogFields(fields: unknown): string {
+  if (!fields || typeof fields !== "object") return "";
+  const entries = Object.entries(fields as Record<string, unknown>).filter(
+    ([, value]) => value !== null && value !== undefined
+  );
+  if (entries.length === 0) return "";
+  return entries
+    .map(([key, value]) => `${key}=${formatLogValue(value)}`)
+    .join(" ");
+}
+
+function formatLogValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value.includes(" ") ? JSON.stringify(value) : value;
+  }
+  return JSON.stringify(value);
+}
+
+function logLevelClass(level: JobLogRecord["level"]): string {
+  switch (level) {
+    case "debug":
+      return "text-zinc-500";
+    case "warn":
+      return "text-amber-300";
+    case "error":
+      return "text-red-300";
+    case "info":
+      return "text-sky-300";
+  }
+}
+
+function useLiveNow(status: RecentJob["status"] | undefined): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (status !== "queued" && status !== "running") {
+      setNow(Date.now());
+      return;
+    }
+    const interval = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [status]);
+  return now;
+}
+
+function formatRelativeAt(
+  when: string | Date | number | null | undefined,
+  now: number
+): string {
+  if (when === null || when === undefined) return "—";
+  const then =
+    typeof when === "number"
+      ? when
+      : (typeof when === "string" ? new Date(when) : when).getTime();
+  if (Number.isNaN(then)) return "—";
+  const seconds = Math.max(0, Math.floor((now - then) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
 }

@@ -1,6 +1,6 @@
 # Postgres schema
 
-`sbol-db` ships eight embedded migrations under
+`sbol-db` ships nine embedded migrations under
 `crates/sbol-db-postgres/migrations/`. They're applied via
 `sqlx::migrate!` either through the library
 (`sbol_db_postgres::run_migrations`) or the CLI (`sbol-db db migrate`).
@@ -34,7 +34,7 @@ One row per imported document.
 | `document_iri`         | `sbol_iri` (unique) | Optional explicit document IRI supplied by the caller.   |
 | `name`                 | `text`              | Display name.                                            |
 | `description`          | `text`              | Display description.                                     |
-| `serialization_format` | `text`              | One of `json|jsonld|rdfxml|turtle|trig|ntriples|nquads`. |
+| `serialization_format` | `text`              | One of `json|jsonld|rdfxml|turtle|trig|ntriples|nquads|genbank|fasta`. |
 | `source_uri`           | `text`              | Free-form provenance (URL, filename) from the caller.    |
 | `raw_payload`          | `jsonb`             | Optional lossless snapshot of the import body.           |
 | `content_hash`         | `bytea`             | SHA3-256 of the original input bytes.                    |
@@ -141,7 +141,7 @@ is keyed by `object_id`.
 | Table                  | What it stores                                                                  |
 | ---------------------- | ------------------------------------------------------------------------------- |
 | `sbol_components`      | Component types/roles, feature/sequence/interaction/model IRI arrays.            |
-| `sbol_sequences`       | `encoding_iri`, `elements`, length (`GENERATED ALWAYS AS`), alphabet, topology.  |
+| `sbol_sequences`       | `encoding_iri`, `elements`, `length_bp` (`GENERATED ALWAYS AS`), alphabet, topology. |
 | `sbol_features`        | Parent component IRI, `feature_kind`, `instance_of_iri`, roles, orientation.     |
 | `sbol_locations`       | Feature IRI, sequence IRI, `start_pos` / `end_pos` / `cut_pos`, location kind.   |
 | `sbol_constraints`     | Parent component IRI, `restriction_iri`, subject / object IRIs.                  |

@@ -324,7 +324,7 @@ export default function DashboardRoute() {
               onClick={() =>
                 launch(
                   "sql",
-                  `SELECT s.object_id, o.iri, s.alphabet, s.length\nFROM sbol_sequences s\nJOIN sbol_objects o ON o.id = s.object_id\nORDER BY s.length DESC NULLS LAST\nLIMIT 50;\n`
+                  `SELECT s.object_id, o.iri, s.alphabet, s.length_bp\nFROM sbol_sequences s\nJOIN sbol_objects o ON o.id = s.object_id\nORDER BY s.length_bp DESC NULLS LAST\nLIMIT 50;\n`
                 )
               }
             />

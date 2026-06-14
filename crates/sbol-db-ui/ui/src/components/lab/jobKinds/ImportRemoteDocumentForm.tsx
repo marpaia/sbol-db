@@ -1,45 +1,35 @@
-/**
- * Structured form for the `import_document` job. Mirrors
- * `ImportDocumentPayload` in `crates/sbol-db-jobs/src/handlers/import_document.rs`.
- *
- * Use this when ingesting a large document where you want a job id to
- * poll, retries on transient DB failures, and visibility into per-file
- * progress. The synchronous `POST /documents` flow remains the right
- * surface for small one-shot imports — that path is the
- * `DocumentImportDialog` reachable from the Documents page.
- */
-
 import {
   IMPORT_DOCUMENT_FORMATS,
   importFormatLabel,
   type ImportDocumentFormat,
 } from "@/lib/api";
 
-import type { ImportDocumentValue } from "./importDocument";
+import type { ImportRemoteDocumentValue } from "./importRemoteDocument";
 
-export interface ImportDocumentFormProps {
-  value: ImportDocumentValue;
-  onChange: (v: ImportDocumentValue) => void;
+export interface ImportRemoteDocumentFormProps {
+  value: ImportRemoteDocumentValue;
+  onChange: (v: ImportRemoteDocumentValue) => void;
   disabled?: boolean;
 }
 
-export function ImportDocumentForm({
+export function ImportRemoteDocumentForm({
   value,
   onChange,
   disabled,
-}: ImportDocumentFormProps) {
-  const patch = (delta: Partial<ImportDocumentValue>) =>
+}: ImportRemoteDocumentFormProps) {
+  const patch = (delta: Partial<ImportRemoteDocumentValue>) =>
     onChange({ ...value, ...delta });
 
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr,160px]">
         <TextInput
-          label="Name"
-          value={value.name}
-          onChange={(s) => patch({ name: s })}
+          label="URL"
+          value={value.url}
+          onChange={(s) => patch({ url: s })}
           disabled={disabled}
-          placeholder="(optional display name)"
+          placeholder="https://synbiohub.org/public/igem/BBa_B0034/1/sbol"
+          required
         />
         <FormatSelect
           value={value.format}
@@ -47,22 +37,6 @@ export function ImportDocumentForm({
           disabled={disabled}
         />
       </div>
-
-      <label className="block">
-        <span className="mb-1.5 block text-sm font-medium text-foreground">
-          Body
-          <span className="ml-1 text-destructive">*</span>
-        </span>
-        <textarea
-          value={value.body}
-          onChange={(e) => patch({ body: e.target.value })}
-          disabled={disabled}
-          spellCheck={false}
-          rows={10}
-          placeholder="Paste the document body in the selected format."
-          className="w-full resize-y rounded-md border bg-background px-3 py-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-1 focus:ring-ring disabled:opacity-50"
-        />
-      </label>
 
       <details className="rounded-md border bg-card">
         <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -77,11 +51,11 @@ export function ImportDocumentForm({
             placeholder="https://example.org/doc/1"
           />
           <TextInput
-            label="Source URI"
-            value={value.source_uri}
-            onChange={(s) => patch({ source_uri: s })}
+            label="Namespace"
+            value={value.namespace}
+            onChange={(s) => patch({ namespace: s })}
             disabled={disabled}
-            placeholder="https://example.org/where-this-came-from"
+            placeholder="https://example.org/lab"
           />
           <TextInput
             label="Created by"
@@ -91,19 +65,21 @@ export function ImportDocumentForm({
             placeholder="alice@lab.example"
           />
           <TextInput
-            label="Namespace"
-            value={value.namespace}
-            onChange={(s) => patch({ namespace: s })}
+            label="Name"
+            value={value.name}
+            onChange={(s) => patch({ name: s })}
             disabled={disabled}
-            placeholder="https://example.org/lab"
+            placeholder="Display name"
           />
-          <TextInput
-            label="Description"
-            value={value.description}
-            onChange={(s) => patch({ description: s })}
-            disabled={disabled}
-            placeholder="Short description"
-          />
+          <div className="sm:col-span-2">
+            <TextInput
+              label="Description"
+              value={value.description}
+              onChange={(s) => patch({ description: s })}
+              disabled={disabled}
+              placeholder="Short description"
+            />
+          </div>
         </div>
       </details>
     </div>
@@ -116,17 +92,20 @@ function TextInput({
   onChange,
   disabled,
   placeholder,
+  required,
 }: {
   label: string;
   value: string;
   onChange: (s: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  required?: boolean;
 }) {
   return (
     <label className="block">
       <span className="mb-1.5 block text-sm font-medium text-foreground">
         {label}
+        {required && <span className="ml-1 text-destructive">*</span>}
       </span>
       <input
         type="text"

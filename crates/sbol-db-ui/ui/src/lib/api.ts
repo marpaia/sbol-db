@@ -687,7 +687,10 @@ export async function fetchRecentJobs(
   return (await res.json()) as RecentJob[];
 }
 
-export async function getJob(id: string, signal?: AbortSignal): Promise<RecentJob> {
+export async function getJob(
+  id: string,
+  signal?: AbortSignal
+): Promise<RecentJob> {
   const res = await fetch(`/jobs/${encodeURIComponent(id)}`, { signal });
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as RecentJob;
@@ -704,6 +707,16 @@ export interface JobAttempt {
   error: string | null;
 }
 
+export interface JobLogRecord {
+  id: number;
+  job_id: string;
+  attempt_no: number | null;
+  level: "debug" | "info" | "warn" | "error";
+  message: string;
+  fields: unknown;
+  created_at: string;
+}
+
 export async function fetchJobAttempts(
   id: string,
   signal?: AbortSignal
@@ -713,6 +726,25 @@ export async function fetchJobAttempts(
   });
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as JobAttempt[];
+}
+
+export async function fetchJobLogs(
+  id: string,
+  query: { after_id?: number; limit?: number } = {},
+  signal?: AbortSignal
+): Promise<JobLogRecord[]> {
+  const qs = new URLSearchParams();
+  if (typeof query.after_id === "number") {
+    qs.set("after_id", String(query.after_id));
+  }
+  if (typeof query.limit === "number") qs.set("limit", String(query.limit));
+  const tail = qs.toString();
+  const res = await fetch(
+    `/jobs/${encodeURIComponent(id)}/logs${tail ? `?${tail}` : ""}`,
+    { signal }
+  );
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as JobLogRecord[];
 }
 
 export interface EnqueueJobRequest {
@@ -742,6 +774,72 @@ export async function enqueueJob(
   });
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as EnqueueJobResult;
+}
+
+export interface ImportRemoteDocumentPayload {
+  url: string;
+  format: ImportDocumentFormat;
+  namespace?: string;
+  document_iri?: string;
+  name?: string;
+  description?: string;
+  created_by?: string;
+}
+
+export interface ImportSynBioHubCollectionPayload {
+  collection_uri: string;
+  base_url?: string;
+  format?: ImportDocumentFormat;
+  namespace?: string;
+  page_size?: number;
+  max_records?: number;
+  created_by?: string;
+}
+
+export interface EnqueueRemoteImportOptions {
+  queue?: string;
+  priority?: number;
+  max_attempts?: number;
+  idempotency_key?: string;
+  correlation_id?: string;
+}
+
+export async function enqueueRemoteImport(
+  payload: ImportRemoteDocumentPayload,
+  options: EnqueueRemoteImportOptions = {},
+  signal?: AbortSignal
+): Promise<EnqueueJobResult> {
+  return enqueueJob(
+    {
+      kind: "import_remote_document",
+      payload,
+      queue: options.queue,
+      priority: options.priority,
+      max_attempts: options.max_attempts,
+      idempotency_key: options.idempotency_key,
+      correlation_id: options.correlation_id,
+    },
+    signal
+  );
+}
+
+export async function enqueueSynBioHubCollection(
+  payload: ImportSynBioHubCollectionPayload,
+  options: EnqueueRemoteImportOptions = {},
+  signal?: AbortSignal
+): Promise<EnqueueJobResult> {
+  return enqueueJob(
+    {
+      kind: "import_synbiohub_collection",
+      payload,
+      queue: options.queue,
+      priority: options.priority,
+      max_attempts: options.max_attempts,
+      idempotency_key: options.idempotency_key,
+      correlation_id: options.correlation_id,
+    },
+    signal
+  );
 }
 
 export interface CancelJobResponse {
@@ -802,12 +900,18 @@ export async function listDocuments(
 }
 
 export type SerializationFormat = "turtle" | "jsonld" | "rdfxml" | "ntriples";
+export type ImportDocumentFormat = SerializationFormat | "genbank" | "fasta";
 
 export const SERIALIZATION_FORMATS: SerializationFormat[] = [
   "turtle",
   "jsonld",
   "rdfxml",
   "ntriples",
+];
+export const IMPORT_DOCUMENT_FORMATS: ImportDocumentFormat[] = [
+  ...SERIALIZATION_FORMATS,
+  "genbank",
+  "fasta",
 ];
 
 export function serializationLabel(format: SerializationFormat): string {
@@ -823,6 +927,17 @@ export function serializationLabel(format: SerializationFormat): string {
   }
 }
 
+export function importFormatLabel(format: ImportDocumentFormat): string {
+  switch (format) {
+    case "genbank":
+      return "GenBank";
+    case "fasta":
+      return "FASTA";
+    default:
+      return serializationLabel(format);
+  }
+}
+
 export function serializationContentType(format: SerializationFormat): string {
   switch (format) {
     case "turtle":
@@ -833,6 +948,17 @@ export function serializationContentType(format: SerializationFormat): string {
       return "application/rdf+xml";
     case "ntriples":
       return "application/n-triples";
+  }
+}
+
+export function importContentType(format: ImportDocumentFormat): string {
+  switch (format) {
+    case "genbank":
+      return "chemical/x-genbank";
+    case "fasta":
+      return "chemical/x-fasta";
+    default:
+      return serializationContentType(format);
   }
 }
 
@@ -858,8 +984,9 @@ export interface DocumentDetail {
 }
 
 export interface ImportDocumentParams {
-  format: SerializationFormat;
+  format: ImportDocumentFormat;
   body: string;
+  namespace?: string;
   name?: string;
   description?: string;
   source_uri?: string;
@@ -872,6 +999,7 @@ export async function importDocument(
   signal?: AbortSignal
 ): Promise<ImportReport> {
   const qs = new URLSearchParams({ format: params.format });
+  if (params.namespace) qs.set("namespace", params.namespace);
   if (params.name) qs.set("name", params.name);
   if (params.description) qs.set("description", params.description);
   if (params.source_uri) qs.set("source_uri", params.source_uri);
@@ -879,7 +1007,7 @@ export async function importDocument(
   if (params.created_by) qs.set("created_by", params.created_by);
   const res = await fetch(`/documents?${qs.toString()}`, {
     method: "POST",
-    headers: { "Content-Type": serializationContentType(params.format) },
+    headers: { "Content-Type": importContentType(params.format) },
     body: params.body,
     signal,
   });
@@ -899,8 +1027,9 @@ export async function getDocument(
 }
 
 export interface BulkImportDocument {
-  format: SerializationFormat;
+  format: ImportDocumentFormat;
   body: string;
+  namespace?: string;
   name?: string;
   description?: string;
   source_uri?: string;

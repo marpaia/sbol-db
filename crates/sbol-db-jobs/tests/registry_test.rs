@@ -2,8 +2,11 @@
 
 use async_trait::async_trait;
 use sbol_db_jobs::{
-    default_registry, handlers::ImportDocumentHandler, HandlerError, JobContext, JobHandler,
-    JobOutcome, JobRegistry,
+    default_registry,
+    handlers::{
+        ImportDocumentHandler, ImportRemoteDocumentHandler, ImportSynBioHubCollectionHandler,
+    },
+    HandlerError, JobContext, JobHandler, JobOutcome, JobRegistry,
 };
 use serde::{Deserialize, Serialize};
 
@@ -60,9 +63,11 @@ fn every_registered_kind_self_identifies() {
     let registry = JobRegistry::new()
         .register(AlphaHandler)
         .register(BetaHandler)
-        .register(ImportDocumentHandler);
+        .register(ImportDocumentHandler)
+        .register(ImportRemoteDocumentHandler)
+        .register(ImportSynBioHubCollectionHandler);
     let kinds: Vec<_> = registry.kinds().collect();
-    assert_eq!(kinds.len(), 3);
+    assert_eq!(kinds.len(), 5);
     for kind in kinds {
         let handler = registry.lookup(kind).expect("registered kind must look up");
         assert_eq!(
@@ -81,6 +86,24 @@ fn default_registry_contains_import_document() {
         .lookup("import_document")
         .expect("default_registry must include import_document");
     assert_eq!(handler.kind(), "import_document");
+}
+
+#[test]
+fn default_registry_contains_import_remote_document() {
+    let registry = default_registry();
+    let handler = registry
+        .lookup("import_remote_document")
+        .expect("default_registry must include import_remote_document");
+    assert_eq!(handler.kind(), "import_remote_document");
+}
+
+#[test]
+fn default_registry_contains_import_synbiohub_collection() {
+    let registry = default_registry();
+    let handler = registry
+        .lookup("import_synbiohub_collection")
+        .expect("default_registry must include import_synbiohub_collection");
+    assert_eq!(handler.kind(), "import_synbiohub_collection");
 }
 
 /// `JobRegistry::register` replaces an existing entry for the same kind.

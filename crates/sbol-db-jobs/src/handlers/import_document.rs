@@ -23,6 +23,8 @@ pub struct ImportDocumentPayload {
     pub body: String,
     pub format: SerializationFormat,
     #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default)]
     pub source_uri: Option<String>,
     #[serde(default)]
     pub document_iri: Option<String>,
@@ -54,11 +56,24 @@ impl JobHandler for ImportDocumentHandler {
             .map(IriString::new)
             .transpose()
             .map_err(|e| HandlerError::InvalidPayload(e.to_string()))?;
+        ctx.log(
+            "info",
+            "document import starting",
+            serde_json::json!({
+                "format": payload.format,
+                "bytes": payload.body.len(),
+                "namespace": payload.namespace.as_deref(),
+                "source_uri": payload.source_uri.as_deref(),
+                "name": payload.name.as_deref(),
+            }),
+        )
+        .await;
         let report = ctx
             .service
             .import_document(ImportInput {
                 body: payload.body,
                 format: payload.format,
+                namespace: payload.namespace,
                 source_uri: payload.source_uri,
                 document_iri,
                 created_by: payload.created_by,
@@ -66,6 +81,18 @@ impl JobHandler for ImportDocumentHandler {
                 description: payload.description,
             })
             .await?;
+        ctx.log(
+            "info",
+            "document import completed",
+            serde_json::json!({
+                "document_id": report.document_id,
+                "object_count": report.object_count,
+                "quad_count": report.quad_count,
+                "validation_status": report.validation_status,
+                "validation_issue_count": report.validation_issue_count,
+            }),
+        )
+        .await;
         let result = serde_json::to_value(&report)?;
         Ok(JobOutcome::with_result(result))
     }

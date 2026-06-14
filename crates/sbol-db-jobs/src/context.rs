@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use sbol_db_core::JobId;
-use sbol_db_postgres::SbolObjectService;
+use sbol_db_postgres::{JobRepository, SbolObjectService};
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 /// Context handed to every [`crate::JobHandler::run`] invocation. Carries
@@ -19,11 +20,22 @@ pub struct JobContext {
     pub worker_id: Arc<str>,
     pub attempt: i32,
     pub service: Arc<SbolObjectService>,
+    pub jobs: JobRepository,
     pub cancel: CancellationToken,
 }
 
 impl JobContext {
     pub fn is_cancelled(&self) -> bool {
         self.cancel.is_cancelled()
+    }
+
+    pub async fn log(&self, level: &str, message: &str, fields: Value) {
+        if let Err(err) = self
+            .jobs
+            .append_log(self.job_id, Some(self.attempt), level, message, fields)
+            .await
+        {
+            tracing::warn!(error = %err, job_id = %self.job_id, "failed to append job log");
+        }
     }
 }

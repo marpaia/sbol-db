@@ -111,6 +111,7 @@ const TOP_LEVEL_SECTIONS: Array<{
   section: string;
   page: string;
 }> = [
+  { prefix: "/import", section: "Data", page: "Import" },
   { prefix: "/documents", section: "Data", page: "Documents" },
   { prefix: "/objects", section: "Data", page: "Objects" },
   { prefix: "/sequences", section: "Data", page: "Sequences" },

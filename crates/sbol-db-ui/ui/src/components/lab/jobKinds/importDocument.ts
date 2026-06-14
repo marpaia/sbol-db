@@ -7,11 +7,12 @@
  * own non-JSX module so the component file can be HMR-friendly.
  */
 
-import type { SerializationFormat } from "@/lib/api";
+import type { ImportDocumentFormat } from "@/lib/api";
 
 export interface ImportDocumentValue {
   body: string;
-  format: SerializationFormat;
+  format: ImportDocumentFormat;
+  namespace: string;
   source_uri: string;
   document_iri: string;
   name: string;
@@ -22,6 +23,7 @@ export interface ImportDocumentValue {
 export const importDocumentEmpty = (): ImportDocumentValue => ({
   body: "",
   format: "turtle",
+  namespace: "",
   source_uri: "",
   document_iri: "",
   name: "",
@@ -43,6 +45,7 @@ export function importDocumentToPayload(v: ImportDocumentValue): unknown {
     body: v.body,
     format: v.format,
   };
+  if (v.namespace.trim()) payload.namespace = v.namespace.trim();
   if (v.source_uri.trim()) payload.source_uri = v.source_uri.trim();
   if (v.document_iri.trim()) payload.document_iri = v.document_iri.trim();
   if (v.name.trim()) payload.name = v.name.trim();

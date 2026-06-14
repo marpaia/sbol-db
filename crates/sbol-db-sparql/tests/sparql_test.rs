@@ -44,6 +44,7 @@ async fn fresh_harness() -> Harness {
         .import_document(ImportInput {
             body: NESTED.to_owned(),
             format: SerializationFormat::Turtle,
+            namespace: None,
             source_uri: None,
             document_iri: None,
             created_by: None,

@@ -12,8 +12,8 @@ pub mod validation;
 
 pub use document::{DocumentRepository, ListDocumentsFilter};
 pub use job::{
-    EnqueueOutcome, JobAttempt, JobRepository, JobStatus, ListJobsFilter, NewJob, OldestQueuedAge,
-    QueueDepthRow, SbolJob, DEFAULT_QUEUE,
+    EnqueueOutcome, JobAttempt, JobLogRecord, JobRepository, JobStatus, ListJobsFilter, NewJob,
+    OldestQueuedAge, QueueDepthRow, SbolJob, DEFAULT_QUEUE,
 };
 pub use neighborhood::NeighborhoodRepository;
 pub use object::{ListObjectsFilter, SbolObjectRepository};

@@ -20,6 +20,7 @@ pub async fn run(pool: PgPool, service: Arc<SbolObjectService>, action: DocActio
         DocAction::Import {
             path,
             format,
+            namespace,
             document_iri,
             name,
             continue_on_error,
@@ -30,6 +31,7 @@ pub async fn run(pool: PgPool, service: Arc<SbolObjectService>, action: DocActio
                 service,
                 path,
                 format,
+                namespace,
                 document_iri,
                 name,
                 continue_on_error,
@@ -83,6 +85,7 @@ async fn import(
     service: Arc<SbolObjectService>,
     path: PathBuf,
     format: Option<String>,
+    namespace: Option<String>,
     document_iri: Option<String>,
     name: Option<String>,
     continue_on_error: bool,
@@ -108,17 +111,26 @@ async fn import(
                 service,
                 &path,
                 format.as_deref(),
+                namespace.as_deref(),
                 parallel.max(1),
                 skip_existing,
             )
             .await
         } else {
-            run_directory_import_atomic(service, &path, format.as_deref(), skip_existing).await
+            run_directory_import_atomic(
+                service,
+                &path,
+                format.as_deref(),
+                namespace.as_deref(),
+                skip_existing,
+            )
+            .await
         }
     } else {
         let body = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
         let format = resolve_format(format.as_deref(), &path)?;
+        let namespace = namespace.or_else(|| default_namespace_for_path(&path, format));
         if skip_existing {
             let hash = hash_bytes(body.as_bytes());
             if service.documents().exists_by_hash(&hash).await? {
@@ -131,6 +143,7 @@ async fn import(
             .import_document(ImportInput {
                 body,
                 format,
+                namespace,
                 source_uri: Some(path.display().to_string()),
                 document_iri,
                 created_by: None,
@@ -171,6 +184,7 @@ async fn run_directory_import_atomic(
     service: Arc<SbolObjectService>,
     root: &Path,
     explicit_format: Option<&str>,
+    namespace: Option<&str>,
     skip_existing: bool,
 ) -> Result<()> {
     let files = collect_importable_files(root)?;
@@ -190,6 +204,9 @@ async fn run_directory_import_atomic(
         let body =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let format = resolve_format(explicit_format, path)?;
+        let namespace = namespace
+            .map(str::to_owned)
+            .or_else(|| default_namespace_for_path(path, format));
         if skip_existing {
             let hash = hash_bytes(body.as_bytes());
             if service.documents().exists_by_hash(&hash).await? {
@@ -201,6 +218,7 @@ async fn run_directory_import_atomic(
         inputs.push(ImportInput {
             body,
             format,
+            namespace,
             source_uri: Some(path.display().to_string()),
             document_iri: None,
             created_by: None,
@@ -231,6 +249,7 @@ async fn run_directory_import_per_file(
     service: Arc<SbolObjectService>,
     root: &Path,
     explicit_format: Option<&str>,
+    namespace: Option<&str>,
     parallel: usize,
     skip_existing: bool,
 ) -> Result<()> {
@@ -246,15 +265,24 @@ async fn run_directory_import_per_file(
     );
 
     let explicit_format = explicit_format.map(str::to_owned);
+    let namespace = namespace.map(str::to_owned);
     let semaphore = Arc::new(tokio::sync::Semaphore::new(parallel));
     let mut set: tokio::task::JoinSet<(PathBuf, OutcomeOfFile)> = tokio::task::JoinSet::new();
     for (idx, path) in files.into_iter().enumerate() {
         let svc = service.clone();
         let sem = semaphore.clone();
         let fmt = explicit_format.clone();
+        let namespace = namespace.clone();
         set.spawn(async move {
             let permit = sem.acquire_owned().await.expect("semaphore");
-            let outcome = import_one(svc, &path, fmt.as_deref(), skip_existing).await;
+            let outcome = import_one(
+                svc,
+                &path,
+                fmt.as_deref(),
+                namespace.as_deref(),
+                skip_existing,
+            )
+            .await;
             drop(permit);
             let label = match &outcome {
                 OutcomeOfFile::Imported(rep) => format!(
@@ -297,6 +325,7 @@ async fn import_one(
     service: Arc<SbolObjectService>,
     path: &Path,
     explicit_format: Option<&str>,
+    namespace: Option<&str>,
     skip_existing: bool,
 ) -> OutcomeOfFile {
     let body = match std::fs::read_to_string(path) {
@@ -307,6 +336,9 @@ async fn import_one(
         Ok(f) => f,
         Err(e) => return OutcomeOfFile::Failed(e.to_string()),
     };
+    let namespace = namespace
+        .map(str::to_owned)
+        .or_else(|| default_namespace_for_path(path, format));
     if skip_existing {
         let hash = hash_bytes(body.as_bytes());
         match service.documents().exists_by_hash(&hash).await {
@@ -319,6 +351,7 @@ async fn import_one(
         .import_document(ImportInput {
             body,
             format,
+            namespace,
             source_uri: Some(path.display().to_string()),
             document_iri: None,
             created_by: None,
@@ -357,4 +390,47 @@ fn collect_importable_files(root: &Path) -> Result<Vec<PathBuf>> {
     }
     out.sort();
     Ok(out)
+}
+
+fn default_namespace_for_path(path: &Path, format: SerializationFormat) -> Option<String> {
+    match format {
+        SerializationFormat::Turtle
+        | SerializationFormat::JsonLd
+        | SerializationFormat::RdfXml
+        | SerializationFormat::NTriples
+        | SerializationFormat::GenBank
+        | SerializationFormat::Fasta => {}
+        SerializationFormat::Json | SerializationFormat::TriG | SerializationFormat::NQuads => {
+            return None;
+        }
+    }
+    let stem = path.file_stem().and_then(|s| s.to_str())?;
+    let segment = sanitize_namespace_segment(stem);
+    (!segment.is_empty()).then(|| format!("https://sbol-db.local/imports/{segment}"))
+}
+
+fn sanitize_namespace_segment(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut previous_was_sep = false;
+    for ch in raw.chars() {
+        let mapped = if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            Some(ch)
+        } else if ch.is_ascii_whitespace() || matches!(ch, '.' | '/' | '\\' | ':') {
+            Some('_')
+        } else {
+            None
+        };
+        if let Some(ch) = mapped {
+            if ch == '_' {
+                if previous_was_sep {
+                    continue;
+                }
+                previous_was_sep = true;
+            } else {
+                previous_was_sep = false;
+            }
+            out.push(ch);
+        }
+    }
+    out.trim_matches('_').to_owned()
 }

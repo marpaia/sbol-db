@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   cancelJob,
   fetchJobAttempts,
+  fetchJobLogs,
   fetchObservabilitySummary,
   fetchPgActivity,
   fetchPgDatabase,
@@ -22,6 +23,7 @@ import {
 const SUMMARY_MS = 5_000;
 const POSTGRES_MS = 15_000;
 const JOBS_MS = 30_000;
+const JOB_DETAIL_MS = 1_000;
 
 export function useObservabilitySummary() {
   return useQuery({
@@ -135,10 +137,8 @@ export function useJob(id: string) {
     enabled: id.length > 0,
     refetchInterval: (q) => {
       const job = q.state.data as RecentJob | undefined;
-      if (!job) return 5_000;
-      return job.status === "queued" || job.status === "running"
-        ? 5_000
-        : false;
+      if (!job) return JOB_DETAIL_MS;
+      return isLiveJobStatus(job.status) ? JOB_DETAIL_MS : false;
     },
     placeholderData: (prev) => prev,
   });
@@ -158,17 +158,36 @@ export function useCancelJob() {
 }
 
 /**
- * Per-attempt audit log for a job. Like `useJob`, polls every 5 s while
- * the parent job is still pending so a re-tried attempt becomes visible
+ * Per-attempt audit log for a job. Like `useJob`, polls every second while
+ * the parent job is still pending so a retried attempt becomes visible
  * without manual refresh.
  */
-export function useJobAttempts(id: string, parentStatus: RecentJob["status"] | undefined) {
+export function useJobAttempts(
+  id: string,
+  parentStatus: RecentJob["status"] | undefined
+) {
   return useQuery({
     queryKey: ["job", id, "attempts"],
     queryFn: ({ signal }) => fetchJobAttempts(id, signal),
     enabled: id.length > 0,
-    refetchInterval:
-      parentStatus === "queued" || parentStatus === "running" ? 5_000 : false,
+    refetchInterval: isLiveJobStatus(parentStatus) ? JOB_DETAIL_MS : false,
     placeholderData: (prev) => prev,
   });
+}
+
+export function useJobLogs(
+  id: string,
+  parentStatus: RecentJob["status"] | undefined
+) {
+  return useQuery({
+    queryKey: ["job", id, "logs"],
+    queryFn: ({ signal }) => fetchJobLogs(id, { limit: 500 }, signal),
+    enabled: id.length > 0,
+    refetchInterval: isLiveJobStatus(parentStatus) ? JOB_DETAIL_MS : false,
+    placeholderData: (prev) => prev,
+  });
+}
+
+function isLiveJobStatus(status: RecentJob["status"] | undefined): boolean {
+  return status === undefined || status === "queued" || status === "running";
 }

@@ -42,6 +42,7 @@ async fn import_fixture(svc: &SbolObjectService, body: &str) {
     svc.import_document(ImportInput {
         body: body.to_owned(),
         format: SerializationFormat::Turtle,
+        namespace: None,
         source_uri: None,
         document_iri: None,
         created_by: None,
@@ -165,6 +166,7 @@ async fn import_documents_commits_all_when_every_doc_is_valid() {
         ImportInput {
             body: FIXTURE.to_owned(),
             format: SerializationFormat::Turtle,
+            namespace: None,
             source_uri: Some("bulk://simple".to_owned()),
             document_iri: None,
             created_by: None,
@@ -174,6 +176,7 @@ async fn import_documents_commits_all_when_every_doc_is_valid() {
         ImportInput {
             body: NESTED.to_owned(),
             format: SerializationFormat::Turtle,
+            namespace: None,
             source_uri: Some("bulk://nested".to_owned()),
             document_iri: None,
             created_by: None,
@@ -201,6 +204,7 @@ async fn import_documents_rolls_back_entire_batch_on_failure() {
         ImportInput {
             body: FIXTURE.to_owned(),
             format: SerializationFormat::Turtle,
+            namespace: None,
             source_uri: Some("bulk://good-1".to_owned()),
             document_iri: None,
             created_by: None,
@@ -210,6 +214,7 @@ async fn import_documents_rolls_back_entire_batch_on_failure() {
         ImportInput {
             body: "this is not turtle at all".to_owned(),
             format: SerializationFormat::Turtle,
+            namespace: None,
             source_uri: Some("bulk://bad".to_owned()),
             document_iri: None,
             created_by: None,
@@ -219,6 +224,7 @@ async fn import_documents_rolls_back_entire_batch_on_failure() {
         ImportInput {
             body: NESTED.to_owned(),
             format: SerializationFormat::Turtle,
+            namespace: None,
             source_uri: Some("bulk://good-2".to_owned()),
             document_iri: None,
             created_by: None,

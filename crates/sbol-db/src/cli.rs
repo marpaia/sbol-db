@@ -133,9 +133,9 @@ pub enum DocAction {
     /// Import SBOL documents from a file or directory.
     ///
     /// `path` may be a single file or a directory; directories are walked
-    /// recursively for files whose extension is a recognised RDF
-    /// serialization (`.ttl`, `.nt`, `.jsonld`, `.rdf`, `.xml`, `.trig`,
-    /// `.nq`).
+    /// recursively for files whose extension is a recognised import format:
+    /// SBOL RDF (`.ttl`, `.nt`, `.jsonld`, `.rdf`, `.xml`, `.trig`, `.nq`),
+    /// GenBank (`.gb`, `.gbk`), or FASTA (`.fa`, `.fasta`, `.fna`, `.faa`).
     ///
     /// Directory imports default to one atomic Postgres transaction:
     /// either every file commits or none do. Use `--continue-on-error`
@@ -143,10 +143,15 @@ pub enum DocAction {
     /// more than batch atomicity; that mode also enables `--parallel`.
     Import {
         path: PathBuf,
-        /// Override the format inferred from the file extension. Only meaningful
-        /// when `path` is a single file.
+        /// Override the format inferred from file extensions. For directory
+        /// imports, applies to every collected file.
         #[arg(long)]
         format: Option<String>,
+        /// Namespace IRI for formats that need one. SBOL 2 uses this only
+        /// as the upgrade fallback; GenBank and FASTA default to a stable
+        /// `https://sbol-db.local/imports/<file-stem>` namespace when omitted.
+        #[arg(long)]
+        namespace: Option<String>,
         /// Optional document IRI to record alongside the import. Only allowed
         /// for single-file imports.
         #[arg(long)]

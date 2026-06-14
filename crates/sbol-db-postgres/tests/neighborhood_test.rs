@@ -38,6 +38,7 @@ async fn fresh_service_with_fixture() -> SbolObjectService {
     svc.import_document(ImportInput {
         body: NESTED.to_owned(),
         format: SerializationFormat::Turtle,
+        namespace: None,
         source_uri: None,
         document_iri: None,
         created_by: None,

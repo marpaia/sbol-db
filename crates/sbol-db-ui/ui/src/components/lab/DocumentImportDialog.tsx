@@ -1,7 +1,7 @@
 /**
  * Modal for importing an SBOL document. Two paths:
  *
- *  - Upload: drop a Turtle / JSON-LD / RDF-XML / N-Triples file. The
+ *  - Upload: drop an SBOL RDF, GenBank, or FASTA file. The
  *    format is inferred from the extension and the file body is read
  *    into a string so the POST mirrors the paste path exactly.
  *  - Paste: a textarea + a format dropdown. Same submit code path.
@@ -17,10 +17,10 @@ import { Check, Loader2, TriangleAlert, Upload, X } from "lucide-react";
 
 import {
   importDocument,
-  SERIALIZATION_FORMATS,
-  serializationLabel,
+  IMPORT_DOCUMENT_FORMATS,
+  importFormatLabel,
+  type ImportDocumentFormat,
   type ImportReport,
-  type SerializationFormat,
 } from "@/lib/api";
 import { describeError } from "@/lib/utils";
 
@@ -39,7 +39,7 @@ type Phase =
   | { kind: "loaded"; report: ImportReport }
   | { kind: "error"; message: string };
 
-const EXTENSION_FORMAT: Record<string, SerializationFormat> = {
+const EXTENSION_FORMAT: Record<string, ImportDocumentFormat> = {
   ttl: "turtle",
   turtle: "turtle",
   jsonld: "jsonld",
@@ -48,9 +48,16 @@ const EXTENSION_FORMAT: Record<string, SerializationFormat> = {
   xml: "rdfxml",
   nt: "ntriples",
   ntriples: "ntriples",
+  gb: "genbank",
+  gbk: "genbank",
+  genbank: "genbank",
+  fa: "fasta",
+  fasta: "fasta",
+  fna: "fasta",
+  faa: "fasta",
 };
 
-function formatFromFilename(name: string): SerializationFormat | null {
+function formatFromFilename(name: string): ImportDocumentFormat | null {
   const ext = name.split(".").pop()?.toLowerCase();
   if (!ext) return null;
   return EXTENSION_FORMAT[ext] ?? null;
@@ -63,12 +70,13 @@ export function DocumentImportDialog({
 }: DocumentImportDialogProps) {
   const [tab, setTab] = useState<Tab>("paste");
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
-  const [format, setFormat] = useState<SerializationFormat>("turtle");
+  const [format, setFormat] = useState<ImportDocumentFormat>("turtle");
   const [body, setBody] = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [sourceUri, setSourceUri] = useState("");
+  const [namespace, setNamespace] = useState("");
   const [documentIri, setDocumentIri] = useState("");
   const [createdBy, setCreatedBy] = useState("");
 
@@ -82,6 +90,7 @@ export function DocumentImportDialog({
       setName("");
       setDescription("");
       setSourceUri("");
+      setNamespace("");
       setDocumentIri("");
       setCreatedBy("");
     }
@@ -102,6 +111,7 @@ export function DocumentImportDialog({
     const inferred = formatFromFilename(file.name);
     if (inferred) setFormat(inferred);
     setFileName(file.name);
+    setSourceUri((current) => current || file.name);
     const text = await file.text();
     setBody(text);
   };
@@ -113,9 +123,10 @@ export function DocumentImportDialog({
       const report = await importDocument({
         format,
         body,
+        namespace: namespace.trim() || undefined,
         name: name.trim() || undefined,
         description: description.trim() || undefined,
-        source_uri: sourceUri.trim() || undefined,
+        source_uri: sourceUri.trim() || fileName || undefined,
         document_iri: documentIri.trim() || undefined,
         created_by: createdBy.trim() || undefined,
       });
@@ -169,14 +180,14 @@ export function DocumentImportDialog({
               <select
                 value={format}
                 onChange={(e) =>
-                  setFormat(e.target.value as SerializationFormat)
+                  setFormat(e.target.value as ImportDocumentFormat)
                 }
                 disabled={phase.kind === "loading"}
                 className="rounded-md border bg-background px-2 py-1 text-xs text-foreground outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
               >
-                {SERIALIZATION_FORMATS.map((f) => (
+                {IMPORT_DOCUMENT_FORMATS.map((f) => (
                   <option key={f} value={f}>
-                    {serializationLabel(f)}
+                    {importFormatLabel(f)}
                   </option>
                 ))}
               </select>
@@ -237,6 +248,13 @@ export function DocumentImportDialog({
                 value={documentIri}
                 onChange={setDocumentIri}
                 placeholder="http://…"
+                disabled={phase.kind === "loading"}
+              />
+              <Field
+                label="Namespace"
+                value={namespace}
+                onChange={setNamespace}
+                placeholder="https://example.org/lab"
                 disabled={phase.kind === "loading"}
               />
               <div className="sm:col-span-2">
