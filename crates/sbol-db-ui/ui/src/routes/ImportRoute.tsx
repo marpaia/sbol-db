@@ -235,6 +235,15 @@ export default function ImportRoute() {
           </div>
         </header>
 
+        <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm">
+          <TriangleAlert size={14} className="mt-0.5 shrink-0 text-amber-500" />
+          <span className="text-foreground">
+            <span className="font-medium">Warning:</span> SynBioHub is currently
+            returning HTTP 401 Unauthorized errors on public datasets. This is
+            being investigated.
+          </span>
+        </div>
+
         {pageError && (
           <ErrorBanner title="Import enqueue failed" body={pageError} />
         )}
