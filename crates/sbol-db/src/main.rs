@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
             queues,
             worker_id,
         } => cmd::worker::run(&cli.database_url, concurrency, queues, worker_id).await,
-        Command::Doc { action } => cmd::doc::run(pool, service, action).await,
+        Command::Graph { action } => cmd::graph::run(pool, service, action).await,
         Command::Object { action } => cmd::object::run(service, action).await,
         Command::Query { action } => cmd::query::run(service, action).await,
         Command::Ontology { action } => cmd::ontology::run(service, action).await,

@@ -25,7 +25,7 @@ export function useObjectsList(query: ListObjectsQuery) {
       "list",
       query.sbol_class ?? "",
       query.role ?? "",
-      query.document_id ?? "",
+      query.graph_id ?? "",
       query.after ?? "",
       query.limit ?? null,
     ],

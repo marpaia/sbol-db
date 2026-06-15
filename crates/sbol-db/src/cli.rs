@@ -71,13 +71,13 @@ pub enum Command {
         worker_id: Option<String>,
     },
 
-    /// Stored documents (the import corpus).
-    Doc {
+    /// Named graphs (the import corpus and any RDF graphs).
+    Graph {
         #[command(subcommand)]
-        action: DocAction,
+        action: GraphAction,
     },
 
-    /// Stored objects (everything below the document level).
+    /// Stored objects (the typed SBOL view derived from graphs).
     Object {
         #[command(subcommand)]
         action: ObjectAction,
@@ -125,11 +125,11 @@ pub enum Command {
 }
 
 // -----------------------------------------------------------------------
-// doc
+// graph
 // -----------------------------------------------------------------------
 
 #[derive(Subcommand, Debug)]
-pub enum DocAction {
+pub enum GraphAction {
     /// Import SBOL documents from a file or directory.
     ///
     /// `path` may be a single file or a directory; directories are walked
@@ -168,7 +168,7 @@ pub enum DocAction {
         #[arg(long, default_value_t = 1)]
         parallel: usize,
         /// Skip files whose SHA3-256 content hash is already present in
-        /// `sbol_documents`.
+        /// the document corpus.
         #[arg(long)]
         skip_existing: bool,
     },
@@ -187,8 +187,8 @@ pub enum DocAction {
     Show { id: uuid::Uuid },
     /// Delete a document by id.
     ///
-    /// Cascades to its quads via FK; objects whose sole source was this
-    /// document are left with a NULL `document_id`.
+    /// Cascades to its triples via FK; objects whose sole source was this
+    /// document are left with a NULL `graph_id`.
     Delete {
         id: uuid::Uuid,
         /// Skip the confirmation prompt. Required when stdin isn't a TTY.
@@ -199,7 +199,7 @@ pub enum DocAction {
     ///
     /// Not yet implemented: revalidation requires re-parseable raw payload
     /// retention, which is not yet wired through.
-    Validate { document_id: uuid::Uuid },
+    Validate { graph_id: uuid::Uuid },
 }
 
 // -----------------------------------------------------------------------
@@ -233,7 +233,7 @@ pub enum ObjectAction {
         role: Option<String>,
         /// Restrict to objects belonging to a specific document.
         #[arg(long)]
-        document_id: Option<uuid::Uuid>,
+        graph_id: Option<uuid::Uuid>,
         /// Page size used internally; max 5000.
         #[arg(long, default_value_t = 1000)]
         page_size: u32,
@@ -491,8 +491,8 @@ pub enum InspectAction {
 pub enum UtilAction {
     /// Content-hash an RDF file.
     ///
-    /// Matches the dedup key on `sbol_documents`, so the output equals
-    /// the `content_hash` of a successfully imported file.
+    /// Matches the import dedup key, so the output equals the
+    /// `content_hash` of a successfully imported file.
     Hash {
         path: PathBuf,
         /// Hash raw bytes instead of the parsed-triple content.

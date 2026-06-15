@@ -1,4 +1,4 @@
-//! Graph neighborhood traversal over `sbol_quads`.
+//! Graph neighborhood traversal over `sbol_triples`.
 //!
 //! Uses a recursive CTE bounded by depth and an optional node-count cap.
 //! Forward, backward, and bidirectional walks share one query; an additional
@@ -210,7 +210,7 @@ impl NeighborhoodRepository {
 /// The recursive walk. Postgres only allows one self-reference in the
 /// recursive term, so we normalize both directions into a non-recursive
 /// `edges` CTE and walk that. Each `edges` row is the *outgoing* view of a
-/// single quad: `(from_id, predicate, to_id)` plus the original subject /
+/// single triple: `(from_id, predicate, to_id)` plus the original subject /
 /// object position for surfacing the edge in the result.
 ///
 /// `$1 = root iri, $2 = depth cap, $3 = predicate allowlist (nullable),
@@ -228,7 +228,7 @@ edges AS (
         subject_blank                              AS edge_subject_blank,
         object_iri::text                           AS edge_object_iri,
         object_blank                               AS edge_object_blank
-    FROM sbol_quads
+    FROM sbol_triples
     WHERE $4 IN ('forward', 'both')
       AND (object_iri IS NOT NULL OR object_blank IS NOT NULL)
 
@@ -244,7 +244,7 @@ edges AS (
         subject_blank,
         object_iri::text,
         object_blank
-    FROM sbol_quads
+    FROM sbol_triples
     WHERE $4 IN ('backward', 'both')
       AND (object_iri IS NOT NULL OR object_blank IS NOT NULL)
 ),
@@ -298,7 +298,7 @@ SELECT
     object_literal                             AS value,
     datatype_iri::text                         AS datatype,
     language                                   AS language
-FROM sbol_quads
+FROM sbol_triples
 WHERE object_literal IS NOT NULL
   AND COALESCE(subject_iri::text, subject_blank) = ANY($1::text[])
 "#;

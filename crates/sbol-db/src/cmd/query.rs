@@ -89,11 +89,12 @@ async fn sparql(
         .map(|f| f.parse::<ResultFormat>())
         .transpose()
         .map_err(|e| anyhow!("{e}"))?;
-    let engine = SparqlEngine::new(Arc::new(service.quads().clone()));
+    let engine = SparqlEngine::new(Arc::new(service.triples().clone()));
     let options = SparqlOptions {
         timeout: Duration::from_secs(timeout_secs),
         max_rows,
         max_query_size,
+        default_graph: None,
     };
     let outcome = engine
         .execute(&query, format, &options)

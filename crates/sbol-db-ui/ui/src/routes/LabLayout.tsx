@@ -112,7 +112,7 @@ const TOP_LEVEL_SECTIONS: Array<{
   page: string;
 }> = [
   { prefix: "/import", section: "Data", page: "Import" },
-  { prefix: "/documents", section: "Data", page: "Documents" },
+  { prefix: "/graphs", section: "Data", page: "Graphs" },
   { prefix: "/objects", section: "Data", page: "Objects" },
   { prefix: "/sequences", section: "Data", page: "Sequences" },
   { prefix: "/ontologies", section: "Data", page: "Ontologies" },
@@ -161,10 +161,10 @@ function buildTrail(pathname: string): Crumb[] {
     trail.push({ label: decodeURIComponent(tableMatch[1]), mono: true });
     return trail;
   }
-  const documentMatch = pathname.match(/^\/documents\/([^/]+)\/?$/);
-  if (documentMatch) {
+  const graphMatch = pathname.match(/^\/graphs\/([^/]+)\/?$/);
+  if (graphMatch) {
     trail.push({
-      label: shortId(decodeURIComponent(documentMatch[1])),
+      label: shortId(decodeURIComponent(graphMatch[1])),
       mono: true,
     });
     return trail;

@@ -1,0 +1,54 @@
+BASE   <https://synbiohub.org/public/demo/>
+PREFIX :     <https://synbiohub.org/public/demo/>
+PREFIX sbol: <http://sbols.org/v3#>
+PREFIX SBO:  <https://identifiers.org/SBO:>
+PREFIX SO:   <https://identifiers.org/SO:>
+PREFIX EDAM: <https://identifiers.org/edam:>
+
+# A small, real-world synthetic-biology example used by docs/domain-model.md:
+# a constitutive reporter unit whose first 35 bp is the Anderson constitutive
+# promoter J23100 (a genuine iGEM part, BBa_J23100), modeled as a located
+# sub-part of the larger device.
+
+:J23100  a                 sbol:Component ;
+        sbol:displayId     "J23100" ;
+        sbol:name          "Anderson promoter J23100" ;
+        sbol:type          SBO:0000251 ;          # DNA
+        sbol:role          SO:0000167 ;           # promoter
+        sbol:hasNamespace  <../demo> ;
+        sbol:hasSequence   :J23100_seq .
+
+:J23100_seq  a             sbol:Sequence ;
+        sbol:displayId     "J23100_seq" ;
+        sbol:hasNamespace  <../demo> ;
+        sbol:elements      "ttgacggctagctcagtcctaggtacagtgctagc" ;
+        sbol:encoding      EDAM:format_1207 .     # IUPAC nucleic acid
+
+:reporter_unit  a          sbol:Component ;
+        sbol:displayId     "reporter_unit" ;
+        sbol:name          "constitutive reporter unit" ;
+        sbol:type          SBO:0000251 ;          # DNA
+        sbol:role          SO:0000804 ;           # engineered region
+        sbol:hasNamespace  <../demo> ;
+        sbol:hasSequence   :reporter_seq ;
+        sbol:hasFeature    <reporter_unit/promoter> .
+
+<reporter_unit/promoter>  a  sbol:SubComponent ;
+        sbol:displayId     "promoter" ;
+        sbol:instanceOf    :J23100 ;
+        sbol:hasLocation   <reporter_unit/promoter/loc> ;
+        sbol:orientation   SO:0001030 .
+
+<reporter_unit/promoter/loc>  a  sbol:Range ;
+        sbol:displayId     "loc" ;
+        sbol:hasSequence   :reporter_seq ;
+        sbol:start         "1" ;
+        sbol:end           "35" ;
+        sbol:order         "1" ;
+        sbol:orientation   SO:0001030 .
+
+:reporter_seq  a           sbol:Sequence ;
+        sbol:displayId     "reporter_seq" ;
+        sbol:hasNamespace  <../demo> ;
+        sbol:elements      "ttgacggctagctcagtcctaggtacagtgctagcaaagaggagaaatactagatgcgtaaaggcgaa" ;
+        sbol:encoding      EDAM:format_1207 .

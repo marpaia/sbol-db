@@ -21,7 +21,7 @@ async fn state() -> AppState {
     let pool = connect(&database_url()).await.expect("connect");
     run_migrations(&pool).await.expect("migrate");
     let service = Arc::new(SbolObjectService::new(pool.clone()));
-    let sparql = Arc::new(SparqlEngine::new(Arc::new(service.quads().clone())));
+    let sparql = Arc::new(SparqlEngine::new(Arc::new(service.triples().clone())));
     let jobs = Arc::new(JobRepository::new(pool.clone()));
     let metrics = Metrics::install(pool.clone(), env!("CARGO_PKG_VERSION"));
     AppState {
@@ -72,12 +72,12 @@ async fn sql_schema_lists_project_tables() {
         "expected sbol_objects in tables, got {names:?}"
     );
     assert!(
-        names.contains(&"sbol_documents"),
-        "expected sbol_documents in tables, got {names:?}"
+        names.contains(&"sbol_graphs"),
+        "expected sbol_graphs in tables, got {names:?}"
     );
     assert!(
-        names.contains(&"sbol_quads"),
-        "expected sbol_quads in tables, got {names:?}"
+        names.contains(&"sbol_triples"),
+        "expected sbol_triples in tables, got {names:?}"
     );
 
     // Verify column shape on sbol_objects.

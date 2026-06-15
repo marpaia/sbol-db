@@ -22,7 +22,7 @@ async fn db_lock() -> MutexGuard<'static, ()> {
 
 struct Harness {
     engine: SparqlEngine,
-    document_id: sbol_db_core::DocumentId,
+    graph_id: sbol_db_core::GraphId,
 }
 
 async fn fresh_harness() -> Harness {
@@ -31,7 +31,7 @@ async fn fresh_harness() -> Harness {
     let pool = connect(&database_url).await.expect("connect");
     run_migrations(&pool).await.expect("migrate");
     sqlx::query(
-        "TRUNCATE sbol_documents, sbol_objects, sbol_quads, sbol_validation_findings, \
+        "TRUNCATE sbol_graphs, sbol_objects, sbol_triples, sbol_validation_findings, \
          sbol_validation_runs, sbol_object_revisions, sbol_rdf_projection_events, sbol_components, \
          sbol_sequences, sbol_features, sbol_locations, sbol_constraints, \
          sbol_interactions, sbol_participations RESTART IDENTITY CASCADE",
@@ -53,10 +53,10 @@ async fn fresh_harness() -> Harness {
         })
         .await
         .expect("import");
-    let engine = SparqlEngine::new(Arc::new(svc.quads().clone()));
+    let engine = SparqlEngine::new(Arc::new(svc.triples().clone()));
     Harness {
         engine,
-        document_id: report.document_id,
+        graph_id: report.graph_id,
     }
 }
 
@@ -65,6 +65,7 @@ fn long_options() -> SparqlOptions {
         timeout: Duration::from_secs(30),
         max_rows: 100_000,
         max_query_size: 64 * 1024,
+        default_graph: None,
     }
 }
 
@@ -162,7 +163,7 @@ async fn describe_i13504_emits_fanout() {
 async fn named_graph_scopes_results_to_one_document() {
     let _g = db_lock().await;
     let h = fresh_harness().await;
-    let graph_iri = format!("graph:document:{}", h.document_id.0);
+    let graph_iri = format!("graph:document:{}", h.graph_id.0);
     let query = format!(
         "PREFIX sbol: <http://sbols.org/v3#>\n\
          SELECT ?s FROM NAMED <{graph_iri}>\n\

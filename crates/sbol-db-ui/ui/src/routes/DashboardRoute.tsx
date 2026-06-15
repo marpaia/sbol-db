@@ -2,9 +2,9 @@
  * Landing page for the lab. Pulls everything from /lab/api/overview
  * and lays it out as a one-screen data dashboard:
  *
- *  - Corpus counts (objects, documents, quads, sequences, …)
+ *  - Corpus counts (objects, graphs, triples, sequences, …)
  *  - Top SBOL classes by row count
- *  - Recent document imports
+ *  - Recent graphs
  *  - Loaded ontologies
  *  - Quick-start query templates for SPARQL and SQL
  *
@@ -19,13 +19,13 @@ import { Link, useNavigate } from "react-router-dom";
 import {
   Boxes,
   Database,
-  FileText,
   GitGraph,
   Library,
   Network,
   Play,
   Plus,
   ShieldCheck,
+  Share2,
 } from "lucide-react";
 
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
@@ -109,15 +109,15 @@ export default function DashboardRoute() {
               loading={isLoading}
             />
             <CountCard
-              icon={<FileText className="size-4" />}
-              label="Documents"
-              value={c?.documents}
+              icon={<Share2 className="size-4" />}
+              label="Graphs"
+              value={c?.graphs}
               loading={isLoading}
             />
             <CountCard
               icon={<GitGraph className="size-4" />}
-              label="Quads"
-              value={c?.quads}
+              label="Triples"
+              value={c?.triples}
               loading={isLoading}
             />
             <CountCard
@@ -239,19 +239,19 @@ export default function DashboardRoute() {
         </div>
 
         <Panel
-          title="Recent imports"
-          subtitle={data ? `last ${data.recent_documents.length}` : undefined}
+          title="Recent graphs"
+          subtitle={data ? `last ${data.recent_graphs.length}` : undefined}
         >
           {isLoading ? (
             <Skeleton lines={3} />
-          ) : data?.recent_documents.length === 0 ? (
-            <Empty>No documents imported yet.</Empty>
+          ) : data?.recent_graphs.length === 0 ? (
+            <Empty>No graphs yet.</Empty>
           ) : (
             <ul className="divide-y">
-              {data?.recent_documents.map((d) => (
+              {data?.recent_graphs.map((d) => (
                 <li key={d.id}>
                   <Link
-                    to={`/documents/${d.id}`}
+                    to={`/graphs/${d.id}`}
                     className="block py-2 text-sm transition-colors hover:bg-accent/40"
                   >
                     <div className="flex items-center gap-3">
@@ -461,6 +461,7 @@ function shortIri(iri: string): string {
 function displayName(d: {
   name: string | null;
   source_uri: string | null;
+  iri: string;
   id: string;
 }): string {
   if (d.name) return d.name;
@@ -469,6 +470,7 @@ function displayName(d: {
     if (m) return m[0];
     return d.source_uri;
   }
+  if (d.iri) return d.iri;
   return d.id.slice(0, 8);
 }
 

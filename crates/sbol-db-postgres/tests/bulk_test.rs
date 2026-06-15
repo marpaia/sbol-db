@@ -26,7 +26,7 @@ async fn fresh_service() -> SbolObjectService {
     let pool = connect(&database_url).await.expect("connect");
     run_migrations(&pool).await.expect("migrate");
     sqlx::query(
-        "TRUNCATE sbol_documents, sbol_objects, sbol_quads, sbol_validation_findings, \
+        "TRUNCATE sbol_graphs, sbol_objects, sbol_triples, sbol_validation_findings, \
          sbol_validation_runs, sbol_object_revisions, sbol_rdf_projection_events, sbol_components, \
          sbol_sequences, sbol_features, sbol_locations, sbol_constraints, \
          sbol_interactions, sbol_participations, sbol_sequence_kmers \
@@ -148,12 +148,12 @@ async fn exists_by_hash_round_trips() {
     let svc = fresh_service().await;
     let hash_before = hash_bytes(FIXTURE.as_bytes());
     assert!(
-        !svc.documents().exists_by_hash(&hash_before).await.unwrap(),
+        !svc.graphs().exists_by_hash(&hash_before).await.unwrap(),
         "fixture should not yet be present"
     );
     import_fixture(&svc, FIXTURE).await;
     assert!(
-        svc.documents().exists_by_hash(&hash_before).await.unwrap(),
+        svc.graphs().exists_by_hash(&hash_before).await.unwrap(),
         "fixture should be visible after import"
     );
 }
@@ -187,10 +187,11 @@ async fn import_documents_commits_all_when_every_doc_is_valid() {
     let reports = svc.import_documents(inputs).await.expect("bulk import");
     assert_eq!(reports.len(), 2);
 
-    let doc_count: i64 = sqlx::query_scalar("SELECT count(*) FROM sbol_documents")
-        .fetch_one(svc.pool())
-        .await
-        .expect("count documents");
+    let doc_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sbol_graphs WHERE kind = 'sbol3'")
+            .fetch_one(svc.pool())
+            .await
+            .expect("count documents");
     assert_eq!(doc_count, 2, "both documents should be visible");
 }
 
@@ -242,10 +243,11 @@ async fn import_documents_rolls_back_entire_batch_on_failure() {
             || matches!(err, sbol_db_core::DomainError::Parse(_))
     );
 
-    let doc_count: i64 = sqlx::query_scalar("SELECT count(*) FROM sbol_documents")
-        .fetch_one(svc.pool())
-        .await
-        .expect("count documents");
+    let doc_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sbol_graphs WHERE kind = 'sbol3'")
+            .fetch_one(svc.pool())
+            .await
+            .expect("count documents");
     assert_eq!(
         doc_count, 0,
         "rolled-back batch must leave the documents table empty"

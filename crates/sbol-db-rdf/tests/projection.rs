@@ -1,6 +1,6 @@
 use sbol::{Document, RdfFormat};
 use sbol_db_core::{IriString, ObjectTerm};
-use sbol_db_rdf::{content_hash, document_to_quads, document_to_summaries, GRAPH_IRI_PREFIX};
+use sbol_db_rdf::{content_hash, document_to_summaries, document_to_triples, GRAPH_IRI_PREFIX};
 
 const TURTLE: &str = r#"
 BASE <https://example.org/test/>
@@ -25,15 +25,15 @@ PREFIX EDAM: <https://identifiers.org/edam:>
 "#;
 
 #[test]
-fn document_to_quads_round_trips_predicate_count() {
+fn document_to_triples_round_trips_predicate_count() {
     let doc = Document::read(TURTLE, RdfFormat::Turtle).expect("parse");
     let graph = IriString::unchecked(format!("{GRAPH_IRI_PREFIX}abc"));
-    let quads = document_to_quads(&doc, &graph);
-    let triples = doc.rdf_graph().triples();
-    assert_eq!(quads.len(), triples.len());
-    for q in &quads {
+    let domain_triples = document_to_triples(&doc, &graph);
+    let rdf_triples = doc.rdf_graph().triples();
+    assert_eq!(domain_triples.len(), rdf_triples.len());
+    for t in &domain_triples {
         assert_eq!(
-            q.graph_iri.as_ref().map(|g| g.as_str()),
+            t.graph_iri.as_ref().map(|g| g.as_str()),
             Some(graph.as_str())
         );
     }
@@ -70,15 +70,15 @@ fn content_hash_is_deterministic_across_triple_order() {
 }
 
 #[test]
-fn literal_quad_carries_datatype() {
+fn literal_triple_carries_datatype() {
     let doc = Document::read(TURTLE, RdfFormat::Turtle).expect("parse");
     let graph = IriString::unchecked(format!("{GRAPH_IRI_PREFIX}abc"));
-    let quads = document_to_quads(&doc, &graph);
-    let display_id_quad = quads
+    let triples = document_to_triples(&doc, &graph);
+    let display_id_triple = triples
         .iter()
         .find(|q| q.predicate.as_str() == "http://sbols.org/v3#displayId")
-        .expect("displayId quad");
-    match &display_id_quad.object {
+        .expect("displayId triple");
+    match &display_id_triple.object {
         ObjectTerm::Literal { datatype, .. } => {
             assert_eq!(datatype.as_str(), "http://www.w3.org/2001/XMLSchema#string");
         }

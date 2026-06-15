@@ -137,9 +137,9 @@ impl JobHandler for ImportRemoteDocumentHandler {
             "info",
             "remote import completed",
             serde_json::json!({
-                "document_id": report.document_id,
+                "graph_id": report.graph_id,
                 "object_count": report.object_count,
-                "quad_count": report.quad_count,
+                "triple_count": report.triple_count,
                 "validation_status": report.validation_status,
                 "validation_issue_count": report.validation_issue_count,
             }),

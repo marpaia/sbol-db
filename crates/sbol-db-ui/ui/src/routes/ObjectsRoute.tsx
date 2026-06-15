@@ -1,6 +1,6 @@
 /**
  * Typed object browser. Paginated listing over `GET /objects/list`,
- * with optional `sbol_class`, `role`, and `document_id` filters surfaced
+ * with optional `sbol_class`, `role`, and `graph_id` filters surfaced
  * as collapsible form inputs. The list uses the server's keyset cursor
  * so the table stays cheap regardless of corpus size.
  */
@@ -22,7 +22,7 @@ export default function ObjectsRoute() {
 
   const classFilter = searchParams.get("class") ?? "";
   const roleFilter = searchParams.get("role") ?? "";
-  const docFilter = searchParams.get("document") ?? "";
+  const graphFilter = searchParams.get("graph") ?? "";
 
   const [cursors, setCursors] = useState<string[]>([""]);
   const after = cursors[cursors.length - 1] || undefined;
@@ -31,12 +31,12 @@ export default function ObjectsRoute() {
   const { data, isLoading, error } = useObjectsList({
     sbol_class: classFilter || undefined,
     role: roleFilter || undefined,
-    document_id: docFilter || undefined,
+    graph_id: graphFilter || undefined,
     after,
     limit: PAGE_SIZE,
   });
 
-  const updateFilter = (key: "class" | "role" | "document", value: string) => {
+  const updateFilter = (key: "class" | "role" | "graph", value: string) => {
     const next = new URLSearchParams(searchParams);
     if (value) next.set(key, value);
     else next.delete(key);
@@ -117,7 +117,7 @@ export default function ObjectsRoute() {
         <Filters
           classFilter={classFilter}
           roleFilter={roleFilter}
-          docFilter={docFilter}
+          graphFilter={graphFilter}
           onChange={updateFilter}
         />
 
@@ -129,7 +129,7 @@ export default function ObjectsRoute() {
         ) : isLoading && !data ? (
           <TableSkeleton />
         ) : !data || data.objects.length === 0 ? (
-          <Empty hasFilters={!!(classFilter || roleFilter || docFilter)} />
+          <Empty hasFilters={!!(classFilter || roleFilter || graphFilter)} />
         ) : (
           <>
             <div className="text-xs text-muted-foreground">
@@ -189,16 +189,16 @@ export default function ObjectsRoute() {
 function Filters({
   classFilter,
   roleFilter,
-  docFilter,
+  graphFilter,
   onChange,
 }: {
   classFilter: string;
   roleFilter: string;
-  docFilter: string;
-  onChange: (key: "class" | "role" | "document", value: string) => void;
+  graphFilter: string;
+  onChange: (key: "class" | "role" | "graph", value: string) => void;
 }) {
-  const [open, setOpen] = useState(!!(classFilter || roleFilter || docFilter));
-  const active = [classFilter, roleFilter, docFilter].filter(Boolean).length;
+  const [open, setOpen] = useState(!!(classFilter || roleFilter || graphFilter));
+  const active = [classFilter, roleFilter, graphFilter].filter(Boolean).length;
   return (
     <section className="rounded-lg border bg-card">
       <button
@@ -234,10 +234,10 @@ function Filters({
             onChange={(v) => onChange("role", v)}
           />
           <FilterField
-            label="Document ID"
-            value={docFilter}
+            label="Graph ID"
+            value={graphFilter}
             placeholder="UUID"
-            onChange={(v) => onChange("document", v)}
+            onChange={(v) => onChange("graph", v)}
           />
         </div>
       )}

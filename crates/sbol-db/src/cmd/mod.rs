@@ -4,7 +4,7 @@
 //! `main.rs`.
 
 pub mod db;
-pub mod doc;
+pub mod graph;
 pub mod inspect;
 pub mod jobs;
 pub mod object;

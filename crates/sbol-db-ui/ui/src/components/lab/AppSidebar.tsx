@@ -14,7 +14,6 @@ import {
   Command as CommandIcon,
   Database,
   Dna,
-  FileText,
   Gauge,
   HardDrive,
   Home,
@@ -23,6 +22,7 @@ import {
   ListChecks,
   Network,
   Search,
+  Share2,
   Table2,
 } from "lucide-react";
 import { NavLink, useMatch } from "react-router-dom";
@@ -75,7 +75,7 @@ const NAV_GROUPS: NavGroup[] = [
     icon: <Boxes className="text-sbol-rbs" />,
     items: [
       { to: "/import", icon: <Import />, label: "Import" },
-      { to: "/documents", icon: <FileText />, label: "Documents" },
+      { to: "/graphs", icon: <Share2 />, label: "Graphs" },
       { to: "/objects", icon: <Boxes />, label: "Objects" },
       { to: "/sequences", icon: <Dna />, label: "Sequences" },
       { to: "/ontologies", icon: <Library />, label: "Ontologies" },

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use sbol_db_core::{DocumentId, ObjectId, SerializationFormat};
+use sbol_db_core::{GraphId, ObjectId, SerializationFormat};
 use sbol_db_postgres::{ListObjectsFilter, SbolObjectService};
 
 use crate::cli::ObjectAction;
@@ -39,9 +39,9 @@ pub async fn run(service: Arc<SbolObjectService>, action: ObjectAction) -> Resul
         ObjectAction::ExportAll {
             sbol_class,
             role,
-            document_id,
+            graph_id,
             page_size,
-        } => export_all(service, sbol_class, role, document_id, page_size).await,
+        } => export_all(service, sbol_class, role, graph_id, page_size).await,
     }
 }
 
@@ -55,7 +55,7 @@ async fn render_subgraph(
         .get_iri_by_id(object_id)
         .await?
         .ok_or_else(|| anyhow!("object id not found"))?;
-    let body = sbol_db_server::export_subject_rdf(service.quads(), &iri, format).await?;
+    let body = sbol_db_server::export_subject_rdf(service.triples(), &iri, format).await?;
     Ok(body)
 }
 
@@ -63,7 +63,7 @@ async fn export_all(
     service: Arc<SbolObjectService>,
     sbol_class: Option<String>,
     role: Option<String>,
-    document_id: Option<uuid::Uuid>,
+    graph_id: Option<uuid::Uuid>,
     page_size: u32,
 ) -> Result<()> {
     let stdout = std::io::stdout();
@@ -74,7 +74,7 @@ async fn export_all(
         let filter = ListObjectsFilter {
             sbol_class: sbol_class.clone(),
             role: role.clone(),
-            document_id: document_id.map(DocumentId),
+            graph_id: graph_id.map(GraphId),
             after_iri: cursor.clone(),
             limit,
         };

@@ -27,10 +27,10 @@ The focused scope is:
 - Ingest SBOL 3 RDF, upgrade SBOL 2 RDF, and import GenBank or FASTA
   through the same document pipeline.
 - Preserve the document losslessly (per-object JSON-LD slice + the
-  full quad set under a named graph).
+  full triple set under a named graph).
 - Project the design into typed relational tables for SQL-shaped
   queries.
-- Project the design into RDF quads for graph-shaped queries.
+- Project the design into RDF triples for graph-shaped queries.
 - Expose five composable query primitives: typed IRI lookup,
   bounded graph neighborhood, read-only SPARQL, nucleotide
   sequence search, and ontology-aware role expansion.
@@ -48,10 +48,10 @@ Six crates:
 
 | Crate              | Purpose                                                                                |
 | ------------------ | -------------------------------------------------------------------------------------- |
-| `sbol-db-core`     | Domain types (`Quad`, `IriString`, `DocumentId`, `NeighborhoodQuery`, …), the k-mer encoder, the OBO parser. No I/O. |
-| `sbol-db-rdf`      | `sbol::Document` ↔ quads projection, RDF (re-)serialization, content hashing.           |
+| `sbol-db-core`     | Domain types (`Triple`, `IriString`, `GraphId`, `NeighborhoodQuery`, …), the k-mer encoder, the OBO parser. No I/O. |
+| `sbol-db-rdf`      | `sbol::Document` ↔ triples projection, RDF (re-)serialization, content hashing.           |
 | `sbol-db-postgres` | sqlx repositories, embedded migrations, the `SbolObjectService` domain entry point. Hosts the sequence-search + ontology repositories.    |
-| `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over `sbol_quads`).            |
+| `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over `sbol_triples`).            |
 | `sbol-db-server`   | axum HTTP API. Thin layer over the postgres + sparql crates.                            |
 | `sbol-db`          | CLI binary. Wires the postgres + server + sparql crates into clap subcommands.          |
 
@@ -62,27 +62,29 @@ The boundaries matter:
   it can be tested without a database.
 - `sbol-db-postgres` is the only crate that talks to sqlx. Every
   other crate that needs persisted data goes through a repository
-  type (`DocumentRepository`, `SbolObjectRepository`,
-  `QuadRepository`, `NeighborhoodRepository`,
+  type (`GraphRepository`, `SbolObjectRepository`,
+  `TripleRepository`, `NeighborhoodRepository`,
   `TypedProjectionRepository`, `ValidationRepository`,
   `ProjectionEventRepository`).
 - `sbol-db-sparql` reaches into Postgres only through
-  `QuadRepository::scan_pattern`. SPARQL evaluation never sees sqlx
+  `TripleRepository::scan_pattern`. SPARQL evaluation never sees sqlx
   types or migrations.
 
 ## Storage model
 
 Three Postgres tables carry the bulk of the data:
 
-- `sbol_documents`: one row per imported document. Holds the raw
-  payload, source URI, content hash, and serialization format.
+- `sbol_graphs`: one row per named graph. A `kind = 'sbol3'` graph is a
+  single imported SBOL document with import metadata (source URI,
+  content hash, serialization format); a `kind = 'verbatim'` graph is
+  raw RDF stored as written. The graph owns its triples.
 - `sbol_objects`: one row per top-level SBOL object, keyed by IRI.
   Carries `sbol_class`, `display_id`, `name`, the JSON-LD slice for
   the object, `types`/`roles` arrays (for indexed filtering), and a
   content hash. This is the canonical KV store keyed by IRI.
-- `sbol_quads`: one row per RDF triple. Carries graph IRI, subject /
+- `sbol_triples`: one row per RDF triple. Carries graph IRI, subject /
   predicate / object positions, literal datatype + language, and a
-  back-reference to the originating document. Blank nodes live in
+  back-reference to the owning graph. Blank nodes live in
   companion `subject_blank` / `object_blank` text columns because
   the `sbol_iri` domain rejects `_:b0`-shaped values; see
   [`schema.md`](schema.md) for the full schema.
@@ -130,14 +132,14 @@ the caller side.
 `SbolObjectService::import_document` runs the full pipeline in one
 Postgres transaction:
 
-1. Insert the `sbol_documents` row.
+1. Insert the `sbol_graphs` row (`kind = 'sbol3'`).
 2. For each `SbolObject` in `document.typed_objects()`:
    - Build a `SbolObjectRecord` (IRI, class, display ID, name,
      types, roles, the per-object JSON-LD slice, content hash).
    - Upsert into `sbol_objects`.
    - Write a row to `sbol_object_revisions`.
-3. Project the document to quads (`document_to_quads`), tag every
-   quad with `graph:document:{document_id}`, and replace the
+3. Project the document to triples (`document_to_triples`), tag every
+   triple with `graph:document:{document_id}`, and replace the
    document's existing named graph atomically.
 4. Run the typed projection inserts.
 5. Record the validation run + findings.
@@ -161,7 +163,7 @@ let obj = svc.objects().get_by_iri(iri).await?;
 ```
 
 **Graph neighborhood** — "what's near this IRI in the design
-graph?". A bounded recursive CTE over `sbol_quads`, with optional
+graph?". A bounded recursive CTE over `sbol_triples`, with optional
 predicate allowlist, max-node cap, and forward / backward / both
 direction. Returns nodes (decorated with sbol_class / displayId)
 plus the visited edges. Optionally re-serializes the visited
@@ -172,7 +174,7 @@ let result = svc.neighborhood().walk(&NeighborhoodQuery { /* ... */ }).await?;
 ```
 
 **SPARQL** — "express it as a SPARQL query". The evaluator runs
-directly against `sbol_quads` via a `spareval::QueryableDataset`
+directly against `sbol_triples` via a `spareval::QueryableDataset`
 implementation; no second index. SELECT / ASK / CONSTRUCT / DESCRIBE
 are supported; SPARQL Update is rejected. See
 [`sparql.md`](sparql.md).
@@ -217,16 +219,16 @@ amortise round-trips:
 - **Corpus listing** — `SbolObjectRepository::list(&ListObjectsFilter)`
   / `GET /objects/list` / `sbol-db object export-all`. Keyset cursor on `iri`,
   page size capped at 5000; filters by `sbol_class`, `role`, and
-  `document_id` compose.
+  `graph_id` compose.
 - **Bulk sequence search** — `SequenceSearchRepository::search_many` /
   `POST /sequences/search`. Loops over patterns; capped at 256 per call.
 - **Atomic bulk import** — `SbolObjectService::import_documents` /
-  `POST /documents/bulk` / `sbol-db doc import <dir>` (default). The entire
+  `POST /graphs/bulk` / `sbol-db graph import <dir>` (default). The entire
   batch runs inside one Postgres transaction; either every document
   commits or none do. The HTTP endpoint caps at 100 documents per call;
   the CLI directory walker has no hard cap. Use this whenever the batch
   is a coherent unit and partial-import state is unacceptable.
-- **Per-file directory import** — `sbol-db doc import <dir> --continue-on-error`
+- **Per-file directory import** — `sbol-db graph import <dir> --continue-on-error`
   is the escape hatch: each file runs in its own transaction, failures
   are logged and reported but don't abort the batch, and `--parallel N`
   enables concurrent imports. This is the right shape for corpus-scale
@@ -245,7 +247,7 @@ A single SBOL design lives in three representations after import:
 - `sbol_objects.data` — lossless per-object JSON-LD slice. The
   authoritative payload for "give me this object back".
 - typed projection tables — columnar view for SQL-shaped filters.
-- `sbol_quads` — RDF view for graph-shaped queries (neighborhood,
+- `sbol_triples` — RDF view for graph-shaped queries (neighborhood,
   SPARQL, RDF export).
 
 This is intentional duplication, not drift. Every projection is
@@ -256,7 +258,7 @@ and a re-import deterministically replaces all three. The
 ### Postgres as the SPARQL backend
 
 There is no sidecar SPARQL store. `sbol-db-sparql` implements
-`spareval::QueryableDataset` against `sbol_quads` and translates
+`spareval::QueryableDataset` against `sbol_triples` and translates
 each triple-pattern lookup to a single indexed SQL scan. The
 trade-off: queries are always strongly consistent with Postgres
 writes, but evaluation makes per-pattern round-trips. For the
@@ -270,7 +272,7 @@ characteristics.
 The `sbol_iri` Postgres domain enforces `^[a-zA-Z][a-zA-Z0-9+.-]*:.+`,
 which rejects `_:b0`. Real SBOL documents (especially after a
 parser pass) routinely carry blank-node resources in subject and
-object positions. `sbol_quads` resolves this with companion
+object positions. `sbol_triples` resolves this with companion
 `subject_blank` / `object_blank` `text` columns plus a CHECK
 constraint that exactly one of the (IRI, blank) pair is non-null
 per position. `sbol_objects` is IRI-only — top-level SBOL objects
@@ -279,12 +281,12 @@ validation error if violated.
 
 ### Named-graph policy
 
-Every quad inserted by the import pipeline is tagged with
+Every triple inserted by the import pipeline is tagged with
 `graph:document:{document_id}` as its graph IRI. This:
 
 - gives RDF queries provenance (every triple is attributable to a
   specific document import);
-- lets `replace_document_graph` atomically swap in the new quads on
+- lets `replace_document_graph` atomically swap in the new triples on
   re-import without touching unrelated documents;
 - lets SPARQL queries scope to a single document with
   `FROM NAMED <graph:document:…> WHERE { GRAPH <…> { … } }`.

@@ -20,7 +20,7 @@ async fn state() -> AppState {
     let pool = connect(&database_url).await.expect("connect");
     run_migrations(&pool).await.expect("migrate");
     let service = Arc::new(SbolObjectService::new(pool.clone()));
-    let sparql = Arc::new(SparqlEngine::new(Arc::new(service.quads().clone())));
+    let sparql = Arc::new(SparqlEngine::new(Arc::new(service.triples().clone())));
     let jobs = Arc::new(JobRepository::new(pool.clone()));
     let metrics = Metrics::install(pool.clone(), env!("CARGO_PKG_VERSION"));
     // Wire the worker pool + jobs repo so the /metrics test sees the
@@ -90,7 +90,7 @@ async fn oversize_body_returns_413() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/documents")
+                .uri("/graphs")
                 .header("content-type", "text/turtle")
                 .body(Body::from(body))
                 .unwrap(),

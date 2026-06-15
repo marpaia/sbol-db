@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
@@ -6,15 +7,16 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
 use sbol_db_core::{
-    Direction, DocumentId, DocumentRecord, ImportReport, IriString, JobId, NeighborhoodQuery,
+    Direction, GraphId, GraphRecord, ImportReport, IriString, JobId, NeighborhoodQuery,
     NeighborhoodResult, ObjectId, SbolObjectRecord, SerializationFormat,
 };
 use sbol_db_postgres::{
-    BatchSequenceMatch, ImportInput, JobAttempt, JobLogRecord, JobStatus, ListJobsFilter,
-    ListObjectsFilter, NewJob, OntologyLoadReport, OntologyRecord, OntologyTermRecord, SbolJob,
-    SequenceMatch, SequenceSearchOptions,
+    BatchSequenceMatch, GraphWriteMode, ImportInput, JobAttempt, JobLogRecord, JobStatus,
+    ListJobsFilter, ListObjectsFilter, NewJob, OntologyLoadReport, OntologyRecord,
+    OntologyTermRecord, SbolJob, SequenceMatch, SequenceSearchOptions,
 };
-use sbol_db_sparql::{ResultFormat, SparqlOptions};
+use sbol_db_rdf::triples_to_rdf;
+use sbol_db_sparql::{ResultFormat, SparqlOptions, SparqlUpdateEngine};
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
@@ -54,7 +56,7 @@ pub struct CreateDocumentParams {
     pub created_by: Option<String>,
 }
 
-pub async fn create_document(
+pub async fn create_graph(
     State(state): State<AppState>,
     Query(params): Query<CreateDocumentParams>,
     headers: HeaderMap,
@@ -86,7 +88,7 @@ const BULK_IMPORT_MAX_DOCUMENTS: usize = 100;
 
 #[derive(Deserialize)]
 pub struct BulkImportBody {
-    pub documents: Vec<BulkImportItem>,
+    pub graphs: Vec<BulkImportItem>,
 }
 
 #[derive(Deserialize)]
@@ -117,23 +119,23 @@ pub struct BulkImportResponse {
 /// failure on document N rolls back documents 1..N and returns the error
 /// unchanged from `import_document`. The body cap is the server's
 /// `SBOL_DB_MAX_BODY_BYTES`; the per-call document cap is enforced here.
-pub async fn create_documents_bulk(
+pub async fn create_graphs_bulk(
     State(state): State<AppState>,
     Json(body): Json<BulkImportBody>,
 ) -> Result<Json<BulkImportResponse>, ApiError> {
-    if body.documents.is_empty() {
+    if body.graphs.is_empty() {
         return Ok(Json(BulkImportResponse {
             imported: 0,
             reports: Vec::new(),
         }));
     }
-    if body.documents.len() > BULK_IMPORT_MAX_DOCUMENTS {
+    if body.graphs.len() > BULK_IMPORT_MAX_DOCUMENTS {
         return Err(ApiError::BadRequest(format!(
             "request exceeds maximum of {BULK_IMPORT_MAX_DOCUMENTS} documents per call"
         )));
     }
-    let mut inputs = Vec::with_capacity(body.documents.len());
-    for item in body.documents {
+    let mut inputs = Vec::with_capacity(body.graphs.len());
+    for item in body.graphs {
         let format = parse_format(&item.format)
             .ok_or_else(|| ApiError::BadRequest(format!("unknown format: {}", item.format)))?;
         let document_iri = item
@@ -159,14 +161,14 @@ pub async fn create_documents_bulk(
     }))
 }
 
-pub async fn get_document(
+pub async fn get_graph(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<DocumentRecord>, ApiError> {
+) -> Result<Json<GraphRecord>, ApiError> {
     let doc = state
         .service
-        .documents()
-        .get(DocumentId(id))
+        .graphs()
+        .get(GraphId(id))
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("document {id}")))?;
     Ok(Json(doc))
@@ -246,7 +248,7 @@ pub struct ListObjectsParams {
     #[serde(default)]
     pub role: Option<String>,
     #[serde(default)]
-    pub document_id: Option<Uuid>,
+    pub graph_id: Option<Uuid>,
     #[serde(default)]
     pub after: Option<String>,
     #[serde(default = "default_list_limit")]
@@ -273,7 +275,7 @@ pub async fn list_objects(
     let filter = ListObjectsFilter {
         sbol_class: params.sbol_class,
         role: params.role,
-        document_id: params.document_id.map(DocumentId),
+        graph_id: params.graph_id.map(GraphId),
         after_iri: params.after,
         limit,
     };
@@ -308,7 +310,7 @@ pub async fn export_object(
     let raw_format = params.format.as_deref().unwrap_or("turtle");
     let format = parse_export_format(raw_format)
         .ok_or_else(|| ApiError::BadRequest(format!("unknown format: {raw_format}")))?;
-    let body = export::export_subject_rdf(state.service.quads(), &iri, format).await?;
+    let body = export::export_subject_rdf(state.service.triples(), &iri, format).await?;
     let content_type = match format {
         SerializationFormat::Turtle => "text/turtle",
         SerializationFormat::JsonLd => "application/ld+json",
@@ -446,12 +448,18 @@ pub struct SparqlGetParams {
     pub query: Option<String>,
     /// Override the format that would otherwise be derived from `Accept`.
     pub format: Option<String>,
+    /// SPARQL 1.1 protocol `default-graph-uri`. SynBioHub sends this to scope
+    /// reads to a user/public graph.
+    #[serde(rename = "default-graph-uri")]
+    pub default_graph_uri: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
 pub struct SparqlFormParams {
     pub query: Option<String>,
     pub format: Option<String>,
+    #[serde(rename = "default-graph-uri")]
+    pub default_graph_uri: Option<String>,
 }
 
 pub async fn sparql_get(
@@ -463,7 +471,7 @@ pub async fn sparql_get(
         .query
         .ok_or_else(|| ApiError::BadRequest("missing ?query= parameter".to_owned()))?;
     let format = resolve_sparql_format(params.format.as_deref(), &headers)?;
-    run_sparql(state, &query, format).await
+    run_sparql(state, &query, format, params.default_graph_uri).await
 }
 
 pub async fn sparql_post(
@@ -476,37 +484,42 @@ pub async fn sparql_post(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.split(';').next().unwrap_or("").trim().to_owned())
         .unwrap_or_default();
-    let (query_str, override_format): (String, Option<String>) = match content_type.as_str() {
-        "application/sparql-query" | "" => {
-            let q = std::str::from_utf8(&body)
-                .map_err(|_| ApiError::BadRequest("query body is not UTF-8".to_owned()))?
-                .to_owned();
-            (q, None)
-        }
-        "application/x-www-form-urlencoded" => {
-            let form: SparqlFormParams = serde_urlencoded::from_bytes(&body)
-                .map_err(|e| ApiError::BadRequest(format!("invalid form body: {e}")))?;
-            let q = form
-                .query
-                .ok_or_else(|| ApiError::BadRequest("missing query= field".to_owned()))?;
-            (q, form.format)
-        }
-        other => {
-            return Err(ApiError::BadRequest(format!(
-                "unsupported content-type for /sparql: {other}"
-            )));
-        }
-    };
+    let (query_str, override_format, default_graph): (String, Option<String>, Option<String>) =
+        match content_type.as_str() {
+            "application/sparql-query" | "" => {
+                let q = std::str::from_utf8(&body)
+                    .map_err(|_| ApiError::BadRequest("query body is not UTF-8".to_owned()))?
+                    .to_owned();
+                (q, None, None)
+            }
+            "application/x-www-form-urlencoded" => {
+                let form: SparqlFormParams = serde_urlencoded::from_bytes(&body)
+                    .map_err(|e| ApiError::BadRequest(format!("invalid form body: {e}")))?;
+                let q = form
+                    .query
+                    .ok_or_else(|| ApiError::BadRequest("missing query= field".to_owned()))?;
+                (q, form.format, form.default_graph_uri)
+            }
+            other => {
+                return Err(ApiError::BadRequest(format!(
+                    "unsupported content-type for /sparql: {other}"
+                )));
+            }
+        };
     let format = resolve_sparql_format(override_format.as_deref(), &headers)?;
-    run_sparql(state, &query_str, format).await
+    run_sparql(state, &query_str, format, default_graph).await
 }
 
 async fn run_sparql(
     state: AppState,
     query: &str,
     format: Option<ResultFormat>,
+    default_graph: Option<String>,
 ) -> Result<axum::response::Response, ApiError> {
-    let options = SparqlOptions::default();
+    let options = SparqlOptions {
+        default_graph,
+        ..SparqlOptions::default()
+    };
     let outcome = state.sparql.execute(query, format, &options).await?;
     let mut response =
         axum::response::Response::builder().header(CONTENT_TYPE, outcome.payload.content_type);
@@ -975,4 +988,188 @@ fn parse_job_status(s: &str) -> Result<JobStatus, ApiError> {
         "dead" => JobStatus::Dead,
         other => return Err(ApiError::BadRequest(format!("unknown job status: {other}"))),
     })
+}
+
+// ── SynBioHub / Virtuoso compatibility: authenticated write endpoints ────────
+//
+// These mirror Virtuoso's write surface so SynBioHub can target sbol-db with no
+// config change. They are mounted under an HTTP Basic auth layer (see
+// `crate::auth`). The SPARQL update engine and the graph-store service are
+// constructed per request from the shared service (both are cheap, pool-backed
+// handles).
+
+#[derive(Deserialize, Default)]
+pub struct SparqlAuthParams {
+    /// SynBioHub/Virtuoso pass the *update* string in `query=` (a Virtuoso
+    /// convention), not the standard `update=`.
+    pub query: Option<String>,
+    pub update: Option<String>,
+    #[serde(rename = "default-graph-uri")]
+    pub default_graph_uri: Option<String>,
+}
+
+/// `GET|POST /sparql-auth` — execute a SPARQL 1.1 Update. The update text and
+/// `default-graph-uri` arrive either as URL query parameters (synbiohub3 POSTs
+/// them in the URL) or as a form body (classic SynBioHub); the form body wins
+/// when both are present. A raw `application/sparql-update` body is also
+/// accepted.
+pub async fn sparql_auth(
+    State(state): State<AppState>,
+    Query(url_params): Query<SparqlAuthParams>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, ApiError> {
+    let mut update = url_params.query.or(url_params.update);
+    let mut default_graph = url_params.default_graph_uri;
+
+    let content_type = content_type_of(&headers);
+    if content_type == "application/x-www-form-urlencoded" && !body.is_empty() {
+        let form: SparqlAuthParams = serde_urlencoded::from_bytes(&body)
+            .map_err(|e| ApiError::BadRequest(format!("invalid form body: {e}")))?;
+        if let Some(q) = form.query.or(form.update) {
+            update = Some(q);
+        }
+        if form.default_graph_uri.is_some() {
+            default_graph = form.default_graph_uri;
+        }
+    } else if content_type == "application/sparql-update" && !body.is_empty() {
+        let raw = std::str::from_utf8(&body)
+            .map_err(|_| ApiError::BadRequest("update body is not UTF-8".to_owned()))?;
+        update = Some(raw.to_owned());
+    }
+
+    let update = update
+        .ok_or_else(|| ApiError::BadRequest("missing update (query= parameter)".to_owned()))?;
+
+    let engine = SparqlUpdateEngine::new(
+        Arc::new(state.service.triples().clone()),
+        state.service.pool().clone(),
+    );
+    let options = SparqlOptions::default();
+    let outcome = engine
+        .execute(&update, default_graph.as_deref(), &options)
+        .await?;
+    Ok(Json(json!({
+        "inserted": outcome.inserted,
+        "deleted": outcome.deleted,
+    })))
+}
+
+#[derive(Deserialize, Default)]
+pub struct GraphCrudParams {
+    /// Virtuoso/SynBioHub spell the target graph `graph-uri`; the W3C Graph
+    /// Store Protocol uses `graph`. Accept both.
+    #[serde(rename = "graph-uri")]
+    pub graph_uri: Option<String>,
+    pub graph: Option<String>,
+}
+
+fn graph_crud_target(params: &GraphCrudParams) -> Result<String, ApiError> {
+    params
+        .graph_uri
+        .clone()
+        .or_else(|| params.graph.clone())
+        .ok_or_else(|| ApiError::BadRequest("missing graph-uri parameter".to_owned()))
+}
+
+fn content_type_of(headers: &HeaderMap) -> String {
+    headers
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| {
+            s.split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase()
+        })
+        .unwrap_or_default()
+}
+
+/// Map an upload Content-Type to a parser format. `text/n3` and unknown types
+/// fall back to Turtle, whose parser is a superset that also accepts
+/// N-Triples/N3-basic — which is what SynBioHub's chunked uploads contain.
+fn rdf_format_from_content_type(content_type: &str) -> SerializationFormat {
+    match content_type {
+        "application/rdf+xml" => SerializationFormat::RdfXml,
+        "application/n-triples" => SerializationFormat::NTriples,
+        "application/ld+json" => SerializationFormat::JsonLd,
+        _ => SerializationFormat::Turtle,
+    }
+}
+
+/// `POST /sparql-graph-crud-auth/?graph-uri=…` — merge (append) the posted RDF
+/// into the named graph. SynBioHub splits large submissions into chunks POSTed
+/// sequentially to the same graph, so this must accumulate, not replace.
+pub async fn graph_store_post(
+    State(state): State<AppState>,
+    Query(params): Query<GraphCrudParams>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, ApiError> {
+    graph_store_write(state, params, headers, body, GraphWriteMode::Merge).await
+}
+
+/// `PUT /sparql-graph-crud-auth/?graph-uri=…` — replace the named graph's
+/// entire contents with the posted RDF.
+pub async fn graph_store_put(
+    State(state): State<AppState>,
+    Query(params): Query<GraphCrudParams>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, ApiError> {
+    graph_store_write(state, params, headers, body, GraphWriteMode::Replace).await
+}
+
+async fn graph_store_write(
+    state: AppState,
+    params: GraphCrudParams,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+    mode: GraphWriteMode,
+) -> Result<axum::response::Response, ApiError> {
+    let graph = graph_crud_target(&params)?;
+    let format = rdf_format_from_content_type(&content_type_of(&headers));
+    let body = std::str::from_utf8(&body)
+        .map_err(|_| ApiError::BadRequest("RDF body is not UTF-8".to_owned()))?;
+    let inserted = state
+        .service
+        .graph_store_write(&graph, body, format, mode)
+        .await?;
+    Ok((StatusCode::OK, Json(json!({ "inserted": inserted }))).into_response())
+}
+
+/// `DELETE /sparql-graph-crud-auth/?graph-uri=…` — drop the named graph.
+pub async fn graph_store_delete(
+    State(state): State<AppState>,
+    Query(params): Query<GraphCrudParams>,
+) -> Result<impl IntoResponse, ApiError> {
+    let graph = graph_crud_target(&params)?;
+    let deleted = state.service.graph_store_clear(&graph).await?;
+    Ok((StatusCode::OK, Json(json!({ "deleted": deleted }))))
+}
+
+/// `GET /sparql-graph-crud-auth/?graph-uri=…` — serialize a named graph as RDF.
+/// Format from `?format=` or the `Accept` header; defaults to Turtle.
+pub async fn graph_store_get(
+    State(state): State<AppState>,
+    Query(params): Query<GraphCrudParams>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    let graph = graph_crud_target(&params)?;
+    let format = resolve_format(None, &headers).unwrap_or(SerializationFormat::Turtle);
+    let triples = state.service.graph_store_read(&graph).await?;
+    let body = triples_to_rdf(&triples, format)?;
+    let content_type = rdf_content_type(format);
+    Ok(([(CONTENT_TYPE, content_type)], body))
+}
+
+fn rdf_content_type(format: SerializationFormat) -> &'static str {
+    match format {
+        SerializationFormat::Turtle => "text/turtle",
+        SerializationFormat::NTriples => "application/n-triples",
+        SerializationFormat::JsonLd => "application/ld+json",
+        SerializationFormat::RdfXml => "application/rdf+xml",
+        _ => "text/turtle",
+    }
 }

@@ -1,14 +1,14 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{DocumentId, ObjectId};
+use crate::ids::{GraphId, ObjectId};
 use crate::iri::IriString;
 use crate::validation::ValidationStatus;
 
 /// Document import formats `sbol-db` understands. The RDF variants are
 /// accepted as SBOL 3 input and can also carry SBOL 2 graphs that are
-/// upgraded on import. Matches the `serialization_format` CHECK in
-/// `sbol_documents`.
+/// upgraded on import. Recorded as the document graph's
+/// `serialization_format`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SerializationFormat {
@@ -55,20 +55,19 @@ impl SerializationFormat {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NewDocument {
+pub struct NewGraph {
     pub document_iri: Option<IriString>,
     pub name: Option<String>,
     pub description: Option<String>,
     pub serialization_format: SerializationFormat,
     pub source_uri: Option<String>,
-    pub raw_payload: Option<serde_json::Value>,
     pub content_hash: Vec<u8>,
     pub created_by: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DocumentRecord {
-    pub id: DocumentId,
+pub struct GraphRecord {
+    pub id: GraphId,
     pub document_iri: Option<IriString>,
     pub name: Option<String>,
     pub description: Option<String>,
@@ -87,7 +86,7 @@ pub struct SbolObjectRecord {
     pub display_id: Option<String>,
     pub name: Option<String>,
     pub description: Option<String>,
-    pub document_id: Option<DocumentId>,
+    pub graph_id: Option<GraphId>,
     pub types: Vec<String>,
     pub roles: Vec<String>,
     pub data: serde_json::Value,
@@ -95,7 +94,7 @@ pub struct SbolObjectRecord {
 }
 
 /// Lightweight per-object summary extracted from a parsed sbol::Document.
-/// Repositories fill in `id` and `document_id` before insert.
+/// Repositories fill in `id` and `graph_id` before insert.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectSummary {
     pub iri: IriString,
@@ -111,9 +110,9 @@ pub struct ObjectSummary {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportReport {
-    pub document_id: DocumentId,
+    pub graph_id: GraphId,
     pub object_count: usize,
-    pub quad_count: usize,
+    pub triple_count: usize,
     pub validation_status: ValidationStatus,
     pub validation_issue_count: usize,
 }

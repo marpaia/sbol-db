@@ -11,7 +11,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use sbol_db_postgres::QuadRepository;
+use oxrdf::{GraphName, NamedNode};
+use sbol_db_postgres::TripleRepository;
 use spareval::{QueryEvaluator, QueryResults};
 use spargebra::SparqlParser;
 
@@ -31,6 +32,11 @@ pub struct SparqlOptions {
     /// Reject query strings exceeding this byte length. Cheap shield against
     /// unbounded posts.
     pub max_query_size: usize,
+    /// The SPARQL-protocol `default-graph-uri`: the graph a query treats as
+    /// its default graph when it carries no `FROM` clause of its own. `None`
+    /// preserves sbol-db's native behavior (default graph = union of all named
+    /// graphs). SynBioHub always supplies this, scoping reads to one graph.
+    pub default_graph: Option<String>,
 }
 
 impl Default for SparqlOptions {
@@ -39,6 +45,7 @@ impl Default for SparqlOptions {
             timeout: Duration::from_secs(30),
             max_rows: 100_000,
             max_query_size: 64 * 1024,
+            default_graph: None,
         }
     }
 }
@@ -77,12 +84,12 @@ impl QueryForm {
 
 #[derive(Clone)]
 pub struct SparqlEngine {
-    quads: Arc<QuadRepository>,
+    triples: Arc<TripleRepository>,
 }
 
 impl SparqlEngine {
-    pub fn new(quads: Arc<QuadRepository>) -> Self {
-        Self { quads }
+    pub fn new(triples: Arc<TripleRepository>) -> Self {
+        Self { triples }
     }
 
     /// Run a SPARQL query and serialize the result.
@@ -110,11 +117,12 @@ impl SparqlEngine {
             )));
         }
 
-        let dataset = PostgresDataset::new(Arc::clone(&self.quads));
+        let dataset = PostgresDataset::new(Arc::clone(&self.triples));
         let max_rows = options.max_rows;
+        let default_graph = options.default_graph.clone();
 
         let blocking = tokio::task::spawn_blocking(move || {
-            evaluate_blocking(query, dataset, format, max_rows)
+            evaluate_blocking(query, dataset, format, max_rows, default_graph)
         });
 
         let payload = match tokio::time::timeout(options.timeout, blocking).await {
@@ -186,13 +194,26 @@ fn evaluate_blocking(
     dataset: PostgresDataset,
     format: ResultFormat,
     max_rows: usize,
+    default_graph: Option<String>,
 ) -> Result<ResultPayload, SparqlError> {
     let evaluator = QueryEvaluator::new();
     let mut prepared = evaluator.prepare(&query);
-    // Default-graph = union of all named graphs. Our writers put every quad
-    // in a named graph (`graph:document:{id}`), so without this a plain
-    // `SELECT ?s WHERE { ?s ?p ?o }` would see nothing.
-    prepared.dataset_mut().set_default_graph_as_union();
+    // Dataset selection precedence:
+    //   1. The query's own `FROM`/`FROM NAMED` clause wins (honored by
+    //      `prepare`); we leave it untouched.
+    //   2. Else the protocol `default-graph-uri` scopes the default graph to
+    //      that one graph (SynBioHub/Virtuoso semantics).
+    //   3. Else the default graph is the union of all named graphs. Our writers
+    //      put every triple in a named graph, so without this a plain
+    //      `SELECT ?s WHERE { ?s ?p ?o }` would see nothing.
+    if query.dataset().is_none() {
+        match default_graph {
+            Some(g) => prepared
+                .dataset_mut()
+                .set_default_graph(vec![GraphName::NamedNode(NamedNode::new_unchecked(g))]),
+            None => prepared.dataset_mut().set_default_graph_as_union(),
+        }
+    }
     let results = prepared
         .execute(&dataset)
         .map_err(|e| SparqlError::Evaluation(e.to_string()))?;
