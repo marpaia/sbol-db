@@ -4,8 +4,8 @@
 //! The Vite dev server only proxies traffic under `/lab/api/*`; without
 //! this shim, the SPA in dev mode can't reach the SPARQL engine
 //! without a manual `/sparql` proxy rule. Keeping all lab traffic
-//! under one prefix also gives us a clean place to put the
-//! corresponding `/lab/api/sparql/validate` endpoint (PR 4).
+//! under one prefix also keeps the companion
+//! `/lab/api/sparql/validate` endpoint alongside it.
 //!
 //! Wire shape:
 //!

@@ -25,7 +25,7 @@ pub fn write_jsonl<W: Write, T: Serialize>(out: &mut W, value: &T) -> Result<()>
 /// Render a simple left-aligned table to stdout. Columns are sized to the
 /// widest cell in each column. Suitable for short operator-facing tables
 /// where reaching for a real TTY layout library would be overkill.
-#[allow(dead_code)] // populated by later inspection/jobs tracks
+#[allow(dead_code)]
 pub fn print_table(headers: &[&str], rows: &[Vec<String>]) {
     let cols = headers.len();
     let mut widths = headers.iter().map(|h| h.len()).collect::<Vec<_>>();

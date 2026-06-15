@@ -70,9 +70,9 @@ pub async fn run(pool: PgPool, service: Arc<SbolObjectService>, action: DocActio
         DocAction::Delete { id, yes } => delete(pool, id, yes).await,
         DocAction::Validate { document_id } => {
             println!(
-                "Phase 1 placeholder: revalidation requires re-parseable raw payload; \
-                 inspect the sbol_validation_runs / sbol_validation_findings tables \
-                 directly for now."
+                "Revalidation is not yet implemented: it requires re-parseable raw \
+                 payload retention, which is not yet wired through. Inspect the \
+                 sbol_validation_runs / sbol_validation_findings tables directly."
             );
             let _ = document_id;
             Ok(())

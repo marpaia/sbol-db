@@ -11,7 +11,7 @@ Entry points to the project's documentation, organized by topic.
 
 ## Query primitives
 
-`sbol-db` exposes three composable ways to read what you've imported:
+`sbol-db` exposes five composable ways to read what you've imported:
 
 - **[SPARQL endpoint](sparql.md)**: read-only SPARQL 1.1 evaluated
   directly against `sbol_quads`. SELECT, ASK, CONSTRUCT, and DESCRIBE

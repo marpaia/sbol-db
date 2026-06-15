@@ -14,7 +14,8 @@
 //!   long-running query stops eating a connection as soon as the
 //!   browser tab closes.
 //!
-//! Validation (parse-without-execute via `pg_query`) lands in PR 4.
+//! Validation (parse-without-execute via `pg_query`) is exposed
+//! separately as [`validate`].
 
 use std::time::Instant;
 

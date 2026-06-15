@@ -4,10 +4,9 @@
 //! `sbol-db-ui` crate at `/lab/*`) is the primary consumer; the JSON
 //! shape is also documented in the OpenAPI schema for ad-hoc clients.
 //!
-//! This module ships SQL execution in the first cut. SPARQL execution
-//! reuses the existing `/sparql` endpoint for now; the corresponding
-//! `/lab/api/sparql/*` shim and the cross-dialect `/validate` endpoints
-//! land in PR 4.
+//! The sub-router exposes SQL and SPARQL `execute`/`validate` pairs,
+//! schema introspection for both dialects, document listing, and the
+//! nested observability endpoints. See [`router`] for the full map.
 
 mod cancel;
 mod convert;

@@ -197,7 +197,7 @@ pub enum DocAction {
     },
     /// Re-print validation findings for a document.
     ///
-    /// Phase 1 placeholder. Revalidation requires re-parseable raw payload
+    /// Not yet implemented: revalidation requires re-parseable raw payload
     /// retention, which is not yet wired through.
     Validate { document_id: uuid::Uuid },
 }

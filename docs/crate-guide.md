@@ -31,8 +31,9 @@ The focused scope is:
 - Project the design into typed relational tables for SQL-shaped
   queries.
 - Project the design into RDF quads for graph-shaped queries.
-- Expose three composable query primitives: typed IRI lookup,
-  bounded graph neighborhood, read-only SPARQL.
+- Expose five composable query primitives: typed IRI lookup,
+  bounded graph neighborhood, read-only SPARQL, nucleotide
+  sequence search, and ontology-aware role expansion.
 - Surface the same operations via a thin REST API and a CLI.
 
 This is enough surface for "show me every component of role `X`",
