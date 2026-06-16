@@ -23,24 +23,28 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use sbol_db_postgres::{JobRepository, SbolObjectService};
-use sbol_db_sparql::SparqlEngine;
+use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
+use sbol_db_storage::{JobQueue, SbolStore};
 use serde_json::json;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub service: Arc<SbolObjectService>,
+    pub service: Arc<dyn SbolStore>,
     pub sparql: Arc<SparqlEngine>,
+    pub sparql_update: Arc<SparqlUpdateEngine>,
     pub metrics: Arc<Metrics>,
-    pub jobs: Arc<JobRepository>,
+    pub jobs: Arc<dyn JobQueue>,
     /// Runtime configuration visible to handlers (lab SQL limits, etc).
     /// Cloned in once at server startup; never mutated.
     pub config: ServerConfig,
+    /// Postgres connection handle for the lab's SQL and introspection
+    /// endpoints, which are irreducibly Postgres-specific. Present whenever
+    /// the `lab` feature and a Postgres backend are active.
+    #[cfg(feature = "lab")]
+    pub pg_pool: sbol_db_postgres::PgPool,
     /// Per-process TTL cache for the `/lab/api/schema/*` endpoints.
-    /// Always present even when the `lab` feature is off — the cost is
-    /// two empty `RwLock`s.
     #[cfg(feature = "lab")]
     pub schema_cache: Arc<lab::SchemaCache>,
 }

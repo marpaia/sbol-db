@@ -1,6 +1,6 @@
 //! `import_document` job handler.
 //!
-//! Wraps [`SbolObjectService::import_document`] in a job: payload is the
+//! Wraps [`sbol_db_storage::SbolStore::import_document`] in a job: payload is the
 //! inline RDF body plus metadata; `result` is the serialised
 //! [`sbol_db_core::ImportReport`]. The synchronous `POST /graphs`
 //! endpoint stays the right surface for small one-shot imports; this
@@ -10,7 +10,7 @@
 
 use async_trait::async_trait;
 use sbol_db_core::{IriString, SerializationFormat};
-use sbol_db_postgres::ImportInput;
+use sbol_db_storage::ImportInput;
 use serde::{Deserialize, Serialize};
 
 use crate::context::JobContext;

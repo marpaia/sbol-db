@@ -9,7 +9,7 @@ description = "Async job queue and worker runtime for sbol-db."
 
 [dependencies]
 sbol-db-core.workspace = true
-sbol-db-postgres.workspace = true
+sbol-db-storage.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -25,4 +25,5 @@ metrics.workspace = true
 chrono.workspace = true
 
 [dev-dependencies]
+sbol-db-postgres.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

@@ -5,6 +5,8 @@ use uuid::Uuid;
 use crate::repo::db_err;
 use crate::PgPool;
 
+use sbol_db_storage::ListObjectsFilter;
+
 #[derive(Clone)]
 pub struct SbolObjectRepository {
     pool: PgPool,
@@ -193,15 +195,6 @@ impl SbolObjectRepository {
 
         rows.into_iter().map(row_to_record).collect()
     }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct ListObjectsFilter {
-    pub sbol_class: Option<String>,
-    pub role: Option<String>,
-    pub graph_id: Option<GraphId>,
-    pub after_iri: Option<String>,
-    pub limit: u32,
 }
 
 fn row_to_record(row: sqlx::postgres::PgRow) -> Result<SbolObjectRecord, DomainError> {

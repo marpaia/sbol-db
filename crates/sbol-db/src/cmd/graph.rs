@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use sbol_db_core::{GraphId, ImportReport, IriString, SerializationFormat};
-use sbol_db_postgres::{GraphRepository, ImportInput, ListGraphsFilter, PgPool, SbolObjectService};
+use sbol_db_postgres::{GraphRepository, PgPool, SbolObjectService};
 use sbol_db_rdf::hash_bytes;
+use sbol_db_storage::{ImportInput, ListGraphsFilter};
 
 use crate::cli::GraphAction;
 use crate::format::{parse_format, resolve_format};

@@ -3,9 +3,8 @@
 use std::sync::OnceLock;
 
 use sbol_db_core::SerializationFormat;
-use sbol_db_postgres::{
-    connect, run_migrations, ImportInput, SbolObjectService, SequenceSearchOptions,
-};
+use sbol_db_postgres::{connect, run_migrations, SbolObjectService};
+use sbol_db_storage::{ImportInput, SequenceSearchOptions};
 use tokio::sync::{Mutex, MutexGuard};
 
 const NESTED: &str = include_str!("fixtures/nested_construct.ttl");

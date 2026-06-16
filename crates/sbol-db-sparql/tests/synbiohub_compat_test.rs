@@ -17,7 +17,7 @@
 //! `set_default_graph_as_union()`), so `default-graph-uri` handling (Phase 1)
 //! is not needed here.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use sbol_db_core::IriString;
@@ -81,7 +81,7 @@ async fn fresh_engine() -> SparqlEngine {
         "every parsed triple should be stored verbatim"
     );
 
-    SparqlEngine::new(Arc::new(svc.triples().clone()))
+    SparqlEngine::new(svc.triple_source())
 }
 
 fn long_options() -> SparqlOptions {
@@ -291,7 +291,7 @@ async fn default_graph_uri_scopes_reads() {
             .await
             .expect("seed user");
     }
-    let engine = SparqlEngine::new(Arc::new(svc.triples().clone()));
+    let engine = SparqlEngine::new(svc.triple_source());
 
     let query = "PREFIX sbol2: <http://sbols.org/v2#>\n\
                  SELECT ?c WHERE { ?c a sbol2:Collection }";

@@ -15,9 +15,8 @@ use async_trait::async_trait;
 use sbol_db_jobs::{
     HandlerError, JobContext, JobHandler, JobOutcome, JobRegistry, Worker, WorkerConfig,
 };
-use sbol_db_postgres::{
-    connect, run_migrations, JobRepository, JobStatus, NewJob, SbolObjectService,
-};
+use sbol_db_postgres::{connect, run_migrations, JobRepository, SbolObjectService};
+use sbol_db_storage::{JobStatus, NewJob};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, MutexGuard};
 use tokio_util::sync::CancellationToken;
@@ -329,8 +328,9 @@ async fn worker_survives_panicking_handler() {
     let cancel = CancellationToken::new();
     let service = Arc::new(SbolObjectService::new(pool.clone()));
     let worker = Worker::new(
-        pool.clone(),
+        Arc::new(JobRepository::new(pool.clone())),
         service,
+        Some(pool.clone()),
         Arc::new(registry),
         fast_config(queue),
     );
@@ -401,8 +401,9 @@ async fn graceful_shutdown_drains_in_flight_handler() {
     let cancel = CancellationToken::new();
     let service = Arc::new(SbolObjectService::new(pool.clone()));
     let worker = Worker::new(
-        pool.clone(),
+        Arc::new(JobRepository::new(pool.clone())),
         service,
+        Some(pool.clone()),
         Arc::new(registry),
         fast_config(queue),
     );
@@ -483,8 +484,9 @@ async fn unknown_kind_does_not_crash_worker() {
     let cancel = CancellationToken::new();
     let service = Arc::new(SbolObjectService::new(pool.clone()));
     let worker = Worker::new(
-        pool.clone(),
+        Arc::new(JobRepository::new(pool.clone())),
         service,
+        Some(pool.clone()),
         Arc::new(registry),
         fast_config(queue),
     );

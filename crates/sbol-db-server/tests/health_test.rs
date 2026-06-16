@@ -9,7 +9,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use sbol_db_postgres::{connect, run_migrations, JobRepository, SbolObjectService};
 use sbol_db_server::{router, AppState, Metrics, ServerConfig};
-use sbol_db_sparql::SparqlEngine;
+use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use tower::ServiceExt;
 
 const BODY_LIMIT: usize = 1024 * 1024;
@@ -20,8 +20,13 @@ async fn state() -> AppState {
     let pool = connect(&database_url).await.expect("connect");
     run_migrations(&pool).await.expect("migrate");
     let service = Arc::new(SbolObjectService::new(pool.clone()));
-    let sparql = Arc::new(SparqlEngine::new(Arc::new(service.triples().clone())));
+    let sparql = Arc::new(SparqlEngine::new(service.triple_source()));
+    let sparql_update = Arc::new(SparqlUpdateEngine::new(
+        service.triple_source(),
+        service.triple_writer(),
+    ));
     let jobs = Arc::new(JobRepository::new(pool.clone()));
+    let pg_pool = pool.clone();
     let metrics = Metrics::install(pool.clone(), env!("CARGO_PKG_VERSION"));
     // Wire the worker pool + jobs repo so the /metrics test sees the
     // scrape-time gauges. In a serve setup these come from
@@ -30,9 +35,11 @@ async fn state() -> AppState {
     AppState {
         service,
         sparql,
+        sparql_update,
         metrics,
         jobs,
         config: ServerConfig::default(),
+        pg_pool,
         schema_cache: std::sync::Arc::new(sbol_db_server::SchemaCache::new()),
     }
 }

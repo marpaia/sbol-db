@@ -3,7 +3,8 @@
 use anyhow::{anyhow, Context, Result};
 use sbol_db_core::JobId;
 use sbol_db_jobs::default_registry;
-use sbol_db_postgres::{EnqueueOutcome, JobRepository, JobStatus, ListJobsFilter, NewJob, PgPool};
+use sbol_db_postgres::{JobRepository, PgPool};
+use sbol_db_storage::{EnqueueOutcome, JobStatus, ListJobsFilter, NewJob};
 
 use crate::cli::JobsAction;
 use crate::output::print_json;

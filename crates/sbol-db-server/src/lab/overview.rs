@@ -71,7 +71,7 @@ pub async fn handler(State(state): State<AppState>) -> Result<Json<Arc<Overview>
         return Ok(Json(hit));
     }
     let started = Instant::now();
-    let pool = state.service.pool();
+    let pool = &state.pg_pool;
 
     // Run the count queries in a single statement so we pay one round
     // trip + one parse plan, not six. SELECT-from-no-table is cheap
@@ -168,7 +168,6 @@ pub async fn handler(State(state): State<AppState>) -> Result<Json<Arc<Overview>
 
     let loaded_ontologies = state
         .service
-        .ontology()
         .list_ontologies()
         .await?
         .into_iter()

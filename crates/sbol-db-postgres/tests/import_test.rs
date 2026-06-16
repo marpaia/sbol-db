@@ -1,7 +1,8 @@
 use std::sync::OnceLock;
 
 use sbol_db_core::{IriString, SerializationFormat, ValidationStatus};
-use sbol_db_postgres::{connect, run_migrations, ImportInput, SbolObjectService};
+use sbol_db_postgres::{connect, run_migrations, SbolObjectService};
+use sbol_db_storage::ImportInput;
 use sqlx::Row;
 use tokio::sync::{Mutex, MutexGuard};
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use sbol_db_core::JobId;
-use sbol_db_postgres::{JobRepository, SbolObjectService};
+use sbol_db_storage::{JobQueue, SbolStore};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -19,8 +19,8 @@ pub struct JobContext {
     pub job_id: JobId,
     pub worker_id: Arc<str>,
     pub attempt: i32,
-    pub service: Arc<SbolObjectService>,
-    pub jobs: JobRepository,
+    pub service: Arc<dyn SbolStore>,
+    pub jobs: Arc<dyn JobQueue>,
     pub cancel: CancellationToken,
 }
 

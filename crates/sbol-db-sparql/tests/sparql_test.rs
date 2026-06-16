@@ -1,12 +1,13 @@
 //! Integration tests for the SPARQL engine against the live docker-compose
 //! Postgres. Mirrors the style of `crates/sbol-db-postgres/tests/neighborhood_test.rs`.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use sbol_db_core::SerializationFormat;
-use sbol_db_postgres::{connect, run_migrations, ImportInput, SbolObjectService};
+use sbol_db_postgres::{connect, run_migrations, SbolObjectService};
 use sbol_db_sparql::{ResultFormat, SparqlEngine, SparqlError, SparqlOptions};
+use sbol_db_storage::ImportInput;
 use tokio::sync::{Mutex, MutexGuard};
 
 const NESTED: &str = include_str!("nested_construct.ttl");
@@ -53,7 +54,7 @@ async fn fresh_harness() -> Harness {
         })
         .await
         .expect("import");
-    let engine = SparqlEngine::new(Arc::new(svc.triples().clone()));
+    let engine = SparqlEngine::new(svc.triple_source());
     Harness {
         engine,
         graph_id: report.graph_id,

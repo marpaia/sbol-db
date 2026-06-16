@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use sbol_db_core::SerializationFormat;
-use sbol_db_postgres::NewJob;
+use sbol_db_storage::{EnqueueOutcome, NewJob};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -159,10 +159,10 @@ impl JobHandler for ImportSynBioHubCollectionHandler {
                 child.correlation_id = Some(correlation_id);
                 child.idempotency_key = Some(format!("synbiohub-member:{format:?}:{member}"));
                 match ctx.jobs.enqueue(child).await? {
-                    sbol_db_postgres::EnqueueOutcome::Inserted(_) => {
+                    EnqueueOutcome::Inserted(_) => {
                         enqueued += 1;
                     }
-                    sbol_db_postgres::EnqueueOutcome::AlreadyExists(_) => {
+                    EnqueueOutcome::AlreadyExists(_) => {
                         deduplicated += 1;
                     }
                 }

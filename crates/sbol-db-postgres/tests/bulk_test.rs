@@ -4,11 +4,9 @@
 use std::sync::OnceLock;
 
 use sbol_db_core::SerializationFormat;
-use sbol_db_postgres::{
-    connect, run_migrations, ImportInput, ListObjectsFilter, SbolObjectService,
-    SequenceSearchOptions,
-};
+use sbol_db_postgres::{connect, run_migrations, SbolObjectService};
 use sbol_db_rdf::hash_bytes;
+use sbol_db_storage::{ImportInput, ListObjectsFilter, SequenceSearchOptions};
 use tokio::sync::{Mutex, MutexGuard};
 
 const FIXTURE: &str = include_str!("fixtures/simple_component.ttl");

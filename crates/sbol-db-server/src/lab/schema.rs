@@ -122,7 +122,7 @@ pub async fn sql(State(state): State<AppState>) -> Result<Json<Arc<SqlSchema>>, 
     if let Some(hit) = read_fresh(&state.schema_cache.sql).await {
         return Ok(Json(hit));
     }
-    let pool = state.service.pool();
+    let pool = &state.pg_pool;
     let schema = load_sql_schema(pool).await?;
     let arc = Arc::new(schema);
     *state.schema_cache.sql.write().await = Some(CacheEntry {
@@ -222,7 +222,7 @@ async fn load_sparql_schema(state: &AppState) -> Result<SparqlSchema, ApiError> 
         })
         .collect();
 
-    let loaded = state.service.ontology().list_ontologies().await?;
+    let loaded = state.service.list_ontologies().await?;
     for ont in loaded {
         // Skip if a curated entry already claimed the prefix.
         if prefixes
@@ -251,7 +251,7 @@ async fn load_sparql_schema(state: &AppState) -> Result<SparqlSchema, ApiError> 
         "#,
     )
     .bind(TOP_CLASSES_LIMIT)
-    .fetch_all(state.service.pool())
+    .fetch_all(&state.pg_pool)
     .await
     .map_err(db)?;
 
