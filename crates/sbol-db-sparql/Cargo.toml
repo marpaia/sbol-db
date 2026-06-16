@@ -5,11 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Read-only SPARQL query engine over sbol_quads via spareval + spargebra."
+description = "SPARQL query and update engine over a TripleSource via spareval + spargebra."
 
 [dependencies]
 sbol-db-core.workspace = true
-sbol-db-postgres.workspace = true
+sbol-db-storage.workspace = true
 sbol-db-rdf.workspace = true
 sbol-rdf.workspace = true
 
@@ -19,12 +19,13 @@ sparesults.workspace = true
 oxrdf.workspace = true
 oxiri.workspace = true
 
-tokio.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
 thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+sbol-db-postgres.workspace = true
 sbol.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use sbol_db_jobs::{default_registry, Worker, WorkerConfig};
 use sbol_db_postgres::{JobRepository, SbolObjectService};
 use sbol_db_server::{router, AppState, Metrics};
-use sbol_db_sparql::SparqlEngine;
+use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use tokio_util::sync::CancellationToken;
 
 use crate::signal::shutdown_signal;
@@ -25,7 +25,7 @@ pub async fn run(
     worker_queues: Option<String>,
     worker_id: Option<String>,
 ) -> Result<()> {
-    let engine = Arc::new(SparqlEngine::new(Arc::new(service.triples().clone())));
+    let engine = Arc::new(SparqlEngine::new(service.triple_source()));
     let jobs_repo = Arc::new(JobRepository::new(pool.clone()));
 
     let worker_setup = if !no_worker {
@@ -52,12 +52,19 @@ pub async fn run(
     };
 
     let config = sbol_db_server::ServerConfig::from_env();
+    let sparql_update = Arc::new(SparqlUpdateEngine::new(
+        service.triple_source(),
+        service.triple_writer(),
+    ));
     let state = AppState {
         service: service.clone(),
         sparql: engine,
+        sparql_update,
         metrics,
         jobs: jobs_repo,
         config: config.clone(),
+        #[cfg(feature = "lab")]
+        pg_pool: pool.clone(),
         #[cfg(feature = "lab")]
         schema_cache: Arc::new(sbol_db_server::SchemaCache::new()),
     };
@@ -100,7 +107,8 @@ pub(crate) struct WorkerSetup {
 impl WorkerSetup {
     pub fn spawn(self, cancel: CancellationToken) -> tokio::task::JoinHandle<()> {
         let registry = Arc::new(default_registry());
-        let worker = Worker::new(self.pool, self.service, registry, self.config);
+        let jobs = Arc::new(JobRepository::new(self.pool.clone()));
+        let worker = Worker::new(jobs, self.service, Some(self.pool), registry, self.config);
         tokio::spawn(async move {
             if let Err(err) = worker.run(cancel).await {
                 tracing::error!(error = %err, "embedded worker exited with error");
@@ -124,7 +132,7 @@ pub(crate) async fn build_worker_setup(
             .unwrap_or(4)
     });
     let queue_list: Vec<String> = match queues {
-        None => vec![sbol_db_postgres::DEFAULT_QUEUE.to_owned()],
+        None => vec![sbol_db_storage::DEFAULT_QUEUE.to_owned()],
         Some(s) => s
             .split(',')
             .map(str::trim)

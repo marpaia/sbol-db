@@ -17,7 +17,8 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
-use sbol_db_postgres::{JobRepository, JobStatus, PgPool};
+use sbol_db_postgres::{JobRepository, PgPool};
+use sbol_db_storage::JobStatus;
 use serde::Serialize;
 
 use crate::AppState;

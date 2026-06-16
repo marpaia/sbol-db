@@ -1,0 +1,16 @@
+[package]
+name = "sbol-db-storage"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Backend-neutral storage contract for sbol-db: traits and request/response types."
+
+[dependencies]
+sbol-db-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+async-trait.workspace = true

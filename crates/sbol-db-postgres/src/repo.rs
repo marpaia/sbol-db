@@ -10,24 +10,19 @@ pub mod sequence_search;
 pub mod triple;
 pub mod validation;
 
-pub use graph::{GraphRepository, ListGraphsFilter};
-pub use job::{
-    EnqueueOutcome, JobAttempt, JobLogRecord, JobRepository, JobStatus, ListJobsFilter, NewJob,
-    OldestQueuedAge, QueueDepthRow, SbolJob, DEFAULT_QUEUE,
-};
+pub use graph::GraphRepository;
+pub use job::JobRepository;
 pub use neighborhood::NeighborhoodRepository;
-pub use object::{ListObjectsFilter, SbolObjectRepository};
-pub use ontology::{OntologyLoadReport, OntologyRecord, OntologyRepository, OntologyTermRecord};
+pub use object::SbolObjectRepository;
+pub use ontology::OntologyRepository;
 pub use pg_stats::{
     Activity, BlockingLock, DatabaseSize, IncomingForeignKey, IndexStats, OutgoingForeignKey,
     PgStatsRepository, SlowQuery, TableColumn, TableSchema, TableStats,
 };
 pub use projection::{ProjectionEvent, ProjectionEventRepository};
 pub use projections::{TypedProjectionCounts, TypedProjectionRepository};
-pub use sequence_search::{
-    BatchSequenceMatch, SequenceMatch, SequenceSearchOptions, SequenceSearchRepository,
-};
-pub use triple::{GraphFilter, PatternObject, PatternSubject, TripleRepository};
+pub use sequence_search::SequenceSearchRepository;
+pub use triple::TripleRepository;
 pub use validation::{RecordedValidation, ValidationRepository};
 
 use sbol_db_core::DomainError;

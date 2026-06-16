@@ -1,22 +1,23 @@
 //! SPARQL query engine — parses, evaluates, and serializes results.
 //!
-//! The evaluation runs inside `tokio::task::spawn_blocking` so the
-//! [`PostgresDataset`]'s sync iterators can call `Handle::current().block_on`
-//! to await per-pattern sqlx fetches. The whole spawn_blocking handle is
-//! wrapped in `tokio::time::timeout` to bound query time. Sync evaluator code
-//! can't be preempted by tokio — past the deadline the task may still run a
-//! short while before its next pattern fetch terminates — so the timeout is
-//! "best-effort soft cap" rather than a hard kill.
+//! The evaluation runs inside `tokio::task::spawn_blocking` because the
+//! [`TripleDataset`]'s `QueryableDataset` iterators are synchronous and a
+//! [`TripleSource`] may block while fetching per-pattern rows. The whole
+//! spawn_blocking handle is wrapped in `tokio::time::timeout` to bound query
+//! time. Sync evaluator code can't be preempted by tokio — past the deadline
+//! the task may still run a short while before its next pattern fetch
+//! terminates — so the timeout is "best-effort soft cap" rather than a hard
+//! kill.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use oxrdf::{GraphName, NamedNode};
-use sbol_db_postgres::TripleRepository;
+use sbol_db_storage::TripleSource;
 use spareval::{QueryEvaluator, QueryResults};
 use spargebra::SparqlParser;
 
-use crate::dataset::PostgresDataset;
+use crate::dataset::TripleDataset;
 use crate::error::SparqlError;
 use crate::results::{
     serialize_boolean, serialize_solutions, serialize_triples, ResultFormat, ResultPayload,
@@ -84,12 +85,12 @@ impl QueryForm {
 
 #[derive(Clone)]
 pub struct SparqlEngine {
-    triples: Arc<TripleRepository>,
+    source: Arc<dyn TripleSource>,
 }
 
 impl SparqlEngine {
-    pub fn new(triples: Arc<TripleRepository>) -> Self {
-        Self { triples }
+    pub fn new(source: Arc<dyn TripleSource>) -> Self {
+        Self { source }
     }
 
     /// Run a SPARQL query and serialize the result.
@@ -117,7 +118,7 @@ impl SparqlEngine {
             )));
         }
 
-        let dataset = PostgresDataset::new(Arc::clone(&self.triples));
+        let dataset = TripleDataset::new(Arc::clone(&self.source));
         let max_rows = options.max_rows;
         let default_graph = options.default_graph.clone();
 
@@ -191,7 +192,7 @@ fn classify_query(query: &spargebra::Query) -> QueryForm {
 
 fn evaluate_blocking(
     query: spargebra::Query,
-    dataset: PostgresDataset,
+    dataset: TripleDataset,
     format: ResultFormat,
     max_rows: usize,
     default_graph: Option<String>,

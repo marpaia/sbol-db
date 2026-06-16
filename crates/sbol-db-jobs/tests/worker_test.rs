@@ -12,10 +12,8 @@ use sbol_db_jobs::{
     default_registry, handlers::ImportDocumentPayload, HandlerError, JobContext, JobHandler,
     JobOutcome, JobRegistry, Worker, WorkerConfig,
 };
-use sbol_db_postgres::{
-    connect, run_migrations, EnqueueOutcome, JobRepository, JobStatus, NewJob, SbolObjectService,
-    DEFAULT_QUEUE,
-};
+use sbol_db_postgres::{connect, run_migrations, JobRepository, SbolObjectService};
+use sbol_db_storage::{EnqueueOutcome, JobStatus, NewJob, DEFAULT_QUEUE};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Mutex, MutexGuard};
@@ -67,7 +65,13 @@ where
         shutdown_grace: Duration::from_secs(5),
         ..WorkerConfig::default()
     };
-    let worker = Worker::new(pool.clone(), service, registry, config);
+    let worker = Worker::new(
+        Arc::new(JobRepository::new(pool.clone())),
+        service,
+        Some(pool.clone()),
+        registry,
+        config,
+    );
     let cancel_clone = cancel.clone();
     let handle = tokio::spawn(async move {
         worker.run(cancel_clone).await.expect("worker run");

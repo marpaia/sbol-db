@@ -7,63 +7,47 @@
 //!
 //! `spareval` is query-only, so we drive its [`QueryEvaluator::prepare_delete_insert`]
 //! helper to evaluate a `DELETE/INSERT ... WHERE` and yield fully instantiated
-//! delete/insert triples, then apply them through [`TripleRepository`]. `INSERT DATA`
-//! and `DELETE DATA` carry ground triples and skip evaluation entirely.
+//! delete/insert triples, then apply every operation atomically through
+//! [`TripleWriter`]. `INSERT DATA` and `DELETE DATA` carry ground triples and
+//! skip evaluation entirely.
 //!
-//! Writes are verbatim (`source = "sparql-update"`, no SBOL interpretation) and
-//! land in the graph named by `default-graph-uri` when a template has no
-//! explicit `GRAPH`/`WITH` (Virtuoso semantics, which SynBioHub relies on).
+//! Writes are verbatim (no SBOL interpretation) and land in the graph named by
+//! `default-graph-uri` when a template has no explicit `GRAPH`/`WITH` (Virtuoso
+//! semantics, which SynBioHub relies on).
 //!
-//! Transaction model: all operations of one update commit atomically in a
-//! single transaction. KNOWN LIMITATION (revisit in Phase 3): `WHERE` clauses
-//! are evaluated against the committed snapshot, so a later operation does not
-//! observe the uncommitted effects of an earlier one in the same request. This
-//! is correct for SynBioHub's updates (their compound operations are
-//! independent) but is not full SPARQL sequential-visibility semantics.
+//! Transaction model: all operations of one update commit atomically as one
+//! [`TripleWriter::apply_update`] call. `WHERE` clauses are evaluated against
+//! the committed snapshot, so a later operation does not observe the
+//! uncommitted effects of an earlier one in the same request. This is correct
+//! for SynBioHub's updates (their compound operations are independent) but is
+//! not full SPARQL sequential-visibility semantics.
 
 use std::sync::Arc;
 
 use oxrdf::{GraphName, NamedNode, NamedOrBlankNode, Term};
-use sbol_db_core::{DomainError, IriString, ObjectTerm, SubjectTerm, Triple};
-use sbol_db_postgres::{PgPool, TripleRepository};
+use sbol_db_core::{IriString, ObjectTerm, SubjectTerm, Triple};
+use sbol_db_storage::{TripleChange, TripleSource, TripleWriter};
 use spareval::{DeleteInsertQuad, QueryEvaluator};
 use spargebra::algebra::{GraphPattern, GraphTarget, QueryDataset};
 use spargebra::term::{GraphName as AstGraphName, GroundQuad, GroundTerm, Quad as AstQuad};
 use spargebra::{GraphUpdateOperation, SparqlParser};
 
-use crate::dataset::PostgresDataset;
+use crate::dataset::TripleDataset;
 use crate::engine::SparqlOptions;
 use crate::error::SparqlError;
 
-const UPDATE_SOURCE: &str = "sparql-update";
+pub use sbol_db_storage::UpdateOutcome;
 
 /// Executes SPARQL 1.1 Update against the triplestore.
 #[derive(Clone)]
 pub struct SparqlUpdateEngine {
-    triples: Arc<TripleRepository>,
-    pool: PgPool,
-}
-
-/// Tally of what an update changed.
-#[derive(Debug, Default, Clone, Copy, serde::Serialize)]
-pub struct UpdateOutcome {
-    pub inserted: usize,
-    pub deleted: usize,
-}
-
-/// One resolved operation, ready to apply inside the transaction.
-enum Step {
-    Change {
-        deletes: Vec<Triple>,
-        inserts: Vec<Triple>,
-    },
-    /// Clear a graph: `Some(iri)` is a named graph, `None` the default graph.
-    Clear(Option<IriString>),
+    source: Arc<dyn TripleSource>,
+    writer: Arc<dyn TripleWriter>,
 }
 
 impl SparqlUpdateEngine {
-    pub fn new(triples: Arc<TripleRepository>, pool: PgPool) -> Self {
-        Self { triples, pool }
+    pub fn new(source: Arc<dyn TripleSource>, writer: Arc<dyn TripleWriter>) -> Self {
+        Self { source, writer }
     }
 
     /// Parse and execute a SPARQL Update. `default_graph` is the
@@ -82,8 +66,8 @@ impl SparqlUpdateEngine {
             .parse_update(update_str)
             .map_err(|e| SparqlError::Parse(e.to_string()))?;
 
-        // Resolve every operation to a concrete Step first (DELETE/INSERT WHERE
-        // needs the evaluator), then apply atomically.
+        // Resolve every operation to a concrete change first (DELETE/INSERT
+        // WHERE needs the evaluator), then apply the batch atomically.
         let mut steps = Vec::with_capacity(update.operations.len());
         for op in update.operations {
             match op {
@@ -92,7 +76,7 @@ impl SparqlUpdateEngine {
                         .iter()
                         .map(|q| ast_to_triple(q, default_graph))
                         .collect();
-                    steps.push(Step::Change {
+                    steps.push(TripleChange::Change {
                         deletes: Vec::new(),
                         inserts,
                     });
@@ -102,7 +86,7 @@ impl SparqlUpdateEngine {
                         .iter()
                         .map(|q| ground_to_triple(q, default_graph))
                         .collect();
-                    steps.push(Step::Change {
+                    steps.push(TripleChange::Change {
                         deletes,
                         inserts: Vec::new(),
                     });
@@ -116,11 +100,11 @@ impl SparqlUpdateEngine {
                     let (deletes, inserts) = self
                         .eval_delete_insert(delete, insert, using, *pattern, default_graph, options)
                         .await?;
-                    steps.push(Step::Change { deletes, inserts });
+                    steps.push(TripleChange::Change { deletes, inserts });
                 }
                 GraphUpdateOperation::Clear { graph, .. }
                 | GraphUpdateOperation::Drop { graph, .. } => {
-                    steps.push(Step::Clear(clear_target(&graph, default_graph)?));
+                    steps.push(TripleChange::Clear(clear_target(&graph, default_graph)?));
                 }
                 // Graphs are implicit in our store (a graph exists iff it has a
                 // triple), so CREATE is a no-op.
@@ -131,39 +115,11 @@ impl SparqlUpdateEngine {
             }
         }
 
-        let mut outcome = UpdateOutcome::default();
-        let mut tx = self.pool.begin().await.map_err(db_err)?;
-        for step in &steps {
-            match step {
-                Step::Change { deletes, inserts } => {
-                    outcome.deleted += self.triples.delete_triples(&mut tx, deletes).await?;
-                    // Register any named graph these inserts target before
-                    // writing: a triple's named graph owns it (FK), so the graph
-                    // row must exist first.
-                    let mut ensured = std::collections::HashSet::new();
-                    for triple in inserts {
-                        if let Some(graph) = &triple.graph_iri {
-                            if ensured.insert(graph.as_str().to_owned()) {
-                                self.triples
-                                    .ensure_graph(&mut tx, graph.as_str(), "verbatim")
-                                    .await?;
-                            }
-                        }
-                    }
-                    outcome.inserted += self
-                        .triples
-                        .insert_triples(&mut tx, inserts, UPDATE_SOURCE)
-                        .await?;
-                }
-                Step::Clear(graph) => {
-                    outcome.deleted += self
-                        .triples
-                        .clear_graph(&mut tx, graph.as_ref().map(|i| i.as_str()))
-                        .await?;
-                }
-            }
-        }
-        tx.commit().await.map_err(db_err)?;
+        let outcome = self
+            .writer
+            .apply_update(steps)
+            .await
+            .map_err(SparqlError::Domain)?;
         Ok(outcome)
     }
 
@@ -181,7 +137,7 @@ impl SparqlUpdateEngine {
         default_graph: Option<&str>,
         options: &SparqlOptions,
     ) -> Result<(Vec<Triple>, Vec<Triple>), SparqlError> {
-        let dataset = PostgresDataset::new(Arc::clone(&self.triples));
+        let dataset = TripleDataset::new(Arc::clone(&self.source));
         let default_graph = default_graph.map(|s| s.to_owned());
 
         let blocking = tokio::task::spawn_blocking(move || {
@@ -225,10 +181,6 @@ impl SparqlUpdateEngine {
             Err(_) => Err(SparqlError::Timeout),
         }
     }
-}
-
-fn db_err<E: std::fmt::Display>(e: E) -> SparqlError {
-    SparqlError::Domain(DomainError::Database(e.to_string()))
 }
 
 fn iri(s: &str) -> IriString {

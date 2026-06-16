@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use sbol_db_core::{DomainError, JobId};
-use sbol_db_postgres::{JobRepository, SbolJob, SbolObjectService, DEFAULT_QUEUE};
+use sbol_db_storage::{JobQueue, JobStatus, SbolJob, SbolStore, DEFAULT_QUEUE};
 use sqlx::postgres::PgListener;
 use sqlx::PgPool;
 use tokio::sync::Semaphore;
@@ -98,23 +98,23 @@ fn uuid_short() -> String {
 /// and the LISTEN/NOTIFY task. Lives as long as its [`CancellationToken`]
 /// stays alive; `run` returns once shutdown has drained or timed out.
 pub struct Worker {
-    pool: PgPool,
-    repo: JobRepository,
-    service: Arc<SbolObjectService>,
+    listener_pool: Option<PgPool>,
+    repo: Arc<dyn JobQueue>,
+    service: Arc<dyn SbolStore>,
     registry: Arc<JobRegistry>,
     config: WorkerConfig,
 }
 
 impl Worker {
     pub fn new(
-        pool: PgPool,
-        service: Arc<SbolObjectService>,
+        repo: Arc<dyn JobQueue>,
+        service: Arc<dyn SbolStore>,
+        listener_pool: Option<PgPool>,
         registry: Arc<JobRegistry>,
         config: WorkerConfig,
     ) -> Self {
-        let repo = JobRepository::new(pool.clone());
         Self {
-            pool,
+            listener_pool,
             repo,
             service,
             registry,
@@ -150,7 +150,7 @@ impl Worker {
         let reaper_handle = spawn_reaper(self.repo.clone(), self.config.clone(), cancel.clone());
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
         let listen_handle = spawn_listener(
-            self.pool.clone(),
+            self.listener_pool.clone(),
             self.config.queues.clone(),
             notify_tx,
             cancel.clone(),
@@ -357,7 +357,7 @@ async fn run_one_job(
     handler: Arc<dyn crate::handler::ErasedHandler>,
     ctx: JobContext,
     job: SbolJob,
-    repo: JobRepository,
+    repo: Arc<dyn JobQueue>,
     cfg: WorkerConfig,
     cancel: CancellationToken,
 ) {
@@ -455,12 +455,12 @@ async fn run_one_job(
                             &repo,
                             job_id,
                             Some(attempt),
-                            if status == sbol_db_postgres::JobStatus::Queued {
+                            if status == JobStatus::Queued {
                                 "warn"
                             } else {
                                 "error"
                             },
-                            if status == sbol_db_postgres::JobStatus::Queued {
+                            if status == JobStatus::Queued {
                                 "job failed; retry scheduled"
                             } else {
                                 "job failed permanently"
@@ -477,11 +477,11 @@ async fn run_one_job(
                     }
                     Err(e) => {
                         tracing::error!(error = %e, original = %msg, "failed to record job failure");
-                        sbol_db_postgres::JobStatus::Failed
+                        JobStatus::Failed
                     }
                 };
                 let status_label = match terminal {
-                    sbol_db_postgres::JobStatus::Dead => "dead",
+                    JobStatus::Dead => "dead",
                     _ => "failed",
                 };
                 metrics::counter!(
@@ -505,7 +505,7 @@ async fn run_one_job(
 }
 
 async fn append_job_log(
-    repo: &JobRepository,
+    repo: &Arc<dyn JobQueue>,
     job_id: JobId,
     attempt_no: Option<i32>,
     level: &str,
@@ -521,7 +521,7 @@ async fn append_job_log(
 }
 
 fn spawn_renewer(
-    repo: JobRepository,
+    repo: Arc<dyn JobQueue>,
     job_id: JobId,
     worker_id: Arc<str>,
     lease: Duration,
@@ -567,7 +567,7 @@ fn spawn_renewer(
 }
 
 fn spawn_reaper(
-    repo: JobRepository,
+    repo: Arc<dyn JobQueue>,
     cfg: WorkerConfig,
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
@@ -598,12 +598,18 @@ fn spawn_reaper(
 }
 
 fn spawn_listener(
-    pool: PgPool,
+    pool: Option<PgPool>,
     queues: Vec<String>,
     notify: tokio::sync::mpsc::UnboundedSender<()>,
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        // No NOTIFY capability (e.g. a non-Postgres backend): the dequeue
+        // loop's poll interval covers wake-ups on its own.
+        let Some(pool) = pool else {
+            cancel.cancelled().await;
+            return;
+        };
         // Best-effort: if LISTEN fails we degrade to the poll-interval
         // fallback. Reconnect on transient errors.
         loop {

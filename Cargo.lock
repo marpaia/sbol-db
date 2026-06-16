@@ -2695,6 +2695,7 @@ dependencies = [
  "sbol-db-rdf",
  "sbol-db-server",
  "sbol-db-sparql",
+ "sbol-db-storage",
  "sbol-rdf",
  "serde",
  "serde_json",
@@ -2731,6 +2732,7 @@ dependencies = [
  "reqwest",
  "sbol-db-core",
  "sbol-db-postgres",
+ "sbol-db-storage",
  "serde",
  "serde_json",
  "sqlx",
@@ -2745,11 +2747,13 @@ dependencies = [
 name = "sbol-db-postgres"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "reqwest",
  "sbol",
  "sbol-db-core",
  "sbol-db-rdf",
+ "sbol-db-storage",
  "sbol-fasta",
  "sbol-genbank",
  "sbol-rdf",
@@ -2793,6 +2797,7 @@ dependencies = [
  "sbol-db-postgres",
  "sbol-db-rdf",
  "sbol-db-sparql",
+ "sbol-db-storage",
  "sbol-db-ui",
  "sbol-rdf",
  "serde",
@@ -2820,6 +2825,7 @@ dependencies = [
  "sbol-db-core",
  "sbol-db-postgres",
  "sbol-db-rdf",
+ "sbol-db-storage",
  "sbol-rdf",
  "serde",
  "sparesults",
@@ -2829,6 +2835,18 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "sbol-db-storage"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "sbol-db-core",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

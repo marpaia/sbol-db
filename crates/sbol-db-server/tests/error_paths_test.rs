@@ -9,7 +9,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use sbol_db_postgres::{connect, run_migrations, JobRepository, SbolObjectService};
 use sbol_db_server::{router, AppState, Metrics, SchemaCache, ServerConfig};
-use sbol_db_sparql::SparqlEngine;
+use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use tower::ServiceExt;
 
 const BODY_LIMIT: usize = 1024 * 1024;
@@ -20,17 +20,24 @@ async fn state() -> AppState {
     let pool = connect(&database_url).await.expect("connect");
     run_migrations(&pool).await.expect("migrate");
     let service = Arc::new(SbolObjectService::new(pool.clone()));
-    let sparql = Arc::new(SparqlEngine::new(Arc::new(service.triples().clone())));
+    let sparql = Arc::new(SparqlEngine::new(service.triple_source()));
+    let sparql_update = Arc::new(SparqlUpdateEngine::new(
+        service.triple_source(),
+        service.triple_writer(),
+    ));
     let jobs = Arc::new(JobRepository::new(pool.clone()));
+    let pg_pool = pool.clone();
     let metrics = Metrics::install(pool.clone(), env!("CARGO_PKG_VERSION"))
         .with_worker_pool(pool)
         .with_jobs_repo(jobs.clone());
     AppState {
         service,
         sparql,
+        sparql_update,
         metrics,
         jobs,
         config: ServerConfig::default(),
+        pg_pool,
         schema_cache: Arc::new(SchemaCache::new()),
     }
 }

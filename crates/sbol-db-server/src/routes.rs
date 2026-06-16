@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
@@ -10,13 +9,13 @@ use sbol_db_core::{
     Direction, GraphId, GraphRecord, ImportReport, IriString, JobId, NeighborhoodQuery,
     NeighborhoodResult, ObjectId, SbolObjectRecord, SerializationFormat,
 };
-use sbol_db_postgres::{
-    BatchSequenceMatch, GraphWriteMode, ImportInput, JobAttempt, JobLogRecord, JobStatus,
-    ListJobsFilter, ListObjectsFilter, NewJob, OntologyLoadReport, OntologyRecord,
+use sbol_db_rdf::triples_to_rdf;
+use sbol_db_sparql::{ResultFormat, SparqlOptions};
+use sbol_db_storage::{
+    BatchSequenceMatch, EnqueueOutcome, GraphWriteMode, ImportInput, JobAttempt, JobLogRecord,
+    JobStatus, ListJobsFilter, ListObjectsFilter, NewJob, OntologyLoadReport, OntologyRecord,
     OntologyTermRecord, SbolJob, SequenceMatch, SequenceSearchOptions,
 };
-use sbol_db_rdf::triples_to_rdf;
-use sbol_db_sparql::{ResultFormat, SparqlOptions, SparqlUpdateEngine};
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
@@ -167,8 +166,7 @@ pub async fn get_graph(
 ) -> Result<Json<GraphRecord>, ApiError> {
     let doc = state
         .service
-        .graphs()
-        .get(GraphId(id))
+        .get_graph(GraphId(id))
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("document {id}")))?;
     Ok(Json(doc))
@@ -185,8 +183,7 @@ pub async fn get_object_by_iri(
 ) -> Result<Json<SbolObjectRecord>, ApiError> {
     let obj = state
         .service
-        .objects()
-        .get_by_iri(&params.iri)
+        .get_object_by_iri(&params.iri)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("object {}", params.iri)))?;
     Ok(Json(obj))
@@ -227,7 +224,7 @@ pub async fn lookup_objects(
         IriString::new(iri.clone()).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     }
     let refs: Vec<&str> = body.iris.iter().map(String::as_str).collect();
-    let found = state.service.objects().get_by_iris(&refs).await?;
+    let found = state.service.get_objects_by_iris(&refs).await?;
     let found_set: std::collections::HashSet<&str> = found.iter().map(|r| r.iri.as_str()).collect();
     let missing: Vec<String> = body
         .iris
@@ -279,7 +276,7 @@ pub async fn list_objects(
         after_iri: params.after,
         limit,
     };
-    let objects = state.service.objects().list(&filter).await?;
+    let objects = state.service.list_objects(&filter).await?;
     let next_cursor = if objects.len() as u32 >= limit {
         objects.last().map(|o| o.iri.as_str().to_owned())
     } else {
@@ -303,14 +300,13 @@ pub async fn export_object(
 ) -> Result<impl IntoResponse, ApiError> {
     let iri = state
         .service
-        .objects()
-        .get_iri_by_id(ObjectId(id))
+        .get_object_iri_by_id(ObjectId(id))
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("object {id}")))?;
     let raw_format = params.format.as_deref().unwrap_or("turtle");
     let format = parse_export_format(raw_format)
         .ok_or_else(|| ApiError::BadRequest(format!("unknown format: {raw_format}")))?;
-    let body = export::export_subject_rdf(state.service.triples(), &iri, format).await?;
+    let body = export::export_subject_rdf(state.service.as_ref(), &iri, format).await?;
     let content_type = match format {
         SerializationFormat::Turtle => "text/turtle",
         SerializationFormat::JsonLd => "application/ld+json",
@@ -388,7 +384,7 @@ pub async fn neighborhood(
     Query(params): Query<NeighborhoodParams>,
 ) -> Result<Json<NeighborhoodResult>, ApiError> {
     let query = build_neighborhood_query(params)?;
-    let result = state.service.neighborhood().walk(&query).await?;
+    let result = state.service.walk(&query).await?;
     Ok(Json(result))
 }
 
@@ -431,7 +427,7 @@ pub async fn neighborhood_rdf(
         max_nodes: params.max_nodes,
         literals: params.literals,
     })?;
-    let result = state.service.neighborhood().walk(&query).await?;
+    let result = state.service.walk(&query).await?;
     let body = sbol_db_rdf::neighborhood_to_rdf(&result, format)?;
     let content_type = match format {
         SerializationFormat::Turtle => "text/turtle",
@@ -627,7 +623,6 @@ pub async fn sequence_search(
 ) -> Result<Json<Vec<SequenceMatch>>, ApiError> {
     let matches = state
         .service
-        .sequence_search()
         .search(
             &params.pattern,
             SequenceSearchOptions {
@@ -673,11 +668,7 @@ pub async fn sequence_search_batch(
             _ => None,
         },
     };
-    let results = state
-        .service
-        .sequence_search()
-        .search_many(&body.patterns, opts)
-        .await?;
+    let results = state.service.search_many(&body.patterns, opts).await?;
     Ok(Json(results))
 }
 
@@ -696,8 +687,7 @@ pub async fn ontology_load(
         .map_err(ApiError::BadRequest)?;
     let report = state
         .service
-        .ontology()
-        .load_from_url(&body.prefix.to_ascii_uppercase(), &name, &url)
+        .load_ontology_from_url(&body.prefix.to_ascii_uppercase(), &name, &url)
         .await?;
     // The lab dashboard, the SPARQL schema sidebar, and the overview
     // ontology count all depend on the loaded-ontologies list. Drop
@@ -710,7 +700,7 @@ pub async fn ontology_load(
 pub async fn ontology_list(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<OntologyRecord>>, ApiError> {
-    Ok(Json(state.service.ontology().list_ontologies().await?))
+    Ok(Json(state.service.list_ontologies().await?))
 }
 
 #[derive(Deserialize)]
@@ -725,8 +715,7 @@ pub async fn ontology_term(
     let canonical = canonical_term_iri(&params.iri);
     let term = state
         .service
-        .ontology()
-        .get_term(&canonical)
+        .get_ontology_term(&canonical)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("ontology term {}", params.iri)))?;
     Ok(Json(term))
@@ -773,8 +762,7 @@ pub async fn ontology_terms(
     let prefix_upper = params.prefix.to_ascii_uppercase();
     let (terms, total) = state
         .service
-        .ontology()
-        .list_terms(&prefix_upper, limit, offset, params.q.as_deref())
+        .list_ontology_terms(&prefix_upper, limit, offset, params.q.as_deref())
         .await?;
     Ok(Json(OntologyTermsPage {
         prefix: prefix_upper,
@@ -790,7 +778,7 @@ pub async fn ontology_descendants(
     Query(params): Query<OntologyTermQuery>,
 ) -> Result<Json<Vec<OntologyDescendant>>, ApiError> {
     let canonical = canonical_term_iri(&params.iri);
-    let rows = state.service.ontology().descendants(&canonical).await?;
+    let rows = state.service.descendants(&canonical).await?;
     let out = rows
         .into_iter()
         .map(|(iri, depth)| OntologyDescendant { iri, depth })
@@ -875,8 +863,8 @@ pub async fn enqueue_job(
         })
         .await?;
     let (deduplicated, job) = match outcome {
-        sbol_db_postgres::EnqueueOutcome::Inserted(j) => (false, j),
-        sbol_db_postgres::EnqueueOutcome::AlreadyExists(j) => (true, j),
+        EnqueueOutcome::Inserted(j) => (false, j),
+        EnqueueOutcome::AlreadyExists(j) => (true, j),
     };
     Ok(Json(EnqueueJobResponse { job, deduplicated }))
 }
@@ -1041,12 +1029,9 @@ pub async fn sparql_auth(
     let update = update
         .ok_or_else(|| ApiError::BadRequest("missing update (query= parameter)".to_owned()))?;
 
-    let engine = SparqlUpdateEngine::new(
-        Arc::new(state.service.triples().clone()),
-        state.service.pool().clone(),
-    );
     let options = SparqlOptions::default();
-    let outcome = engine
+    let outcome = state
+        .sparql_update
         .execute(&update, default_graph.as_deref(), &options)
         .await?;
     Ok(Json(json!({

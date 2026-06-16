@@ -19,9 +19,10 @@ use axum::routing::get;
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use sbol_db_postgres::{
-    Activity, BlockingLock, DatabaseSize, IndexStats, JobStatus, ListJobsFilter, OldestQueuedAge,
-    PgStatsRepository, QueueDepthRow, SbolJob, SlowQuery, TableSchema, TableStats,
+    Activity, BlockingLock, DatabaseSize, IndexStats, PgStatsRepository, SlowQuery, TableSchema,
+    TableStats,
 };
+use sbol_db_storage::{JobStatus, ListJobsFilter, OldestQueuedAge, QueueDepthRow, SbolJob};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
@@ -118,7 +119,7 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<Summary>, Api
           AND finished_at >= now() - interval '24 hours'
         "#,
     )
-    .fetch_one(state.service.pool())
+    .fetch_one(&state.pg_pool)
     .await
     .map(|r| r.try_get::<i64, _>("n").unwrap_or(0))
     .unwrap_or(0);
@@ -143,7 +144,7 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<Summary>, Api
 // ---------- Postgres ----------------------------------------------------------
 
 fn pg_repo(state: &AppState) -> PgStatsRepository {
-    PgStatsRepository::new(state.service.pool().clone())
+    PgStatsRepository::new(state.pg_pool.clone())
 }
 
 pub async fn pg_database(State(state): State<AppState>) -> Result<Json<DatabaseSize>, ApiError> {

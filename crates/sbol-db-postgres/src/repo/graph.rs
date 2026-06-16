@@ -12,6 +12,8 @@ use sqlx::Row;
 use crate::repo::db_err;
 use crate::PgPool;
 
+use sbol_db_storage::ListGraphsFilter;
+
 #[derive(Clone)]
 pub struct GraphRepository {
     pool: PgPool,
@@ -126,18 +128,6 @@ impl GraphRepository {
             .rows_affected();
         Ok(affected > 0)
     }
-}
-
-/// Filter for [`GraphRepository::list`]. Empty fields mean no
-/// restriction; the limit is required and applied last.
-#[derive(Clone, Debug, Default)]
-pub struct ListGraphsFilter {
-    /// Case-insensitive substring match against the graph's `name`.
-    pub name: Option<String>,
-    /// Exact match on the serialization format.
-    pub format: Option<SerializationFormat>,
-    /// Hard cap on the rows returned.
-    pub limit: u32,
 }
 
 fn row_to_record(row: sqlx::postgres::PgRow) -> Result<GraphRecord, DomainError> {

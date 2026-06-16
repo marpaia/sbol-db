@@ -7,7 +7,7 @@
 //! {...}`; that writes land in the `default-graph-uri` graph (Virtuoso
 //! semantics); and that re-running an edit replaces rather than duplicates.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use sbol_db_core::IriString;
@@ -61,10 +61,9 @@ async fn fresh_harness() -> Harness {
             .await
             .expect("seed");
     }
-    let triples = Arc::new(svc.triples().clone());
     Harness {
-        read: SparqlEngine::new(Arc::clone(&triples)),
-        update: SparqlUpdateEngine::new(triples, pool),
+        read: SparqlEngine::new(svc.triple_source()),
+        update: SparqlUpdateEngine::new(svc.triple_source(), svc.triple_writer()),
     }
 }
 

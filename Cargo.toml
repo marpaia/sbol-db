@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/sbol-db-core",
+    "crates/sbol-db-storage",
     "crates/sbol-db-rdf",
     "crates/sbol-db-postgres",
     "crates/sbol-db-sparql",
@@ -47,6 +48,7 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "cloc
 
 thiserror = "2"
 anyhow = "1"
+async-trait = "0.1"
 
 clap = { version = "4.5", features = ["derive", "env"] }
 
@@ -73,6 +75,7 @@ metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.16", default-features = false }
 
 sbol-db-core = { path = "crates/sbol-db-core", version = "0.1.0" }
+sbol-db-storage = { path = "crates/sbol-db-storage", version = "0.1.0" }
 sbol-db-rdf = { path = "crates/sbol-db-rdf", version = "0.1.0" }
 sbol-db-postgres = { path = "crates/sbol-db-postgres", version = "0.1.0" }
 sbol-db-sparql = { path = "crates/sbol-db-sparql", version = "0.1.0" }

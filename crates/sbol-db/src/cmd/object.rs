@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use sbol_db_core::{GraphId, ObjectId, SerializationFormat};
-use sbol_db_postgres::{ListObjectsFilter, SbolObjectService};
+use sbol_db_postgres::SbolObjectService;
+use sbol_db_storage::ListObjectsFilter;
 
 use crate::cli::ObjectAction;
 use crate::format::parse_format;
@@ -55,7 +56,7 @@ async fn render_subgraph(
         .get_iri_by_id(object_id)
         .await?
         .ok_or_else(|| anyhow!("object id not found"))?;
-    let body = sbol_db_server::export_subject_rdf(service.triples(), &iri, format).await?;
+    let body = sbol_db_server::export_subject_rdf(service.as_ref(), &iri, format).await?;
     Ok(body)
 }
 

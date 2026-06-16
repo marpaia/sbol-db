@@ -11,7 +11,7 @@ use axum::http::{Request, StatusCode};
 use base64::Engine as _;
 use sbol_db_postgres::{connect, run_migrations, JobRepository, SbolObjectService};
 use sbol_db_server::{router, AppState, Metrics, ServerConfig};
-use sbol_db_sparql::SparqlEngine;
+use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use tokio::sync::{Mutex, MutexGuard};
 use tower::ServiceExt;
 
@@ -36,15 +36,22 @@ async fn fresh_app() -> axum::Router {
         .await
         .expect("truncate");
     let service = Arc::new(SbolObjectService::new(pool.clone()));
-    let sparql = Arc::new(SparqlEngine::new(Arc::new(service.triples().clone())));
+    let sparql = Arc::new(SparqlEngine::new(service.triple_source()));
+    let sparql_update = Arc::new(SparqlUpdateEngine::new(
+        service.triple_source(),
+        service.triple_writer(),
+    ));
     let jobs = Arc::new(JobRepository::new(pool.clone()));
+    let pg_pool = pool.clone();
     let metrics = Metrics::install(pool, env!("CARGO_PKG_VERSION"));
     let state = AppState {
         service,
         sparql,
+        sparql_update,
         metrics,
         jobs,
         config: ServerConfig::default(),
+        pg_pool,
         schema_cache: Arc::new(sbol_db_server::SchemaCache::new()),
     };
     router(state, ServerConfig::default())

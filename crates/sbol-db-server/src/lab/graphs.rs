@@ -128,7 +128,7 @@ pub async fn list_graphs(
 ) -> Result<Json<ListResponse>, ApiError> {
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
-    let pool = state.service.pool();
+    let pool = &state.pg_pool;
 
     let total: i64 = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM sbol_graphs WHERE ($1::text IS NULL OR kind = $1)",
@@ -192,7 +192,7 @@ pub async fn get_graph_detail(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<GraphSummary>, ApiError> {
-    let pool = state.service.pool();
+    let pool = &state.pg_pool;
     let row = sqlx::query(
         r#"
         SELECT
@@ -233,7 +233,7 @@ pub async fn get_graph_triples(
         .unwrap_or(DEFAULT_TRIPLE_LIMIT)
         .clamp(1, MAX_TRIPLE_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
-    let pool = state.service.pool();
+    let pool = &state.pg_pool;
 
     let iri: Option<String> =
         sqlx::query_scalar::<_, String>("SELECT iri FROM sbol_graphs WHERE id = $1")

@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use sbol_db_core::{IriString, NeighborhoodQuery};
-use sbol_db_postgres::{SbolObjectService, SequenceSearchOptions};
+use sbol_db_postgres::SbolObjectService;
 use sbol_db_sparql::{parse_query, ResultFormat, SparqlEngine, SparqlOptions};
+use sbol_db_storage::SequenceSearchOptions;
 
 use crate::cli::QueryAction;
 use crate::format::{parse_direction, parse_format};
@@ -89,7 +90,7 @@ async fn sparql(
         .map(|f| f.parse::<ResultFormat>())
         .transpose()
         .map_err(|e| anyhow!("{e}"))?;
-    let engine = SparqlEngine::new(Arc::new(service.triples().clone()));
+    let engine = SparqlEngine::new(service.triple_source());
     let options = SparqlOptions {
         timeout: Duration::from_secs(timeout_secs),
         max_rows,

@@ -8,7 +8,8 @@
 use std::sync::OnceLock;
 
 use sbol_db_core::SerializationFormat;
-use sbol_db_postgres::{connect, run_migrations, GraphWriteMode, ImportInput, SbolObjectService};
+use sbol_db_postgres::{connect, run_migrations, SbolObjectService};
+use sbol_db_storage::{GraphWriteMode, ImportInput};
 use sqlx::Row;
 use tokio::sync::{Mutex, MutexGuard};
 

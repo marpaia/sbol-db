@@ -4,38 +4,7 @@ use sqlx::{QueryBuilder, Row};
 use crate::repo::db_err;
 use crate::PgPool;
 
-/// Filter on the named-graph column for a pattern scan.
-///
-/// Mirrors SPARQL `graph_name` semantics from `spareval::QueryableDataset`:
-/// `None` here means "no filter" (any graph, including the default graph),
-/// `Some(GraphFilter::AnyNamed)` is "any named graph" (default graph excluded),
-/// `Some(GraphFilter::DefaultOnly)` is "the default graph only", and
-/// `Some(GraphFilter::Iri(g))` is a specific named graph.
-#[derive(Clone, Debug)]
-pub enum GraphFilter {
-    AnyNamed,
-    DefaultOnly,
-    Iri(String),
-}
-
-/// A bound subject position in a triple pattern.
-#[derive(Clone, Debug)]
-pub enum PatternSubject {
-    Iri(String),
-    Blank(String),
-}
-
-/// A bound object position in a triple pattern.
-#[derive(Clone, Debug)]
-pub enum PatternObject {
-    Iri(String),
-    Blank(String),
-    Literal {
-        value: String,
-        datatype: String,
-        language: Option<String>,
-    },
-}
+use sbol_db_storage::{GraphFilter, PatternObject, PatternSubject};
 
 #[derive(Clone)]
 pub struct TripleRepository {

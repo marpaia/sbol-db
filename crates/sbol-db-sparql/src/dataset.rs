@@ -1,40 +1,37 @@
-//! Postgres-backed [`spareval::QueryableDataset`] over `sbol_triples`.
+//! A [`spareval::QueryableDataset`] backed by any [`TripleSource`].
 //!
 //! Each `internal_quads_for_pattern` call translates the bound positions to a
-//! single SQL pattern scan via [`TripleRepository::scan_pattern`], buffers the
-//! result rows, and returns an owning iterator. This is "buffer-per-pattern"
-//! — fine for correctness, intentionally simple for v1.
+//! single pattern scan via [`TripleSource::scan_pattern`], buffers the result
+//! rows, and returns an owning iterator. This is "buffer-per-pattern" — fine
+//! for correctness, intentionally simple.
 //!
-//! Because the `QueryableDataset` trait returns sync iterators but sqlx is
-//! async, the implementation does
-//! `tokio::runtime::Handle::current().block_on(...)` for each scan. This is
-//! only safe when called from inside `tokio::task::spawn_blocking`, which is
-//! exactly what [`crate::SparqlEngine`] arranges.
+//! `scan_pattern` is synchronous: a backend that needs to await I/O does so
+//! internally (the Postgres source runs its async query to completion under
+//! `spawn_blocking`, which is how [`crate::SparqlEngine`] drives evaluation).
 
 use std::sync::Arc;
 
 use oxrdf::{BlankNode, Literal, NamedNode, Term};
 use sbol_db_core::{DomainError, ObjectTerm, SubjectTerm, Triple};
-use sbol_db_postgres::{GraphFilter, PatternObject, PatternSubject, TripleRepository};
+use sbol_db_storage::{GraphFilter, PatternObject, PatternSubject, TripleSource};
 use spareval::{InternalQuad, QueryableDataset};
-use tokio::runtime::Handle;
 
 /// Per-pattern row cap. Realistic SBOL queries have far fewer hits per pattern;
 /// this is a safety valve against pathological scans.
 const PATTERN_LIMIT: i64 = 1_000_000;
 
 #[derive(Clone)]
-pub struct PostgresDataset {
-    triples: Arc<TripleRepository>,
+pub struct TripleDataset {
+    source: Arc<dyn TripleSource>,
 }
 
-impl PostgresDataset {
-    pub fn new(triples: Arc<TripleRepository>) -> Self {
-        Self { triples }
+impl TripleDataset {
+    pub fn new(source: Arc<dyn TripleSource>) -> Self {
+        Self { source }
     }
 }
 
-impl<'a> QueryableDataset<'a> for &'a PostgresDataset {
+impl<'a> QueryableDataset<'a> for &'a TripleDataset {
     type InternalTerm = Term;
     type Error = DomainError;
 
@@ -75,19 +72,13 @@ impl<'a> QueryableDataset<'a> for &'a PostgresDataset {
             Some(Some(_)) => return Vec::new().into_iter(),
         };
 
-        // Run the async scan to completion synchronously. Only valid inside
-        // `spawn_blocking`; see module-level docs.
-        let repo = Arc::clone(&self.triples);
-        let result = Handle::current().block_on(async move {
-            repo.scan_pattern(
-                pattern_subject.as_ref(),
-                pattern_predicate.as_deref(),
-                pattern_object.as_ref(),
-                pattern_graph.as_ref(),
-                PATTERN_LIMIT,
-            )
-            .await
-        });
+        let result = self.source.scan_pattern(
+            pattern_subject.as_ref(),
+            pattern_predicate.as_deref(),
+            pattern_object.as_ref(),
+            pattern_graph.as_ref(),
+            PATTERN_LIMIT,
+        );
 
         match result {
             Ok(triples) => triples
