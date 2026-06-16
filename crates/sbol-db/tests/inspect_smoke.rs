@@ -1,5 +1,5 @@
 //! Smoke tests for the DB-touching read-only surfaces: `sbol-db inspect`,
-//! `sbol-db db doctor`, `sbol-db doc {list,show,delete}`, and the
+//! `sbol-db db doctor`, `sbol-db graph {list,show,delete}`, and the
 //! `sbol-db query explain` parse-only path. Each skips when
 //! `DATABASE_URL` is unset.
 
@@ -109,20 +109,20 @@ fn inspect_config_prints_effective_server_config() {
 }
 
 #[test]
-fn doc_list_returns_array() {
+fn graph_list_returns_array() {
     let Some(url) = database_url() else {
         eprintln!("DATABASE_URL not set, skipping");
         return;
     };
     let _ = cli(&url, &["db", "migrate"]);
-    let out = cli(&url, &["doc", "list", "--limit", "5"]);
-    assert!(out.status.success(), "doc list failed: {out:?}");
+    let out = cli(&url, &["graph", "list", "--limit", "5"]);
+    assert!(out.status.success(), "graph list failed: {out:?}");
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(json.is_array(), "expected array, got {json}");
 }
 
 #[test]
-fn doc_show_round_trips_with_list() {
+fn graph_show_round_trips_with_list() {
     let Some(url) = database_url() else {
         eprintln!("DATABASE_URL not set, skipping");
         return;
@@ -136,31 +136,31 @@ fn doc_show_round_trips_with_list() {
     let _ = cli(
         &url,
         &[
-            "doc",
+            "graph",
             "import",
             fixture.to_str().unwrap(),
             "--skip-existing",
         ],
     );
-    let listed = cli(&url, &["doc", "list", "--limit", "1"]);
+    let listed = cli(&url, &["graph", "list", "--limit", "1"]);
     assert!(listed.status.success(), "list failed: {listed:?}");
     let arr: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
     let id = arr[0]["id"].as_str().expect("id");
-    let shown = cli(&url, &["doc", "show", id]);
+    let shown = cli(&url, &["graph", "show", id]);
     assert!(shown.status.success(), "show failed: {shown:?}");
     let one: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
     assert_eq!(one["id"], id);
 }
 
 #[test]
-fn doc_delete_without_tty_requires_yes_flag() {
+fn graph_delete_without_tty_requires_yes_flag() {
     let Some(url) = database_url() else {
         eprintln!("DATABASE_URL not set, skipping");
         return;
     };
     let _ = cli(&url, &["db", "migrate"]);
     let bogus = "00000000-0000-0000-0000-000000000000";
-    let out = cli(&url, &["doc", "delete", bogus]);
+    let out = cli(&url, &["graph", "delete", bogus]);
     assert!(!out.status.success(), "expected failure: {out:?}");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(

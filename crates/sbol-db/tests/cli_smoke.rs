@@ -37,7 +37,7 @@ fn import_get_export_round_trip() {
     // Import.
     let import = Command::cargo_bin("sbol-db")
         .unwrap()
-        .args(["doc", "import", fixture_path().to_str().unwrap()])
+        .args(["graph", "import", fixture_path().to_str().unwrap()])
         .env("DATABASE_URL", &url)
         .output()
         .expect("run import");
