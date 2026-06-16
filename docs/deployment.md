@@ -21,17 +21,20 @@ you're deploying; reach for the later sections to do the actual work.
 
 ### Topology
 
+Storage sits behind a pluggable backend; Postgres is the default
+engine, and the shapes below describe a Postgres deployment.
+
 `sbol-db server` is a single stateless binary that talks to one
-Postgres instance. Each pod runs both an HTTP listener **and** an
+storage backend. Each pod runs both an HTTP listener **and** an
 embedded async-job worker by default — the worker subscribes to every
-registered queue and shares the database (but not the connection
+registered queue and shares the backend (but not the connection
 pool) with the HTTP routes. Everything — the typed objects, the RDF
 triplestore, the typed projections, the k-mer index, ontology
-closures, the job queue itself — lives in Postgres. Multiple pods can
-share a database safely; work is distributed across the cluster via
-`FOR UPDATE SKIP LOCKED` against `sbol_jobs`, with no leader election
-or external broker. Migrations are idempotent and run before the
-serve pods roll.
+closures, the job queue itself — lives in the backend. On Postgres,
+multiple pods share one database safely; work is distributed across
+the cluster via `FOR UPDATE SKIP LOCKED` against `sbol_jobs`, with no
+leader election or external broker. Migrations are idempotent and run
+before the serve pods roll.
 
 The HTTP surface exposes the SBOL query API, the async-job operator
 surface (`POST /jobs`, etc.), and three operational endpoints

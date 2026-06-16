@@ -1,14 +1,20 @@
-![sbol-db: A Postgres-backed data management system for synthetic biology](docs/images/sbol-db.png)
+# sbol-db
 
-`sbol-db` is a Postgres-backed data management system for
-synthetic biology data. It ingests [SBOL 3](https://sbolstandard.org/)
-RDF, upgrades SBOL 2 RDF, and imports GenBank or FASTA into SBOL 3
-before projecting designs into a typed relational schema *and* an
-RDF triplestore inside the same Postgres instance. It then exposes
-the result through five composable query primitives: typed lookup by
-IRI, bounded graph neighborhood traversal, read-only SPARQL 1.1,
-nucleotide substring + reverse-complement search, and ontology-aware
-role expansion.
+`sbol-db` is a database for synthetic biology data. It stores your
+[SBOL](https://sbolstandard.org/) designs and lets you query them by
+IRI, across the design graph, with SPARQL, or by DNA sequence.
+
+It ingests SBOL 3 RDF, upgrades SBOL 2 RDF, and imports GenBank or
+FASTA into SBOL 3, projecting every design into both a typed
+relational schema and an RDF triplestore. The query surface is five
+composable primitives: typed lookup by IRI, bounded graph neighborhood
+traversal, read-only SPARQL 1.1, nucleotide substring +
+reverse-complement search, and ontology-aware role expansion.
+
+The persistence layer sits behind a backend-neutral storage contract
+(the `sbol-db-storage` crate), so the same query surface runs on
+different storage engines. Postgres is the default engine; a RocksDB
+engine is coming soon.
 
 New to the codebase? Start with the [**crate guide**](docs/crate-guide.md).
 Want to see how a design flows through the tables? See the
@@ -28,7 +34,8 @@ Built on:
 
 - [`sbol-rs`](https://github.com/marpaia/sbol-rs) for SBOL parsing,
   validation, and RDF I/O.
-- Postgres 17 as the canonical durable store.
+- Postgres 17 as the default storage engine, implementing the
+  `sbol-db-storage` contract. A RocksDB engine is coming soon.
 - The [Oxigraph](https://github.com/oxigraph/oxigraph) ecosystem
   (`oxrdf`, `spareval`, `spargebra`, `sparesults`) for SPARQL.
 
@@ -101,14 +108,16 @@ sbol-db server
 
 ## Quickstart — Library
 
-The CLI is a thin wrapper around `sbol-db-postgres::SbolObjectService`
-and `sbol-db-sparql::SparqlEngine`. Both are usable as library types:
+The CLI wraps the `sbol-db-storage` contract: `SbolObjectService`
+(the Postgres implementation of `SbolStore`) and
+`sbol-db-sparql::SparqlEngine` (which evaluates over any `TripleSource`).
+Both are usable as library types:
 
 ```rust
-use std::sync::Arc;
 use sbol_db_core::SerializationFormat;
-use sbol_db_postgres::{connect, run_migrations, ImportInput, SbolObjectService};
+use sbol_db_postgres::{connect, run_migrations, SbolObjectService};
 use sbol_db_sparql::{ResultFormat, SparqlEngine, SparqlOptions};
+use sbol_db_storage::ImportInput;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -128,7 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .await?;
 
-    let engine = SparqlEngine::new(Arc::new(svc.triples().clone()));
+    let engine = SparqlEngine::new(svc.triple_source());
     let outcome = engine
         .execute(
             "PREFIX sbol: <http://sbols.org/v3#> \
@@ -225,14 +234,17 @@ and operator-surface details.
 | Crate              | Purpose                                                                                |
 | ------------------ | -------------------------------------------------------------------------------------- |
 | `sbol-db-core`     | Domain types shared across the workspace. No I/O dependencies.                          |
+| `sbol-db-storage`  | Backend-neutral storage contract: the `SbolStore` / `TripleSource` traits and their request/response types. Names no concrete database. |
 | `sbol-db-rdf`      | `sbol::Document` ↔ triples projection, RDF export, content hashing.                       |
-| `sbol-db-postgres` | sqlx repositories, embedded migrations, the `SbolObjectService` domain entry point.     |
-| `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over `sbol_triples`).            |
+| `sbol-db-postgres` | Postgres implementation of the storage contract: sqlx repositories, embedded migrations, the `SbolObjectService` entry point. |
+| `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over any `TripleSource`).        |
 | `sbol-db-jobs`     | Async job runtime — `JobHandler` trait, registry, worker, built-in handlers.            |
+| `sbol-db-ui`       | Embedded data-lab SPA served at `/lab` (React + Vite, baked in via `rust-embed`).        |
 | `sbol-db-server`   | axum HTTP API.                                                                          |
 | `sbol-db`          | CLI binary.                                                                             |
 
 The boundary between `sbol-db-postgres` and `sbol-db-sparql` is the
-`TripleRepository::scan_pattern` primitive: SPARQL evaluation never
-touches sqlx directly, only the repository's pattern-scan method. See
-the [crate guide](docs/crate-guide.md) for details.
+`TripleSource` trait in `sbol-db-storage`: SPARQL evaluation never
+touches sqlx directly, only the trait's pattern-scan method. That seam
+is also what lets a non-Postgres backend drop in. See the
+[crate guide](docs/crate-guide.md) for details.

@@ -1,9 +1,11 @@
 # SPARQL
 
 `sbol-db` exposes a read-only SPARQL 1.1 endpoint that evaluates
-queries directly against `sbol_triples`. Postgres is the canonical
-store; there is no sidecar triplestore, no second index to operate,
-and queries always see the latest committed state.
+queries directly against the storage backend's triples. There is no
+sidecar triplestore and no second index to operate: the evaluator
+reads through the `TripleSource` contract, and the default Postgres
+backend services each scan with an indexed SQL query against
+`sbol_triples`, so queries always see the latest committed state.
 
 The endpoint is implemented in the `sbol-db-sparql` crate on top of
 [`spareval`](https://crates.io/crates/spareval), the standalone SPARQL

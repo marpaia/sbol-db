@@ -15,8 +15,9 @@ particular surface.
 
 ## Scope
 
-`sbol-db` is a Postgres-backed data management system for
-synthetic biology data. It is **not** a
+`sbol-db` is a database for synthetic biology data. Its query surface
+runs over a pluggable storage engine (Postgres by default, with a
+RocksDB engine coming soon). It is **not** a
 DBTL workflow tracker. Projects, cycles, predictive model runs,
 builds, samples, measurements, and decision records are
 intentionally **out of scope** -- the goal is a best-in-class
@@ -44,15 +45,17 @@ the build state of this design".
 
 ## Workspace layout
 
-Six crates:
+Eight crates:
 
 | Crate              | Purpose                                                                                |
 | ------------------ | -------------------------------------------------------------------------------------- |
 | `sbol-db-core`     | Domain types (`Triple`, `IriString`, `GraphId`, `NeighborhoodQuery`, …), the k-mer encoder, the OBO parser. No I/O. |
+| `sbol-db-storage`  | Backend-neutral storage contract: the `SbolStore` / `TripleSource` / `JobQueue` traits and their request/response types. Names no concrete database. |
 | `sbol-db-rdf`      | `sbol::Document` ↔ triples projection, RDF (re-)serialization, content hashing.           |
-| `sbol-db-postgres` | sqlx repositories, embedded migrations, the `SbolObjectService` domain entry point. Hosts the sequence-search + ontology repositories.    |
-| `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over `sbol_triples`).            |
-| `sbol-db-server`   | axum HTTP API. Thin layer over the postgres + sparql crates.                            |
+| `sbol-db-postgres` | Postgres implementation of the storage contract: sqlx repositories, embedded migrations, the `SbolObjectService` entry point. Hosts the sequence-search + ontology repositories.    |
+| `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over any `TripleSource`).        |
+| `sbol-db-ui`       | Embedded data-lab SPA served at `/lab` (React + Vite, baked in via `rust-embed`).        |
+| `sbol-db-server`   | axum HTTP API. Thin layer over the storage + sparql crates.                             |
 | `sbol-db`          | CLI binary. Wires the postgres + server + sparql crates into clap subcommands.          |
 
 The boundaries matter:
@@ -60,17 +63,25 @@ The boundaries matter:
 - `sbol-db-core` has no `sqlx`, no `axum`, no `tokio` types in its
   public surface. Domain logic that doesn't need I/O lives here so
   it can be tested without a database.
-- `sbol-db-postgres` is the only crate that talks to sqlx. Every
-  other crate that needs persisted data goes through a repository
-  type (`GraphRepository`, `SbolObjectRepository`,
-  `TripleRepository`, `NeighborhoodRepository`,
-  `TypedProjectionRepository`, `ValidationRepository`,
-  `ProjectionEventRepository`).
-- `sbol-db-sparql` reaches into Postgres only through
-  `TripleRepository::scan_pattern`. SPARQL evaluation never sees sqlx
-  types or migrations.
+- `sbol-db-storage` defines the persistence contract every backend
+  satisfies. It names no concrete database, only traits and the
+  request/response types they exchange. A new backend (RocksDB) is a
+  new crate that implements these traits; nothing above the contract
+  changes.
+- `sbol-db-postgres` is the only crate that talks to sqlx. It
+  implements the storage traits over a repository layer
+  (`GraphRepository`, `SbolObjectRepository`, `TripleRepository`,
+  `NeighborhoodRepository`, `TypedProjectionRepository`,
+  `ValidationRepository`, `ProjectionEventRepository`).
+- `sbol-db-sparql` reaches storage only through the `TripleSource`
+  trait. SPARQL evaluation never sees sqlx types, migrations, or any
+  concrete backend.
 
 ## Storage model
+
+This section describes the default Postgres backend's layout; the
+contract it satisfies is the `sbol-db-storage` traits, and another
+backend is free to lay the same data out differently.
 
 Three Postgres tables carry the bulk of the data:
 
@@ -255,12 +266,14 @@ derived from `sbol::Document` during import inside one transaction,
 and a re-import deterministically replaces all three. The
 `content_hash` columns provide a cheap drift check.
 
-### Postgres as the SPARQL backend
+### SPARQL over the storage contract
 
 There is no sidecar SPARQL store. `sbol-db-sparql` implements
-`spareval::QueryableDataset` against `sbol_triples` and translates
-each triple-pattern lookup to a single indexed SQL scan. The
-trade-off: queries are always strongly consistent with Postgres
+`spareval::QueryableDataset` against a `TripleSource` and translates
+each triple-pattern lookup to a single backend scan. The default
+Postgres backend services that scan with an indexed SQL query against
+`sbol_triples`; a future backend implements the same trait. The
+trade-off: queries are always strongly consistent with committed
 writes, but evaluation makes per-pattern round-trips. For the
 workloads `sbol-db` targets (SBOL designs, tens of millions of
 triples, exploratory queries from a human-in-the-loop), this is a

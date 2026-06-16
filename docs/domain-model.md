@@ -13,6 +13,11 @@ object IRI):
 The graph owns the triples; the typed view is derived from those triples; the
 IRI threads through all of it.
 
+This two-layer model is the backend-neutral contract. The table names below
+(`sbol_graphs`, `sbol_triples`, `sbol_objects`, ...) are the default Postgres
+backend's realization of it; another storage engine satisfies the same contract
+with its own layout.
+
 ```
 STORAGE (RDF truth)                      DERIVED VIEW (typed index)
 ─────────────────────                    ──────────────────────────

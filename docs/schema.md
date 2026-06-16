@@ -5,6 +5,11 @@
 `sqlx::migrate!` either through the library
 (`sbol_db_postgres::run_migrations`) or the CLI (`sbol-db db migrate`).
 
+This is the schema of the default Postgres backend specifically: the
+concrete tables that satisfy the backend-neutral `sbol-db-storage`
+contract. Another storage engine satisfies the same contract with its
+own layout.
+
 This document is the table-by-table reference; rationale and the
 "why this shape" lives in [`crate-guide.md`](crate-guide.md).
 
