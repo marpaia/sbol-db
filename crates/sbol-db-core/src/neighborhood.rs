@@ -1,5 +1,5 @@
 //! Graph neighborhood traversal types. The traversal itself happens in
-//! `sbol-db-postgres` via a recursive CTE over `sbol_quads`.
+//! `sbol-db-postgres` via a recursive CTE over `sbol_triples`.
 
 use std::collections::HashMap;
 

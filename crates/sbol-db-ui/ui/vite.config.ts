@@ -38,7 +38,7 @@ const ROOT_API_PREFIXES = [
   "/ontology",
   "/openapi.json",
   "/objects",
-  "/documents",
+  "/graphs",
   "/sequences",
   "/jobs",
 ];

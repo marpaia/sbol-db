@@ -8,12 +8,12 @@ pub mod kmer;
 mod neighborhood;
 pub mod obo;
 mod projections;
-pub mod quad;
 mod record;
+pub mod triple;
 mod validation;
 
 pub use error::DomainError;
-pub use ids::{DocumentId, JobId, ObjectId, ValidationRunId};
+pub use ids::{GraphId, JobId, ObjectId, ValidationRunId};
 pub use iri::{IriString, IriValidationError};
 pub use neighborhood::{
     group_by_depth, Direction, EdgeInfo, EdgeObject, NeighborhoodQuery, NeighborhoodResult,
@@ -24,8 +24,8 @@ pub use projections::{
     LocationProjection, ParticipationProjection, SequenceAlphabet, SequenceProjection,
     TypedProjections,
 };
-pub use quad::{ObjectTerm, Quad, SubjectTerm};
 pub use record::{
-    DocumentRecord, ImportReport, NewDocument, ObjectSummary, SbolObjectRecord, SerializationFormat,
+    GraphRecord, ImportReport, NewGraph, ObjectSummary, SbolObjectRecord, SerializationFormat,
 };
+pub use triple::{ObjectTerm, SubjectTerm, Triple};
 pub use validation::{Severity, ValidationFinding, ValidationStatus};

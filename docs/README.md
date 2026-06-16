@@ -14,7 +14,7 @@ Entry points to the project's documentation, organized by topic.
 `sbol-db` exposes five composable ways to read what you've imported:
 
 - **[SPARQL endpoint](sparql.md)**: read-only SPARQL 1.1 evaluated
-  directly against `sbol_quads`. SELECT, ASK, CONSTRUCT, and DESCRIBE
+  directly against `sbol_triples`. SELECT, ASK, CONSTRUCT, and DESCRIBE
   are supported; SPARQL Update is rejected. Postgres remains the
   single source of truth, with no second index to operate.
 - **[Graph neighborhood](neighborhood.md)**: bounded recursive
@@ -33,7 +33,7 @@ Entry points to the project's documentation, organized by topic.
 ## Storage
 
 - **[Postgres schema](schema.md)**: table-by-table reference for the
-  embedded migrations. Documents, objects, the quad store, typed
+  embedded migrations. Documents, objects, the triplestore, typed
   projections, validation, projection events, blank-node handling,
   index choices.
 

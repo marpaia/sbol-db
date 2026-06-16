@@ -1,7 +1,7 @@
 //! `GET /lab/api/overview` — one round-trip dashboard payload.
 //!
 //! Collects everything the landing page needs in a single request:
-//! corpus counts, the last few document imports, top SBOL classes by
+//! corpus counts, the most recently created graphs, top SBOL classes by
 //! row count, and the currently loaded ontologies. The cost of doing
 //! this server-side (rather than five parallel client fetches) is one
 //! `Vec::with_capacity` and a short txn — the cost of *not* doing it
@@ -26,7 +26,7 @@ use crate::AppState;
 #[derive(Serialize, Clone)]
 pub struct Overview {
     pub counts: Counts,
-    pub recent_documents: Vec<RecentDocument>,
+    pub recent_graphs: Vec<RecentGraph>,
     pub top_classes: Vec<TopClass>,
     pub loaded_ontologies: Vec<LoadedOntology>,
 }
@@ -34,19 +34,21 @@ pub struct Overview {
 #[derive(Serialize, Clone, Default)]
 pub struct Counts {
     pub objects: i64,
-    pub documents: i64,
-    pub quads: i64,
+    pub graphs: i64,
+    pub triples: i64,
     pub sequences: i64,
     pub validation_runs: i64,
     pub ontologies: i64,
 }
 
 #[derive(Serialize, Clone)]
-pub struct RecentDocument {
+pub struct RecentGraph {
     pub id: uuid::Uuid,
+    pub iri: String,
+    pub kind: String,
     pub name: Option<String>,
     pub source_uri: Option<String>,
-    pub serialization_format: String,
+    pub serialization_format: Option<String>,
     pub created_at: DateTime<Utc>,
     pub object_count: i64,
 }
@@ -78,8 +80,8 @@ pub async fn handler(State(state): State<AppState>) -> Result<Json<Arc<Overview>
         r#"
         SELECT
           (SELECT count(*) FROM sbol_objects)         AS objects,
-          (SELECT count(*) FROM sbol_documents)       AS documents,
-          (SELECT count(*) FROM sbol_quads)           AS quads,
+          (SELECT count(*) FROM sbol_graphs)          AS graphs,
+          (SELECT count(*) FROM sbol_triples)           AS triples,
           (SELECT count(*) FROM sbol_sequences)       AS sequences,
           (SELECT count(*) FROM sbol_validation_runs) AS validation_runs,
           (SELECT count(*) FROM sbol_ontologies)      AS ontologies
@@ -91,8 +93,8 @@ pub async fn handler(State(state): State<AppState>) -> Result<Json<Arc<Overview>
 
     let counts = Counts {
         objects: counts_row.try_get("objects").map_err(db)?,
-        documents: counts_row.try_get("documents").map_err(db)?,
-        quads: counts_row.try_get("quads").map_err(db)?,
+        graphs: counts_row.try_get("graphs").map_err(db)?,
+        triples: counts_row.try_get("triples").map_err(db)?,
         sequences: counts_row.try_get("sequences").map_err(db)?,
         validation_runs: counts_row.try_get("validation_runs").map_err(db)?,
         ontologies: counts_row.try_get("ontologies").map_err(db)?,
@@ -101,20 +103,22 @@ pub async fn handler(State(state): State<AppState>) -> Result<Json<Arc<Overview>
     let recent_rows = sqlx::query::<sqlx::Postgres>(
         r#"
         SELECT
-          d.id,
-          d.name,
-          d.source_uri,
-          d.serialization_format,
-          d.created_at,
+          g.id,
+          g.iri,
+          g.kind,
+          g.name,
+          g.source_uri,
+          g.serialization_format,
+          g.created_at,
           coalesce(o.n, 0) AS object_count
-        FROM sbol_documents d
+        FROM sbol_graphs g
         LEFT JOIN (
-          SELECT document_id, count(*) AS n
+          SELECT graph_id, count(*) AS n
           FROM sbol_objects
-          WHERE document_id IS NOT NULL
-          GROUP BY document_id
-        ) o ON o.document_id = d.id
-        ORDER BY d.created_at DESC
+          WHERE graph_id IS NOT NULL
+          GROUP BY graph_id
+        ) o ON o.graph_id = g.id
+        ORDER BY g.created_at DESC
         LIMIT 5
         "#,
     )
@@ -122,11 +126,13 @@ pub async fn handler(State(state): State<AppState>) -> Result<Json<Arc<Overview>
     .await
     .map_err(db)?;
 
-    let recent_documents = recent_rows
+    let recent_graphs = recent_rows
         .into_iter()
         .map(|row| {
-            Ok::<_, ApiError>(RecentDocument {
+            Ok::<_, ApiError>(RecentGraph {
                 id: row.try_get("id").map_err(db)?,
+                iri: row.try_get("iri").map_err(db)?,
+                kind: row.try_get("kind").map_err(db)?,
                 name: row.try_get("name").map_err(db)?,
                 source_uri: row.try_get("source_uri").map_err(db)?,
                 serialization_format: row.try_get("serialization_format").map_err(db)?,
@@ -175,7 +181,7 @@ pub async fn handler(State(state): State<AppState>) -> Result<Json<Arc<Overview>
 
     let overview = Overview {
         counts,
-        recent_documents,
+        recent_graphs,
         top_classes,
         loaded_ontologies,
     };

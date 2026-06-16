@@ -1,32 +1,33 @@
 /**
- * Documents listing. Paginated table of every SBOL document the server
- * has imported, newest first. The "Import" button opens the dialog that
- * mirrors `POST /documents`; rows link into the per-document detail
- * page that surfaces validation status and the objects this document
- * produced.
+ * Graphs listing. Paginated table of every named graph the server holds,
+ * newest first. Shows both `sbol3` graphs (imported SBOL documents, with a
+ * derived object view) and `verbatim` graphs (raw RDF written through the
+ * SynBioHub-compatible Graph
+ * Store / SPARQL Update endpoints). The "Import" button creates an `sbol3`
+ * graph; rows link into the per-graph detail page.
  */
 
 import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { ChevronLeft, ChevronRight, FileText, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Share2 } from "lucide-react";
 
 import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
-import { DocumentImportDialog } from "@/components/lab/DocumentImportDialog";
+import { ImportDialog } from "@/components/lab/ImportDialog";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
-import { useDocuments } from "@/hooks/useDocuments";
-import type { DocumentSummary, ImportReport } from "@/lib/api";
+import { useGraphs } from "@/hooks/useGraphs";
+import type { GraphSummary, ImportReport } from "@/lib/api";
 import { formatRelative } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
 
-export default function DocumentsRoute() {
+export default function GraphsRoute() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [page, setPage] = useState(0);
   const [importerOpen, setImporterOpen] = useState(false);
 
-  const { data, isLoading, error } = useDocuments({
+  const { data, isLoading, error } = useGraphs({
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
   });
@@ -35,80 +36,70 @@ export default function DocumentsRoute() {
 
   const onImported = useCallback(
     (report: ImportReport) => {
-      queryClient.invalidateQueries({ queryKey: ["lab", "documents"] });
+      queryClient.invalidateQueries({ queryKey: ["lab", "graphs"] });
       queryClient.invalidateQueries({ queryKey: ["lab", "overview"] });
-      // Jump straight to the detail page — closing the dialog from there
-      // is the natural next step after a successful import.
       setImporterOpen(false);
-      navigate(`/documents/${report.document_id}`);
+      navigate(`/graphs/${report.graph_id}`);
     },
     [queryClient, navigate]
   );
 
-  const columns: DataTableColumn<DocumentSummary>[] = [
+  const columns: DataTableColumn<GraphSummary>[] = [
     {
       id: "name",
-      header: "Name",
-      width: 280,
-      cell: (d) => (
-        <div className="flex items-center gap-2">
-          <FileText
-            size={12}
-            className="shrink-0 text-muted-foreground/70"
-            aria-hidden
-          />
-          <span className="truncate text-foreground">
-            {d.name ?? <Muted>untitled</Muted>}
-          </span>
+      header: "Name / IRI",
+      width: 320,
+      cell: (g) => (
+        <div className="min-w-0">
+          {g.name ? (
+            <div className="truncate text-foreground">{g.name}</div>
+          ) : null}
+          <div className="truncate font-mono text-[11px] text-muted-foreground">
+            {g.iri}
+          </div>
         </div>
       ),
-      sortValue: (d) => d.name?.toLowerCase() ?? "",
-      filterValue: (d) => d.name ?? "",
+      sortValue: (g) => g.name?.toLowerCase() ?? g.iri,
+      filterValue: (g) => `${g.name ?? ""} ${g.iri}`,
     },
     {
-      id: "format",
-      header: "Format",
+      id: "kind",
+      header: "Kind",
+      width: 110,
+      cell: (g) => <KindBadge kind={g.kind} />,
+      sortValue: (g) => g.kind,
+      filterValue: (g) => g.kind,
+    },
+    {
+      id: "triples",
+      header: "Triples",
       width: 90,
-      cell: (d) => (
-        <span className="font-mono text-[11px] text-muted-foreground">
-          {d.serialization_format}
-        </span>
-      ),
-      sortValue: (d) => d.serialization_format,
-      filterValue: (d) => d.serialization_format,
+      align: "right",
+      cell: (g) => g.triple_count.toLocaleString(),
+      sortValue: (g) => g.triple_count,
     },
     {
       id: "objects",
       header: "Objects",
       width: 90,
       align: "right",
-      cell: (d) => d.object_count.toLocaleString(),
-      sortValue: (d) => d.object_count,
-    },
-    {
-      id: "source",
-      header: "Source",
-      width: 280,
-      cell: (d) =>
-        d.source_uri ? (
-          <span className="truncate font-mono text-[11px] text-muted-foreground">
-            {d.source_uri}
-          </span>
+      cell: (g) =>
+        g.object_count > 0 ? (
+          g.object_count.toLocaleString()
         ) : (
           <Muted>—</Muted>
         ),
-      sortValue: (d) => d.source_uri?.toLowerCase() ?? "",
-      filterValue: (d) => d.source_uri ?? "",
+      sortValue: (g) => g.object_count,
     },
     {
       id: "created_at",
-      header: "Imported",
+      header: "Created",
       width: 110,
       align: "right",
-      cell: (d) => (
-        <span title={d.created_at}>{formatRelative(d.created_at)}</span>
+      cell: (g) => (
+        <span title={g.created_at}>{formatRelative(g.created_at)}</span>
       ),
-      sortValue: (d) => d.created_at,
+      sortValue: (g) => g.created_at,
     },
   ];
 
@@ -117,10 +108,12 @@ export default function DocumentsRoute() {
       <div className="mx-auto max-w-6xl space-y-6 px-8 py-10">
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Documents</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Graphs</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              Every SBOL document the server has ingested. Each row commits
-              objects, quads, and a validation run in one transaction.
+              Every named graph in the store. <strong>SBOL3</strong> graphs are
+              imported documents with a derived object view;{" "}
+              <strong>verbatim</strong> graphs are raw RDF written through the
+              triplestore endpoints.
             </p>
           </div>
           <button
@@ -135,12 +128,12 @@ export default function DocumentsRoute() {
 
         {error ? (
           <ErrorBanner
-            title="Couldn't list documents"
+            title="Couldn't list graphs"
             body={(error as Error).message}
           />
         ) : isLoading && !data ? (
           <TableSkeleton />
-        ) : !data || data.documents.length === 0 ? (
+        ) : !data || data.graphs.length === 0 ? (
           <Empty onImport={() => setImporterOpen(true)} />
         ) : (
           <>
@@ -148,10 +141,10 @@ export default function DocumentsRoute() {
             <div className="overflow-hidden rounded-lg border bg-card">
               <DataTable
                 columns={columns}
-                rows={data.documents}
-                rowKey={(d) => d.id}
+                rows={data.graphs}
+                rowKey={(g) => g.id}
                 filterable
-                onRowClick={(d) => navigate(`/documents/${d.id}`)}
+                onRowClick={(g) => navigate(`/graphs/${g.id}`)}
               />
             </div>
             <Pagination page={page} totalPages={totalPages} onPage={setPage} />
@@ -159,12 +152,27 @@ export default function DocumentsRoute() {
         )}
       </div>
 
-      <DocumentImportDialog
+      <ImportDialog
         open={importerOpen}
         onOpenChange={setImporterOpen}
         onImported={onImported}
       />
     </div>
+  );
+}
+
+function KindBadge({ kind }: { kind: GraphSummary["kind"] }) {
+  const isSbol3 = kind === "sbol3";
+  return (
+    <span
+      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${
+        isSbol3
+          ? "bg-primary/10 text-primary"
+          : "bg-muted text-muted-foreground"
+      }`}
+    >
+      {isSbol3 ? "SBOL3" : "verbatim"}
+    </span>
   );
 }
 
@@ -189,7 +197,7 @@ function PageStatus({
       <span className="tabular-nums text-foreground">
         {total.toLocaleString()}
       </span>{" "}
-      documents
+      graphs
     </div>
   );
 }
@@ -234,10 +242,11 @@ function Pagination({
 function Empty({ onImport }: { onImport: () => void }) {
   return (
     <div className="rounded-lg border bg-card px-6 py-10 text-center">
-      <FileText size={20} className="mx-auto text-muted-foreground/60" />
-      <p className="mt-3 text-sm text-foreground">No documents yet.</p>
+      <Share2 size={20} className="mx-auto text-muted-foreground/60" />
+      <p className="mt-3 text-sm text-foreground">No graphs yet.</p>
       <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
-        Import a Turtle, JSON-LD, RDF/XML, or N-Triples file to get started.
+        Import an SBOL document, or write RDF through the Graph Store endpoints,
+        to populate the store.
       </p>
       <button
         type="button"

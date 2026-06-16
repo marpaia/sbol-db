@@ -1,5 +1,5 @@
 use sbol::ValidationReport;
-use sbol_db_core::{DocumentId, DomainError, Severity, ValidationRunId, ValidationStatus};
+use sbol_db_core::{DomainError, GraphId, Severity, ValidationRunId, ValidationStatus};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -30,7 +30,7 @@ impl ValidationRepository {
         &self,
         conn: &mut sqlx::PgConnection,
         target_iri: &str,
-        target_document_id: Option<DocumentId>,
+        graph_id: Option<GraphId>,
         validator_name: &str,
         validator_version: Option<&str>,
         ruleset: &str,
@@ -40,14 +40,14 @@ impl ValidationRepository {
         let run_row = sqlx::query(
             r#"
             INSERT INTO sbol_validation_runs (
-                target_iri, target_document_id, validator_name, validator_version,
+                target_iri, graph_id, validator_name, validator_version,
                 ruleset, status, finished_at, summary
             ) VALUES ($1, $2, $3, $4, $5, $6, now(), $7)
             RETURNING id
             "#,
         )
         .bind(target_iri)
-        .bind(target_document_id.map(|d| d.0))
+        .bind(graph_id.map(|d| d.0))
         .bind(validator_name)
         .bind(validator_version)
         .bind(ruleset)

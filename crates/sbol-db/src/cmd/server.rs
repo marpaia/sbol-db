@@ -25,7 +25,7 @@ pub async fn run(
     worker_queues: Option<String>,
     worker_id: Option<String>,
 ) -> Result<()> {
-    let engine = Arc::new(SparqlEngine::new(Arc::new(service.quads().clone())));
+    let engine = Arc::new(SparqlEngine::new(Arc::new(service.triples().clone())));
     let jobs_repo = Arc::new(JobRepository::new(pool.clone()));
 
     let worker_setup = if !no_worker {

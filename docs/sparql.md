@@ -1,8 +1,8 @@
 # SPARQL
 
 `sbol-db` exposes a read-only SPARQL 1.1 endpoint that evaluates
-queries directly against `sbol_quads`. Postgres is the canonical
-store; there is no sidecar triple store, no second index to operate,
+queries directly against `sbol_triples`. Postgres is the canonical
+store; there is no sidecar triplestore, no second index to operate,
 and queries always see the latest committed state.
 
 The endpoint is implemented in the `sbol-db-sparql` crate on top of
@@ -19,9 +19,26 @@ server (`POST`/`GET /sparql`) and the CLI (`sbol-db query sparql`).
 | `CONSTRUCT` | `text/turtle`               | N-Triples, JSON-LD, RDF/XML      |
 | `DESCRIBE`  | `text/turtle`               | N-Triples, JSON-LD, RDF/XML      |
 
-SPARQL Update (`INSERT DATA`, `DELETE DATA`, `DELETE/INSERT WHERE`,
-`LOAD`, `CLEAR`, `DROP`, `CREATE GRAPH`) is rejected at parse time
-with `400 Bad Request` and a `sparql_update_not_allowed` error code.
+SPARQL Update on the public `/sparql` endpoint is rejected at parse
+time with `400 Bad Request` and a `sparql_update_not_allowed` error
+code. Updates are accepted only on the separate authenticated
+`/sparql-auth` endpoint (see the Virtuoso-compatibility note below).
+
+The `default-graph-uri` protocol parameter is honored: when supplied
+(and the query carries no `FROM` clause of its own) it scopes the
+default graph to that one named graph. Without it, the default graph is
+the union of all named graphs. A query's explicit `FROM`/`FROM NAMED`
+always takes precedence.
+
+## SynBioHub / Virtuoso compatibility
+
+`sbol-db` can stand in for Virtuoso as a SynBioHub triplestore. In
+addition to read-only `/sparql`, it exposes the authenticated write
+surface SynBioHub expects: `POST /sparql-auth` for SPARQL Update and
+`POST|PUT|DELETE|GET /sparql-graph-crud-auth/` for the Graph Store HTTP
+Protocol, both behind HTTP Basic auth. RDF posted there is stored
+**verbatim** (no SBOL2 to SBOL3 upgrade). See
+[`docs/synbiohub.md`](synbiohub.md).
 
 ## CLI
 
@@ -78,7 +95,7 @@ CONSTRUCT, Turtle for SELECT) return `406 Not Acceptable` with a
 
 ## Named-graph semantics
 
-`sbol-db` puts every imported quad in a named graph
+`sbol-db` puts every imported triple in a named graph
 `graph:document:{document_id}`. The default graph (the unnamed
 graph in SPARQL terms) is configured as the **union of all named
 graphs** so plain queries return data without requiring callers to
@@ -104,8 +121,8 @@ WHERE {
 }
 ```
 
-The document IRI is the `document_id` UUID returned in the
-`ImportReport` (or visible in the `sbol_documents` table).
+The graph IRI embeds the `graph_id` UUID returned in the
+`ImportReport` (or visible in the `sbol_graphs` table).
 
 ## Architecture
 
@@ -114,13 +131,13 @@ SPARQL query string
   → spargebra::SparqlParser::parse_query   (rejects Updates)
   → spareval::QueryEvaluator
   → PostgresDataset (impl spareval::QueryableDataset)
-  → QuadRepository::scan_pattern  (one SQL scan per triple pattern)
-  → sbol_quads (Postgres)
+  → TripleRepository::scan_pattern  (one SQL scan per triple pattern)
+  → sbol_triples (Postgres)
 ```
 
 The evaluator is called once per query; the dataset is called once
 per triple pattern in the query plan. Each pattern lookup translates
-to a single `SELECT … FROM sbol_quads WHERE …` with a dynamic
+to a single `SELECT … FROM sbol_triples WHERE …` with a dynamic
 `WHERE` clause built only from the bound positions. Postgres' planner
 picks the right SPOG / POSG / OSPG / GSPO index for the access shape.
 
@@ -185,8 +202,8 @@ a non-zero status.
 SQL round-trip per pattern. For SBOL-scale graphs this is fine in
 practice:
 
-- Tens of millions of quads fit comfortably in Postgres with the
-  indexes from `migrations/20260515000004_sbol_quads.sql` and serve
+- Tens of millions of triples fit comfortably in Postgres with the
+  indexes from `migrations/20260515000004_sbol_triples.sql` and serve
   most query shapes in single-digit milliseconds per pattern.
 - The chatter doesn't dominate end-to-end latency until joins span
   many high-cardinality patterns. For those, the optimization path is

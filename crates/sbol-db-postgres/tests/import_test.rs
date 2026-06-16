@@ -23,7 +23,7 @@ async fn fresh_service() -> SbolObjectService {
     run_migrations(&pool).await.expect("migrate");
     // Reset between tests so they're isolated.
     sqlx::query(
-        "TRUNCATE sbol_documents, sbol_objects, sbol_quads, sbol_validation_findings, \
+        "TRUNCATE sbol_graphs, sbol_objects, sbol_triples, sbol_validation_findings, \
          sbol_validation_runs, sbol_object_revisions, sbol_rdf_projection_events RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
@@ -51,7 +51,7 @@ async fn imports_simple_component_fixture() {
         .expect("import");
 
     assert_eq!(report.object_count, 2);
-    assert!(report.quad_count >= 10);
+    assert!(report.triple_count >= 10);
     assert_eq!(report.validation_status, ValidationStatus::Passed);
 
     let obj = svc
@@ -85,16 +85,17 @@ async fn reimport_is_idempotent_and_bumps_revision() {
     };
     let first = svc.import_document(input()).await.expect("first import");
     let second = svc.import_document(input()).await.expect("second import");
-    assert_ne!(first.document_id, second.document_id);
+    assert_ne!(first.graph_id, second.graph_id);
 
-    // Second import should leave only the second document's quads behind,
-    // since each import owns its own document graph.
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM sbol_quads WHERE document_id = $1")
-        .bind(second.document_id.as_uuid())
+    // Each import owns its own `graph:document:{id}` graph, so the second
+    // document's triples live in that graph.
+    let second_graph = format!("graph:document:{}", second.graph_id.as_uuid());
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM sbol_triples WHERE graph_iri = $1")
+        .bind(&second_graph)
         .fetch_one(svc.pool())
         .await
         .expect("count");
-    assert_eq!(count as usize, second.quad_count);
+    assert_eq!(count as usize, second.triple_count);
 
     // The object's revision_number should be >= 2 because the upsert created
     // a fresh revision on each import.
@@ -125,27 +126,25 @@ async fn validation_findings_are_persisted() {
         .await
         .expect("import");
 
-    let runs: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM sbol_validation_runs WHERE target_document_id = $1",
-    )
-    .bind(report.document_id.as_uuid())
-    .fetch_one(svc.pool())
-    .await
-    .expect("count");
-    assert_eq!(runs, 1);
-
-    let summary_row =
-        sqlx::query("SELECT summary FROM sbol_validation_runs WHERE target_document_id = $1")
-            .bind(report.document_id.as_uuid())
+    let runs: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sbol_validation_runs WHERE graph_id = $1")
+            .bind(report.graph_id.as_uuid())
             .fetch_one(svc.pool())
             .await
-            .expect("summary");
+            .expect("count");
+    assert_eq!(runs, 1);
+
+    let summary_row = sqlx::query("SELECT summary FROM sbol_validation_runs WHERE graph_id = $1")
+        .bind(report.graph_id.as_uuid())
+        .fetch_one(svc.pool())
+        .await
+        .expect("summary");
     let summary: serde_json::Value = summary_row.try_get("summary").unwrap();
     assert!(summary.get("issue_count").is_some());
 }
 
 #[tokio::test]
-async fn quads_round_trip_through_export() {
+async fn triples_round_trip_through_export() {
     let _guard = db_lock().await;
     let svc = fresh_service().await;
     let _ = svc
@@ -162,14 +161,15 @@ async fn quads_round_trip_through_export() {
         .await
         .expect("import");
 
-    let quads = svc
-        .quads()
-        .quads_for_subject("https://example.org/sbol-db/test/promoter_j23119")
+    let triples = svc
+        .triples()
+        .triples_for_subject("https://example.org/sbol-db/test/promoter_j23119")
         .await
-        .expect("quads");
-    assert!(!quads.is_empty(), "promoter should have quads");
+        .expect("triples");
+    assert!(!triples.is_empty(), "promoter should have triples");
 
-    let turtle = sbol_db_rdf::quads_to_rdf(&quads, SerializationFormat::Turtle).expect("serialize");
+    let turtle =
+        sbol_db_rdf::triples_to_rdf(&triples, SerializationFormat::Turtle).expect("serialize");
     // Re-parse to verify the output is valid Turtle the upstream crate accepts.
     let _ = sbol::Document::read(&turtle, sbol::RdfFormat::Turtle).expect("re-parse");
 }

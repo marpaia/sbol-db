@@ -1,12 +1,12 @@
 use sbol_db_core::{
-    DomainError, EdgeInfo, EdgeObject, IriString, NeighborhoodResult, ObjectTerm, Quad,
-    SerializationFormat, SubjectTerm,
+    DomainError, EdgeInfo, EdgeObject, IriString, NeighborhoodResult, ObjectTerm,
+    SerializationFormat, SubjectTerm, Triple,
 };
 
-/// Convert traversal edges back into the domain `Quad` shape so they can be
-/// re-serialized via [`quads_to_rdf`].
-pub fn neighborhood_to_quads(result: &NeighborhoodResult) -> Vec<Quad> {
-    result.edges.iter().map(edge_to_quad).collect()
+/// Convert traversal edges back into the domain `Triple` shape so they can be
+/// re-serialized via [`triples_to_rdf`].
+pub fn neighborhood_to_triples(result: &NeighborhoodResult) -> Vec<Triple> {
+    result.edges.iter().map(edge_to_triple).collect()
 }
 
 /// Serialize a [`NeighborhoodResult`]'s edges directly as an RDF document.
@@ -14,11 +14,11 @@ pub fn neighborhood_to_rdf(
     result: &NeighborhoodResult,
     format: SerializationFormat,
 ) -> Result<String, DomainError> {
-    let quads = neighborhood_to_quads(result);
-    quads_to_rdf(&quads, format)
+    let triples = neighborhood_to_triples(result);
+    triples_to_rdf(&triples, format)
 }
 
-fn edge_to_quad(edge: &EdgeInfo) -> Quad {
+fn edge_to_triple(edge: &EdgeInfo) -> Triple {
     let subject = if edge.subject_is_blank {
         SubjectTerm::BlankNode(edge.subject.clone())
     } else {
@@ -37,7 +37,7 @@ fn edge_to_quad(edge: &EdgeInfo) -> Quad {
             language: language.clone(),
         },
     };
-    Quad {
+    Triple {
         graph_iri: None,
         subject,
         predicate: IriString::unchecked(&edge.predicate),
@@ -45,12 +45,15 @@ fn edge_to_quad(edge: &EdgeInfo) -> Quad {
     }
 }
 
-/// Re-serialize a quad set as an RDF document in the requested format. The
-/// quads are first rendered to N-Triples (the canonical lossless wire form
+/// Re-serialize a triple set as an RDF document in the requested format. The
+/// triples are first rendered to N-Triples (the canonical lossless wire form
 /// for our subject-position blank nodes) then re-parsed by `sbol-rdf` for
 /// non-N-Triples formats.
-pub fn quads_to_rdf(quads: &[Quad], format: SerializationFormat) -> Result<String, DomainError> {
-    let ntriples = render_ntriples(quads);
+pub fn triples_to_rdf(
+    triples: &[Triple],
+    format: SerializationFormat,
+) -> Result<String, DomainError> {
+    let ntriples = render_ntriples(triples);
     if matches!(format, SerializationFormat::NTriples) {
         return Ok(ntriples);
     }
@@ -72,9 +75,9 @@ pub fn quads_to_rdf(quads: &[Quad], format: SerializationFormat) -> Result<Strin
         .map_err(|e| DomainError::Serialization(e.to_string()))
 }
 
-fn render_ntriples(quads: &[Quad]) -> String {
+fn render_ntriples(triples: &[Triple]) -> String {
     let mut out = String::new();
-    for q in quads {
+    for q in triples {
         let subject = match &q.subject {
             SubjectTerm::Iri(iri) => format!("<{}>", iri.as_str()),
             SubjectTerm::BlankNode(node) => format!("_:{}", node),

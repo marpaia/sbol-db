@@ -1,8 +1,8 @@
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 
 import DashboardRoute from "@/routes/DashboardRoute";
-import DocumentDetailRoute from "@/routes/DocumentDetailRoute";
-import DocumentsRoute from "@/routes/DocumentsRoute";
+import GraphDetailRoute from "@/routes/GraphDetailRoute";
+import GraphsRoute from "@/routes/GraphsRoute";
 import ImportRoute from "@/routes/ImportRoute";
 import JobDetailRoute from "@/routes/JobDetailRoute";
 import JobsRoute from "@/routes/JobsRoute";
@@ -34,8 +34,8 @@ export default function App() {
           path="schema/tables/:schema/:name"
           element={<RedirectToSchemaTable />}
         />
-        <Route path="documents" element={<DocumentsRoute />} />
-        <Route path="documents/:id" element={<DocumentDetailRoute />} />
+        <Route path="graphs" element={<GraphsRoute />} />
+        <Route path="graphs/:id" element={<GraphDetailRoute />} />
         <Route path="import" element={<ImportRoute />} />
         <Route path="objects" element={<ObjectsRoute />} />
         <Route path="objects/lookup" element={<ObjectLookupRoute />} />

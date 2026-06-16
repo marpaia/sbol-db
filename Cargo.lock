@@ -2781,6 +2781,7 @@ name = "sbol-db-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "chrono",
  "hex",
  "metrics",

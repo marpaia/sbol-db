@@ -99,7 +99,7 @@ At query time the engine:
 For patterns shorter than `K=8` the seed step is skipped and the
 candidate set is built via a bounded `UPPER(elements) LIKE '%P%'`
 scan on `sbol_sequences`. This is intentionally simple and bounded:
-`sbol_sequences` is small relative to `sbol_quads` and short-pattern
+`sbol_sequences` is small relative to `sbol_triples` and short-pattern
 search is dominated by the restriction-site use case (6 bp).
 
 ## Performance

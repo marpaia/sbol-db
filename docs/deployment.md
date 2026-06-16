@@ -26,7 +26,7 @@ Postgres instance. Each pod runs both an HTTP listener **and** an
 embedded async-job worker by default — the worker subscribes to every
 registered queue and shares the database (but not the connection
 pool) with the HTTP routes. Everything — the typed objects, the RDF
-quad store, the typed projections, the k-mer index, ontology
+triplestore, the typed projections, the k-mer index, ontology
 closures, the job queue itself — lives in Postgres. Multiple pods can
 share a database safely; work is distributed across the cluster via
 `FOR UPDATE SKIP LOCKED` against `sbol_jobs`, with no leader election
@@ -74,7 +74,7 @@ When `--no-worker` is set, the worker pool isn't opened at all.
 
 The runtime guarantees at-least-once execution of every enqueued
 job. Handlers must therefore be idempotent or use `idempotency_key`;
-`sbol_documents.content_hash` gives natural idempotency for imports.
+`sbol_graphs.content_hash` gives natural idempotency for imports.
 
 - **Lease.** A worker takes a lease (default 60s) on dequeue and
   renews it while the handler runs. The lease in Postgres is what
@@ -95,7 +95,7 @@ Built-in handlers ship in `sbol-db-jobs::handlers`. Today:
 
 | `kind` | Purpose |
 |---|---|
-| `import_document` | Async equivalent of `POST /documents`. Payload is the inline import body, format (`turtle`, `jsonld`, `rdfxml`, `ntriples`, `genbank`, or `fasta`), optional namespace, and metadata; `result` is the `ImportReport`. |
+| `import_document` | Async equivalent of `POST /graphs`. Payload is the inline import body, format (`turtle`, `jsonld`, `rdfxml`, `ntriples`, `genbank`, or `fasta`), optional namespace, and metadata; `result` is the `ImportReport`. |
 | `import_remote_document` | Worker-side public HTTPS fetch followed by the same import pipeline. Payload is `{url, format, namespace?, document_iri?, name?, description?, created_by?}`; the worker rejects non-HTTPS, local, and private-address URLs before fetching. |
 
 Future handlers (projection worker, ontology fetch, index rebuild)
@@ -128,7 +128,7 @@ sbol-db worker --concurrency 8 --queues default
 The `/jobs` routes inherit the same `SBOL_DB_MAX_BODY_BYTES` and
 `SBOL_DB_REQUEST_TIMEOUT_SECS` limits as the rest of the HTTP surface;
 keep that in mind when enqueueing large `import_document` bodies (split
-into multiple jobs, or use synchronous `POST /documents` with a higher
+into multiple jobs, or use synchronous `POST /graphs` with a higher
 body cap if you really need a single 200 MB import). Remote imports keep
 large source bodies out of the enqueue request, but the fetched response
 still runs inside the worker's request and shutdown budgets.
@@ -725,7 +725,7 @@ LOCKED handles distribution.
 
 The dominant tables grow with the imported design corpus:
 
-- `sbol_quads` — one row per RDF triple, ~10× the typed-object count.
+- `sbol_triples` — one row per RDF triple, ~10× the typed-object count.
   Plan for tens of millions of rows on a serious deployment.
 - `sbol_sequence_kmers` — one row per 8-mer position per nucleotide
   Sequence. Long sequences blow up here; e.g. a 10 kb plasmid yields
@@ -751,10 +751,10 @@ The chart provisions no backup tooling. Production deployments should:
   Aiven, etc.).
 - Or, run `pg_dump` as a sidecar CronJob outside this chart.
 
-Since every projection is deterministically rebuildable from the
-imported documents, a full restore from the raw payloads
-(`sbol_documents.raw_payload`) is a fallback option — but it's a
-last-resort path, not a primary backup strategy.
+The stored triples (`sbol_triples`) are the canonical record, and every
+derived projection is deterministically rebuildable from them.
+Replaying the triples is a fallback restore path, not a primary backup
+strategy.
 
 ## Troubleshooting
 

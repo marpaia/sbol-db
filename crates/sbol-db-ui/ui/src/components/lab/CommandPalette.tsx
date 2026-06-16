@@ -17,7 +17,6 @@ import {
   Clock,
   Database,
   Dna,
-  FileText,
   Gauge,
   GitBranch,
   HardDrive,
@@ -26,6 +25,7 @@ import {
   Import,
   Library,
   Network,
+  Share2,
   Star,
   Table2,
 } from "lucide-react";
@@ -120,9 +120,9 @@ export function CommandPalette({
               onSelect={() => goTo("/")}
             />
             <Item
-              icon={<FileText size={14} />}
-              label="Documents"
-              onSelect={() => goTo("/documents")}
+              icon={<Share2 size={14} />}
+              label="Graphs"
+              onSelect={() => goTo("/graphs")}
             />
             <Item
               icon={<Import size={14} />}

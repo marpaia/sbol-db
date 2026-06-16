@@ -8,7 +8,7 @@
  *
  * Optional metadata fields (name, description, source URI, document
  * IRI, created by) are folded into query parameters. On success we
- * surface the ImportReport (object count, quad count, validation
+ * surface the ImportReport (object count, triple count, validation
  * status) and offer a button to jump to the new detail page.
  */
 
@@ -24,10 +24,10 @@ import {
 } from "@/lib/api";
 import { describeError } from "@/lib/utils";
 
-export interface DocumentImportDialogProps {
+export interface ImportDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Called once the import succeeds. Receives the new document id. */
+  /** Called once the import succeeds. Receives the import report. */
   onImported: (report: ImportReport) => void;
 }
 
@@ -63,11 +63,11 @@ function formatFromFilename(name: string): ImportDocumentFormat | null {
   return EXTENSION_FORMAT[ext] ?? null;
 }
 
-export function DocumentImportDialog({
+export function ImportDialog({
   open,
   onOpenChange,
   onImported,
-}: DocumentImportDialogProps) {
+}: ImportDialogProps) {
   const [tab, setTab] = useState<Tab>("paste");
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [format, setFormat] = useState<ImportDocumentFormat>("turtle");
@@ -481,7 +481,7 @@ function Status({ phase, onDone }: { phase: Phase; onDone: () => void }) {
       </div>
       <dl className="mt-3 grid grid-cols-3 gap-2">
         <Stat label="Objects" value={r.object_count} />
-        <Stat label="Quads" value={r.quad_count} />
+        <Stat label="Triples" value={r.triple_count} />
         <Stat
           label="Validation"
           value={r.validation_issue_count}

@@ -53,6 +53,9 @@ impl IntoResponse for ApiError {
             ApiError::Sparql(SparqlError::UnsupportedFormat(_)) => {
                 (StatusCode::NOT_ACCEPTABLE, "sparql_unsupported_format")
             }
+            ApiError::Sparql(SparqlError::Unsupported(_)) => {
+                (StatusCode::NOT_IMPLEMENTED, "sparql_unsupported")
+            }
             ApiError::Sparql(_) => (StatusCode::INTERNAL_SERVER_ERROR, "sparql_error"),
             ApiError::Timeout => (StatusCode::GATEWAY_TIMEOUT, "timeout"),
         };

@@ -55,6 +55,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 sha3 = "0.10"
 hex = "0.4"
+base64 = "0.22"
 url = "2"
 
 assert_cmd = "2"

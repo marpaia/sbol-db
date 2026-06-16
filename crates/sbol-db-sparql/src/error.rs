@@ -24,6 +24,9 @@ pub enum SparqlError {
     #[error("unsupported result format for this query form: {0}")]
     UnsupportedFormat(String),
 
+    #[error("unsupported SPARQL Update construct: {0}")]
+    Unsupported(String),
+
     #[error(transparent)]
     Domain(#[from] DomainError),
 

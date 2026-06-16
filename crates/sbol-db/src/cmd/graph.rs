@@ -5,19 +5,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use sbol_db_core::{DocumentId, ImportReport, IriString, SerializationFormat};
-use sbol_db_postgres::{
-    DocumentRepository, ImportInput, ListDocumentsFilter, PgPool, SbolObjectService,
-};
+use sbol_db_core::{GraphId, ImportReport, IriString, SerializationFormat};
+use sbol_db_postgres::{GraphRepository, ImportInput, ListGraphsFilter, PgPool, SbolObjectService};
 use sbol_db_rdf::hash_bytes;
 
-use crate::cli::DocAction;
+use crate::cli::GraphAction;
 use crate::format::{parse_format, resolve_format};
 use crate::output::print_json;
 
-pub async fn run(pool: PgPool, service: Arc<SbolObjectService>, action: DocAction) -> Result<()> {
+pub async fn run(pool: PgPool, service: Arc<SbolObjectService>, action: GraphAction) -> Result<()> {
     match action {
-        DocAction::Import {
+        GraphAction::Import {
             path,
             format,
             namespace,
@@ -40,18 +38,18 @@ pub async fn run(pool: PgPool, service: Arc<SbolObjectService>, action: DocActio
             )
             .await
         }
-        DocAction::List {
+        GraphAction::List {
             limit,
             name,
             format,
         } => {
-            let repo = DocumentRepository::new(pool);
+            let repo = GraphRepository::new(pool);
             let format = format
                 .as_deref()
                 .map(|f| parse_format(f).ok_or_else(|| anyhow!("unknown format: {f}")))
                 .transpose()?;
             let rows = repo
-                .list(&ListDocumentsFilter {
+                .list(&ListGraphsFilter {
                     name,
                     format,
                     limit,
@@ -59,22 +57,22 @@ pub async fn run(pool: PgPool, service: Arc<SbolObjectService>, action: DocActio
                 .await?;
             print_json(&rows)
         }
-        DocAction::Show { id } => {
-            let repo = DocumentRepository::new(pool);
+        GraphAction::Show { id } => {
+            let repo = GraphRepository::new(pool);
             let doc = repo
-                .get(DocumentId(id))
+                .get(GraphId(id))
                 .await?
                 .ok_or_else(|| anyhow!("no document with id {id}"))?;
             print_json(&doc)
         }
-        DocAction::Delete { id, yes } => delete(pool, id, yes).await,
-        DocAction::Validate { document_id } => {
+        GraphAction::Delete { id, yes } => delete(pool, id, yes).await,
+        GraphAction::Validate { graph_id } => {
             println!(
                 "Revalidation is not yet implemented: it requires re-parseable raw \
                  payload retention, which is not yet wired through. Inspect the \
                  sbol_validation_runs / sbol_validation_findings tables directly."
             );
-            let _ = document_id;
+            let _ = graph_id;
             Ok(())
         }
     }
@@ -133,7 +131,7 @@ async fn import(
         let namespace = namespace.or_else(|| default_namespace_for_path(&path, format));
         if skip_existing {
             let hash = hash_bytes(body.as_bytes());
-            if service.documents().exists_by_hash(&hash).await? {
+            if service.graphs().exists_by_hash(&hash).await? {
                 println!("[skipped] {} (already imported)", path.display());
                 return Ok(());
             }
@@ -172,8 +170,8 @@ async fn delete(pool: PgPool, id: uuid::Uuid, yes: bool) -> Result<()> {
             return Ok(());
         }
     }
-    let repo = DocumentRepository::new(pool);
-    let deleted = repo.delete(DocumentId(id)).await?;
+    let repo = GraphRepository::new(pool);
+    let deleted = repo.delete(GraphId(id)).await?;
     print_json(&serde_json::json!({
         "id": id,
         "deleted": deleted,
@@ -209,7 +207,7 @@ async fn run_directory_import_atomic(
             .or_else(|| default_namespace_for_path(path, format));
         if skip_existing {
             let hash = hash_bytes(body.as_bytes());
-            if service.documents().exists_by_hash(&hash).await? {
+            if service.graphs().exists_by_hash(&hash).await? {
                 skipped += 1;
                 println!("[skip] {}", path.display());
                 continue;
@@ -286,8 +284,8 @@ async fn run_directory_import_per_file(
             drop(permit);
             let label = match &outcome {
                 OutcomeOfFile::Imported(rep) => format!(
-                    "imported ({} objects, {} quads, {:?})",
-                    rep.object_count, rep.quad_count, rep.validation_status
+                    "imported ({} objects, {} triples, {:?})",
+                    rep.object_count, rep.triple_count, rep.validation_status
                 ),
                 OutcomeOfFile::Skipped => "skipped (already imported)".to_owned(),
                 OutcomeOfFile::Failed(err) => format!("FAILED: {err}"),
@@ -341,7 +339,7 @@ async fn import_one(
         .or_else(|| default_namespace_for_path(path, format));
     if skip_existing {
         let hash = hash_bytes(body.as_bytes());
-        match service.documents().exists_by_hash(&hash).await {
+        match service.graphs().exists_by_hash(&hash).await {
             Ok(true) => return OutcomeOfFile::Skipped,
             Ok(false) => {}
             Err(e) => return OutcomeOfFile::Failed(e.to_string()),

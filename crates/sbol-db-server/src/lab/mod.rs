@@ -10,7 +10,7 @@
 
 mod cancel;
 mod convert;
-mod documents;
+mod graphs;
 mod observability;
 mod overview;
 mod schema;
@@ -37,7 +37,8 @@ pub fn router() -> Router<AppState> {
         .route("/sparql/validate", post(sparql::validate))
         .route("/schema/sql", get(schema::sql))
         .route("/schema/sparql", get(schema::sparql))
-        .route("/documents", get(documents::list_documents))
-        .route("/documents/:id", get(documents::get_document_detail))
+        .route("/graphs", get(graphs::list_graphs))
+        .route("/graphs/:id", get(graphs::get_graph_detail))
+        .route("/graphs/:id/triples", get(graphs::get_graph_triples))
         .nest("/observability", observability::router())
 }

@@ -8,8 +8,7 @@ use sbol_db_core::kmer::{
     KmerStrand, KMER_BITS, KMER_K, KMER_MASK,
 };
 use sbol_db_core::{
-    DocumentId, IriString, IriValidationError, JobId, ObjectId, SerializationFormat,
-    ValidationRunId,
+    GraphId, IriString, IriValidationError, JobId, ObjectId, SerializationFormat, ValidationRunId,
 };
 use uuid::Uuid;
 
@@ -419,7 +418,7 @@ macro_rules! id_roundtrip_props {
     };
 }
 
-id_roundtrip_props!(document_id, DocumentId);
+id_roundtrip_props!(graph_id, GraphId);
 id_roundtrip_props!(object_id, ObjectId);
 id_roundtrip_props!(validation_run_id, ValidationRunId);
 id_roundtrip_props!(job_id, JobId);
@@ -428,11 +427,11 @@ id_roundtrip_props!(job_id, JobId);
 /// serde representation). This is load-bearing for column shape in Postgres.
 #[test]
 fn ids_serialize_as_bare_uuid_string() {
-    let id = DocumentId::new();
+    let id = GraphId::new();
     let value = serde_json::to_value(id).unwrap();
     assert!(
         value.is_string(),
-        "DocumentId must serialize as string, got {value}"
+        "GraphId must serialize as string, got {value}"
     );
     assert_eq!(value.as_str().unwrap(), id.to_string());
 }

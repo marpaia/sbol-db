@@ -8,19 +8,19 @@ use crate::hash::content_hash;
 use crate::vocab::{RDF_TYPE, SBOL_ROLE, SBOL_TYPE};
 
 /// Per-object slice of the document graph. The summary feeds `sbol_objects`,
-/// the `triples` feed `sbol_quads`.
+/// the `triples` feed `sbol_triples`.
 #[derive(Clone, Debug)]
-pub struct ObjectQuads {
+pub struct ObjectTriples {
     pub summary: ObjectSummary,
     pub triples: Vec<Triple>,
 }
 
-/// Build one `ObjectQuads` per top-level + typed SBOL object in the document.
+/// Build one `ObjectTriples` per top-level + typed SBOL object in the document.
 ///
 /// Objects whose identity is a blank node are skipped because the schema's
-/// `sbol_iri` domain rejects `_:b...` — their triples still land in `sbol_quads`
-/// via [`document_to_quads`](crate::document_to_quads).
-pub fn document_to_summaries(doc: &Document) -> Vec<ObjectQuads> {
+/// `sbol_iri` domain rejects `_:b...` — their triples still land in `sbol_triples`
+/// via [`document_to_triples`](crate::document_to_triples).
+pub fn document_to_summaries(doc: &Document) -> Vec<ObjectTriples> {
     let triples_by_subject = group_triples_by_subject(doc);
     let mut out = Vec::with_capacity(doc.typed_objects().len());
 
@@ -35,7 +35,7 @@ pub fn document_to_summaries(doc: &Document) -> Vec<ObjectQuads> {
             .cloned()
             .unwrap_or_default();
         let summary = build_summary(obj, iri, &triples);
-        out.push(ObjectQuads { summary, triples });
+        out.push(ObjectTriples { summary, triples });
     }
     out
 }

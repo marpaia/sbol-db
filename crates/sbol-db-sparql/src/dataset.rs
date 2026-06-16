@@ -1,7 +1,7 @@
-//! Postgres-backed [`spareval::QueryableDataset`] over `sbol_quads`.
+//! Postgres-backed [`spareval::QueryableDataset`] over `sbol_triples`.
 //!
 //! Each `internal_quads_for_pattern` call translates the bound positions to a
-//! single SQL pattern scan via [`QuadRepository::scan_pattern`], buffers the
+//! single SQL pattern scan via [`TripleRepository::scan_pattern`], buffers the
 //! result rows, and returns an owning iterator. This is "buffer-per-pattern"
 //! — fine for correctness, intentionally simple for v1.
 //!
@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use oxrdf::{BlankNode, Literal, NamedNode, Term};
-use sbol_db_core::{DomainError, ObjectTerm, Quad, SubjectTerm};
-use sbol_db_postgres::{GraphFilter, PatternObject, PatternSubject, QuadRepository};
+use sbol_db_core::{DomainError, ObjectTerm, SubjectTerm, Triple};
+use sbol_db_postgres::{GraphFilter, PatternObject, PatternSubject, TripleRepository};
 use spareval::{InternalQuad, QueryableDataset};
 use tokio::runtime::Handle;
 
@@ -25,12 +25,12 @@ const PATTERN_LIMIT: i64 = 1_000_000;
 
 #[derive(Clone)]
 pub struct PostgresDataset {
-    quads: Arc<QuadRepository>,
+    triples: Arc<TripleRepository>,
 }
 
 impl PostgresDataset {
-    pub fn new(quads: Arc<QuadRepository>) -> Self {
-        Self { quads }
+    pub fn new(triples: Arc<TripleRepository>) -> Self {
+        Self { triples }
     }
 }
 
@@ -77,7 +77,7 @@ impl<'a> QueryableDataset<'a> for &'a PostgresDataset {
 
         // Run the async scan to completion synchronously. Only valid inside
         // `spawn_blocking`; see module-level docs.
-        let repo = Arc::clone(&self.quads);
+        let repo = Arc::clone(&self.triples);
         let result = Handle::current().block_on(async move {
             repo.scan_pattern(
                 pattern_subject.as_ref(),
@@ -90,9 +90,9 @@ impl<'a> QueryableDataset<'a> for &'a PostgresDataset {
         });
 
         match result {
-            Ok(quads) => quads
+            Ok(triples) => triples
                 .into_iter()
-                .map(quad_to_internal_quad)
+                .map(triple_to_internal)
                 .collect::<Vec<_>>()
                 .into_iter(),
             Err(e) => vec![Err(e)].into_iter(),
@@ -108,13 +108,13 @@ impl<'a> QueryableDataset<'a> for &'a PostgresDataset {
     }
 }
 
-fn quad_to_internal_quad(quad: Quad) -> Result<InternalQuad<Term>, DomainError> {
-    let subject = match quad.subject {
+fn triple_to_internal(triple: Triple) -> Result<InternalQuad<Term>, DomainError> {
+    let subject = match triple.subject {
         SubjectTerm::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri.as_str())),
         SubjectTerm::BlankNode(id) => Term::BlankNode(BlankNode::new_unchecked(id)),
     };
-    let predicate = Term::NamedNode(NamedNode::new_unchecked(quad.predicate.as_str()));
-    let object = match quad.object {
+    let predicate = Term::NamedNode(NamedNode::new_unchecked(triple.predicate.as_str()));
+    let object = match triple.object {
         ObjectTerm::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri.as_str())),
         ObjectTerm::BlankNode(id) => Term::BlankNode(BlankNode::new_unchecked(id)),
         ObjectTerm::Literal {
@@ -130,7 +130,7 @@ fn quad_to_internal_quad(quad: Quad) -> Result<InternalQuad<Term>, DomainError> 
             Term::Literal(literal)
         }
     };
-    let graph_name = quad
+    let graph_name = triple
         .graph_iri
         .map(|g| Term::NamedNode(NamedNode::new_unchecked(g.as_str())));
     Ok(InternalQuad {

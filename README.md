@@ -4,14 +4,16 @@
 synthetic biology data. It ingests [SBOL 3](https://sbolstandard.org/)
 RDF, upgrades SBOL 2 RDF, and imports GenBank or FASTA into SBOL 3
 before projecting designs into a typed relational schema *and* an
-RDF quad store inside the same Postgres instance. It then exposes
+RDF triplestore inside the same Postgres instance. It then exposes
 the result through five composable query primitives: typed lookup by
 IRI, bounded graph neighborhood traversal, read-only SPARQL 1.1,
 nucleotide substring + reverse-complement search, and ontology-aware
 role expansion.
 
 New to the codebase? Start with the [**crate guide**](docs/crate-guide.md).
-Deploying it? See [**docs/deployment.md**](docs/deployment.md).
+Want to see how a design flows through the tables? See the
+[**domain model**](docs/domain-model.md). Deploying it? See
+[**docs/deployment.md**](docs/deployment.md).
 
 ## Scope
 
@@ -50,20 +52,20 @@ sbol-db db migrate
 
 ```sh
 # Import a single document.
-sbol-db doc import path/to/design.ttl
+sbol-db graph import path/to/design.ttl
 
 # SBOL 2 RDF is upgraded to SBOL 3 on import.
-sbol-db doc import path/to/legacy-sbol2.xml
+sbol-db graph import path/to/legacy-sbol2.xml
 
 # GenBank and FASTA are converted to SBOL 3 on import.
-sbol-db doc import path/to/design.gbk --namespace https://example.org/lab
-sbol-db doc import path/to/sequences.fasta --namespace https://example.org/lab
+sbol-db graph import path/to/design.gbk --namespace https://example.org/lab
+sbol-db graph import path/to/sequences.fasta --namespace https://example.org/lab
 
 # Import an entire directory as one atomic transaction (commits all or none).
-sbol-db doc import path/to/designs/ --skip-existing
+sbol-db graph import path/to/designs/ --skip-existing
 
 # Corpus-scale onboarding: per-file txs, parallel, tolerate bad files.
-sbol-db doc import path/to/corpus/ --continue-on-error --parallel 4 --skip-existing
+sbol-db graph import path/to/corpus/ --continue-on-error --parallel 4 --skip-existing
 
 # Resolve an object by IRI.
 sbol-db object get https://synbiohub.org/public/igem/i13504
@@ -126,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .await?;
 
-    let engine = SparqlEngine::new(Arc::new(svc.quads().clone()));
+    let engine = SparqlEngine::new(Arc::new(svc.triples().clone()));
     let outcome = engine
         .execute(
             "PREFIX sbol: <http://sbols.org/v3#> \
@@ -146,9 +148,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Method | Path                              | Purpose                                |
 | ------ | --------------------------------- | -------------------------------------- |
-| `POST` | `/documents`                      | Import SBOL RDF, GenBank, or FASTA     |
-| `POST` | `/documents/bulk`                 | Atomic bulk import (≤ 100, one txn)    |
-| `GET`  | `/documents/{id}`                 | Document metadata                      |
+| `POST` | `/graphs`                         | Import SBOL RDF, GenBank, or FASTA     |
+| `POST` | `/graphs/bulk`                    | Atomic bulk import (≤ 100, one txn)    |
+| `GET`  | `/graphs/{id}`                    | Graph metadata                         |
 | `GET`  | `/objects?iri=...`                | Resolve a stored object by IRI         |
 | `GET`  | `/objects/list`                   | Paginated corpus listing (keyset cursor) |
 | `POST` | `/objects/lookup`                 | Bulk IRI → object resolution (≤ 1000)  |
@@ -156,6 +158,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `GET`  | `/objects/neighborhood`           | Bounded graph traversal (JSON)         |
 | `GET`  | `/objects/neighborhood.rdf`       | Bounded graph traversal (RDF subgraph) |
 | `GET`/`POST` | `/sparql`                   | Read-only SPARQL 1.1 endpoint          |
+| `GET`/`POST` | `/sparql-auth`              | SPARQL 1.1 Update (Basic auth)         |
+| `*`    | `/sparql-graph-crud-auth/`        | Graph Store HTTP Protocol (Basic auth) |
 | `GET`  | `/sequences/search`               | Nucleotide substring + RC search       |
 | `POST` | `/sequences/search`               | Bulk pattern search (≤ 256 patterns)   |
 | `GET`/`POST` | `/ontology`                 | List / load ontologies                 |
@@ -175,6 +179,12 @@ See [`docs/sparql.md`](docs/sparql.md) for the SPARQL Protocol shape,
 [`docs/neighborhood.md`](docs/neighborhood.md) for traversal parameters,
 [`docs/sequences.md`](docs/sequences.md) for the k-mer search, and
 [`docs/ontology.md`](docs/ontology.md) for ontology loading.
+
+`sbol-db` can also stand in for the Virtuoso triplestore behind
+[SynBioHub](https://synbiohub.org): the `/sparql-auth` and
+`/sparql-graph-crud-auth/` endpoints implement the authenticated write
+surface SynBioHub expects, storing RDF verbatim. See
+[`docs/synbiohub.md`](docs/synbiohub.md).
 
 ## Async batch processing
 
@@ -215,14 +225,14 @@ and operator-surface details.
 | Crate              | Purpose                                                                                |
 | ------------------ | -------------------------------------------------------------------------------------- |
 | `sbol-db-core`     | Domain types shared across the workspace. No I/O dependencies.                          |
-| `sbol-db-rdf`      | `sbol::Document` ↔ quads projection, RDF export, content hashing.                       |
+| `sbol-db-rdf`      | `sbol::Document` ↔ triples projection, RDF export, content hashing.                       |
 | `sbol-db-postgres` | sqlx repositories, embedded migrations, the `SbolObjectService` domain entry point.     |
-| `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over `sbol_quads`).            |
+| `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over `sbol_triples`).            |
 | `sbol-db-jobs`     | Async job runtime — `JobHandler` trait, registry, worker, built-in handlers.            |
 | `sbol-db-server`   | axum HTTP API.                                                                          |
 | `sbol-db`          | CLI binary.                                                                             |
 
 The boundary between `sbol-db-postgres` and `sbol-db-sparql` is the
-`QuadRepository::scan_pattern` primitive: SPARQL evaluation never
+`TripleRepository::scan_pattern` primitive: SPARQL evaluation never
 touches sqlx directly, only the repository's pattern-scan method. See
 the [crate guide](docs/crate-guide.md) for details.

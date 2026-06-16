@@ -1,5 +1,6 @@
 //! HTTP server for sbol-db. Mirrors the CLI surface but over REST.
 
+mod auth;
 mod docs;
 mod error;
 mod export;
@@ -67,6 +68,14 @@ pub struct ServerConfig {
     /// in one response payload. Rows beyond this are dropped with
     /// `truncated = true`.
     pub lab_sql_row_cap_max: u32,
+    /// Credentials the authenticated SPARQL endpoints (`/sparql-auth`,
+    /// `/sparql-graph-crud-auth/`) require via HTTP Basic. Default `dba`/`dba`
+    /// matches Virtuoso, so SynBioHub needs no config change. When
+    /// `sparql_auth_disabled` is true the endpoints skip auth entirely (for
+    /// trusted-network deployments behind a proxy).
+    pub sparql_auth_user: String,
+    pub sparql_auth_password: String,
+    pub sparql_auth_disabled: bool,
 }
 
 impl Default for ServerConfig {
@@ -79,6 +88,9 @@ impl Default for ServerConfig {
             lab_enabled: true,
             lab_sql_timeout_ms_max: 60_000,
             lab_sql_row_cap_max: 50_000,
+            sparql_auth_user: "dba".to_owned(),
+            sparql_auth_password: "dba".to_owned(),
+            sparql_auth_disabled: false,
         }
     }
 }
@@ -108,6 +120,14 @@ impl ServerConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(defaults.lab_sql_row_cap_max),
+            sparql_auth_user: std::env::var("SBOL_DB_SPARQL_AUTH_USER")
+                .unwrap_or(defaults.sparql_auth_user),
+            sparql_auth_password: std::env::var("SBOL_DB_SPARQL_AUTH_PASSWORD")
+                .unwrap_or(defaults.sparql_auth_password),
+            sparql_auth_disabled: std::env::var("SBOL_DB_SPARQL_AUTH_DISABLED")
+                .ok()
+                .map(|v| parse_bool(&v))
+                .unwrap_or(defaults.sparql_auth_disabled),
         }
     }
 }
@@ -140,9 +160,9 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route("/metrics", get(metrics::metrics_handler))
         .route("/docs", get(docs::docs_html))
         .route("/openapi.json", get(docs::openapi_json))
-        .route("/documents", post(routes::create_document))
-        .route("/documents/bulk", post(routes::create_documents_bulk))
-        .route("/documents/:id", get(routes::get_document))
+        .route("/graphs", post(routes::create_graph))
+        .route("/graphs/bulk", post(routes::create_graphs_bulk))
+        .route("/graphs/:id", get(routes::get_graph))
         .route("/objects", get(routes::get_object_by_iri))
         .route("/objects/list", get(routes::list_objects))
         .route("/objects/lookup", post(routes::lookup_objects))
@@ -168,7 +188,26 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route("/jobs/:id/cancel", post(routes::cancel_job))
         .route_layer(axum::middleware::from_fn(metrics::track_metrics));
 
-    let app = mount_lab(api, &config)
+    // SynBioHub/Virtuoso-compatible write surface, behind HTTP Basic auth.
+    // Registered on both the bare and trailing-slash paths because SynBioHub
+    // configures `…/sparql-graph-crud-auth/` with the slash.
+    let graph_crud = get(routes::graph_store_get)
+        .post(routes::graph_store_post)
+        .put(routes::graph_store_put)
+        .delete(routes::graph_store_delete);
+    let authed = Router::new()
+        .route(
+            "/sparql-auth",
+            get(routes::sparql_auth).post(routes::sparql_auth),
+        )
+        .route("/sparql-graph-crud-auth", graph_crud.clone())
+        .route("/sparql-graph-crud-auth/", graph_crud)
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
+
+    let app = mount_lab(api.merge(authed), &config)
         .fallback(not_found_handler)
         .with_state(state);
 

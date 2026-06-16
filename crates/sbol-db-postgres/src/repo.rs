@@ -1,4 +1,4 @@
-pub mod document;
+pub mod graph;
 pub mod job;
 pub mod neighborhood;
 pub mod object;
@@ -6,11 +6,11 @@ pub mod ontology;
 pub mod pg_stats;
 pub mod projection;
 pub mod projections;
-pub mod quad;
 pub mod sequence_search;
+pub mod triple;
 pub mod validation;
 
-pub use document::{DocumentRepository, ListDocumentsFilter};
+pub use graph::{GraphRepository, ListGraphsFilter};
 pub use job::{
     EnqueueOutcome, JobAttempt, JobLogRecord, JobRepository, JobStatus, ListJobsFilter, NewJob,
     OldestQueuedAge, QueueDepthRow, SbolJob, DEFAULT_QUEUE,
@@ -24,10 +24,10 @@ pub use pg_stats::{
 };
 pub use projection::{ProjectionEvent, ProjectionEventRepository};
 pub use projections::{TypedProjectionCounts, TypedProjectionRepository};
-pub use quad::{GraphFilter, PatternObject, PatternSubject, QuadRepository};
 pub use sequence_search::{
     BatchSequenceMatch, SequenceMatch, SequenceSearchOptions, SequenceSearchRepository,
 };
+pub use triple::{GraphFilter, PatternObject, PatternSubject, TripleRepository};
 pub use validation::{RecordedValidation, ValidationRepository};
 
 use sbol_db_core::DomainError;

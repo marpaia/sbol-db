@@ -236,18 +236,20 @@ export async function fetchSparqlSchema(
 
 export interface OverviewCounts {
   objects: number;
-  documents: number;
-  quads: number;
+  graphs: number;
+  triples: number;
   sequences: number;
   validation_runs: number;
   ontologies: number;
 }
 
-export interface RecentDocument {
+export interface RecentGraph {
   id: string;
+  iri: string;
+  kind: "sbol3" | "verbatim";
   name: string | null;
   source_uri: string | null;
-  serialization_format: string;
+  serialization_format: string | null;
   created_at: string;
   object_count: number;
 }
@@ -265,7 +267,7 @@ export interface OverviewOntology {
 
 export interface Overview {
   counts: OverviewCounts;
-  recent_documents: RecentDocument[];
+  recent_graphs: RecentGraph[];
   top_classes: OverviewTopClass[];
   loaded_ontologies: OverviewOntology[];
 }
@@ -858,45 +860,102 @@ export async function cancelJob(
   return (await res.json()) as CancelJobResponse;
 }
 
-// ---------- Documents ----------
+// ---------- Graphs (graph-native browser) ----------
 
-export interface DocumentSummary {
+/** A named graph. `kind = 'sbol3'` is an imported SBOL document with a derived
+ *  object view; `kind = 'verbatim'` is raw RDF written through the
+ *  SynBioHub-compatible Graph Store / SPARQL Update endpoints. */
+export interface GraphSummary {
   id: string;
-  document_iri: string | null;
+  iri: string;
+  kind: "sbol3" | "verbatim";
   name: string | null;
-  description: string | null;
-  serialization_format: string;
+  serialization_format: string | null;
   source_uri: string | null;
-  created_by: string | null;
   created_at: string;
   object_count: number;
+  triple_count: number;
 }
 
-export interface DocumentsPage {
+export interface GraphsPage {
   total: number;
   limit: number;
   offset: number;
-  documents: DocumentSummary[];
+  graphs: GraphSummary[];
 }
 
-export interface DocumentsListQuery {
+export interface GraphsListQuery {
+  limit?: number;
+  offset?: number;
+  kind?: "sbol3" | "verbatim";
+}
+
+export async function listGraphs(
+  query: GraphsListQuery = {},
+  signal?: AbortSignal
+): Promise<GraphsPage> {
+  const qs = new URLSearchParams();
+  if (typeof query.limit === "number") qs.set("limit", String(query.limit));
+  if (typeof query.offset === "number") qs.set("offset", String(query.offset));
+  if (query.kind) qs.set("kind", query.kind);
+  const tail = qs.toString();
+  const res = await fetch(`/lab/api/graphs${tail ? `?${tail}` : ""}`, { signal });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as GraphsPage;
+}
+
+export async function getGraph(
+  id: string,
+  signal?: AbortSignal
+): Promise<GraphSummary> {
+  const res = await fetch(`/lab/api/graphs/${encodeURIComponent(id)}`, { signal });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as GraphSummary;
+}
+
+/** One RDF term, shaped like a SPARQL-results binding. */
+export interface GraphTerm {
+  type: "uri" | "bnode" | "literal";
+  value: string;
+  datatype?: string;
+  language?: string;
+}
+
+export interface GraphTriple {
+  subject: GraphTerm;
+  predicate: GraphTerm;
+  object: GraphTerm;
+}
+
+export interface GraphTriplesPage {
+  total: number;
+  limit: number;
+  offset: number;
+  triples: GraphTriple[];
+}
+
+export interface GraphTriplesQuery {
   limit?: number;
   offset?: number;
 }
 
-export async function listDocuments(
-  query: DocumentsListQuery = {},
+/** Fetch a graph's raw triples, paginated. Used to browse `verbatim` graphs,
+ *  which have no derived object view. */
+export async function listGraphTriples(
+  id: string,
+  query: GraphTriplesQuery = {},
   signal?: AbortSignal
-): Promise<DocumentsPage> {
+): Promise<GraphTriplesPage> {
   const qs = new URLSearchParams();
   if (typeof query.limit === "number") qs.set("limit", String(query.limit));
   if (typeof query.offset === "number") qs.set("offset", String(query.offset));
   const tail = qs.toString();
-  const res = await fetch(`/lab/api/documents${tail ? `?${tail}` : ""}`, {
-    signal,
-  });
+  const res = await fetch(
+    `/lab/api/graphs/${encodeURIComponent(id)}/triples${tail ? `?${tail}` : ""}`,
+    { signal }
+  );
   if (!res.ok) throw await asApiError(res);
-  return (await res.json()) as DocumentsPage;
+  return (await res.json()) as GraphTriplesPage;
 }
 
 export type SerializationFormat = "turtle" | "jsonld" | "rdfxml" | "ntriples";
@@ -963,24 +1022,11 @@ export function importContentType(format: ImportDocumentFormat): string {
 }
 
 export interface ImportReport {
-  document_id: string;
+  graph_id: string;
   object_count: number;
-  quad_count: number;
+  triple_count: number;
   validation_status: "passed" | "failed";
   validation_issue_count: number;
-}
-
-export interface DocumentDetail {
-  id: string;
-  document_iri: string | null;
-  name: string | null;
-  description: string | null;
-  serialization_format: string;
-  source_uri: string | null;
-  created_by: string | null;
-  created_at: string;
-  object_count: number;
-  quad_count: number;
 }
 
 export interface ImportDocumentParams {
@@ -1005,7 +1051,7 @@ export async function importDocument(
   if (params.source_uri) qs.set("source_uri", params.source_uri);
   if (params.document_iri) qs.set("document_iri", params.document_iri);
   if (params.created_by) qs.set("created_by", params.created_by);
-  const res = await fetch(`/documents?${qs.toString()}`, {
+  const res = await fetch(`/graphs?${qs.toString()}`, {
     method: "POST",
     headers: { "Content-Type": importContentType(params.format) },
     body: params.body,
@@ -1013,47 +1059,6 @@ export async function importDocument(
   });
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as ImportReport;
-}
-
-export async function getDocument(
-  id: string,
-  signal?: AbortSignal
-): Promise<DocumentDetail> {
-  const res = await fetch(`/lab/api/documents/${encodeURIComponent(id)}`, {
-    signal,
-  });
-  if (!res.ok) throw await asApiError(res);
-  return (await res.json()) as DocumentDetail;
-}
-
-export interface BulkImportDocument {
-  format: ImportDocumentFormat;
-  body: string;
-  namespace?: string;
-  name?: string;
-  description?: string;
-  source_uri?: string;
-  document_iri?: string;
-  created_by?: string;
-}
-
-export interface BulkImportResponse {
-  imported: number;
-  reports: ImportReport[];
-}
-
-export async function createDocumentsBulk(
-  documents: BulkImportDocument[],
-  signal?: AbortSignal
-): Promise<BulkImportResponse> {
-  const res = await fetch("/documents/bulk", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ documents }),
-    signal,
-  });
-  if (!res.ok) throw await asApiError(res);
-  return (await res.json()) as BulkImportResponse;
 }
 
 // ---------- Objects ----------
@@ -1075,7 +1080,7 @@ export interface SbolObjectRecord {
 export interface ListObjectsQuery {
   sbol_class?: string;
   role?: string;
-  document_id?: string;
+  graph_id?: string;
   after?: string;
   limit?: number;
 }
@@ -1092,7 +1097,7 @@ export async function listObjects(
   const qs = new URLSearchParams();
   if (query.sbol_class) qs.set("sbol_class", query.sbol_class);
   if (query.role) qs.set("role", query.role);
-  if (query.document_id) qs.set("document_id", query.document_id);
+  if (query.graph_id) qs.set("graph_id", query.graph_id);
   if (query.after) qs.set("after", query.after);
   if (typeof query.limit === "number") qs.set("limit", String(query.limit));
   const tail = qs.toString();

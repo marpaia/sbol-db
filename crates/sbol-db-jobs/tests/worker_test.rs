@@ -35,7 +35,7 @@ async fn fresh_pool() -> sbol_db_postgres::PgPool {
     let pool = connect(&database_url).await.expect("connect");
     run_migrations(&pool).await.expect("migrate");
     sqlx::query(
-        "TRUNCATE sbol_documents, sbol_objects, sbol_quads, sbol_validation_findings, \
+        "TRUNCATE sbol_graphs, sbol_objects, sbol_triples, sbol_validation_findings, \
          sbol_validation_runs, sbol_object_revisions, sbol_rdf_projection_events, \
          sbol_jobs, sbol_job_attempts RESTART IDENTITY CASCADE",
     )
@@ -146,7 +146,7 @@ async fn embedded_worker_drains_import_document_job() {
         "import_document handler should write its ImportReport into result"
     );
     let report = final_job.result.unwrap();
-    assert!(report.get("document_id").is_some());
+    assert!(report.get("graph_id").is_some());
     assert!(report.get("object_count").is_some());
 }
 

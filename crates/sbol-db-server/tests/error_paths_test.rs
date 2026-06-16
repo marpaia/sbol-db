@@ -20,7 +20,7 @@ async fn state() -> AppState {
     let pool = connect(&database_url).await.expect("connect");
     run_migrations(&pool).await.expect("migrate");
     let service = Arc::new(SbolObjectService::new(pool.clone()));
-    let sparql = Arc::new(SparqlEngine::new(Arc::new(service.quads().clone())));
+    let sparql = Arc::new(SparqlEngine::new(Arc::new(service.triples().clone())));
     let jobs = Arc::new(JobRepository::new(pool.clone()));
     let metrics = Metrics::install(pool.clone(), env!("CARGO_PKG_VERSION"))
         .with_worker_pool(pool)
@@ -46,7 +46,7 @@ async fn send(req: Request<Body>) -> axum::response::Response {
 }
 
 // ---------------------------------------------------------------------------
-// /documents
+// /graphs
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -54,7 +54,7 @@ async fn create_document_without_format_or_content_type_is_400() {
     let res = send(
         Request::builder()
             .method("POST")
-            .uri("/documents")
+            .uri("/graphs")
             .body(Body::from("not really turtle"))
             .unwrap(),
     )
@@ -72,7 +72,7 @@ async fn create_document_with_unknown_format_is_400() {
     let res = send(
         Request::builder()
             .method("POST")
-            .uri("/documents?format=parquet")
+            .uri("/graphs?format=parquet")
             .body(Body::from(""))
             .unwrap(),
     )
@@ -87,7 +87,7 @@ async fn create_document_with_invalid_iri_is_400() {
     let res = send(
         Request::builder()
             .method("POST")
-            .uri("/documents?format=turtle&document_iri=not-an-iri")
+            .uri("/graphs?format=turtle&document_iri=not-an-iri")
             .header("content-type", "text/turtle")
             .body(Body::from("# empty"))
             .unwrap(),
@@ -211,7 +211,7 @@ async fn objects_lookup_with_missing_iri_is_400() {
 async fn get_document_with_malformed_uuid_is_400_or_404() {
     let res = send(
         Request::builder()
-            .uri("/documents/not-a-uuid")
+            .uri("/graphs/not-a-uuid")
             .body(Body::empty())
             .unwrap(),
     )
@@ -230,7 +230,7 @@ async fn get_document_with_malformed_uuid_is_400_or_404() {
 async fn get_document_with_unknown_uuid_is_404() {
     let res = send(
         Request::builder()
-            .uri("/documents/00000000-0000-0000-0000-000000000000")
+            .uri("/graphs/00000000-0000-0000-0000-000000000000")
             .body(Body::empty())
             .unwrap(),
     )

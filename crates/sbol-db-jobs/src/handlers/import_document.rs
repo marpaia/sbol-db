@@ -2,7 +2,7 @@
 //!
 //! Wraps [`SbolObjectService::import_document`] in a job: payload is the
 //! inline RDF body plus metadata; `result` is the serialised
-//! [`sbol_db_core::ImportReport`]. The synchronous `POST /documents`
+//! [`sbol_db_core::ImportReport`]. The synchronous `POST /graphs`
 //! endpoint stays the right surface for small one-shot imports; this
 //! handler is the right surface for queued / fanned-out corpus work
 //! where you want a job id to poll, retries on transient DB failures,
@@ -85,9 +85,9 @@ impl JobHandler for ImportDocumentHandler {
             "info",
             "document import completed",
             serde_json::json!({
-                "document_id": report.document_id,
+                "graph_id": report.graph_id,
                 "object_count": report.object_count,
-                "quad_count": report.quad_count,
+                "triple_count": report.triple_count,
                 "validation_status": report.validation_status,
                 "validation_issue_count": report.validation_issue_count,
             }),

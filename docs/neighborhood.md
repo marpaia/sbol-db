@@ -2,7 +2,7 @@
 
 The neighborhood primitive answers shape-of-graph questions like
 "what's contained in this design?" and "what references this part?"
-by walking `sbol_quads` outward from a root IRI under explicit
+by walking `sbol_triples` outward from a root IRI under explicit
 bounds.
 
 It's the middle ground between `GET /objects?iri=…` (one row, no
@@ -140,7 +140,7 @@ WITH RECURSIVE
 edges AS (
     -- forward arm
     SELECT subject as from_id, ..., object as to_id, ...
-    FROM sbol_quads
+    FROM sbol_triples
     WHERE $4 IN ('forward', 'both')
       AND (object_iri IS NOT NULL OR object_blank IS NOT NULL)
 
@@ -148,7 +148,7 @@ edges AS (
 
     -- backward arm
     SELECT object as from_id, ..., subject as to_id, ...
-    FROM sbol_quads
+    FROM sbol_triples
     WHERE $4 IN ('backward', 'both') ...
 ),
 walk AS (
@@ -165,7 +165,7 @@ SELECT * FROM walk LIMIT $5
 
 Postgres only allows one self-reference in a recursive term, so both
 directions are normalized into a single non-recursive `edges` CTE
-and the `walk` recursion walks `edges` instead of `sbol_quads`
+and the `walk` recursion walks `edges` instead of `sbol_triples`
 directly. Cycle prevention is via the `path` array (`NOT to_id =
 ANY(w.path)`).
 

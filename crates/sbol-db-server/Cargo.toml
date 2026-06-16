@@ -37,6 +37,7 @@ serde_urlencoded.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 hex.workspace = true
+base64.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 url.workspace = true

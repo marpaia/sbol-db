@@ -24,25 +24,33 @@ Two domains for cheap shape checks:
 - `sbol_ontology_term text` with the same shape. Carries SBO / SO /
   EDAM / GO / ChEBI / CL / NCIT term IRIs.
 
-## `sbol_documents`
+## `sbol_graphs`
 
-One row per imported document.
+One row per named graph. The graph is the storage container: every triple
+belongs to a graph, and `kind` records how it is normalized. `kind =
+'sbol3'` is a single imported SBOL document, normalized to SBOL3, with a
+derived object view; `kind = 'verbatim'` is a graph stored exactly as
+written through the Graph Store / SPARQL Update endpoints (the SynBioHub
+triplestore case), with no derived view. The import-metadata columns
+(`name`, `serialization_format`, `content_hash`, …) describe an `sbol3`
+graph's import and are null for `verbatim` graphs.
 
 | Column                 | Type                | Notes                                                    |
 | ---------------------- | ------------------- | -------------------------------------------------------- |
-| `id`                   | `uuid`              | Primary key, `gen_random_uuid()`.                        |
-| `document_iri`         | `sbol_iri` (unique) | Optional explicit document IRI supplied by the caller.   |
+| `iri`                  | `sbol_iri`          | Primary key. The named graph IRI. An imported document uses `graph:document:{id}`. |
+| `id`                   | `uuid` (unique)     | Surrogate key, `gen_random_uuid()`. The join target for `sbol_objects.graph_id`. |
+| `kind`                 | `text`              | `'sbol3'` or `'verbatim'`. Defaults to `'verbatim'`.     |
+| `document_iri`         | `sbol_iri` (unique) | Optional explicit document IRI declared by an imported SBOL document. |
 | `name`                 | `text`              | Display name.                                            |
 | `description`          | `text`              | Display description.                                     |
 | `serialization_format` | `text`              | One of `json|jsonld|rdfxml|turtle|trig|ntriples|nquads|genbank|fasta`. |
 | `source_uri`           | `text`              | Free-form provenance (URL, filename) from the caller.    |
-| `raw_payload`          | `jsonb`             | Optional lossless snapshot of the import body.           |
 | `content_hash`         | `bytea`             | SHA3-256 of the original input bytes.                    |
 | `created_by`           | `text`              | Free-form actor identifier.                              |
 | `created_at`           | `timestamptz`       | Row-insertion timestamp.                                 |
 | `updated_at`           | `timestamptz`       | Last-modification timestamp.                             |
 
-Indexed: `raw_payload` as `gin`, document_iri unique, `id` primary key.
+Indexed: `iri` primary key, `id` unique, `document_iri` unique.
 
 ## `sbol_objects`
 
@@ -59,7 +67,7 @@ canonical KV store for "give me the object at this IRI".
 | `version`             | `text`                 | SBOL version, if present.                                          |
 | `name`                | `text`                 | Object name.                                                       |
 | `description`         | `text`                 | Object description.                                                |
-| `document_id`         | `uuid` (FK)            | References `sbol_documents.id`; `ON DELETE SET NULL`.              |
+| `graph_id`            | `uuid` (FK)            | References `sbol_graphs.id`; `ON DELETE SET NULL`. Which graph the object is derived from. |
 | `types`               | `sbol_ontology_term[]` | Component / object types. Gin-indexed.                             |
 | `roles`               | `sbol_ontology_term[]` | Feature / participation roles. Gin-indexed.                        |
 | `data`                | `jsonb`                | The per-object JSON-LD slice. Lossless, suitable for re-emit.      |
@@ -72,21 +80,21 @@ Indexes:
 
 - `(iri)` primary uniqueness; `(persistent_identity)` and
   `(persistent_identity, version)` for SBOL version-stack queries.
-- `(display_id, document_id)` unique-by-document for displayId
+- `(display_id, graph_id)` unique-by-graph for displayId
   collision detection.
 - gin on `types`, `roles`, `data` (jsonb_path_ops).
 - trgm on `display_id` and `name` for fuzzy lookup.
 - partial `(iri) WHERE is_deleted = false` for the live-object hot
   path.
 
-## `sbol_quads`
+## `sbol_triples`
 
-The RDF triple/quad store. One row per imported triple.
+The RDF triplestore. One row per imported triple.
 
 | Column           | Type          | Notes                                                                                     |
 | ---------------- | ------------- | ----------------------------------------------------------------------------------------- |
 | `id`             | `bigserial`   |                                                                                           |
-| `graph_iri`      | `sbol_iri`    | Named graph IRI. The import pipeline tags every quad with `graph:document:{document_id}`. |
+| `graph_iri`      | `sbol_iri`    | Owning named graph. FK to `sbol_graphs(iri)`, `ON DELETE CASCADE`. An import tags every triple with the graph IRI `graph:document:{id}`. |
 | `subject_iri`    | `sbol_iri`    | Mutually exclusive with `subject_blank`.                                                  |
 | `subject_blank`  | `text`        | Blank node identifier (without the `_:` prefix). See [Blank nodes](#blank-nodes).         |
 | `predicate_iri`  | `sbol_iri`    | Required.                                                                                 |
@@ -95,8 +103,7 @@ The RDF triple/quad store. One row per imported triple.
 | `object_literal` | `text`        | Literal lexical form.                                                                     |
 | `datatype_iri`   | `sbol_iri`    | Populated alongside `object_literal`.                                                     |
 | `language`       | `text`        | BCP-47 language tag for language-tagged literals.                                         |
-| `document_id`    | `uuid` (FK)   | References `sbol_documents.id`; `ON DELETE CASCADE`.                                      |
-| `source`         | `text`        | Provenance tag; defaults to `'sbol'`.                                                     |
+| `source`         | `text`        | Provenance tag; `'sbol'` (import), `'graph-store'`, or `'sparql-update'`.                  |
 | `created_at`     | `timestamptz` |                                                                                           |
 
 CHECK constraints enforce "exactly one" of (subject_iri,
@@ -120,7 +127,7 @@ Postgres picks the right one based on which positions are bound.
 The `sbol_iri` domain enforces `^[a-zA-Z][a-zA-Z0-9+.-]*:.+`, which
 rejects `_:b0`-shaped blank-node identifiers. Real SBOL documents
 routinely carry blank nodes after a parser pass (location objects,
-intermediate participations, anonymous list-cells). `sbol_quads`
+intermediate participations, anonymous list-cells). `sbol_triples`
 resolves this by carrying companion `subject_blank text` and
 `object_blank text` columns with a CHECK that exactly one of the
 (IRI, blank) pair is non-null per position. The repository's
@@ -211,7 +218,7 @@ sbol_ontology_closure (ancestor_iri FK, descendant_iri FK, depth)
 ## Validation
 
 ```sql
-sbol_validation_runs (id, target_iri, target_document_id, validator_name,
+sbol_validation_runs (id, target_iri, graph_id, validator_name,
                       validator_version, ruleset, status, summary, ...)
 sbol_validation_findings (id, validation_run_id, severity, rule_id, message,
                           subject_iri, predicate_iri, object_iri, path, data)
@@ -250,11 +257,11 @@ can tail the log deterministically. The partial index
 ## Conventions
 
 - All primary keys are `uuid DEFAULT gen_random_uuid()` except
-  `sbol_quads.id` (`bigserial`).
+  `sbol_triples.id` (`bigserial`).
 - All timestamps are `timestamptz DEFAULT now()`.
-- Foreign keys cascade through document boundaries (`ON DELETE
-  CASCADE` for quads, `ON DELETE SET NULL` for objects so individual
-  objects survive a document deletion if needed).
+- Foreign keys cascade through graph boundaries (`ON DELETE
+  CASCADE` for triples, `ON DELETE SET NULL` for objects so individual
+  objects survive a graph deletion if needed).
 - Soft-delete via `is_deleted boolean DEFAULT false`, with a
   partial index on the live rows.
 - Free-form metadata lives in `jsonb` columns with `gin

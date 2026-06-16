@@ -1,0 +1,51 @@
+# A SynBioHub-shaped SBOL2 fixture. Stored verbatim (no SBOL2->3 upgrade) so
+# the SPARQL spike can exercise the v2 vocabulary and query shapes SynBioHub
+# actually issues: sbh:topLevel self-edges, biopax type IRIs, SO role IRIs,
+# dcterms title/description, collection membership, persistentIdentity.
+@prefix sbol2: <http://sbols.org/v2#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix sbh: <http://wiki.synbiohub.org/wiki/Terms/synbiohub#> .
+@prefix biopax: <http://www.biopax.org/release/biopax-level3.owl#> .
+@prefix so: <http://identifiers.org/so/> .
+
+<https://synbiohub.org/public/igem/igem_collection/1>
+    a sbol2:Collection ;
+    sbh:topLevel <https://synbiohub.org/public/igem/igem_collection/1> ;
+    sbol2:persistentIdentity <https://synbiohub.org/public/igem/igem_collection> ;
+    sbol2:displayId "igem_collection" ;
+    sbol2:version "1" ;
+    dcterms:title "iGEM Parts Collection" ;
+    dcterms:description "A collection of iGEM parts." ;
+    sbol2:member <https://synbiohub.org/public/igem/BBa_J23100/1> ,
+                 <https://synbiohub.org/public/igem/BBa_B0034/1> .
+
+<https://synbiohub.org/public/igem/BBa_J23100/1>
+    a sbol2:ComponentDefinition ;
+    sbh:topLevel <https://synbiohub.org/public/igem/BBa_J23100/1> ;
+    sbol2:persistentIdentity <https://synbiohub.org/public/igem/BBa_J23100> ;
+    sbol2:displayId "BBa_J23100" ;
+    sbol2:version "1" ;
+    dcterms:title "Anderson promoter J23100" ;
+    dcterms:description "constitutive promoter family member" ;
+    sbol2:type biopax:DnaRegion ;
+    sbol2:role so:0000167 ;
+    sbol2:sequence <https://synbiohub.org/public/igem/BBa_J23100_sequence/1> .
+
+<https://synbiohub.org/public/igem/BBa_J23100_sequence/1>
+    a sbol2:Sequence ;
+    sbh:topLevel <https://synbiohub.org/public/igem/BBa_J23100_sequence/1> ;
+    sbol2:persistentIdentity <https://synbiohub.org/public/igem/BBa_J23100_sequence> ;
+    sbol2:displayId "BBa_J23100_sequence" ;
+    sbol2:version "1" ;
+    sbol2:elements "ttgacggctagctcagtcctaggtacagtgctagc" ;
+    sbol2:encoding <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .
+
+<https://synbiohub.org/public/igem/BBa_B0034/1>
+    a sbol2:ComponentDefinition ;
+    sbh:topLevel <https://synbiohub.org/public/igem/BBa_B0034/1> ;
+    sbol2:persistentIdentity <https://synbiohub.org/public/igem/BBa_B0034> ;
+    sbol2:displayId "BBa_B0034" ;
+    sbol2:version "1" ;
+    dcterms:title "RBS (Elowitz 1999)" ;
+    sbol2:type biopax:DnaRegion ;
+    sbol2:role so:0000139 .

@@ -4,9 +4,9 @@
  *
  * Use this when ingesting a large document where you want a job id to
  * poll, retries on transient DB failures, and visibility into per-file
- * progress. The synchronous `POST /documents` flow remains the right
+ * progress. The synchronous `POST /graphs` flow remains the right
  * surface for small one-shot imports — that path is the
- * `DocumentImportDialog` reachable from the Documents page.
+ * `ImportDialog` reachable from the Graphs page.
  */
 
 import {

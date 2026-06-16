@@ -104,7 +104,7 @@ export default function NeighborhoodRoute() {
           </div>
           <p className="mt-2 text-sm text-muted-foreground">
             Bounded recursive traversal of{" "}
-            <code className="font-mono">sbol_quads</code> from a root IRI.
+            <code className="font-mono">sbol_triples</code> from a root IRI.
             Depth, direction, and predicate allowlist are applied server-side;
             the URL preserves every control so the result is shareable.
           </p>

@@ -1,21 +1,24 @@
 use sbol::{Document, Iri, RdfFormat, UpgradeOptions};
-use sbol_db_core::{DomainError, ImportReport, IriString, NewDocument, SerializationFormat};
+use sbol_db_core::{
+    DomainError, GraphId, ImportReport, IriString, NewGraph, SerializationFormat, Triple,
+};
 use sbol_db_rdf::{
-    document_to_projections, document_to_quads, document_to_summaries, hash_bytes, GRAPH_IRI_PREFIX,
+    document_to_projections, document_to_summaries, document_to_triples, hash_bytes,
+    rdf_graph_to_triples, GRAPH_IRI_PREFIX,
 };
 
 use crate::repo::{
-    DocumentRepository, NeighborhoodRepository, OntologyRepository, ProjectionEvent,
-    ProjectionEventRepository, QuadRepository, SbolObjectRepository, SequenceSearchRepository,
-    TypedProjectionRepository, ValidationRepository,
+    GraphRepository, NeighborhoodRepository, OntologyRepository, ProjectionEvent,
+    ProjectionEventRepository, RecordedValidation, SbolObjectRepository, SequenceSearchRepository,
+    TripleRepository, TypedProjectionCounts, TypedProjectionRepository, ValidationRepository,
 };
 use crate::PgPool;
 
 pub struct SbolObjectService {
     pool: PgPool,
-    documents: DocumentRepository,
+    graphs: GraphRepository,
     objects: SbolObjectRepository,
-    quads: QuadRepository,
+    triples: TripleRepository,
     validation: ValidationRepository,
     projection: ProjectionEventRepository,
     typed: TypedProjectionRepository,
@@ -35,12 +38,27 @@ pub struct ImportInput {
     pub description: Option<String>,
 }
 
+/// How a Graph Store write combines with a graph's existing contents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphWriteMode {
+    /// `POST`: append to the graph (SynBioHub uploads submissions as a sequence
+    /// of chunks POSTed to the same graph, so this must accumulate).
+    Merge,
+    /// `PUT`: replace the graph's entire contents.
+    Replace,
+}
+
+/// Per-call cap on rows returned by a Graph Store `GET`. Far above any real
+/// single-graph payload SynBioHub would round-trip; a guard against a
+/// pathological whole-graph serialize.
+const GRAPH_READ_LIMIT: i64 = 5_000_000;
+
 impl SbolObjectService {
     pub fn new(pool: PgPool) -> Self {
         Self {
-            documents: DocumentRepository::new(pool.clone()),
+            graphs: GraphRepository::new(pool.clone()),
             objects: SbolObjectRepository::new(pool.clone()),
-            quads: QuadRepository::new(pool.clone()),
+            triples: TripleRepository::new(pool.clone()),
             validation: ValidationRepository::new(pool.clone()),
             projection: ProjectionEventRepository::new(pool.clone()),
             typed: TypedProjectionRepository::new(pool.clone()),
@@ -66,16 +84,16 @@ impl SbolObjectService {
             .map_err(|e| DomainError::Database(e.to_string()))
     }
 
-    pub fn documents(&self) -> &DocumentRepository {
-        &self.documents
+    pub fn graphs(&self) -> &GraphRepository {
+        &self.graphs
     }
 
     pub fn objects(&self) -> &SbolObjectRepository {
         &self.objects
     }
 
-    pub fn quads(&self) -> &QuadRepository {
-        &self.quads
+    pub fn triples(&self) -> &TripleRepository {
+        &self.triples
     }
 
     pub fn neighborhood(&self) -> &NeighborhoodRepository {
@@ -124,14 +142,69 @@ impl SbolObjectService {
         Ok(report)
     }
 
+    /// Graph Store HTTP Protocol write: one ingest mode feeding the shared,
+    /// graph-owned store. Parses `body` as RDF and writes its triples
+    /// **verbatim** into `graph` (registered via [`TripleRepository::ensure_graph`]),
+    /// with no SBOL interpretation at write time. `Merge` appends; `Replace`
+    /// first clears the graph; both run in one transaction. Returns the inserted
+    /// triple count.
+    ///
+    /// This is the same storage substrate [`Self::import_document`] writes to —
+    /// the difference is only how the triples arrive (a posted RDF graph here, a
+    /// parsed/validated SBOL document there). The SBOL3 typed view
+    /// ([`Self::apply_sbol_view`]) is a derivation over a graph's triples; for
+    /// graphs populated this way it is produced by the asynchronous
+    /// reprojection path rather than inline (see the derived-view work).
+    pub async fn graph_store_write(
+        &self,
+        graph: &str,
+        body: &str,
+        format: SerializationFormat,
+        mode: GraphWriteMode,
+    ) -> Result<usize, DomainError> {
+        let rdf_format = to_rdf_format(format)?;
+        let parsed = sbol_rdf::Graph::parse(body, rdf_format)
+            .map_err(|e| DomainError::Parse(e.to_string()))?;
+        let triples = rdf_graph_to_triples(&parsed, &IriString::unchecked(graph));
+
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        self.triples
+            .ensure_graph(&mut tx, graph, "verbatim")
+            .await?;
+        if mode == GraphWriteMode::Replace {
+            self.triples.clear_graph(&mut tx, Some(graph)).await?;
+        }
+        let inserted = self
+            .triples
+            .insert_triples(&mut tx, &triples, "graph-store")
+            .await?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(inserted)
+    }
+
+    /// Graph Store CRUD `DELETE`: drop a named graph entirely (its triples and
+    /// `sbol_graphs` registry row). Returns the number of triples removed.
+    pub async fn graph_store_clear(&self, graph: &str) -> Result<usize, DomainError> {
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let deleted = self.triples.clear_graph(&mut tx, Some(graph)).await?;
+        self.triples.delete_graph(&mut tx, graph).await?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(deleted)
+    }
+
+    /// Graph Store CRUD `GET`: read back a named graph's triples.
+    pub async fn graph_store_read(&self, graph: &str) -> Result<Vec<Triple>, DomainError> {
+        self.triples
+            .triples_for_graph(Some(graph), GRAPH_READ_LIMIT)
+            .await
+    }
+
     async fn import_into_conn(
         &self,
         conn: &mut sqlx::PgConnection,
         input: ImportInput,
     ) -> Result<ImportReport, DomainError> {
         let doc = parse_import_document(&input)?;
-
-        let report = doc.validate();
 
         let body_hash = hash_bytes(input.body.as_bytes());
 
@@ -146,59 +219,35 @@ impl SbolObjectService {
                     .unwrap_or_else(|| format!("urn:sbol-db:import:{}", uuid::Uuid::new_v4()))
             });
 
-        let raw_payload = serde_json::to_value(triples_json_snapshot(&doc))?;
-
-        let document_id = self
-            .documents
+        // A document is an `sbol3`-kind graph; `insert` creates that graph row
+        // (id + `graph:document:{id}` IRI) and returns its id. We then write the
+        // document's triples into that same graph — the graph owns them.
+        let graph_id = self
+            .graphs
             .insert(
                 &mut *conn,
-                NewDocument {
+                NewGraph {
                     document_iri: input.document_iri.clone(),
                     name: input.name,
                     description: input.description,
                     serialization_format: input.format,
                     source_uri: input.source_uri,
-                    raw_payload: Some(raw_payload),
                     content_hash: body_hash,
                     created_by: input.created_by,
                 },
             )
             .await?;
 
-        let summaries = document_to_summaries(&doc);
-        let object_count = summaries.len();
-
-        for slice in &summaries {
-            self.objects
-                .upsert(&mut *conn, &slice.summary, Some(document_id))
-                .await?;
-        }
-
-        let typed_projections = document_to_projections(&doc);
-        let typed_counts = self
-            .typed
-            .upsert_all(&mut *conn, &typed_projections)
+        let graph_iri = IriString::unchecked(format!("{}{}", GRAPH_IRI_PREFIX, graph_id.as_uuid()));
+        let triples = document_to_triples(&doc, &graph_iri);
+        let triple_count = self
+            .triples
+            .insert_triples(&mut *conn, &triples, "sbol")
             .await?;
 
-        let graph_iri =
-            IriString::unchecked(format!("{}{}", GRAPH_IRI_PREFIX, document_id.as_uuid()));
-        let quads = document_to_quads(&doc, &graph_iri);
-        let quad_count = self
-            .quads
-            .replace_document_graph(&mut *conn, document_id, &quads)
-            .await?;
-
-        let recorded = self
-            .validation
-            .record_run(
-                &mut *conn,
-                &target_iri,
-                Some(document_id),
-                "sbol-rs",
-                Some(sbol::SPEC_VERSION),
-                "sbol3-3.1.0",
-                &report,
-            )
+        // Derivation: the shared SBOL-view seam.
+        let view = self
+            .apply_sbol_view(&mut *conn, &doc, graph_id, &target_iri)
             .await?;
 
         self.projection
@@ -209,23 +258,77 @@ impl SbolObjectService {
                     subject_iri: Some(IriString::unchecked(target_iri.clone())),
                     graph_iri: Some(graph_iri.clone()),
                     payload: serde_json::json!({
-                        "document_id": document_id.as_uuid(),
-                        "object_count": object_count,
-                        "quad_count": quad_count,
-                        "typed_counts": typed_counts,
+                        "graph_id": graph_id.as_uuid(),
+                        "object_count": view.object_count,
+                        "triple_count": triple_count,
+                        "typed_counts": view.typed_counts,
                     }),
                 },
             )
             .await?;
 
         Ok(ImportReport {
-            document_id,
-            object_count,
-            quad_count,
-            validation_status: recorded.status,
-            validation_issue_count: recorded.issue_count,
+            graph_id,
+            object_count: view.object_count,
+            triple_count,
+            validation_status: view.recorded.status,
+            validation_issue_count: view.recorded.issue_count,
         })
     }
+
+    /// Derive sbol-db's typed SBOL view from a parsed [`Document`] and upsert
+    /// it: object summaries, typed projections, and a validation run, keyed by
+    /// object IRI and attributed to `graph_id`.
+    ///
+    /// This is the single derivation seam, decoupled from how the triples
+    /// arrived. SBOL document import passes a freshly parsed document; the
+    /// verbatim-graph reprojection path (for SynBioHub's SBOL2 data)
+    /// reconstructs a document from a graph's stored triples and calls the same
+    /// method, so every ingest route produces the identical native view.
+    async fn apply_sbol_view(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        doc: &Document,
+        graph_id: GraphId,
+        target_iri: &str,
+    ) -> Result<SbolViewCounts, DomainError> {
+        let summaries = document_to_summaries(doc);
+        let object_count = summaries.len();
+        for slice in &summaries {
+            self.objects
+                .upsert(&mut *conn, &slice.summary, Some(graph_id))
+                .await?;
+        }
+        let typed_counts = self
+            .typed
+            .upsert_all(&mut *conn, &document_to_projections(doc))
+            .await?;
+        let recorded = self
+            .validation
+            .record_run(
+                &mut *conn,
+                target_iri,
+                Some(graph_id),
+                "sbol-rs",
+                Some(sbol::SPEC_VERSION),
+                "sbol3-3.1.0",
+                &doc.validate(),
+            )
+            .await?;
+        Ok(SbolViewCounts {
+            object_count,
+            typed_counts,
+            recorded,
+        })
+    }
+}
+
+/// Counts plus the validation result from one
+/// [`SbolObjectService::apply_sbol_view`] run.
+struct SbolViewCounts {
+    object_count: usize,
+    typed_counts: TypedProjectionCounts,
+    recorded: RecordedValidation,
 }
 
 fn db_err<E: std::fmt::Display>(e: E) -> DomainError {
@@ -350,40 +453,6 @@ fn to_rdf_format(format: SerializationFormat) -> Result<RdfFormat, DomainError> 
             "serialization format {other:?} is not supported by the upstream parser yet"
         ))),
     }
-}
-
-/// Minimal snapshot of the parsed RDF graph as a JSON array of triples,
-/// suitable for storing as the lossless `raw_payload`.
-fn triples_json_snapshot(doc: &Document) -> Vec<serde_json::Value> {
-    use sbol::{Resource, Term};
-    doc.rdf_graph()
-        .triples()
-        .iter()
-        .map(|t| {
-            let subject = match &t.subject {
-                Resource::Iri(iri) => serde_json::json!({ "iri": iri.as_str() }),
-                Resource::BlankNode(node) => serde_json::json!({ "blank": node.as_str() }),
-                _ => serde_json::json!({ "blank": format!("{}", t.subject) }),
-            };
-            let object = match &t.object {
-                Term::Resource(Resource::Iri(iri)) => serde_json::json!({ "iri": iri.as_str() }),
-                Term::Resource(Resource::BlankNode(node)) => {
-                    serde_json::json!({ "blank": node.as_str() })
-                }
-                Term::Literal(lit) => serde_json::json!({
-                    "literal": lit.value(),
-                    "datatype": lit.datatype().as_str(),
-                    "language": lit.language(),
-                }),
-                _ => serde_json::Value::Null,
-            };
-            serde_json::json!({
-                "s": subject,
-                "p": t.predicate.as_str(),
-                "o": object,
-            })
-        })
-        .collect()
 }
 
 #[cfg(test)]

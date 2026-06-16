@@ -1,4 +1,4 @@
-use sbol_db_core::{DocumentId, DomainError, IriString, ObjectId, ObjectSummary, SbolObjectRecord};
+use sbol_db_core::{DomainError, GraphId, IriString, ObjectId, ObjectSummary, SbolObjectRecord};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -28,7 +28,7 @@ impl SbolObjectRepository {
         &self,
         conn: &mut sqlx::PgConnection,
         summary: &ObjectSummary,
-        document_id: Option<DocumentId>,
+        graph_id: Option<GraphId>,
     ) -> Result<UpsertResult, DomainError> {
         let row = sqlx::query(
             r#"
@@ -38,7 +38,7 @@ impl SbolObjectRepository {
             upsert AS (
                 INSERT INTO sbol_objects (
                     iri, sbol_class, display_id, name, description,
-                    document_id, types, roles, data, content_hash, updated_at
+                    graph_id, types, roles, data, content_hash, updated_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7::text[]::sbol_ontology_term[],
                           $8::text[]::sbol_ontology_term[], $9, $10, now())
                 ON CONFLICT (iri) DO UPDATE SET
@@ -46,7 +46,7 @@ impl SbolObjectRepository {
                     display_id = EXCLUDED.display_id,
                     name = EXCLUDED.name,
                     description = EXCLUDED.description,
-                    document_id = EXCLUDED.document_id,
+                    graph_id = EXCLUDED.graph_id,
                     types = EXCLUDED.types,
                     roles = EXCLUDED.roles,
                     data = EXCLUDED.data,
@@ -81,7 +81,7 @@ impl SbolObjectRepository {
         .bind(summary.display_id.as_deref())
         .bind(summary.name.as_deref())
         .bind(summary.description.as_deref())
-        .bind(document_id.map(|d| d.0))
+        .bind(graph_id.map(|d| d.0))
         .bind(&summary.types)
         .bind(&summary.roles)
         .bind(&summary.data)
@@ -118,7 +118,7 @@ impl SbolObjectRepository {
         let row = sqlx::query(
             r#"
             SELECT id, iri::text AS iri, sbol_class, display_id, name, description,
-                   document_id, types::text[] AS types, roles::text[] AS roles,
+                   graph_id, types::text[] AS types, roles::text[] AS roles,
                    data, content_hash
             FROM sbol_objects
             WHERE iri = $1 AND is_deleted = false
@@ -143,7 +143,7 @@ impl SbolObjectRepository {
         let rows = sqlx::query(
             r#"
             SELECT id, iri::text AS iri, sbol_class, display_id, name, description,
-                   document_id, types::text[] AS types, roles::text[] AS roles,
+                   graph_id, types::text[] AS types, roles::text[] AS roles,
                    data, content_hash
             FROM sbol_objects
             WHERE iri::text = ANY($1::text[]) AND is_deleted = false
@@ -160,7 +160,7 @@ impl SbolObjectRepository {
     /// Paginated listing for corpus-scale export. Keyset cursor on `iri`
     /// (lexicographic ascending); pass the last `iri` of the prior page as
     /// `after_iri` to fetch the next. Filters compose: when any of
-    /// `sbol_class`, `role`, or `document_id` is `Some`, the corresponding
+    /// `sbol_class`, `role`, or `graph_id` is `Some`, the corresponding
     /// predicate is added to the WHERE clause.
     pub async fn list(
         &self,
@@ -170,13 +170,13 @@ impl SbolObjectRepository {
         let rows = sqlx::query(
             r#"
             SELECT id, iri::text AS iri, sbol_class, display_id, name, description,
-                   document_id, types::text[] AS types, roles::text[] AS roles,
+                   graph_id, types::text[] AS types, roles::text[] AS roles,
                    data, content_hash
             FROM sbol_objects
             WHERE is_deleted = false
               AND ($1::text IS NULL OR sbol_class = $1)
               AND ($2::text IS NULL OR $2 = ANY(roles::text[]))
-              AND ($3::uuid IS NULL OR document_id = $3)
+              AND ($3::uuid IS NULL OR graph_id = $3)
               AND ($4::text IS NULL OR iri::text > $4)
             ORDER BY iri::text ASC
             LIMIT $5
@@ -184,7 +184,7 @@ impl SbolObjectRepository {
         )
         .bind(filter.sbol_class.as_deref())
         .bind(filter.role.as_deref())
-        .bind(filter.document_id.map(|d| d.0))
+        .bind(filter.graph_id.map(|d| d.0))
         .bind(filter.after_iri.as_deref())
         .bind(limit)
         .fetch_all(&self.pool)
@@ -199,7 +199,7 @@ impl SbolObjectRepository {
 pub struct ListObjectsFilter {
     pub sbol_class: Option<String>,
     pub role: Option<String>,
-    pub document_id: Option<DocumentId>,
+    pub graph_id: Option<GraphId>,
     pub after_iri: Option<String>,
     pub limit: u32,
 }
@@ -211,7 +211,7 @@ fn row_to_record(row: sqlx::postgres::PgRow) -> Result<SbolObjectRecord, DomainE
     let display_id: Option<String> = row.try_get("display_id").map_err(db_err)?;
     let name: Option<String> = row.try_get("name").map_err(db_err)?;
     let description: Option<String> = row.try_get("description").map_err(db_err)?;
-    let document_id: Option<Uuid> = row.try_get("document_id").map_err(db_err)?;
+    let graph_id: Option<Uuid> = row.try_get("graph_id").map_err(db_err)?;
     let types: Vec<String> = row.try_get("types").map_err(db_err)?;
     let roles: Vec<String> = row.try_get("roles").map_err(db_err)?;
     let data: serde_json::Value = row.try_get("data").map_err(db_err)?;
@@ -223,7 +223,7 @@ fn row_to_record(row: sqlx::postgres::PgRow) -> Result<SbolObjectRecord, DomainE
         display_id,
         name,
         description,
-        document_id: document_id.map(DocumentId),
+        graph_id: graph_id.map(GraphId),
         types,
         roles,
         data,
