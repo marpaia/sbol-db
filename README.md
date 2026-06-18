@@ -100,8 +100,8 @@ SELECT ?s WHERE { ?s a sbol:Component } LIMIT 10' \
 
 # Start the HTTP server.
 sbol-db server
-# Then visit http://127.0.0.1:8080/docs for the Scalar-rendered API
-# reference, or http://127.0.0.1:8080/openapi.json for the raw schema.
+# Then visit http://127.0.0.1:8888/docs for the Scalar-rendered API
+# reference, or http://127.0.0.1:8888/openapi.json for the raw schema.
 ```
 
 `sbol-db --help` lists all subcommands.

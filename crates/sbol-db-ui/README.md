@@ -53,12 +53,12 @@ cd crates/sbol-db-ui/ui && npm run dev
 ```
 
 The Vite dev server (port 5173) proxies `/lab/api` and `/openapi.json`
-to the Rust server (port 8080), so the SPA can talk to a real backend
+to the Rust server (port 8888), so the SPA can talk to a real backend
 while still getting React Refresh on every save.
 
 For production-shape testing, build once and visit the embed:
 
 ```sh
 cargo run -p sbol-db -- server
-# open http://localhost:8080/lab
+# open http://localhost:8888/lab
 ```

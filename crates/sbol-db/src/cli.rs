@@ -39,7 +39,7 @@ pub enum Command {
     /// API-only nodes when a dedicated worker fleet runs elsewhere
     /// (see `sbol-db worker`).
     Server {
-        #[arg(long, env = "SBOL_DB_BIND", default_value = "127.0.0.1:8080")]
+        #[arg(long, env = "SBOL_DB_BIND", default_value = "127.0.0.1:8888")]
         bind: SocketAddr,
         /// Disable the embedded worker.
         #[arg(long, env = "SBOL_DB_WORKER_DISABLED")]

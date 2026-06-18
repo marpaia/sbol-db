@@ -43,7 +43,7 @@ const ROOT_API_PREFIXES = [
   "/jobs",
 ];
 const BACKEND_HOST = "localhost";
-const BACKEND_PORT = 8080;
+const BACKEND_PORT = 8888;
 
 const forwardRootApi: PluginOption = {
   name: "sbol-forward-root-api",
@@ -88,7 +88,7 @@ const forwardRootApi: PluginOption = {
 
 // `base: "/lab/"` makes every emitted asset URL absolute under /lab/,
 // matching the path the Rust server mounts the SPA at. The dev proxy
-// forwards backend traffic to the Rust server on port 8080.
+// forwards backend traffic to the Rust server on port 8888.
 export default defineConfig({
   base: "/lab/",
   plugins: [react(), svgr(), redirectBareLab, forwardRootApi],
@@ -104,7 +104,7 @@ export default defineConfig({
     // above, because Vite's base-aware handler swallows them before
     // proxy middleware fires.
     proxy: {
-      "/lab/api": "http://localhost:8080",
+      "/lab/api": `http://${BACKEND_HOST}:${BACKEND_PORT}`,
     },
   },
   build: {

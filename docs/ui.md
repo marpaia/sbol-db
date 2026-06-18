@@ -17,14 +17,14 @@ The lab is fronted by two knobs:
 
 ## Development
 
-Two terminals: the Rust server provides the JSON API on port 8080, and
+Two terminals: the Rust server provides the JSON API on port 8888, and
 the Vite dev server provides the UI with hot module reload on port
 5173. The Vite dev server's proxy forwards `/lab/api/*` and
 `/openapi.json` to the Rust server, so the SPA talks to a real
 backend while you iterate on the frontend.
 
 ```sh
-# Terminal 1 — Rust server (also serves the embedded UI at :8080/lab,
+# Terminal 1 — Rust server (also serves the embedded UI at :8888/lab,
 # but during dev you'll point your browser at the Vite server below).
 cargo run -p sbol-db -- server
 
@@ -74,11 +74,11 @@ server directly:
 
 ```sh
 cargo run -p sbol-db -- server
-# open http://localhost:8080/lab
+# open http://localhost:8888/lab
 ```
 
 This is what users see. The Vite dev server is purely a development
-convenience; the binary at `localhost:8080/lab` serves the same
+convenience; the binary at `localhost:8888/lab` serves the same
 compiled assets that ship to production.
 
 ### Useful UI scripts
