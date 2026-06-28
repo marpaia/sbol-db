@@ -173,16 +173,24 @@ to the same output.
 - `config.local.json` points SynBioHub's triplestore block at sbol-db and
   is seeded into the container as its initial config.
 - `test-sboldb.sh` brings the stack up, waits for SynBioHub to report
-  healthy, and runs the suite.
+  healthy, and runs the suite. With `--persist` it then restarts the stack
+  with volumes intact and runs `test_docker_persist.py` to confirm data
+  survives a restart (sbol-db data lives in Postgres, SynBioHub state in
+  the `sbh` volume).
+- `run-sboltestrunner.sh` builds the SBHEmulator and SBOLTestRunner jars
+  in a Java 8 + Maven container and runs the SBOL2 round-trip conformance
+  suite against the running stack.
 
 The same synbiohub image serves both backends. Triplestore endpoints come
 from config rather than being baked into the image, so one image runs
 against either store.
 
-The Python suite (`test_suite.py`) passes end to end against sbol-db:
-setup, registration, submission, collection create and delete, makePublic,
-search and faceted search, SBOL/GFF/OMEX download, edit, attachment, the
-admin pages, and the in-suite persistence checks.
+All three suites pass against sbol-db. The Python suite (`test_suite.py`)
+covers setup, registration, submission, collection create and delete,
+makePublic, search and faceted search, SBOL/GFF/OMEX download, edit,
+attachment, and the admin pages. The persistence phase confirms the
+submitted data survives a container restart. The Java SBOLTestRunner
+round-trips all 189 SBOLTestSuite files (submit, retrieve, compare).
 
 ## Not implemented
 
@@ -194,6 +202,3 @@ admin pages, and the in-suite persistence checks.
   state at the start of the request, not against the uncommitted effects
   of earlier operations in the same request. SynBioHub's multi-operation
   updates are independent, so this matches its behavior.
-- The separate persistence phase (`test_docker_persist.py`, which restarts
-  containers and rechecks state) and the Java SBOLTestRunner integration
-  are not yet wired into the sbol-db harness.
