@@ -1034,10 +1034,35 @@ pub async fn sparql_auth(
         .sparql_update
         .execute(&update, default_graph.as_deref(), &options)
         .await?;
-    Ok(Json(json!({
-        "inserted": outcome.inserted,
-        "deleted": outcome.deleted,
-    })))
+
+    // SynBioHub parses the update response as SPARQL-results-JSON and reads the
+    // `callret-0` binding (Virtuoso's update-status convention). Its
+    // `deleteStaggered` loop re-runs a DELETE until that status says "nothing to
+    // do", so a no-op update must report exactly that to terminate the loop.
+    let status = if outcome.inserted == 0 && outcome.deleted == 0 {
+        "nothing to do".to_owned()
+    } else {
+        format!(
+            "Modify <{}>, {} triples removed, {} triples added -- done",
+            default_graph.as_deref().unwrap_or(""),
+            outcome.deleted,
+            outcome.inserted
+        )
+    };
+    let results = json!({
+        "head": { "link": [], "vars": ["callret-0"] },
+        "results": {
+            "distinct": false,
+            "ordered": true,
+            "bindings": [
+                { "callret-0": { "type": "literal", "value": status } }
+            ]
+        }
+    });
+    Ok((
+        [(CONTENT_TYPE, "application/sparql-results+json")],
+        serde_json::to_string(&results).expect("serialize sparql-results json"),
+    ))
 }
 
 #[derive(Deserialize, Default)]
