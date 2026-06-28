@@ -69,7 +69,10 @@ impl FromStr for ResultFormat {
             "csv" | "text/csv" => Ok(Self::Csv),
             "tsv" | "tab-separated-values" | "text/tab-separated-values" => Ok(Self::Tsv),
             "turtle" | "ttl" | "text/turtle" => Ok(Self::Turtle),
-            "ntriples" | "nt" | "application/n-triples" => Ok(Self::NTriples),
+            // text/plain has no registered RDF meaning, but the de-facto
+            // convention (Virtuoso, and what SynBioHub's recursive fetch relies
+            // on) is line-based N-Triples — the plain-text RDF serialization.
+            "ntriples" | "nt" | "application/n-triples" | "text/plain" => Ok(Self::NTriples),
             "jsonld" | "json-ld" | "application/ld+json" => Ok(Self::JsonLd),
             "rdfxml" | "rdf-xml" | "rdf" | "application/rdf+xml" => Ok(Self::RdfXml),
             other => Err(SparqlError::UnsupportedFormat(other.to_owned())),
