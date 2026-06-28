@@ -37,8 +37,10 @@ RUN cargo chef prepare --recipe-path recipe.json
 # Stage 3 — builder: cook deps, then build the binary statically
 ############################
 FROM chef AS builder
+# musl-tools for the static target; clang/libclang for crates that run
+# bindgen at build time (e.g. aws-lc-sys behind rustls).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends musl-tools \
+    && apt-get install -y --no-install-recommends musl-tools clang libclang-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN rust_target="$(uname -m)-unknown-linux-musl" \
