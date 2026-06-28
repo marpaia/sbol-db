@@ -2689,6 +2689,7 @@ dependencies = [
  "chrono",
  "clap",
  "sbol",
+ "sbol-db-backend",
  "sbol-db-core",
  "sbol-db-jobs",
  "sbol-db-postgres",
@@ -2708,6 +2709,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "sbol-db-backend"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sbol-db-postgres",
+ "sbol-db-storage",
+ "tokio",
+]
+
+[[package]]
+name = "sbol-db-conformance"
+version = "0.1.0"
+dependencies = [
+ "sbol-db-core",
+ "sbol-db-storage",
+ "serde_json",
+]
+
+[[package]]
 name = "sbol-db-core"
 version = "0.1.0"
 dependencies = [
@@ -2718,6 +2738,19 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "sbol-db-derive"
+version = "0.1.0"
+dependencies = [
+ "sbol",
+ "sbol-db-core",
+ "sbol-db-rdf",
+ "sbol-db-storage",
+ "sbol-fasta",
+ "sbol-genbank",
  "uuid",
 ]
 
@@ -2751,11 +2784,11 @@ dependencies = [
  "chrono",
  "reqwest",
  "sbol",
+ "sbol-db-conformance",
  "sbol-db-core",
+ "sbol-db-derive",
  "sbol-db-rdf",
  "sbol-db-storage",
- "sbol-fasta",
- "sbol-genbank",
  "sbol-rdf",
  "serde",
  "serde_json",

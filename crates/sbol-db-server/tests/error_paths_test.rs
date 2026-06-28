@@ -27,7 +27,7 @@ async fn state() -> AppState {
     ));
     let jobs = Arc::new(JobRepository::new(pool.clone()));
     let pg_pool = pool.clone();
-    let metrics = Metrics::install(pool.clone(), env!("CARGO_PKG_VERSION"))
+    let metrics = Metrics::install(Some(pool.clone()), env!("CARGO_PKG_VERSION"))
         .with_worker_pool(pool)
         .with_jobs_repo(jobs.clone());
     AppState {

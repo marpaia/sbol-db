@@ -31,7 +31,7 @@ async fn state() -> AppState {
         service.triple_writer(),
     ));
     let jobs = Arc::new(JobRepository::new(pool.clone()));
-    let metrics = Metrics::install(pool.clone(), env!("CARGO_PKG_VERSION"));
+    let metrics = Metrics::install(Some(pool.clone()), env!("CARGO_PKG_VERSION"));
     AppState {
         service,
         sparql,

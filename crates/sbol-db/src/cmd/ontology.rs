@@ -3,35 +3,33 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use sbol_db_postgres::SbolObjectService;
+use sbol_db_storage::SbolStore;
 
 use crate::cli::OntologyAction;
 use crate::output::print_json;
 
-pub async fn run(service: Arc<SbolObjectService>, action: OntologyAction) -> Result<()> {
+pub async fn run(service: Arc<dyn SbolStore>, action: OntologyAction) -> Result<()> {
     match action {
         OntologyAction::Fetch { prefix, url, name } => {
             let (resolved_url, resolved_name) = resolve_ontology_source(&prefix, url, name)?;
             let report = service
-                .ontology()
-                .load_from_url(&prefix.to_ascii_uppercase(), &resolved_name, &resolved_url)
+                .load_ontology_from_url(&prefix.to_ascii_uppercase(), &resolved_name, &resolved_url)
                 .await?;
             print_json(&report)
         }
         OntologyAction::List => {
-            let rows = service.ontology().list_ontologies().await?;
+            let rows = service.list_ontologies().await?;
             print_json(&rows)
         }
         OntologyAction::Descendants { iri_or_curie } => {
             let canonical = canonical_term_iri(&iri_or_curie);
-            let descendants = service.ontology().descendants(&canonical).await?;
+            let descendants = service.descendants(&canonical).await?;
             print_json(&descendants)
         }
         OntologyAction::Term { iri_or_curie } => {
             let canonical = canonical_term_iri(&iri_or_curie);
             let term = service
-                .ontology()
-                .get_term(&canonical)
+                .get_ontology_term(&canonical)
                 .await?
                 .ok_or_else(|| anyhow!("no term {canonical}"))?;
             print_json(&term)
@@ -42,8 +40,7 @@ pub async fn run(service: Arc<SbolObjectService>, action: OntologyAction) -> Res
             let prefix_upper = prefix.to_ascii_uppercase();
             let resolved_name = name.unwrap_or_else(|| prefix_upper.clone());
             let report = service
-                .ontology()
-                .load_from_text(
+                .load_ontology_from_text(
                     &prefix_upper,
                     &resolved_name,
                     Some(&path.display().to_string()),

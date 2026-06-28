@@ -132,3 +132,41 @@ async fn graph_store_write_owns_an_rdf_graph_and_clear_removes_it() {
     assert_eq!(graph_kind(&svc, graph).await, None, "graph row removed");
     assert_eq!(triple_count(&svc, graph).await, 0, "triples removed");
 }
+
+#[tokio::test]
+async fn a_graph_is_a_set_so_re_merging_a_triple_is_a_no_op() {
+    let _g = db_lock().await;
+    let svc = fresh_service().await;
+    let graph = "https://synbiohub.org/public";
+    let body = "@prefix ex: <https://example.org/> .\nex:s ex:p ex:o .\nex:s ex:p ex:o2 .";
+
+    let first = svc
+        .graph_store_write(
+            graph,
+            body,
+            SerializationFormat::Turtle,
+            GraphWriteMode::Merge,
+        )
+        .await
+        .expect("first write");
+    assert_eq!(first, 2, "two distinct triples inserted");
+    assert_eq!(triple_count(&svc, graph).await, 2);
+
+    // Writing the same triples again stores nothing: a triple already present
+    // in a graph is one triple, not two.
+    let second = svc
+        .graph_store_write(
+            graph,
+            body,
+            SerializationFormat::Turtle,
+            GraphWriteMode::Merge,
+        )
+        .await
+        .expect("second write");
+    assert_eq!(second, 0, "already-present triples are not stored again");
+    assert_eq!(
+        triple_count(&svc, graph).await,
+        2,
+        "the graph still holds exactly its distinct triples"
+    );
+}

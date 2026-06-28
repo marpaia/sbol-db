@@ -24,15 +24,16 @@ impl GraphRepository {
         Self { pool }
     }
 
-    /// Create the `sbol3`-kind graph that backs a document. The graph id and
-    /// its `graph:document:{id}` IRI are generated here so the caller can write
-    /// the document's triples into the same graph.
+    /// Create the `sbol3`-kind graph that backs a document. The caller mints
+    /// the `GraphId` so the document's triples can be attributed to its
+    /// `graph:document:{id}` IRI before this write.
     pub async fn insert(
         &self,
         conn: &mut sqlx::PgConnection,
+        id: GraphId,
         input: NewGraph,
     ) -> Result<GraphId, DomainError> {
-        let id = uuid::Uuid::new_v4();
+        let id = id.0;
         let iri = format!("{GRAPH_IRI_PREFIX}{id}");
         sqlx::query(
             r#"

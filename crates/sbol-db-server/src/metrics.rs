@@ -17,8 +17,8 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
-use sbol_db_postgres::{JobRepository, PgPool};
-use sbol_db_storage::JobStatus;
+use sbol_db_postgres::PgPool;
+use sbol_db_storage::{JobQueue, JobStatus};
 use serde::Serialize;
 
 use crate::AppState;
@@ -35,9 +35,11 @@ const JOB_WAIT_BUCKETS_SECONDS: &[f64] =
 
 pub struct Metrics {
     handle: PrometheusHandle,
-    api_pool: PgPool,
+    /// The API connection pool, when the backend exposes one (Postgres).
+    /// `None` for poolless backends; pool gauges are then simply not emitted.
+    api_pool: Option<PgPool>,
     worker_pool: std::sync::Mutex<Option<PgPool>>,
-    jobs: std::sync::Mutex<Option<Arc<JobRepository>>>,
+    jobs: std::sync::Mutex<Option<Arc<dyn JobQueue>>>,
 }
 
 static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
@@ -59,7 +61,7 @@ impl Metrics {
     /// To enable the worker / queue gauges, call
     /// [`Metrics::with_worker_pool`] and [`Metrics::with_jobs_repo`]
     /// before publishing the `AppState`.
-    pub fn install(pool: PgPool, version: &'static str) -> Arc<Self> {
+    pub fn install(pool: Option<PgPool>, version: &'static str) -> Arc<Self> {
         let _ = SERVER_START.get_or_init(Instant::now);
         let handle = RECORDER
             .get_or_init(|| {
@@ -101,7 +103,7 @@ impl Metrics {
 
     /// Attach the job repository. Enables the queue-depth and
     /// oldest-queued-age gauges scraped at /metrics call time.
-    pub fn with_jobs_repo(self: &Arc<Self>, jobs: Arc<JobRepository>) -> Arc<Self> {
+    pub fn with_jobs_repo(self: &Arc<Self>, jobs: Arc<dyn JobQueue>) -> Arc<Self> {
         *self.jobs.lock().expect("jobs repo poisoned") = Some(jobs);
         self.clone()
     }
@@ -119,7 +121,7 @@ impl Metrics {
     /// for direct JSON serialisation. Used by the lab observability
     /// summary handler; does no DB I/O.
     pub fn pool_snapshot(&self) -> PoolSnapshot {
-        let api = Self::pool_stat(&self.api_pool);
+        let api = self.api_pool.as_ref().map(Self::pool_stat);
         let worker = self
             .worker_pool
             .lock()
@@ -203,7 +205,9 @@ impl Metrics {
     }
 
     async fn render(&self) -> String {
-        Self::snapshot_pool("sbol_db", &self.api_pool);
+        if let Some(pool) = self.api_pool.as_ref() {
+            Self::snapshot_pool("sbol_db", pool);
+        }
         let worker_pool = {
             let lock = self.worker_pool.lock().expect("worker pool poisoned");
             lock.clone()
@@ -225,7 +229,7 @@ pub async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PoolSnapshot {
-    pub api: PoolStat,
+    pub api: Option<PoolStat>,
     pub worker: Option<PoolStat>,
 }
 

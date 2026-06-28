@@ -4,7 +4,10 @@ members = [
     "crates/sbol-db-core",
     "crates/sbol-db-storage",
     "crates/sbol-db-rdf",
+    "crates/sbol-db-derive",
     "crates/sbol-db-postgres",
+    "crates/sbol-db-backend",
+    "crates/sbol-db-conformance",
     "crates/sbol-db-sparql",
     "crates/sbol-db-jobs",
     "crates/sbol-db-ui",
@@ -77,7 +80,10 @@ metrics-exporter-prometheus = { version = "0.16", default-features = false }
 sbol-db-core = { path = "crates/sbol-db-core", version = "0.1.0" }
 sbol-db-storage = { path = "crates/sbol-db-storage", version = "0.1.0" }
 sbol-db-rdf = { path = "crates/sbol-db-rdf", version = "0.1.0" }
+sbol-db-derive = { path = "crates/sbol-db-derive", version = "0.1.0" }
 sbol-db-postgres = { path = "crates/sbol-db-postgres", version = "0.1.0" }
+sbol-db-backend = { path = "crates/sbol-db-backend", version = "0.1.0" }
+sbol-db-conformance = { path = "crates/sbol-db-conformance", version = "0.1.0" }
 sbol-db-sparql = { path = "crates/sbol-db-sparql", version = "0.1.0" }
 sbol-db-jobs = { path = "crates/sbol-db-jobs", version = "0.1.0" }
 sbol-db-ui = { path = "crates/sbol-db-ui", version = "0.1.0" }

@@ -43,7 +43,7 @@ async fn fresh_app() -> axum::Router {
     ));
     let jobs = Arc::new(JobRepository::new(pool.clone()));
     let pg_pool = pool.clone();
-    let metrics = Metrics::install(pool, env!("CARGO_PKG_VERSION"));
+    let metrics = Metrics::install(Some(pool), env!("CARGO_PKG_VERSION"));
     let state = AppState {
         service,
         sparql,

@@ -5,7 +5,7 @@ mod repo;
 mod service;
 mod store_impls;
 
-pub use pool::{connect, connect_with_retry, run_migrations, PgPool, PoolConfig};
+pub use pool::{connect, connect_with_retry, run_migrations, PgMigrator, PgPool, PoolConfig};
 pub use repo::{
     Activity, BlockingLock, DatabaseSize, GraphRepository, IncomingForeignKey, IndexStats,
     JobRepository, NeighborhoodRepository, OntologyRepository, OutgoingForeignKey,

@@ -6,18 +6,18 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use sbol_db_backend::Backend;
 use sbol_db_jobs::{default_registry, Worker, WorkerConfig};
-use sbol_db_postgres::{JobRepository, SbolObjectService};
 use sbol_db_server::{router, AppState, Metrics};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
+use sbol_db_storage::{JobQueue, SbolStore};
 use tokio_util::sync::CancellationToken;
 
 use crate::signal::shutdown_signal;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
-    pool: sbol_db_postgres::PgPool,
-    service: Arc<SbolObjectService>,
+    backend: Backend,
     database_url: &str,
     bind: SocketAddr,
     no_worker: bool,
@@ -25,8 +25,7 @@ pub async fn run(
     worker_queues: Option<String>,
     worker_id: Option<String>,
 ) -> Result<()> {
-    let engine = Arc::new(SparqlEngine::new(service.triple_source()));
-    let jobs_repo = Arc::new(JobRepository::new(pool.clone()));
+    let engine = Arc::new(SparqlEngine::new(backend.triple_source.clone()));
 
     let worker_setup = if !no_worker {
         Some(
@@ -43,8 +42,11 @@ pub async fn run(
         None
     };
 
-    let metrics = Metrics::install(pool.clone(), env!("CARGO_PKG_VERSION"));
-    let metrics = metrics.with_jobs_repo(jobs_repo.clone());
+    // The API pool, when the backend exposes one, drives the connection-pool
+    // gauges; poolless backends simply omit them.
+    let api_pool = backend.postgres.as_ref().map(|pg| pg.pool.clone());
+    let metrics = Metrics::install(api_pool, env!("CARGO_PKG_VERSION"));
+    let metrics = metrics.with_jobs_repo(backend.jobs.clone());
     let metrics = if let Some(setup) = worker_setup.as_ref() {
         metrics.with_worker_pool(setup.pool.clone())
     } else {
@@ -53,18 +55,24 @@ pub async fn run(
 
     let config = sbol_db_server::ServerConfig::from_env();
     let sparql_update = Arc::new(SparqlUpdateEngine::new(
-        service.triple_source(),
-        service.triple_writer(),
+        backend.triple_source.clone(),
+        backend.triple_writer.clone(),
     ));
     let state = AppState {
-        service: service.clone(),
+        service: backend.store.clone(),
         sparql: engine,
         sparql_update,
         metrics,
-        jobs: jobs_repo,
+        jobs: backend.jobs.clone(),
         config: config.clone(),
+        // The lab's SQL console and introspection are irreducibly Postgres;
+        // mounting the lab requires the Postgres backend.
         #[cfg(feature = "lab")]
-        pg_pool: pool.clone(),
+        pg_pool: backend
+            .require_postgres()
+            .context("the lab feature requires the Postgres backend")?
+            .pool
+            .clone(),
         #[cfg(feature = "lab")]
         schema_cache: Arc::new(sbol_db_server::SchemaCache::new()),
     };
@@ -100,15 +108,22 @@ pub async fn run(
 /// `Metrics::with_worker_pool` before the worker starts taking work.
 pub(crate) struct WorkerSetup {
     pub pool: sbol_db_postgres::PgPool,
-    pub service: Arc<SbolObjectService>,
+    pub store: Arc<dyn SbolStore>,
+    pub jobs: Arc<dyn JobQueue>,
     pub config: WorkerConfig,
 }
 
 impl WorkerSetup {
     pub fn spawn(self, cancel: CancellationToken) -> tokio::task::JoinHandle<()> {
         let registry = Arc::new(default_registry());
-        let jobs = Arc::new(JobRepository::new(self.pool.clone()));
-        let worker = Worker::new(jobs, self.service, Some(self.pool), registry, self.config);
+        // The pool doubles as the LISTEN/NOTIFY channel for low-latency wakeups.
+        let worker = Worker::new(
+            self.jobs,
+            self.store,
+            Some(self.pool),
+            registry,
+            self.config,
+        );
         tokio::spawn(async move {
             if let Err(err) = worker.run(cancel).await {
                 tracing::error!(error = %err, "embedded worker exited with error");
@@ -150,7 +165,7 @@ pub(crate) async fn build_worker_setup(
     let pool = sbol_db_postgres::pool::connect_with_config(database_url, &worker_pool_cfg)
         .await
         .context("opening worker connection pool")?;
-    let service = Arc::new(SbolObjectService::new(pool.clone()));
+    let bundle = Backend::from_postgres_pool(pool.clone());
 
     let mut config = WorkerConfig {
         concurrency,
@@ -163,7 +178,8 @@ pub(crate) async fn build_worker_setup(
 
     Ok(WorkerSetup {
         pool,
-        service,
+        store: bundle.store,
+        jobs: bundle.jobs,
         config,
     })
 }

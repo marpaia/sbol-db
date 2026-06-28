@@ -1,0 +1,16 @@
+[package]
+name = "sbol-db-backend"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Runtime storage-backend selection: open a connection string into a backend-neutral bundle of sbol-db-storage trait objects."
+
+[dependencies]
+sbol-db-storage.workspace = true
+sbol-db-postgres.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
