@@ -1,13 +1,14 @@
 name: container
 
-# Automatic builds fire on `v*` tag pushes; manual runs are always
-# available via workflow_dispatch. To also build every commit to master,
-# uncomment the `branches:` line below.
+# Builds the sbol-db image and pushes it to GHCR. Commits to master are
+# tagged with both the short and the long commit hash; `v*` tag pushes are
+# tagged with the tag name (e.g. v0.2.0). Manual runs are available via
+# workflow_dispatch.
 on:
   workflow_dispatch:
   push:
+    branches: [master]
     tags: ['v*']
-    # branches: [master]
 
 permissions:
   contents: read
@@ -19,32 +20,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Need full history + tags so `git describe --tags --exact-match`
-          # can find an annotated tag on the current commit.
+          # Full history + tags so `git describe --tags --exact-match` can
+          # find an annotated tag on the current commit.
           fetch-depth: 0
           fetch-tags: true
 
       - id: version
-        name: Resolve image tag
-        # Mirrors the logic in the repo's Makefile:
-        #   VERSION := $(or $(GIT_TAG),$(GIT_HASH)$(GIT_DIRTY))
-        # where GIT_TAG is `git describe --tags --exact-match --dirty` on
-        # the current commit and the hash form is `<short-sha>[-dirty]`.
+        name: Resolve image tags
+        # A `v*` tag push tags the image with the tag name. Any other build
+        # (a commit to master) tags it with both the short and the long
+        # commit hash.
         run: |
           set -euo pipefail
-          GIT_TAG=$(git describe --tags --exact-match --dirty 2>/dev/null || true)
-          if [ -n "$GIT_TAG" ]; then
-            VERSION="$GIT_TAG"
-          else
-            GIT_HASH=$(git rev-parse --short HEAD)
-            DIRTY=""
-            if ! git diff --quiet HEAD; then
-              DIRTY="-dirty"
+          REPO=ghcr.io/marpaia/sbol-db
+          GIT_TAG=$(git describe --tags --exact-match 2>/dev/null || true)
+          {
+            echo "tags<<EOF"
+            if [ -n "$GIT_TAG" ]; then
+              echo "$REPO:$GIT_TAG"
+            else
+              echo "$REPO:$(git rev-parse --short HEAD)"
+              echo "$REPO:$(git rev-parse HEAD)"
             fi
-            VERSION="${GIT_HASH}${DIRTY}"
-          fi
-          echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Resolved image tag: $VERSION"
+            echo "EOF"
+          } | tee -a "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -59,8 +58,8 @@ jobs:
           context: .
           file: Dockerfile
           push: true
-          tags: ghcr.io/marpaia/sbol-db:${{ steps.version.outputs.tag }}
-          # Reuse buildkit layer cache across runs so the cargo-chef
+          tags: ${{ steps.version.outputs.tags }}
+          # Reuse the buildkit layer cache across runs so the cargo-chef
           # dependency layer doesn't rebuild every push.
           cache-from: type=gha
           cache-to: type=gha,mode=max
