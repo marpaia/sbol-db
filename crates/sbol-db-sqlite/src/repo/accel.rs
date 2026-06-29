@@ -18,8 +18,8 @@ use std::collections::{HashMap, HashSet};
 
 use sbol_db_core::DomainError;
 use sbol_db_storage::{
-    build_accel_index, generate_rows, integer, AccelSolutions, AcceleratedQuery, FacetKind, Field,
-    GraphFilter, MetaRecord, Scope, TermValue,
+    build_accel_index, generate_metadata_rows, generate_rows, integer, AccelSolutions,
+    AcceleratedQuery, FacetKind, Field, GraphFilter, MetaRecord, Scope, TermValue,
 };
 use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection, SqlitePool};
 
@@ -95,6 +95,16 @@ impl AccelRepository {
             AcceleratedQuery::Facet { graph, kind, var } => {
                 self.ensure_fresh(graph).await?;
                 self.facet(graph, *kind, var).await
+            }
+            AcceleratedQuery::ObjectMetadata {
+                graph,
+                subject,
+                projection,
+                required,
+            } => {
+                self.ensure_fresh(graph).await?;
+                self.object_metadata(graph, subject, projection, required)
+                    .await
             }
         }
     }
@@ -367,6 +377,31 @@ impl AccelRepository {
             out.push((iri, meta));
         }
         Ok(out)
+    }
+
+    /// Fetch one object's metadata projection by primary key. A missing or
+    /// metadata-less object yields no rows (the required title cannot bind).
+    async fn object_metadata(
+        &self,
+        graph: &str,
+        subject: &str,
+        projection: &[(String, Field)],
+        required: &[bool],
+    ) -> Result<AccelSolutions, DomainError> {
+        let vars: Vec<String> = projection.iter().map(|(v, _)| v.clone()).collect();
+        let meta_json: Option<String> =
+            sqlx::query_scalar("SELECT meta FROM accel_object WHERE graph_iri = ? AND iri = ?")
+                .bind(graph)
+                .bind(subject)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(db_err)?;
+        let mut rows = Vec::new();
+        if let Some(json) = meta_json {
+            let meta: MetaRecord = serde_json::from_str(&json).map_err(db_err)?;
+            generate_metadata_rows(subject, &meta, projection, required, &mut rows);
+        }
+        Ok(AccelSolutions { vars, rows })
     }
 
     async fn count(

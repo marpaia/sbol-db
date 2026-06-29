@@ -318,6 +318,18 @@ pub enum AcceleratedQuery {
         kind: FacetKind,
         var: String,
     },
+    /// One specific object's metadata projection (`getMetadata`): a constant
+    /// `subject` with a per-field projection, answered by a primary-key lookup
+    /// on the object's metadata record. `required[i]` marks a column whose
+    /// triple pattern is outside any `OPTIONAL`, so the object yields no rows
+    /// when that field has no value (an inner join); an optional column instead
+    /// contributes an unbound cell.
+    ObjectMetadata {
+        graph: String,
+        subject: String,
+        projection: Vec<(String, Field)>,
+        required: Vec<bool>,
+    },
 }
 
 /// A backend's answer to an [`AcceleratedQuery`]: a SPARQL solution sequence.
@@ -341,15 +353,49 @@ pub fn generate_rows(
     projection: &[(String, Field)],
     out: &mut Vec<Vec<Option<TermValue>>>,
 ) {
+    let columns: Vec<Vec<Option<TermValue>>> = projection
+        .iter()
+        .map(|(_, field)| field_values(field, iri, meta))
+        .collect();
+    cartesian(&columns, out);
+}
+
+/// Build one object's rows for a constant-subject metadata query (`getMetadata`),
+/// honoring `required`: a required column uses its raw values, so when it has
+/// none the cartesian product is empty and the object yields no rows (an inner
+/// join); an optional column contributes an unbound cell when empty. `required`
+/// is parallel to `projection`. Rows are appended to `out`.
+pub fn generate_metadata_rows(
+    iri: &str,
+    meta: &MetaRecord,
+    projection: &[(String, Field)],
+    required: &[bool],
+    out: &mut Vec<Vec<Option<TermValue>>>,
+) {
     let mut columns: Vec<Vec<Option<TermValue>>> = Vec::with_capacity(projection.len());
-    for (_, field) in projection {
-        columns.push(field_values(field, iri, meta));
+    for (i, (_, field)) in projection.iter().enumerate() {
+        let values = field_values_raw(field, iri, meta);
+        if required.get(i).copied().unwrap_or(false) {
+            if values.is_empty() {
+                return;
+            }
+            columns.push(values);
+        } else if values.is_empty() {
+            columns.push(vec![None]);
+        } else {
+            columns.push(values);
+        }
     }
+    cartesian(&columns, out);
+}
+
+/// Append the cartesian product of `columns` (one cell per column) to `out`.
+fn cartesian(columns: &[Vec<Option<TermValue>>], out: &mut Vec<Vec<Option<TermValue>>>) {
     let mut rows: Vec<Vec<Option<TermValue>>> = vec![Vec::new()];
     for column in columns {
         let mut next = Vec::with_capacity(rows.len() * column.len());
         for prefix in &rows {
-            for value in &column {
+            for value in column {
                 let mut row = prefix.clone();
                 row.push(value.clone());
                 next.push(row);
@@ -360,27 +406,32 @@ pub fn generate_rows(
     out.extend(rows);
 }
 
-/// The possible cell values for one projected column. The literal columns and
-/// the IRI columns (`?type`, `?sbolType` filtered to BioPAX, `?role` filtered to
-/// the Sequence Ontology) are optional and yield a single unbound cell when they
-/// have no value, so an object never drops out for a missing optional.
+/// The possible cell values for one projected column, treated as optional: a
+/// column with no value yields a single unbound cell, so an object never drops
+/// out for a missing optional.
 fn field_values(field: &Field, iri: &str, meta: &MetaRecord) -> Vec<Option<TermValue>> {
-    let optional = |values: Vec<Option<TermValue>>| {
-        if values.is_empty() {
-            vec![None]
-        } else {
-            values
-        }
-    };
+    let values = field_values_raw(field, iri, meta);
+    if values.is_empty() {
+        vec![None]
+    } else {
+        values
+    }
+}
+
+/// A column's raw values, with no unbound-cell fallback: the literal columns and
+/// the IRI columns (`?type`, `?sbolType` filtered to BioPAX, `?role` filtered to
+/// the Sequence Ontology) return an empty vec when the object has no such value.
+/// `?subject` is always a single bound cell.
+fn field_values_raw(field: &Field, iri: &str, meta: &MetaRecord) -> Vec<Option<TermValue>> {
     match field {
         Field::Subject => vec![Some(TermValue::Iri(iri.to_owned()))],
-        Field::DisplayId => optional(lit_terms(&meta.display_id)),
-        Field::Version => optional(lit_terms(&meta.version)),
-        Field::Name => optional(lit_terms(&meta.name)),
-        Field::Description => optional(lit_terms(&meta.description)),
-        Field::Type => optional(iri_terms(&meta.types, "")),
-        Field::SbolType => optional(iri_terms(&meta.sbol_types, BIOPAX_PREFIX)),
-        Field::Role => optional(iri_terms(&meta.roles, SO_PREFIX)),
+        Field::DisplayId => lit_terms(&meta.display_id),
+        Field::Version => lit_terms(&meta.version),
+        Field::Name => lit_terms(&meta.name),
+        Field::Description => lit_terms(&meta.description),
+        Field::Type => iri_terms(&meta.types, ""),
+        Field::SbolType => iri_terms(&meta.sbol_types, BIOPAX_PREFIX),
+        Field::Role => iri_terms(&meta.roles, SO_PREFIX),
     }
 }
 

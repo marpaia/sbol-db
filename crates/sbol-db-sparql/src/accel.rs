@@ -110,6 +110,12 @@ pub fn recognize(query: &Query, default_graph: Option<&str>) -> Option<Accelerat
         }
     }
 
+    // A constant-subject metadata fetch (`getMetadata`) has no scope variable;
+    // recognize it from the algebra so required (non-`OPTIONAL`) fields are known.
+    if let Some(q) = recognize_object_metadata(p, projection, &graph) {
+        return Some(q);
+    }
+
     let (scope, subject_var) = detect_scope(&patterns, root_only)?;
     let fields = field_map(&patterns);
     let mut proj = Vec::with_capacity(vars.len());
@@ -228,6 +234,136 @@ fn field_map(patterns: &[&TriplePattern]) -> HashMap<String, Field> {
         fields.insert(var, field);
     }
     fields
+}
+
+/// Recognize a constant-subject metadata fetch (`getMetadata`):
+///
+/// ```sparql
+/// SELECT ?name ?description WHERE {
+///   <subject> dcterms:title ?name .
+///   OPTIONAL { <subject> dcterms:description ?description }
+/// }
+/// ```
+///
+/// Every triple pattern shares one constant IRI subject and maps a known
+/// metadata predicate to a distinct projected variable; patterns outside an
+/// `OPTIONAL` are required. A variable subject, a filter, a sub-select, or a
+/// bound variable that is not projected returns `None` (generic evaluation).
+fn recognize_object_metadata(
+    pattern: &GraphPattern,
+    projection: &[Variable],
+    graph: &str,
+) -> Option<AcceleratedQuery> {
+    let mut required: Vec<&TriplePattern> = Vec::new();
+    let mut optional: Vec<&TriplePattern> = Vec::new();
+    if !split_required_optional(pattern, false, &mut required, &mut optional) {
+        return None;
+    }
+    if required.is_empty() {
+        return None;
+    }
+
+    let mut subject: Option<&str> = None;
+    let mut var_field: Vec<(String, Field)> = Vec::new();
+    let mut required_vars: Vec<&str> = Vec::new();
+    for (is_required, t) in required
+        .iter()
+        .map(|t| (true, *t))
+        .chain(optional.iter().map(|t| (false, *t)))
+    {
+        let s = match &t.subject {
+            TermPattern::NamedNode(n) => n.as_str(),
+            _ => return None,
+        };
+        match subject {
+            None => subject = Some(s),
+            Some(prev) if prev == s => {}
+            Some(_) => return None,
+        }
+        let var = match &t.object {
+            TermPattern::Variable(v) => v.as_str(),
+            _ => return None,
+        };
+        var_field.push((var.to_owned(), meta_field(pred(t)?)?));
+        if is_required {
+            required_vars.push(var);
+        }
+    }
+    let subject = subject?.to_owned();
+
+    // Every bound variable must be projected (an unprojected required var is an
+    // extra inner join; an unprojected optional multi-valued var would multiply
+    // rows), and every projected var must be one of the bound metadata fields.
+    let proj_names: Vec<&str> = projection.iter().map(Variable::as_str).collect();
+    if var_field
+        .iter()
+        .any(|(v, _)| !proj_names.contains(&v.as_str()))
+    {
+        return None;
+    }
+    let mut proj = Vec::with_capacity(projection.len());
+    let mut required_flags = Vec::with_capacity(projection.len());
+    for v in projection {
+        let name = v.as_str();
+        let field = var_field.iter().find(|(n, _)| n == name).map(|(_, f)| *f)?;
+        proj.push((name.to_owned(), field));
+        required_flags.push(required_vars.contains(&name));
+    }
+    Some(AcceleratedQuery::ObjectMetadata {
+        graph: graph.to_owned(),
+        subject,
+        projection: proj,
+        required: required_flags,
+    })
+}
+
+/// Split a graph pattern's triple patterns into required (outside any `OPTIONAL`)
+/// and optional (the right side of a `LeftJoin`). Returns `false` for any shape
+/// outside the simple join/optional/graph nesting `getMetadata` uses (a filter,
+/// a union, a sub-select, a filtered `OPTIONAL`, ...), leaving the query to
+/// generic evaluation.
+fn split_required_optional<'a>(
+    pattern: &'a GraphPattern,
+    in_optional: bool,
+    required: &mut Vec<&'a TriplePattern>,
+    optional: &mut Vec<&'a TriplePattern>,
+) -> bool {
+    use GraphPattern::*;
+    match pattern {
+        Bgp { patterns } => {
+            if in_optional { optional } else { required }.extend(patterns.iter());
+            true
+        }
+        Join { left, right } => {
+            split_required_optional(left, in_optional, required, optional)
+                && split_required_optional(right, in_optional, required, optional)
+        }
+        LeftJoin {
+            left,
+            right,
+            expression,
+        } => {
+            expression.is_none()
+                && split_required_optional(left, in_optional, required, optional)
+                && split_required_optional(right, true, required, optional)
+        }
+        Graph { inner, .. } => split_required_optional(inner, in_optional, required, optional),
+        _ => false,
+    }
+}
+
+/// Map a metadata predicate IRI to the field it projects.
+fn meta_field(predicate: &str) -> Option<Field> {
+    match predicate {
+        RDF_TYPE => Some(Field::Type),
+        DISPLAY_ID => Some(Field::DisplayId),
+        VERSION => Some(Field::Version),
+        TITLE => Some(Field::Name),
+        DESCRIPTION => Some(Field::Description),
+        SBOL_TYPE => Some(Field::SbolType),
+        ROLE => Some(Field::Role),
+        _ => None,
+    }
 }
 
 /// Whether the pattern contains a `FILTER NOT EXISTS`.
@@ -514,6 +650,42 @@ mod tests {
             "got {:?}",
             rec(&q)
         );
+    }
+
+    #[test]
+    fn recognizes_get_metadata() {
+        let top = "http://synbiohub.org/public/Foo/Foo_collection/1";
+        let q = format!("SELECT ?name ?description FROM <{G}> WHERE {{ <{top}> dcterms:title ?name . OPTIONAL {{ <{top}> dcterms:description ?description }} }}");
+        match rec(&q) {
+            Some(AcceleratedQuery::ObjectMetadata {
+                subject,
+                projection,
+                required,
+                ..
+            }) => {
+                assert_eq!(subject, top);
+                assert_eq!(
+                    projection,
+                    vec![
+                        ("name".to_owned(), Field::Name),
+                        ("description".to_owned(), Field::Description)
+                    ]
+                );
+                // Title is required (outside OPTIONAL); description is optional.
+                assert_eq!(required, vec![true, false]);
+            }
+            other => panic!("expected ObjectMetadata, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn metadata_declines_variable_subject() {
+        // A variable subject is a listing/search shape, not a single-object fetch.
+        let q = format!("SELECT ?name FROM <{G}> WHERE {{ ?s dcterms:title ?name }}");
+        assert!(!matches!(
+            rec(&q),
+            Some(AcceleratedQuery::ObjectMetadata { .. })
+        ));
     }
 
     #[test]

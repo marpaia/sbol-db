@@ -20,8 +20,9 @@ mod triple;
 mod update;
 
 pub use accel::{
-    build_accel_index, generate_rows, integer, AccelIndex, AccelObject, AccelSolutions,
-    AcceleratedQuery, FacetKind, Field, LitVal, MetaRecord, Scope, BIOPAX_PREFIX, SO_PREFIX,
+    build_accel_index, generate_metadata_rows, generate_rows, integer, AccelIndex, AccelObject,
+    AccelSolutions, AcceleratedQuery, FacetKind, Field, LitVal, MetaRecord, Scope, BIOPAX_PREFIX,
+    SO_PREFIX,
 };
 pub use graph::ListGraphsFilter;
 pub use import::{GraphWriteMode, ImportInput};

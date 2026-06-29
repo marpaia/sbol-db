@@ -24,6 +24,14 @@ const SBOL2: &str = include_str!("synbiohub_sbol2.ttl");
 const PUBLIC_GRAPH: &str = "https://synbiohub.org/public";
 const COLLECTION: &str = "https://synbiohub.org/public/igem/igem_collection/1";
 const MEMBER_PREFIX: &str = "https://synbiohub.org/public/igem/";
+/// A top-level object with both a title and a description.
+const META_FULL: &str = "https://synbiohub.org/public/igem/BBa_J23100/1";
+/// A top-level object with a title but no description (the optional stays unbound).
+const META_NO_DESC: &str = "https://synbiohub.org/public/igem/BBa_B0034/1";
+/// An object with no title (the required pattern fails: zero rows).
+const META_NO_TITLE: &str = "https://synbiohub.org/public/igem/BBa_J23100_sequence/1";
+/// An IRI absent from the graph (no metadata record: zero rows).
+const META_MISSING: &str = "https://synbiohub.org/public/igem/Nonexistent/1";
 
 /// A `TripleSource` decorator that forces the generic engine by declining every
 /// accelerated query, while delegating all real reads to the inner source.
@@ -212,6 +220,14 @@ fn templates() -> Vec<(&'static str, String)> {
          FILTER NOT EXISTS {{ <{COLLECTION}> sbol2:member ?om . \
            {{ ?om ?r ?uri }} UNION {{ ?om ?r ?c . ?c ?cr ?uri }} FILTER(?om != ?uri) }} }}"
     );
+    // getMetadata: a constant subject, required title, optional description.
+    let metadata = |subject: &str| {
+        format!(
+            "{prefixes}SELECT ?name ?description WHERE {{ \
+             <{subject}> dcterms:title ?name . \
+             OPTIONAL{{<{subject}> dcterms:description ?description}} }}"
+        )
+    };
     vec![
         ("search", search),
         ("search_count", search_count),
@@ -223,6 +239,10 @@ fn templates() -> Vec<(&'static str, String)> {
         ("members_all", members_all),
         ("members_root", members_root),
         ("count_members", count_members),
+        ("metadata_full", metadata(META_FULL)),
+        ("metadata_no_desc", metadata(META_NO_DESC)),
+        ("metadata_no_title", metadata(META_NO_TITLE)),
+        ("metadata_missing", metadata(META_MISSING)),
     ]
 }
 
