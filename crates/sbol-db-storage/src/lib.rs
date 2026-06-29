@@ -8,6 +8,7 @@
 mod graph;
 mod import;
 mod job;
+mod lab;
 mod migrate;
 mod object;
 mod ontology;
@@ -23,6 +24,7 @@ pub use job::{
     EnqueueOutcome, JobAttempt, JobLogRecord, JobStatus, ListJobsFilter, NewJob, OldestQueuedAge,
     QueueDepthRow, SbolJob, DEFAULT_QUEUE,
 };
+pub use lab::{ClassCount, CorpusCounts, GraphOverview, GraphTriplesPage, LabStore};
 pub use migrate::{MigrationEntry, Migrator};
 pub use object::ListObjectsFilter;
 pub use ontology::{OntologyLoadReport, OntologyRecord, OntologyTermRecord};

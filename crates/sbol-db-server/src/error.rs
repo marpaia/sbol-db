@@ -17,6 +17,10 @@ pub enum ApiError {
     Sparql(SparqlError),
     #[error("request timed out")]
     Timeout,
+    /// The requested feature is not available on the active storage backend
+    /// (e.g. a Postgres-only lab page when running on SQLite).
+    #[error("{0}")]
+    Unavailable(String),
 }
 
 impl From<SparqlError> for ApiError {
@@ -58,6 +62,7 @@ impl IntoResponse for ApiError {
             }
             ApiError::Sparql(_) => (StatusCode::INTERNAL_SERVER_ERROR, "sparql_error"),
             ApiError::Timeout => (StatusCode::GATEWAY_TIMEOUT, "timeout"),
+            ApiError::Unavailable(_) => (StatusCode::NOT_IMPLEMENTED, "backend_unsupported"),
         };
         let detail = self.to_string();
         if status.is_server_error() {
@@ -206,6 +211,14 @@ mod tests {
     #[test]
     fn top_level_timeout_is_504() {
         assert_eq!(status_of(ApiError::Timeout), StatusCode::GATEWAY_TIMEOUT);
+    }
+
+    #[test]
+    fn top_level_unavailable_is_501() {
+        assert_eq!(
+            status_of(ApiError::Unavailable("x".into())),
+            StatusCode::NOT_IMPLEMENTED,
+        );
     }
 
     /// `From<SparqlError> for ApiError` must hoist `Timeout` and `Domain`

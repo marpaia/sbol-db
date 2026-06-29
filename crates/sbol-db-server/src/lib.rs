@@ -24,6 +24,8 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
+#[cfg(feature = "lab")]
+use sbol_db_storage::LabStore;
 use sbol_db_storage::{JobQueue, SbolStore};
 use serde_json::json;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -36,14 +38,18 @@ pub struct AppState {
     pub sparql_update: Arc<SparqlUpdateEngine>,
     pub metrics: Arc<Metrics>,
     pub jobs: Arc<dyn JobQueue>,
+    /// Backend-neutral dashboard / graph-browser reads for the lab UI.
+    #[cfg(feature = "lab")]
+    pub lab: Arc<dyn LabStore>,
     /// Runtime configuration visible to handlers (lab SQL limits, etc).
     /// Cloned in once at server startup; never mutated.
     pub config: ServerConfig,
     /// Postgres connection handle for the lab's SQL and introspection
-    /// endpoints, which are irreducibly Postgres-specific. Present whenever
-    /// the `lab` feature and a Postgres backend are active.
+    /// endpoints, which are irreducibly Postgres-specific. `Some` only when
+    /// the active backend is Postgres; lab pages that need it degrade with a
+    /// "backend unsupported" error otherwise (see [`AppState::require_pg_pool`]).
     #[cfg(feature = "lab")]
-    pub pg_pool: sbol_db_postgres::PgPool,
+    pub pg_pool: Option<sbol_db_postgres::PgPool>,
     /// Per-process TTL cache for the `/lab/api/schema/*` endpoints.
     #[cfg(feature = "lab")]
     pub schema_cache: Arc<lab::SchemaCache>,
@@ -154,6 +160,20 @@ impl AppState {
             let cache = self.schema_cache.clone();
             tokio::spawn(async move { cache.invalidate_all().await });
         }
+    }
+
+    /// The Postgres pool, or a "backend unsupported" error. Lab pages that are
+    /// irreducibly Postgres (the SQL console, schema introspection, Postgres
+    /// observability) call this so they degrade cleanly on other backends.
+    #[cfg(feature = "lab")]
+    pub fn require_pg_pool(&self) -> Result<&sbol_db_postgres::PgPool, ApiError> {
+        self.pg_pool.as_ref().ok_or_else(|| {
+            ApiError::Unavailable(
+                "this lab page requires the Postgres backend; the server is running on a \
+                 different backend"
+                    .to_owned(),
+            )
+        })
     }
 }
 

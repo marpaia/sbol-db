@@ -122,7 +122,7 @@ pub async fn sql(State(state): State<AppState>) -> Result<Json<Arc<SqlSchema>>, 
     if let Some(hit) = read_fresh(&state.schema_cache.sql).await {
         return Ok(Json(hit));
     }
-    let pool = &state.pg_pool;
+    let pool = state.require_pg_pool()?;
     let schema = load_sql_schema(pool).await?;
     let arc = Arc::new(schema);
     *state.schema_cache.sql.write().await = Some(CacheEntry {
@@ -240,30 +240,16 @@ async fn load_sparql_schema(state: &AppState) -> Result<SparqlSchema, ApiError> 
         }
     }
 
-    let class_rows = sqlx::query::<sqlx::Postgres>(
-        r#"
-        SELECT sbol_class, count(*) AS n
-        FROM sbol_objects
-        WHERE sbol_class IS NOT NULL
-        GROUP BY sbol_class
-        ORDER BY n DESC
-        LIMIT $1
-        "#,
-    )
-    .bind(TOP_CLASSES_LIMIT)
-    .fetch_all(&state.pg_pool)
-    .await
-    .map_err(db)?;
-
-    let top_classes = class_rows
+    let top_classes = state
+        .lab
+        .top_classes(TOP_CLASSES_LIMIT)
+        .await?
         .into_iter()
-        .map(|row| {
-            Ok::<_, ApiError>(SparqlClass {
-                iri: row.try_get("sbol_class").map_err(db)?,
-                count: row.try_get("n").map_err(db)?,
-            })
+        .map(|c| SparqlClass {
+            iri: c.iri,
+            count: c.count,
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect();
 
     Ok(SparqlSchema {
         prefixes,

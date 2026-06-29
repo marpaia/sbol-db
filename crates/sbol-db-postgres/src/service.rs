@@ -3,7 +3,7 @@ use sbol_db_derive::{build_import_plan, to_rdf_format};
 use sbol_db_rdf::rdf_graph_to_triples;
 
 use crate::repo::{
-    GraphRepository, NeighborhoodRepository, OntologyRepository, ProjectionEvent,
+    GraphRepository, LabRepository, NeighborhoodRepository, OntologyRepository, ProjectionEvent,
     ProjectionEventRepository, SbolObjectRepository, SequenceSearchRepository, TripleRepository,
     TypedProjectionRepository, ValidationRepository,
 };
@@ -22,6 +22,7 @@ pub struct SbolObjectService {
     neighborhood: NeighborhoodRepository,
     sequence_search: SequenceSearchRepository,
     ontology: OntologyRepository,
+    lab: LabRepository,
 }
 
 /// Per-call cap on rows returned by a Graph Store `GET`. Far above any real
@@ -41,8 +42,13 @@ impl SbolObjectService {
             neighborhood: NeighborhoodRepository::new(pool.clone()),
             sequence_search: SequenceSearchRepository::new(pool.clone()),
             ontology: OntologyRepository::new(pool.clone()),
+            lab: LabRepository::new(pool.clone()),
             pool,
         }
+    }
+
+    pub fn lab(&self) -> &LabRepository {
+        &self.lab
     }
 
     pub fn pool(&self) -> &PgPool {

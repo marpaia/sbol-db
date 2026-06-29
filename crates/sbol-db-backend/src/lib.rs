@@ -17,7 +17,10 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use sbol_db_postgres::{JobRepository, PgMigrator, PgPool, PgStatsRepository, SbolObjectService};
-use sbol_db_storage::{DbStats, JobQueue, Migrator, SbolStore, TripleSource, TripleWriter};
+use sbol_db_sqlite::{SqliteJobRepository, SqliteMigrator, SqlitePool, SqliteStore};
+use sbol_db_storage::{
+    DbStats, JobQueue, LabStore, Migrator, SbolStore, TripleSource, TripleWriter,
+};
 
 /// A ready-to-use storage backend: the neutral trait objects every consumer
 /// shares, plus a typed handle for whichever concrete backend was opened.
@@ -30,6 +33,8 @@ pub struct Backend {
     pub triple_source: Arc<dyn TripleSource>,
     /// Transactional triple writes for SPARQL Update.
     pub triple_writer: Arc<dyn TripleWriter>,
+    /// Dashboard / graph-browser reads for the lab UI.
+    pub lab: Arc<dyn LabStore>,
     /// Schema migrations, when the backend has a migratable schema.
     pub migrator: Option<Arc<dyn Migrator>>,
     /// Database introspection, when the backend can expose engine internals.
@@ -63,9 +68,15 @@ impl Backend {
                     .with_context(|| format!("connecting to {conn}"))?;
                 Ok(Self::from_postgres(pool))
             }
+            Some("sqlite") => {
+                let pool = sbol_db_sqlite::connect(conn)
+                    .await
+                    .with_context(|| format!("opening {conn}"))?;
+                Ok(Self::from_sqlite(pool))
+            }
             Some(other) => bail!(
                 "unsupported storage backend scheme `{other}://` \
-                 (supported: postgres://)"
+                 (supported: postgres://, sqlite://)"
             ),
             None => bail!(
                 "connection string `{conn}` has no scheme; \
@@ -81,6 +92,26 @@ impl Backend {
         Self::from_postgres(pool)
     }
 
+    fn from_sqlite(pool: SqlitePool) -> Self {
+        let store = Arc::new(SqliteStore::new(pool.clone()));
+        let triple_source = store.triple_source();
+        let triple_writer = store.triple_writer();
+        let jobs: Arc<dyn JobQueue> = Arc::new(SqliteJobRepository::new(pool.clone()));
+        let migrator: Arc<dyn Migrator> = Arc::new(SqliteMigrator::new(pool));
+        let lab: Arc<dyn LabStore> = store.clone();
+        Self {
+            store,
+            jobs,
+            triple_source,
+            triple_writer,
+            lab,
+            migrator: Some(migrator),
+            // SQLite introspection is not yet implemented.
+            db_stats: None,
+            postgres: None,
+        }
+    }
+
     fn from_postgres(pool: PgPool) -> Self {
         let service = Arc::new(SbolObjectService::new(pool.clone()));
         let triple_source = service.triple_source();
@@ -88,12 +119,14 @@ impl Backend {
         let jobs: Arc<dyn JobQueue> = Arc::new(JobRepository::new(pool.clone()));
         let migrator: Arc<dyn Migrator> = Arc::new(PgMigrator::new(pool.clone()));
         let db_stats: Arc<dyn DbStats> = Arc::new(PgStatsRepository::new(pool.clone()));
+        let lab: Arc<dyn LabStore> = service.clone();
         let store: Arc<dyn SbolStore> = service.clone();
         Self {
             store,
             jobs,
             triple_source,
             triple_writer,
+            lab,
             migrator: Some(migrator),
             db_stats: Some(db_stats),
             postgres: Some(PostgresHandle { pool, service }),

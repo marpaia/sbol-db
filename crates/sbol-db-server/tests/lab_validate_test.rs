@@ -33,13 +33,14 @@ async fn state() -> AppState {
     let jobs = Arc::new(JobRepository::new(pool.clone()));
     let metrics = Metrics::install(Some(pool.clone()), env!("CARGO_PKG_VERSION"));
     AppState {
+        lab: service.clone(),
         service,
         sparql,
         sparql_update,
         metrics,
         jobs,
         config: ServerConfig::default(),
-        pg_pool: pool,
+        pg_pool: Some(pool),
         schema_cache: Arc::new(sbol_db_server::SchemaCache::new()),
     }
 }

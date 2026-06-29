@@ -80,7 +80,7 @@ pub async fn execute(
         .unwrap_or(DEFAULT_ROW_CAP)
         .min(state.config.lab_sql_row_cap_max);
 
-    let pool = state.pg_pool.clone();
+    let pool = state.require_pg_pool()?.clone();
 
     // One transaction holds the captured pid, the SET LOCAL GUCs, and
     // the query itself. The GUCs revert on commit; the pid is captured

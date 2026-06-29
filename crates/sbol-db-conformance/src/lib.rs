@@ -13,10 +13,10 @@
 
 use std::time::Duration;
 
-use sbol_db_core::SerializationFormat;
+use sbol_db_core::{Direction, IriString, NeighborhoodQuery, SerializationFormat};
 use sbol_db_storage::{
     EnqueueOutcome, GraphWriteMode, ImportInput, JobQueue, JobStatus, ListJobsFilter,
-    ListObjectsFilter, NewJob, SbolStore, DEFAULT_QUEUE,
+    ListObjectsFilter, NewJob, SbolStore, SequenceSearchOptions, DEFAULT_QUEUE,
 };
 
 /// A self-contained SBOL3 document: one Component referencing one Sequence.
@@ -78,6 +78,8 @@ const SO_PROMOTER_IRI: &str = "http://purl.obolibrary.org/obo/SO_0000167";
 pub async fn run_all(store: &dyn SbolStore, jobs: &dyn JobQueue) {
     import_and_read_back(store).await;
     graph_set_semantics(store).await;
+    neighborhood_walk(store).await;
+    sequence_search(store).await;
     ontology_roundtrip(store).await;
     job_queue_lifecycle(jobs).await;
 }
@@ -226,6 +228,145 @@ pub async fn graph_set_semantics(store: &dyn SbolStore) {
             .is_empty(),
         "graph is empty after clear"
     );
+}
+
+/// A forward neighborhood walk from a component reaches the sequence it
+/// references, with the connecting edge.
+pub async fn neighborhood_walk(store: &dyn SbolStore) {
+    let report = store
+        .import_document(ImportInput {
+            body: SIMPLE_COMPONENT_TTL.to_owned(),
+            format: SerializationFormat::Turtle,
+            namespace: None,
+            source_uri: Some("conformance://neighborhood".to_owned()),
+            document_iri: None,
+            created_by: None,
+            name: None,
+            description: None,
+        })
+        .await
+        .expect("import_document");
+
+    let objects = store
+        .list_objects(&ListObjectsFilter {
+            sbol_class: None,
+            role: None,
+            graph_id: Some(report.graph_id),
+            after_iri: None,
+            limit: 100,
+        })
+        .await
+        .expect("list_objects");
+    let component = objects
+        .iter()
+        .find(|o| o.sbol_class.ends_with("#Component"))
+        .expect("a component object");
+    let sequence = objects
+        .iter()
+        .find(|o| o.sbol_class.ends_with("#Sequence"))
+        .expect("a sequence object");
+
+    let result = store
+        .walk(&NeighborhoodQuery {
+            root_iri: IriString::unchecked(component.iri.as_str()),
+            depth: 1,
+            direction: Direction::Forward,
+            predicate_allowlist: Vec::new(),
+            max_nodes: Some(100),
+            include_literals: false,
+        })
+        .await
+        .expect("walk");
+
+    assert!(
+        result.nodes.iter().any(|n| n.id == component.iri.as_str()),
+        "the root component is a node in the walk"
+    );
+    assert!(
+        result.nodes.iter().any(|n| n.id == sequence.iri.as_str()),
+        "the referenced sequence is reached at depth 1"
+    );
+    assert!(
+        result
+            .edges
+            .iter()
+            .any(|e| e.subject == component.iri.as_str()),
+        "there is an edge out of the component"
+    );
+
+    store
+        .delete_graph(report.graph_id)
+        .await
+        .expect("delete_graph");
+}
+
+/// Nucleotide search finds a present motif (seeded by k-mer), is
+/// reverse-complement aware, and reports nothing for an absent motif.
+pub async fn sequence_search(store: &dyn SbolStore) {
+    let report = store
+        .import_document(ImportInput {
+            body: SIMPLE_COMPONENT_TTL.to_owned(),
+            format: SerializationFormat::Turtle,
+            namespace: None,
+            source_uri: Some("conformance://sequence".to_owned()),
+            document_iri: None,
+            created_by: None,
+            name: None,
+            description: None,
+        })
+        .await
+        .expect("import_document");
+
+    let objects = store
+        .list_objects(&ListObjectsFilter {
+            sbol_class: None,
+            role: None,
+            graph_id: Some(report.graph_id),
+            after_iri: None,
+            limit: 100,
+        })
+        .await
+        .expect("list_objects");
+    let sequence_iri = objects
+        .iter()
+        .find(|o| o.sbol_class.ends_with("#Sequence"))
+        .expect("a sequence object")
+        .iri
+        .as_str()
+        .to_owned();
+
+    let opts = || SequenceSearchOptions {
+        max_hits: Some(100),
+        forward_only: None,
+    };
+
+    // A motif present in the sequence's elements (k-mer seeded path).
+    let motif = "GCTAGCTCAGTCC";
+    let hits = store.search(motif, opts()).await.expect("search");
+    assert!(
+        hits.iter().any(|m| m.sequence_iri == sequence_iri),
+        "k-mer-seeded forward search finds the sequence"
+    );
+
+    // The motif's reverse complement still matches (reverse strand).
+    let rc = sbol_db_core::kmer::reverse_complement_string(motif);
+    let rc_hits = store.search(&rc, opts()).await.expect("rc search");
+    assert!(
+        rc_hits.iter().any(|m| m.sequence_iri == sequence_iri),
+        "reverse-complement search finds the sequence"
+    );
+
+    // A motif that does not occur returns nothing.
+    let absent = store
+        .search("AAAAAAAAAAAACCCCC", opts())
+        .await
+        .expect("search");
+    assert!(absent.is_empty(), "an absent motif returns no matches");
+
+    store
+        .delete_graph(report.graph_id)
+        .await
+        .expect("delete_graph");
 }
 
 /// Loading an ontology builds its transitive closure: descendants of an

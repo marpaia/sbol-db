@@ -6,6 +6,7 @@ members = [
     "crates/sbol-db-rdf",
     "crates/sbol-db-derive",
     "crates/sbol-db-postgres",
+    "crates/sbol-db-sqlite",
     "crates/sbol-db-backend",
     "crates/sbol-db-conformance",
     "crates/sbol-db-sparql",
@@ -82,6 +83,7 @@ sbol-db-storage = { path = "crates/sbol-db-storage", version = "0.1.0" }
 sbol-db-rdf = { path = "crates/sbol-db-rdf", version = "0.1.0" }
 sbol-db-derive = { path = "crates/sbol-db-derive", version = "0.1.0" }
 sbol-db-postgres = { path = "crates/sbol-db-postgres", version = "0.1.0" }
+sbol-db-sqlite = { path = "crates/sbol-db-sqlite", version = "0.1.0" }
 sbol-db-backend = { path = "crates/sbol-db-backend", version = "0.1.0" }
 sbol-db-conformance = { path = "crates/sbol-db-conformance", version = "0.1.0" }
 sbol-db-sparql = { path = "crates/sbol-db-sparql", version = "0.1.0" }

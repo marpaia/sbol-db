@@ -16,12 +16,13 @@ use sbol_db_core::{
     ObjectId, SbolObjectRecord, SerializationFormat, Triple,
 };
 use sbol_db_storage::{
-    BatchSequenceMatch, EnqueueOutcome, GraphFilter, GraphStore, GraphWriteMode, ImportInput,
-    JobAttempt, JobLogRecord, JobQueue, JobStatus, ListGraphsFilter, ListJobsFilter,
-    ListObjectsFilter, NeighborhoodStore, NewJob, ObjectStore, OldestQueuedAge, OntologyLoadReport,
-    OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject, PatternSubject,
-    QueueDepthRow, SbolJob, SbolStore, SequenceMatch, SequenceSearchOptions, SequenceSearchStore,
-    TripleChange, TripleSource, TripleWriter, UpdateOutcome,
+    BatchSequenceMatch, ClassCount, CorpusCounts, EnqueueOutcome, GraphFilter, GraphOverview,
+    GraphStore, GraphTriplesPage, GraphWriteMode, ImportInput, JobAttempt, JobLogRecord, JobQueue,
+    JobStatus, LabStore, ListGraphsFilter, ListJobsFilter, ListObjectsFilter, NeighborhoodStore,
+    NewJob, ObjectStore, OldestQueuedAge, OntologyLoadReport, OntologyRecord, OntologyStore,
+    OntologyTermRecord, PatternObject, PatternSubject, QueueDepthRow, SbolJob, SbolStore,
+    SequenceMatch, SequenceSearchOptions, SequenceSearchStore, TripleChange, TripleSource,
+    TripleWriter, UpdateOutcome,
 };
 use serde_json::Value;
 use tokio::runtime::Handle;
@@ -253,6 +254,47 @@ impl OntologyStore for SbolObjectService {
         iri: &str,
     ) -> Result<Option<OntologyTermRecord>, DomainError> {
         self.ontology().get_term(iri).await
+    }
+}
+
+#[async_trait]
+impl LabStore for SbolObjectService {
+    async fn corpus_counts(&self) -> Result<CorpusCounts, DomainError> {
+        self.lab().corpus_counts().await
+    }
+
+    async fn recent_graphs(&self, limit: i64) -> Result<Vec<GraphOverview>, DomainError> {
+        self.lab().list_graph_overviews(None, limit, 0).await
+    }
+
+    async fn top_classes(&self, limit: i64) -> Result<Vec<ClassCount>, DomainError> {
+        self.lab().top_classes(limit).await
+    }
+
+    async fn count_graphs(&self, kind: Option<&str>) -> Result<i64, DomainError> {
+        self.lab().count_graphs(kind).await
+    }
+
+    async fn list_graph_overviews(
+        &self,
+        kind: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<GraphOverview>, DomainError> {
+        self.lab().list_graph_overviews(kind, limit, offset).await
+    }
+
+    async fn get_graph_overview(&self, id: GraphId) -> Result<Option<GraphOverview>, DomainError> {
+        self.lab().get_graph_overview(id).await
+    }
+
+    async fn graph_triples(
+        &self,
+        id: GraphId,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Option<GraphTriplesPage>, DomainError> {
+        self.lab().graph_triples(id, limit, offset).await
     }
 }
 

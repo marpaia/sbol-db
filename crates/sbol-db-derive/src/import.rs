@@ -4,7 +4,7 @@
 use sbol::{Document, Iri, RdfFormat, UpgradeOptions, ValidationReport};
 use sbol_db_core::{
     DomainError, GraphId, IriString, NewGraph, ObjectSummary, SerializationFormat, Triple,
-    TypedProjections,
+    TypedProjections, ValidationStatus,
 };
 use sbol_db_rdf::{
     document_to_projections, document_to_summaries, document_to_triples, hash_bytes,
@@ -35,8 +35,14 @@ pub struct ImportPlan {
     pub summaries: Vec<ObjectSummary>,
     /// Typed projections (components, sequences, features, ...).
     pub projections: TypedProjections,
-    /// The validation report produced by the SBOL validator.
+    /// The validation report produced by the SBOL validator. Backends that
+    /// store individual findings consume this; the summary status and count
+    /// below are precomputed for the [`ImportReport`](sbol_db_core::ImportReport).
     pub validation: ValidationReport,
+    /// Summary classification of `validation`.
+    pub validation_status: ValidationStatus,
+    /// Number of validation issues in `validation`.
+    pub validation_issue_count: usize,
 }
 
 /// Parse `input` and derive its [`ImportPlan`]. Pure: no I/O beyond parsing.
@@ -66,6 +72,8 @@ pub fn build_import_plan(input: &ImportInput) -> Result<ImportPlan, DomainError>
         .collect();
     let projections = document_to_projections(&doc);
     let validation = doc.validate();
+    let validation_status = classify(&validation);
+    let validation_issue_count = validation.issues().len();
 
     let new_graph = NewGraph {
         document_iri: input.document_iri.clone(),
@@ -86,7 +94,21 @@ pub fn build_import_plan(input: &ImportInput) -> Result<ImportPlan, DomainError>
         summaries,
         projections,
         validation,
+        validation_status,
+        validation_issue_count,
     })
+}
+
+/// Classify a validation report into a summary status: any error fails, any
+/// warning warns, otherwise it passes.
+fn classify(report: &ValidationReport) -> ValidationStatus {
+    if report.has_errors() {
+        ValidationStatus::Failed
+    } else if report.warnings().next().is_some() {
+        ValidationStatus::Warning
+    } else {
+        ValidationStatus::Passed
+    }
 }
 
 /// Parse an import body into an `sbol::Document`, dispatching on its declared

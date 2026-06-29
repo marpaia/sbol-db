@@ -12,9 +12,8 @@
 //! IRI plus an identifiers.org alias (`http://identifiers.org/{prefix}/{CURIE}`)
 //! since SBOL documents commonly use the latter.
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-
-use sbol_db_core::{obo::parse_obo, DomainError};
+use sbol_db_core::DomainError;
+use sbol_db_derive::build_ontology_plan;
 use sqlx::Row;
 
 use crate::repo::db_err;
@@ -60,7 +59,9 @@ impl OntologyRepository {
             .await
     }
 
-    /// Same as [`load_from_url`] but takes already-fetched OBO text.
+    /// Same as [`load_from_url`] but takes already-fetched OBO text. The OBO
+    /// parse, canonical-IRI/alias generation, and closure are derived by the
+    /// shared [`build_ontology_plan`]; this method only persists the plan.
     pub async fn load_from_text(
         &self,
         prefix: &str,
@@ -68,81 +69,13 @@ impl OntologyRepository {
         source_url: Option<&str>,
         text: &str,
     ) -> Result<OntologyLoadReport, DomainError> {
-        let parsed = parse_obo(text);
-        let prefix_upper = prefix.to_ascii_uppercase();
-        let prefix_lower = prefix.to_ascii_lowercase();
-        let version = parsed.data_version.clone();
-
-        // Build canonical IRIs for every term, including alt_ids as aliases.
-        let mut terms: Vec<MaterialisedTerm> = Vec::with_capacity(parsed.terms.len());
-        let mut curie_to_canonical: HashMap<String, String> = HashMap::new();
-        for t in &parsed.terms {
-            if !t.curie.starts_with(&format!("{prefix_upper}:")) {
-                continue;
-            }
-            let canonical = curie_to_iri(&prefix_upper, &t.curie);
-            curie_to_canonical.insert(t.curie.clone(), canonical.clone());
-            terms.push(MaterialisedTerm {
-                canonical_iri: canonical,
-                curie: t.curie.clone(),
-                name: t.name.clone(),
-                definition: t.definition.clone(),
-                is_obsolete: t.is_obsolete,
-                parents: t.parents.clone(),
-                alt_ids: t.alt_ids.clone(),
-                synonyms: t.synonyms.clone(),
-            });
-        }
-        // alt_ids also resolve to the same canonical IRI -- record them so
-        // queries for the alt CURIE can resolve back to the parent term.
-        for t in &terms {
-            for alt in &t.alt_ids {
-                curie_to_canonical
-                    .entry(alt.clone())
-                    .or_insert_with(|| t.canonical_iri.clone());
-            }
-        }
-        // Compute closure: (ancestor → descendant). Both must be in-ontology.
-        // For each term, BFS up through parents and record every ancestor.
-        let mut closure_pairs: HashSet<(String, String, i16)> = HashSet::new();
-        // parent map: canonical_iri → Vec<canonical_iri parents>
-        let mut parent_map: HashMap<&str, Vec<&str>> = HashMap::new();
-        for t in &terms {
-            let parents: Vec<&str> = t
-                .parents
-                .iter()
-                .filter_map(|p| curie_to_canonical.get(p.as_str()).map(|s| s.as_str()))
-                .collect();
-            parent_map.insert(t.canonical_iri.as_str(), parents);
-        }
-        for t in &terms {
-            closure_pairs.insert((t.canonical_iri.clone(), t.canonical_iri.clone(), 0));
-            // BFS upward.
-            let mut visited: HashSet<&str> = HashSet::new();
-            visited.insert(t.canonical_iri.as_str());
-            let mut frontier: VecDeque<(&str, i16)> = VecDeque::new();
-            frontier.push_back((t.canonical_iri.as_str(), 0));
-            while let Some((cur, depth)) = frontier.pop_front() {
-                if depth > 1024 {
-                    break;
-                }
-                let Some(parents) = parent_map.get(cur) else {
-                    continue;
-                };
-                for p in parents {
-                    if visited.insert(p) {
-                        closure_pairs.insert(((*p).to_owned(), t.canonical_iri.clone(), depth + 1));
-                        frontier.push_back((p, depth + 1));
-                    }
-                }
-            }
-        }
+        let plan = build_ontology_plan(prefix, name, source_url, text);
 
         let mut tx = self.pool.begin().await.map_err(db_err)?;
 
         // Replace any previous ontology of this prefix.
         sqlx::query("DELETE FROM sbol_ontologies WHERE prefix = $1")
-            .bind(&prefix_upper)
+            .bind(&plan.prefix)
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
@@ -153,11 +86,11 @@ impl OntologyRepository {
             VALUES ($1, $2, $3, $4, $5, now())
             "#,
         )
-        .bind(&prefix_upper)
-        .bind(name)
-        .bind(source_url)
-        .bind(&version)
-        .bind(terms.len() as i32)
+        .bind(&plan.prefix)
+        .bind(&plan.name)
+        .bind(plan.source_url.as_deref())
+        .bind(&plan.version)
+        .bind(plan.terms.len() as i32)
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
@@ -166,7 +99,7 @@ impl OntologyRepository {
         // multidim arrays, so we cannot UNNEST text[][] safely -- and an
         // OBO file is a few thousand rows, well within row-by-row insert
         // throughput inside one transaction.
-        for t in &terms {
+        for t in &plan.terms {
             sqlx::query(
                 r#"
                 INSERT INTO sbol_ontology_terms
@@ -175,7 +108,7 @@ impl OntologyRepository {
                 "#,
             )
             .bind(&t.canonical_iri)
-            .bind(&prefix_upper)
+            .bind(&plan.prefix)
             .bind(&t.curie)
             .bind(&t.name)
             .bind(&t.definition)
@@ -186,34 +119,9 @@ impl OntologyRepository {
             .map_err(db_err)?;
         }
 
-        // Aliases: identifiers.org form + alt_ids.
-        let mut alias_iri: Vec<String> = Vec::new();
-        let mut alias_canon: Vec<String> = Vec::new();
-        let mut alias_seen: BTreeSet<String> = BTreeSet::new();
-        for t in &terms {
-            // identifiers.org variant
-            let identif = format!("http://identifiers.org/{prefix_lower}/{}", t.curie);
-            if identif != t.canonical_iri && alias_seen.insert(identif.clone()) {
-                alias_iri.push(identif);
-                alias_canon.push(t.canonical_iri.clone());
-            }
-            for alt in &t.alt_ids {
-                if alt.starts_with(&format!("{prefix_upper}:")) {
-                    let alt_iri = curie_to_iri(&prefix_upper, alt);
-                    if alt_iri != t.canonical_iri && alias_seen.insert(alt_iri.clone()) {
-                        alias_iri.push(alt_iri);
-                        alias_canon.push(t.canonical_iri.clone());
-                    }
-                    let alt_identif = format!("http://identifiers.org/{prefix_lower}/{alt}");
-                    if alt_identif != t.canonical_iri && alias_seen.insert(alt_identif.clone()) {
-                        alias_iri.push(alt_identif);
-                        alias_canon.push(t.canonical_iri.clone());
-                    }
-                }
-            }
-        }
-        let alias_count = alias_iri.len();
-        if !alias_iri.is_empty() {
+        if !plan.aliases.is_empty() {
+            let alias_iri: Vec<String> = plan.aliases.iter().map(|(a, _)| a.clone()).collect();
+            let alias_canon: Vec<String> = plan.aliases.iter().map(|(_, c)| c.clone()).collect();
             sqlx::query(
                 r#"
                 INSERT INTO sbol_ontology_term_aliases (alias_iri, canonical_iri)
@@ -230,16 +138,15 @@ impl OntologyRepository {
             .map_err(db_err)?;
         }
 
-        // Bulk insert closure.
-        let mut anc: Vec<String> = Vec::with_capacity(closure_pairs.len());
-        let mut des: Vec<String> = Vec::with_capacity(closure_pairs.len());
-        let mut dep: Vec<i16> = Vec::with_capacity(closure_pairs.len());
-        for (a, d, depth) in &closure_pairs {
-            anc.push(a.clone());
-            des.push(d.clone());
-            dep.push(*depth);
-        }
-        if !anc.is_empty() {
+        if !plan.closure.is_empty() {
+            let mut anc: Vec<String> = Vec::with_capacity(plan.closure.len());
+            let mut des: Vec<String> = Vec::with_capacity(plan.closure.len());
+            let mut dep: Vec<i16> = Vec::with_capacity(plan.closure.len());
+            for (a, d, depth) in &plan.closure {
+                anc.push(a.clone());
+                des.push(d.clone());
+                dep.push(*depth);
+            }
             sqlx::query(
                 r#"
                 INSERT INTO sbol_ontology_closure (ancestor_iri, descendant_iri, depth)
@@ -258,14 +165,7 @@ impl OntologyRepository {
 
         tx.commit().await.map_err(db_err)?;
 
-        Ok(OntologyLoadReport {
-            prefix: prefix_upper,
-            source_url: source_url.map(|s| s.to_owned()),
-            version,
-            term_count: terms.len(),
-            closure_count: closure_pairs.len(),
-            alias_count,
-        })
+        Ok(plan.report())
     }
 
     pub async fn list_ontologies(&self) -> Result<Vec<OntologyRecord>, DomainError> {
@@ -470,23 +370,4 @@ impl OntologyRepository {
             None => None,
         })
     }
-}
-
-struct MaterialisedTerm {
-    canonical_iri: String,
-    curie: String,
-    name: String,
-    definition: Option<String>,
-    is_obsolete: bool,
-    parents: Vec<String>,
-    alt_ids: Vec<String>,
-    synonyms: Vec<String>,
-}
-
-fn curie_to_iri(prefix_upper: &str, curie: &str) -> String {
-    // SO:0000167 -> http://purl.obolibrary.org/obo/SO_0000167
-    let suffix = curie
-        .strip_prefix(&format!("{prefix_upper}:"))
-        .unwrap_or(curie);
-    format!("http://purl.obolibrary.org/obo/{prefix_upper}_{suffix}")
 }

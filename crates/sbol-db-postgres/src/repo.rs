@@ -1,5 +1,6 @@
 pub mod graph;
 pub mod job;
+pub mod lab;
 pub mod neighborhood;
 pub mod object;
 pub mod ontology;
@@ -12,6 +13,7 @@ pub mod validation;
 
 pub use graph::GraphRepository;
 pub use job::JobRepository;
+pub use lab::LabRepository;
 pub use neighborhood::NeighborhoodRepository;
 pub use object::SbolObjectRepository;
 pub use ontology::OntologyRepository;

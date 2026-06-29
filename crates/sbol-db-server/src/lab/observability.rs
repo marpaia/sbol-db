@@ -111,18 +111,23 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<Summary>, Api
         })
         .collect();
 
-    let failures_24h: i64 = sqlx::query(
-        r#"
-        SELECT COUNT(*)::bigint AS n
-        FROM sbol_jobs
-        WHERE status IN ('failed', 'dead')
-          AND finished_at >= now() - interval '24 hours'
-        "#,
-    )
-    .fetch_one(&state.pg_pool)
-    .await
-    .map(|r| r.try_get::<i64, _>("n").unwrap_or(0))
-    .unwrap_or(0);
+    // Postgres-only refinement; other backends report 0 here (the rest of the
+    // summary is backend-neutral and still rendered).
+    let failures_24h: i64 = match &state.pg_pool {
+        Some(pool) => sqlx::query(
+            r#"
+            SELECT COUNT(*)::bigint AS n
+            FROM sbol_jobs
+            WHERE status IN ('failed', 'dead')
+              AND finished_at >= now() - interval '24 hours'
+            "#,
+        )
+        .fetch_one(pool)
+        .await
+        .map(|r| r.try_get::<i64, _>("n").unwrap_or(0))
+        .unwrap_or(0),
+        None => 0,
+    };
 
     Ok(Json(Summary {
         health: Health {
@@ -143,12 +148,12 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<Summary>, Api
 
 // ---------- Postgres ----------------------------------------------------------
 
-fn pg_repo(state: &AppState) -> PgStatsRepository {
-    PgStatsRepository::new(state.pg_pool.clone())
+fn pg_repo(state: &AppState) -> Result<PgStatsRepository, ApiError> {
+    Ok(PgStatsRepository::new(state.require_pg_pool()?.clone()))
 }
 
 pub async fn pg_database(State(state): State<AppState>) -> Result<Json<DatabaseSize>, ApiError> {
-    Ok(Json(pg_repo(&state).database_size().await?))
+    Ok(Json(pg_repo(&state)?.database_size().await?))
 }
 
 #[derive(Deserialize)]
@@ -163,7 +168,7 @@ pub async fn pg_tables(
 ) -> Result<Json<Vec<TableStats>>, ApiError> {
     let limit = params.limit.unwrap_or(20).clamp(1, 200);
     let offset = params.offset.unwrap_or(0).max(0);
-    Ok(Json(pg_repo(&state).table_stats(limit, offset).await?))
+    Ok(Json(pg_repo(&state)?.table_stats(limit, offset).await?))
 }
 
 pub async fn pg_indexes(
@@ -171,7 +176,7 @@ pub async fn pg_indexes(
     Query(params): Query<PgPageQuery>,
 ) -> Result<Json<Vec<IndexStats>>, ApiError> {
     let limit = params.limit.unwrap_or(30).clamp(1, 200);
-    Ok(Json(pg_repo(&state).index_stats(limit).await?))
+    Ok(Json(pg_repo(&state)?.index_stats(limit).await?))
 }
 
 #[derive(Deserialize)]
@@ -184,18 +189,18 @@ pub async fn pg_activity(
     Query(params): Query<ActivityQuery>,
 ) -> Result<Json<Vec<Activity>>, ApiError> {
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
-    Ok(Json(pg_repo(&state).activity(limit).await?))
+    Ok(Json(pg_repo(&state)?.activity(limit).await?))
 }
 
 pub async fn pg_locks(State(state): State<AppState>) -> Result<Json<Vec<BlockingLock>>, ApiError> {
-    Ok(Json(pg_repo(&state).blocking_locks().await?))
+    Ok(Json(pg_repo(&state)?.blocking_locks().await?))
 }
 
 pub async fn pg_table_schema(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<TableSchema>, ApiError> {
-    pg_repo(&state)
+    pg_repo(&state)?
         .table_schema(&name)
         .await?
         .map(Json)
@@ -220,7 +225,7 @@ pub async fn pg_slow_queries(
     State(state): State<AppState>,
     Query(params): Query<PgPageQuery>,
 ) -> Result<Json<SlowQueriesResponse>, ApiError> {
-    let repo = pg_repo(&state);
+    let repo = pg_repo(&state)?;
     if !repo.has_pg_stat_statements().await? {
         return Ok(Json(SlowQueriesResponse::NotInstalled {
             setup_hint: SLOW_QUERIES_SETUP_HINT,
