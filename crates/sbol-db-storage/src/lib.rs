@@ -5,6 +5,7 @@
 //! (`sbol-db-postgres`) implements this contract; the types here never name a
 //! concrete database.
 
+mod accel;
 mod graph;
 mod import;
 mod job;
@@ -18,6 +19,7 @@ mod traits;
 mod triple;
 mod update;
 
+pub use accel::{AccelSolutions, AcceleratedQuery, FacetKind, Field, Scope};
 pub use graph::ListGraphsFilter;
 pub use import::{GraphWriteMode, ImportInput};
 pub use job::{
@@ -37,5 +39,7 @@ pub use traits::{
     GraphStore, JobQueue, NeighborhoodStore, ObjectStore, OntologyStore, SbolStore,
     SequenceSearchStore, TripleSource, TripleWriter,
 };
-pub use triple::{GraphFilter, PatternObject, PatternSubject};
+pub use triple::{
+    GraphFilter, IdGraphFilter, IdQuad, PatternObject, PatternSubject, TermId, TermKey, TermValue,
+};
 pub use update::{TripleChange, UpdateOutcome};

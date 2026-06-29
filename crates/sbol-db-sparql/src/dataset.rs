@@ -9,11 +9,15 @@
 //! internally (the Postgres source runs its async query to completion under
 //! `spawn_blocking`, which is how [`crate::SparqlEngine`] drives evaluation).
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use oxrdf::{BlankNode, Literal, NamedNode, Term};
 use sbol_db_core::{DomainError, ObjectTerm, SubjectTerm, Triple};
-use sbol_db_storage::{GraphFilter, PatternObject, PatternSubject, TripleSource};
+use sbol_db_storage::{
+    GraphFilter, IdGraphFilter, PatternObject, PatternSubject, TermId, TermKey, TermValue,
+    TripleSource,
+};
 use spareval::{InternalQuad, QueryableDataset};
 
 /// Per-pattern row cap. Realistic SBOL queries have far fewer hits per pattern;
@@ -130,4 +134,116 @@ fn triple_to_internal(triple: Triple) -> Result<InternalQuad<Term>, DomainError>
         object,
         graph_name,
     })
+}
+
+/// An id-native [`QueryableDataset`] for backends that scan by term id
+/// ([`TripleSource::supports_id_scan`]). The evaluator joins on fixed-size term
+/// ids, which are `Copy` and need no allocation, and a term is materialized only
+/// when a result row or a filter operand is externalized. This avoids the
+/// per-intermediate-row term allocation the term-materializing [`TripleDataset`]
+/// incurs, which dominates scan- and join-heavy queries.
+///
+/// Ids from scans address stored terms (resolvable via the backend). The
+/// evaluator also produces terms that are *not* in the store: query constants,
+/// and values computed by aggregates, `BIND`, and functions. Those are recorded
+/// in `ephemeral` when internalized (their id is still content-addressed) so
+/// they round-trip on externalization without a store lookup that would fail.
+pub struct IdTripleDataset {
+    source: Arc<dyn TripleSource>,
+    ephemeral: Mutex<HashMap<TermId, Term>>,
+}
+
+impl IdTripleDataset {
+    pub fn new(source: Arc<dyn TripleSource>) -> Self {
+        Self {
+            source,
+            ephemeral: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl<'a> QueryableDataset<'a> for &'a IdTripleDataset {
+    type InternalTerm = TermId;
+    type Error = DomainError;
+
+    fn internal_quads_for_pattern(
+        &self,
+        subject: Option<&TermId>,
+        predicate: Option<&TermId>,
+        object: Option<&TermId>,
+        graph_name: Option<Option<&TermId>>,
+    ) -> impl Iterator<Item = Result<InternalQuad<TermId>, DomainError>> + use<'a> {
+        let graph = match graph_name {
+            None => IdGraphFilter::AnyNamed,
+            Some(None) => IdGraphFilter::DefaultOnly,
+            Some(Some(g)) => IdGraphFilter::Iri(*g),
+        };
+        let result = self.source.id_scan(
+            subject.copied(),
+            predicate.copied(),
+            object.copied(),
+            &graph,
+            PATTERN_LIMIT,
+        );
+        match result {
+            Ok(quads) => quads
+                .into_iter()
+                .map(|q| {
+                    Ok(InternalQuad {
+                        subject: q.subject,
+                        predicate: q.predicate,
+                        object: q.object,
+                        graph_name: q.graph,
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter(),
+            Err(e) => vec![Err(e)].into_iter(),
+        }
+    }
+
+    fn internalize_term(&self, term: Term) -> Result<TermId, DomainError> {
+        let key = match &term {
+            Term::NamedNode(n) => TermKey::Iri(n.as_str()),
+            Term::BlankNode(b) => TermKey::Blank(b.as_str()),
+            Term::Literal(lit) => TermKey::Literal {
+                value: lit.value(),
+                datatype: lit.datatype().as_str(),
+                language: lit.language(),
+            },
+            #[allow(unreachable_patterns)]
+            _ => {
+                return Err(DomainError::Database(
+                    "unsupported term kind in id dataset".into(),
+                ))
+            }
+        };
+        let id = self.source.term_to_id(key)?;
+        // Remember the term so externalization round-trips even when it is not
+        // (or not yet) in the store: a query constant or a computed value.
+        self.ephemeral.lock().unwrap().insert(id, term);
+        Ok(id)
+    }
+
+    fn externalize_term(&self, term: TermId) -> Result<Term, DomainError> {
+        if let Some(known) = self.ephemeral.lock().unwrap().get(&term) {
+            return Ok(known.clone());
+        }
+        Ok(match self.source.id_to_term(term)? {
+            TermValue::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri)),
+            TermValue::Blank(id) => Term::BlankNode(BlankNode::new_unchecked(id)),
+            TermValue::Literal {
+                value,
+                datatype,
+                language,
+            } => {
+                let literal = if let Some(lang) = language {
+                    Literal::new_language_tagged_literal_unchecked(value, lang)
+                } else {
+                    Literal::new_typed_literal(value, NamedNode::new_unchecked(datatype))
+                };
+                Term::Literal(literal)
+            }
+        })
+    }
 }

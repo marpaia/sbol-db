@@ -165,16 +165,18 @@ fn rewrite_filter(expr: Expression, inner: GraphPattern) -> GraphPattern {
     let mut keep: Vec<Expression> = Vec::new();
 
     for conjunct in split_and(expr) {
-        match as_not_exists(&conjunct) {
-            Some(body) => match try_anti_join(current, body, &outer) {
-                Ok(rewritten) => current = rewritten,
-                Err(unchanged) => {
-                    current = unchanged;
-                    keep.push(conjunct);
+        if let Some(body) = as_not_exists(&conjunct) {
+            if let Some(disjuncts) = anti_join_disjuncts(body, &outer) {
+                for disjunct in disjuncts {
+                    current = GraphPattern::Minus {
+                        left: Box::new(current),
+                        right: Box::new(disjunct),
+                    };
                 }
-            },
-            None => keep.push(conjunct),
+                continue;
+            }
         }
+        keep.push(conjunct);
     }
 
     match combine_and(keep) {
@@ -186,29 +188,18 @@ fn rewrite_filter(expr: Expression, inner: GraphPattern) -> GraphPattern {
     }
 }
 
-/// Turn `left` into `MINUS`-anti-joins against each conjunctive disjunct of a
-/// `NOT EXISTS` body. Returns `Err(left)` unchanged if the body cannot be safely
-/// rewritten.
-fn try_anti_join(
-    left: GraphPattern,
-    body: &GraphPattern,
-    outer: &HashSet<String>,
-) -> Result<GraphPattern, GraphPattern> {
-    let disjuncts = match disjuncts_of(body) {
-        Some(d) if !d.is_empty() && d.len() <= MAX_DISJUNCTS => d,
-        _ => return Err(left),
-    };
+/// The conjunctive disjuncts to `MINUS` against (one anti-join each) for a
+/// `NOT EXISTS` body, or `None` if the body cannot be safely rewritten and the
+/// `FILTER NOT EXISTS` should stand.
+fn anti_join_disjuncts(body: &GraphPattern, outer: &HashSet<String>) -> Option<Vec<GraphPattern>> {
+    let disjuncts = disjuncts_of(body)?;
+    if disjuncts.is_empty() || disjuncts.len() > MAX_DISJUNCTS {
+        return None;
+    }
     if !disjuncts.iter().all(|d| safe_as_minus(d, outer)) {
-        return Err(left);
+        return None;
     }
-    let mut result = left;
-    for disjunct in disjuncts {
-        result = GraphPattern::Minus {
-            left: Box::new(result),
-            right: Box::new(disjunct),
-        };
-    }
-    Ok(result)
+    Some(disjuncts)
 }
 
 /// `NOT EXISTS { d }` equals `MINUS { d }` when `d` shares a bound variable with

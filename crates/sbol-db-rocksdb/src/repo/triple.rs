@@ -10,7 +10,10 @@ use std::collections::HashSet;
 
 use rocksdb::WriteBatch;
 use sbol_db_core::{DomainError, IriString, Triple};
-use sbol_db_storage::{GraphFilter, PatternObject, PatternSubject};
+use sbol_db_storage::{
+    GraphFilter, IdGraphFilter, IdQuad, PatternObject, PatternSubject, TermId as StorageTermId,
+    TermKey, TermValue,
+};
 
 use crate::codec::{Term, TermId};
 use crate::db::Db;
@@ -265,6 +268,78 @@ impl TripleRepository {
             })?;
         }
         Ok(out)
+    }
+
+    /// Like [`Self::scan_pattern`] but returns term ids straight from the index
+    /// key, skipping the per-row `id2term` resolution and term allocation that
+    /// `scan_pattern` does. The id-native SPARQL dataset joins on these ids and
+    /// resolves terms only for output rows. Bound positions are already ids.
+    pub fn id_scan(
+        &self,
+        subject: Option<TermId>,
+        predicate: Option<TermId>,
+        object: Option<TermId>,
+        graph: &IdGraphFilter,
+        limit: i64,
+    ) -> Result<Vec<IdQuad>, DomainError> {
+        let plans = match graph {
+            IdGraphFilter::DefaultOnly => vec![default_scan(subject, predicate, object)],
+            IdGraphFilter::AnyNamed => vec![any_named_scan(subject, predicate, object)],
+            IdGraphFilter::Iri(gid) => vec![named_graph_scan(*gid, subject, predicate, object)],
+        };
+        let mut out = Vec::new();
+        let limit = if limit < 0 { i64::MAX } else { limit };
+        for (index, prefix) in plans {
+            if out.len() as i64 >= limit {
+                break;
+            }
+            self.db.for_each_prefix(index.cf, &prefix, |key, _| {
+                let quad = keys::decode_key(index, key);
+                out.push(IdQuad {
+                    graph: quad.g,
+                    subject: quad.s,
+                    predicate: quad.p,
+                    object: quad.o,
+                });
+                Ok((out.len() as i64) < limit)
+            })?;
+        }
+        Ok(out)
+    }
+
+    /// The id of a term, for binding a query constant into [`Self::id_scan`].
+    pub fn term_id(key: &TermKey<'_>) -> StorageTermId {
+        let term = match key {
+            TermKey::Iri(iri) => Term::Named((*iri).to_owned()),
+            TermKey::Blank(node) => Term::Blank((*node).to_owned()),
+            TermKey::Literal {
+                value,
+                datatype,
+                language,
+            } => Term::Literal {
+                value: (*value).to_owned(),
+                datatype: (*datatype).to_owned(),
+                language: language.map(str::to_owned),
+            },
+        };
+        term.id()
+    }
+
+    /// Resolve a term id to its value (cached; see [`Db::resolve_term`]).
+    pub fn resolve_value(&self, id: StorageTermId) -> Result<TermValue, DomainError> {
+        Ok(match self.db.resolve_term(&id)? {
+            Term::Named(iri) => TermValue::Iri(iri),
+            Term::Blank(node) => TermValue::Blank(node),
+            Term::Literal {
+                value,
+                datatype,
+                language,
+            } => TermValue::Literal {
+                value,
+                datatype,
+                language,
+            },
+        })
     }
 
     fn materialize(&self, quad: &Quad) -> Result<Triple, DomainError> {

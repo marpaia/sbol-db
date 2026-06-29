@@ -31,3 +31,52 @@ pub enum PatternObject {
         language: Option<String>,
     },
 }
+
+/// A content-addressed term id used by an id-native backend: a fixed-size key
+/// derived from the term, so it is stable and unique per term. An id-native
+/// SPARQL dataset joins on these instead of materialized terms, materializing a
+/// term only for output rows and filter operands.
+pub type TermId = [u8; 16];
+
+/// A bound term to resolve to its id, borrowed from the query.
+#[derive(Clone, Copy, Debug)]
+pub enum TermKey<'a> {
+    Iri(&'a str),
+    Blank(&'a str),
+    Literal {
+        value: &'a str,
+        datatype: &'a str,
+        language: Option<&'a str>,
+    },
+}
+
+/// The decoded value of a term id.
+#[derive(Clone, Debug)]
+pub enum TermValue {
+    Iri(String),
+    Blank(String),
+    Literal {
+        value: String,
+        datatype: String,
+        language: Option<String>,
+    },
+}
+
+/// Graph-position filter for an id-native scan; like [`GraphFilter`] but the
+/// named graph is identified by its id.
+#[derive(Clone, Copy, Debug)]
+pub enum IdGraphFilter {
+    AnyNamed,
+    DefaultOnly,
+    Iri(TermId),
+}
+
+/// A quad of term ids from an id-native scan; `graph` is `None` for the default
+/// graph.
+#[derive(Clone, Copy, Debug)]
+pub struct IdQuad {
+    pub graph: Option<TermId>,
+    pub subject: TermId,
+    pub predicate: TermId,
+    pub object: TermId,
+}

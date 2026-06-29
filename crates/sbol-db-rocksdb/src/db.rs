@@ -63,6 +63,16 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     "job_attempt",
     "job_log",
     "job_ready",
+    // SynBioHub query accelerator: derived per-graph indexes (rebuilt lazily
+    // when a graph is marked dirty). See `repo::accel`.
+    "acc_meta",       // graph + SEP + iri -> MetaRecord JSON
+    "acc_toplevel",   // graph + SEP + displayId + SEP + iri -> () (top-levels in sort order)
+    "acc_bytype",     // graph + SEP + type + SEP + displayId + SEP + iri -> ()
+    "acc_member",     // graph + SEP + collection + SEP + displayId + SEP + iri -> ()
+    "acc_rootmember", // graph + SEP + collection + SEP + displayId + SEP + iri -> () (anti-join)
+    "acc_facet",      // graph + SEP + kind + SEP + value -> ()
+    "acc_count",      // graph + SEP + scope -> u64 LE (precomputed counts)
+    "acc_dirty",      // graph -> () (presence = indexes stale, rebuild on next read)
     // Counters and schema version.
     "meta",
 ];

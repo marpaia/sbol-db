@@ -1,5 +1,6 @@
 //! Per-surface repositories over the shared RocksDB handle.
 
+pub mod accel;
 pub mod graph;
 pub mod job;
 pub mod lab;

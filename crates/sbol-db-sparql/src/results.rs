@@ -8,8 +8,9 @@
 
 use std::str::FromStr;
 
-use oxrdf::Triple;
+use oxrdf::{BlankNode, Literal, NamedNode, Term, Triple, Variable};
 use sbol_db_core::{DomainError, SerializationFormat};
+use sbol_db_storage::{AccelSolutions, TermValue};
 use sparesults::{QueryResultsFormat, QueryResultsSerializer, QuerySolution};
 use spareval::QuerySolutionIter;
 
@@ -127,6 +128,67 @@ pub fn serialize_solutions(
         body: buffer,
         truncated,
     })
+}
+
+/// Serialize accelerator solutions in the chosen solution format, through the
+/// same writer as [`serialize_solutions`] so the bytes match what generic
+/// evaluation would produce.
+pub fn serialize_accel_solutions(
+    solutions: AccelSolutions,
+    format: ResultFormat,
+    max_rows: usize,
+) -> Result<ResultPayload, SparqlError> {
+    let fmt = query_results_format(format)?;
+    let variables: Vec<Variable> = solutions.vars.iter().map(Variable::new_unchecked).collect();
+    let serializer = QueryResultsSerializer::from_format(fmt);
+    let mut buffer = Vec::with_capacity(1024);
+    let mut writer = serializer
+        .serialize_solutions_to_writer(&mut buffer, variables.clone())
+        .map_err(|e| SparqlError::Serialization(e.to_string()))?;
+
+    let mut truncated = false;
+    for (count, row) in solutions.rows.iter().enumerate() {
+        if count >= max_rows {
+            truncated = true;
+            break;
+        }
+        let bound: Vec<(&Variable, Term)> = row
+            .iter()
+            .enumerate()
+            .filter_map(|(i, cell)| cell.as_ref().map(|v| (&variables[i], term_of(v))))
+            .collect();
+        writer
+            .serialize(bound.iter().map(|(v, t)| (v.as_ref(), t.as_ref())))
+            .map_err(|e| SparqlError::Serialization(e.to_string()))?;
+    }
+    writer
+        .finish()
+        .map_err(|e| SparqlError::Serialization(e.to_string()))?;
+
+    Ok(ResultPayload {
+        content_type: format.content_type(),
+        body: buffer,
+        truncated,
+    })
+}
+
+fn term_of(value: &TermValue) -> Term {
+    match value {
+        TermValue::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri)),
+        TermValue::Blank(id) => Term::BlankNode(BlankNode::new_unchecked(id)),
+        TermValue::Literal {
+            value,
+            datatype,
+            language,
+        } => {
+            let literal = if let Some(lang) = language {
+                Literal::new_language_tagged_literal_unchecked(value, lang)
+            } else {
+                Literal::new_typed_literal(value, NamedNode::new_unchecked(datatype))
+            };
+            Term::Literal(literal)
+        }
+    }
 }
 
 /// Serialize an ASK boolean.

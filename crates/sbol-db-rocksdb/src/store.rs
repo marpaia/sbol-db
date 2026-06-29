@@ -17,16 +17,17 @@ use sbol_db_core::{
 use sbol_db_derive::{build_import_plan, to_rdf_format};
 use sbol_db_rdf::{rdf_graph_to_triples, GRAPH_IRI_PREFIX};
 use sbol_db_storage::{
-    BatchSequenceMatch, ClassCount, CorpusCounts, GraphFilter, GraphOverview, GraphStore,
-    GraphTriplesPage, GraphWriteMode, ImportInput, LabStore, ListGraphsFilter, ListObjectsFilter,
-    NeighborhoodStore, ObjectStore, OntologyLoadReport, OntologyRecord, OntologyStore,
-    OntologyTermRecord, PatternObject, PatternSubject, SbolStore, SequenceMatch,
-    SequenceSearchOptions, SequenceSearchStore, TripleChange, TripleSource, TripleWriter,
-    UpdateOutcome,
+    AccelSolutions, AcceleratedQuery, BatchSequenceMatch, ClassCount, CorpusCounts, GraphFilter,
+    GraphOverview, GraphStore, GraphTriplesPage, GraphWriteMode, IdGraphFilter, IdQuad,
+    ImportInput, LabStore, ListGraphsFilter, ListObjectsFilter, NeighborhoodStore, ObjectStore,
+    OntologyLoadReport, OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject,
+    PatternSubject, SbolStore, SequenceMatch, SequenceSearchOptions, SequenceSearchStore, TermId,
+    TermKey, TermValue, TripleChange, TripleSource, TripleWriter, UpdateOutcome,
 };
 
 use crate::codec::Term;
 use crate::db::Db;
+use crate::repo::accel::AccelRepository;
 use crate::repo::neighborhood;
 use crate::repo::{
     GraphRepository, LabRepository, ObjectRepository, OntologyRepository, SequenceSearchRepository,
@@ -46,6 +47,7 @@ pub struct RocksdbStore {
     ontology: OntologyRepository,
     sequences: SequenceSearchRepository,
     lab: LabRepository,
+    accel: AccelRepository,
 }
 
 impl RocksdbStore {
@@ -57,6 +59,7 @@ impl RocksdbStore {
             ontology: OntologyRepository::new(db.clone()),
             sequences: SequenceSearchRepository::new(db.clone()),
             lab: LabRepository::new(db.clone()),
+            accel: AccelRepository::new(db.clone(), TripleRepository::new(db.clone())),
             db,
         }
     }
@@ -64,6 +67,7 @@ impl RocksdbStore {
     pub fn triple_source(&self) -> Arc<dyn TripleSource> {
         Arc::new(RocksdbTripleSource {
             triples: self.triples.clone(),
+            accel: self.accel.clone(),
         })
     }
 
@@ -71,6 +75,7 @@ impl RocksdbStore {
         Arc::new(RocksdbTripleWriter {
             triples: self.triples.clone(),
             db: self.db.clone(),
+            accel: self.accel.clone(),
         })
     }
 
@@ -84,6 +89,7 @@ impl RocksdbStore {
         self.graphs
             .stage_insert(batch, plan.graph_id, &plan.new_graph)?;
         let triple_count = self.triples.stage_insert(batch, seen, &plan.triples)?;
+        self.accel.stage_mark_dirty(batch, plan.graph_iri.as_str());
         let object_count = plan.summaries.len();
         for summary in &plan.summaries {
             self.objects
@@ -168,6 +174,7 @@ impl RocksdbStore {
                 this.triples.stage_clear_graph(&mut batch, Some(&graph))?;
             }
             let inserted = this.triples.stage_insert(&mut batch, &mut seen, &triples)?;
+            this.accel.stage_mark_dirty(&mut batch, &graph);
             this.db.write(batch)?;
             Ok(inserted)
         })
@@ -180,6 +187,7 @@ impl RocksdbStore {
         blocking(move || {
             let mut batch = WriteBatch::default();
             let deleted = this.triples.stage_clear_graph(&mut batch, Some(&graph))?;
+            this.accel.stage_mark_dirty(&mut batch, &graph);
             this.db.write(batch)?;
             Ok(deleted)
         })
@@ -198,6 +206,7 @@ impl RocksdbStore {
 #[derive(Clone)]
 struct RocksdbTripleSource {
     triples: TripleRepository,
+    accel: AccelRepository,
 }
 
 impl TripleSource for RocksdbTripleSource {
@@ -235,6 +244,37 @@ impl TripleSource for RocksdbTripleSource {
         self.triples
             .scan_pattern(Some(&subject), None, None, None, i64::MAX)
     }
+
+    fn supports_id_scan(&self) -> bool {
+        true
+    }
+
+    fn id_scan(
+        &self,
+        subject: Option<TermId>,
+        predicate: Option<TermId>,
+        object: Option<TermId>,
+        graph: &IdGraphFilter,
+        limit: i64,
+    ) -> Result<Vec<IdQuad>, DomainError> {
+        self.triples
+            .id_scan(subject, predicate, object, graph, limit)
+    }
+
+    fn term_to_id(&self, key: TermKey<'_>) -> Result<TermId, DomainError> {
+        Ok(TripleRepository::term_id(&key))
+    }
+
+    fn id_to_term(&self, id: TermId) -> Result<TermValue, DomainError> {
+        self.triples.resolve_value(id)
+    }
+
+    fn run_accelerated(
+        &self,
+        query: &AcceleratedQuery,
+    ) -> Result<Option<AccelSolutions>, DomainError> {
+        self.accel.run(query).map(Some)
+    }
 }
 
 /// Transactional [`TripleWriter`] for SPARQL Update: the whole batch commits or
@@ -243,6 +283,7 @@ impl TripleSource for RocksdbTripleSource {
 struct RocksdbTripleWriter {
     triples: TripleRepository,
     db: Db,
+    accel: AccelRepository,
 }
 
 #[async_trait]
@@ -250,21 +291,34 @@ impl TripleWriter for RocksdbTripleWriter {
     async fn apply_update(&self, changes: Vec<TripleChange>) -> Result<UpdateOutcome, DomainError> {
         let triples = self.triples.clone();
         let db = self.db.clone();
+        let accel = self.accel.clone();
         blocking(move || {
             let mut outcome = UpdateOutcome::default();
             let mut batch = WriteBatch::default();
             let mut seen = HashSet::new();
+            let mut dirty: HashSet<String> = HashSet::new();
             for change in &changes {
                 match change {
                     TripleChange::Change { deletes, inserts } => {
                         outcome.deleted += triples.stage_delete(&mut batch, deletes)?;
                         outcome.inserted += triples.stage_insert(&mut batch, &mut seen, inserts)?;
+                        for t in deletes.iter().chain(inserts.iter()) {
+                            if let Some(g) = &t.graph_iri {
+                                dirty.insert(g.as_str().to_owned());
+                            }
+                        }
                     }
                     TripleChange::Clear(graph) => {
                         outcome.deleted += triples
                             .stage_clear_graph(&mut batch, graph.as_ref().map(|i| i.as_str()))?;
+                        if let Some(g) = graph {
+                            dirty.insert(g.as_str().to_owned());
+                        }
                     }
                 }
+            }
+            for graph in &dirty {
+                accel.stage_mark_dirty(&mut batch, graph);
             }
             db.write(batch)?;
             Ok(outcome)
