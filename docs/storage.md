@@ -79,6 +79,7 @@ sbol-db --backend sqlite --database-url /tmp/sbol.db db migrate
 
 ```rust
 pub struct Backend {
+    pub kind: BackendKind,
     pub store: Arc<dyn SbolStore>,
     pub jobs: Arc<dyn JobQueue>,
     pub triple_source: Arc<dyn TripleSource>,
@@ -86,16 +87,22 @@ pub struct Backend {
     pub lab: Arc<dyn LabStore>,
     pub migrator: Option<Arc<dyn Migrator>>,
     pub db_stats: Option<Arc<dyn DbStats>>,
+    pub lsm_stats: Option<Arc<dyn LsmStats>>,
+    pub sql_console: Option<Arc<dyn SqlConsole>>,
     pub postgres: Option<PostgresHandle>,
 }
 ```
 
-`migrator`, `db_stats`, and `postgres` are optional because they are not
-universal. Every engine has a migrator today. `db_stats` (engine
-introspection) and `postgres` (a typed handle to the pool, the seam the lab's
-SQL console reaches through) are present only when the Postgres backend is
-active. A feature that needs Postgres calls `Backend::require_postgres()`, which
-returns the handle or an error against any other engine.
+The optional fields are capabilities a given engine may or may not provide.
+Every engine has a migrator today. `db_stats` (relational engine
+introspection: tables, indexes, schema, and on Postgres sessions and locks)
+and `sql_console` (arbitrary SQL) are present for the SQL engines, Postgres and
+SQLite. `lsm_stats` (column families, levels, and compaction) is present for
+RocksDB. `postgres` is a typed handle to the pool for the things that really
+are Postgres-specific: the dedicated worker pool, the connection-pool gauges,
+and LISTEN/NOTIFY. `kind` lets the server report the engine and derive the lab
+UI's capability flags. The lab serves `GET /lab/api/info` so the UI shows only
+the features the running backend supports.
 
 ## What every backend shares, and what it does not
 
@@ -115,17 +122,20 @@ diverge in two places:
 - How they store the data. Postgres uses relational tables and indexes; SQLite
   mirrors that model with portable types; RocksDB uses a dictionary-encoded,
   permuted-index key/value layout. The layout references document each.
-- A few Postgres-only surfaces that are not part of the neutral contract: the
-  validation-findings audit trail, the typed projection tables
-  (`sbol_components` and siblings), engine introspection (`DbStats`), and the
-  SQL console. Validation still runs on every engine during import and the
-  status comes back in the `ImportReport`; only Postgres persists the per-finding
-  rows for later querying.
+- The engine-specific surfaces that are not part of the neutral contract. The
+  SQL console and relational schema browser work on both SQL engines (Postgres
+  and SQLite); RocksDB has no SQL, so it offers an LSM maintenance view
+  (column families, levels, compaction) instead. Sessions, locks, and slow-query
+  stats are Postgres-only refinements of the relational maintenance surface. The
+  validation-findings audit trail and the typed projection tables
+  (`sbol_components` and siblings) are Postgres-only; validation still runs on
+  every engine during import and the status comes back in the `ImportReport`,
+  but only Postgres persists the per-finding rows for later querying.
 
 ## Capability matrix
 
 Every engine passes the full storage conformance suite (see below). The matrix
-records that, plus the surfaces that are Postgres-only.
+records that, plus the surfaces that differ by engine.
 
 | Surface | Postgres | SQLite | RocksDB |
 | --- | :---: | :---: | :---: |
@@ -139,10 +149,12 @@ records that, plus the surfaces that are Postgres-only.
 | Async job queue | yes | yes | yes |
 | SynBioHub query accelerator | yes | yes | yes |
 | Id-native SPARQL scan | no | no | yes |
+| SQL console (lab UI) | yes | yes | no |
+| Relational schema browser + introspection (`DbStats`) | yes | yes | no |
+| LSM maintenance + compaction (`LsmStats`) | no | no | yes |
+| Sessions, locks, slow-query stats | yes | no | no |
 | Validation-findings audit trail | yes | no | no |
 | Typed projection tables | yes | no | no |
-| Engine introspection (`DbStats`) | yes | no | no |
-| SQL console (lab UI) | yes | no | no |
 
 Two rows need a note. The id-native scan is a SPARQL-evaluation optimization:
 RocksDB stores triples as term ids and can join on those ids, materializing
@@ -157,23 +169,27 @@ it.
 
 **Postgres** is the default and the most capable. Pick it for multi-node
 deployments (several `sbol-db server` pods sharing one database, work
-distributed by `FOR UPDATE SKIP LOCKED`), for the lab UI's SQL console and
-engine introspection, and when you want the validation-findings audit trail and
-typed projection tables. It is the only engine that runs as a separate server
-process; the others are embedded. See [deployment.md](deployment.md) for the
-production shapes.
+distributed by `FOR UPDATE SKIP LOCKED`), for the live sessions/locks and
+slow-query views on the maintenance page, and when you want the
+validation-findings audit trail and typed projection tables. It is the only
+engine that runs as a separate server process; the others are embedded. See
+[deployment.md](deployment.md) for the production shapes.
 
 **SQLite** is a single-file, embedded SQL engine. It needs no server process and
-no configuration beyond a file path. Pick it for development, for small
-single-node deployments, for embedding sbol-db inside another tool, and for test
-fixtures where a throwaway database per test is convenient.
+no configuration beyond a file path. Being a SQL engine, it drives the lab's
+SQL console and relational schema browser, and its maintenance page reports
+table and index sizes with a VACUUM/ANALYZE action. Pick it for development, for
+small single-node deployments, for embedding sbol-db inside another tool, and
+for test fixtures where a throwaway database per test is convenient.
 
 **RocksDB** is an embedded, single-node key/value engine with a triplestore
 built directly on its column families. It stores each RDF term once under a
 content-addressed 16-byte id and keeps permuted indexes so a triple pattern with
-bound leading positions becomes one prefix scan. Pick it for single-node
-workloads that want the throughput of an in-process store and the id-native
-SPARQL path, without a database server.
+bound leading positions becomes one prefix scan. It has no SQL, so the lab shows
+an LSM maintenance view instead of the SQL console: column-family and per-level
+sizes, estimated keys, pending compaction, and a manual compaction action. Pick
+it for single-node workloads that want the throughput of an in-process store and
+the id-native SPARQL path, without a database server.
 
 ## The conformance suite
 

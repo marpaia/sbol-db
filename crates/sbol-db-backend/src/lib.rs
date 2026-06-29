@@ -16,16 +16,23 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use sbol_db_postgres::{JobRepository, PgMigrator, PgPool, PgStatsRepository, SbolObjectService};
-use sbol_db_rocksdb::{RocksdbJobs, RocksdbMigrator, RocksdbStore};
-use sbol_db_sqlite::{SqliteJobRepository, SqliteMigrator, SqlitePool, SqliteStore};
+use sbol_db_postgres::{
+    JobRepository, PgMigrator, PgPool, PgSqlConsole, PgStatsRepository, SbolObjectService,
+};
+use sbol_db_rocksdb::{RocksdbJobs, RocksdbMigrator, RocksdbStats, RocksdbStore};
+use sbol_db_sqlite::{
+    SqliteJobRepository, SqliteMigrator, SqlitePool, SqliteSqlConsole, SqliteStats, SqliteStore,
+};
 use sbol_db_storage::{
-    DbStats, JobQueue, LabStore, Migrator, SbolStore, TripleSource, TripleWriter,
+    BackendKind, DbStats, JobQueue, LabStore, LsmStats, Migrator, SbolStore, SqlConsole,
+    TripleSource, TripleWriter,
 };
 
 /// A ready-to-use storage backend: the neutral trait objects every consumer
 /// shares, plus a typed handle for whichever concrete backend was opened.
 pub struct Backend {
+    /// Which engine this bundle is backed by.
+    pub kind: BackendKind,
     /// The SBOL-aware store: ingest plus every derived-view read surface.
     pub store: Arc<dyn SbolStore>,
     /// The async job queue.
@@ -38,10 +45,18 @@ pub struct Backend {
     pub lab: Arc<dyn LabStore>,
     /// Schema migrations, when the backend has a migratable schema.
     pub migrator: Option<Arc<dyn Migrator>>,
-    /// Database introspection, when the backend can expose engine internals.
+    /// Relational engine introspection (tables, indexes, schema), when the
+    /// backend has a relational engine. Present for Postgres and SQLite.
     pub db_stats: Option<Arc<dyn DbStats>>,
-    /// Present when the Postgres backend is active; the seam through which
-    /// the lab's irreducibly-Postgres SQL console reaches the pool.
+    /// LSM engine introspection (column families, levels, compaction), when
+    /// the backend is a log-structured key-value store. Present for RocksDB.
+    pub lsm_stats: Option<Arc<dyn LsmStats>>,
+    /// The SQL console, when the engine is itself a SQL database. Present for
+    /// Postgres and SQLite.
+    pub sql_console: Option<Arc<dyn SqlConsole>>,
+    /// Present when the Postgres backend is active; the seam through which a
+    /// dedicated worker pool, connection-pool gauges, and LISTEN/NOTIFY reach
+    /// the pool.
     pub postgres: Option<PostgresHandle>,
 }
 
@@ -104,17 +119,21 @@ impl Backend {
         let triple_source = store.triple_source();
         let triple_writer = store.triple_writer();
         let jobs: Arc<dyn JobQueue> = Arc::new(SqliteJobRepository::new(pool.clone()));
-        let migrator: Arc<dyn Migrator> = Arc::new(SqliteMigrator::new(pool));
+        let migrator: Arc<dyn Migrator> = Arc::new(SqliteMigrator::new(pool.clone()));
+        let db_stats: Arc<dyn DbStats> = Arc::new(SqliteStats::new(pool.clone()));
+        let sql_console: Arc<dyn SqlConsole> = Arc::new(SqliteSqlConsole::new(pool));
         let lab: Arc<dyn LabStore> = store.clone();
         Self {
+            kind: BackendKind::Sqlite,
             store,
             jobs,
             triple_source,
             triple_writer,
             lab,
             migrator: Some(migrator),
-            // SQLite introspection is not yet implemented.
-            db_stats: None,
+            db_stats: Some(db_stats),
+            lsm_stats: None,
+            sql_console: Some(sql_console),
             postgres: None,
         }
     }
@@ -124,17 +143,21 @@ impl Backend {
         let triple_source = store.triple_source();
         let triple_writer = store.triple_writer();
         let jobs: Arc<dyn JobQueue> = Arc::new(RocksdbJobs::new(db.clone()));
-        let migrator: Arc<dyn Migrator> = Arc::new(RocksdbMigrator::new(db));
+        let migrator: Arc<dyn Migrator> = Arc::new(RocksdbMigrator::new(db.clone()));
+        let lsm_stats: Arc<dyn LsmStats> = Arc::new(RocksdbStats::new(db));
         let lab: Arc<dyn LabStore> = store.clone();
         Self {
+            kind: BackendKind::Rocksdb,
             store,
             jobs,
             triple_source,
             triple_writer,
             lab,
             migrator: Some(migrator),
-            // RocksDB introspection is not yet implemented.
+            // A key-value store has no relational engine and no SQL console.
             db_stats: None,
+            lsm_stats: Some(lsm_stats),
+            sql_console: None,
             postgres: None,
         }
     }
@@ -146,9 +169,11 @@ impl Backend {
         let jobs: Arc<dyn JobQueue> = Arc::new(JobRepository::new(pool.clone()));
         let migrator: Arc<dyn Migrator> = Arc::new(PgMigrator::new(pool.clone()));
         let db_stats: Arc<dyn DbStats> = Arc::new(PgStatsRepository::new(pool.clone()));
+        let sql_console: Arc<dyn SqlConsole> = Arc::new(PgSqlConsole::new(pool.clone()));
         let lab: Arc<dyn LabStore> = service.clone();
         let store: Arc<dyn SbolStore> = service.clone();
         Self {
+            kind: BackendKind::Postgres,
             store,
             jobs,
             triple_source,
@@ -156,6 +181,8 @@ impl Backend {
             lab,
             migrator: Some(migrator),
             db_stats: Some(db_stats),
+            lsm_stats: None,
+            sql_console: Some(sql_console),
             postgres: Some(PostgresHandle { pool, service }),
         }
     }

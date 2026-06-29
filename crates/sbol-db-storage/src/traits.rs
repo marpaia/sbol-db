@@ -260,4 +260,25 @@ pub trait JobQueue: Send + Sync {
     async fn current_status(&self, id: JobId) -> Result<Option<JobStatus>, DomainError>;
     async fn queue_depth_snapshot(&self) -> Result<Vec<QueueDepthRow>, DomainError>;
     async fn oldest_queued_age(&self) -> Result<Vec<OldestQueuedAge>, DomainError>;
+
+    /// Count jobs that reached a terminal failure (`failed` or `dead`) in the
+    /// last `within_hours`. Backed by [`Self::list`] so every backend reports
+    /// the same number without backend-specific SQL; the dashboard's
+    /// failures tile reads it.
+    async fn recent_failure_count(&self, within_hours: i64) -> Result<i64, DomainError> {
+        let since = chrono::Utc::now() - chrono::Duration::hours(within_hours.max(0));
+        let mut total = 0i64;
+        for status in [JobStatus::Failed, JobStatus::Dead] {
+            let filter = ListJobsFilter {
+                kind: None,
+                status: Some(status),
+                queue: None,
+                correlation_id: None,
+                since: Some(since),
+                limit: 10_000,
+            };
+            total += self.list(&filter).await?.len() as i64;
+        }
+        Ok(total)
+    }
 }

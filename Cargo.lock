@@ -2873,6 +2873,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "hex",
+ "pg_query",
  "reqwest",
  "sbol",
  "sbol-db-conformance",
@@ -2936,7 +2938,6 @@ dependencies = [
  "hex",
  "metrics",
  "metrics-exporter-prometheus",
- "pg_query",
  "sbol",
  "sbol-db-core",
  "sbol-db-jobs",
@@ -2992,6 +2993,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "hex",
  "reqwest",
  "sbol-db-conformance",
  "sbol-db-core",

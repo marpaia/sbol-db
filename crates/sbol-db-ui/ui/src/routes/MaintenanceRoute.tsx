@@ -1,38 +1,50 @@
 /**
- * Postgres maintenance dashboard.
+ * Backend maintenance dashboard. The shape depends on the active
+ * storage backend:
  *
- * Read-only views over the catalog: database/table/index size,
- * autovacuum lag, live activity from `pg_stat_activity`, blocker →
- * blocked pairs from `pg_locks`, and (when installed) top slow queries
- * from `pg_stat_statements`. Backed by `/lab/api/observability/postgres/*`
- * and polled every 15 s. No destructive actions in v1.
+ *  - Relational (Postgres, SQLite): read-only views over the catalog —
+ *    database/table/index size, live activity, blocking locks, and
+ *    slow queries — plus an Optimize action (SQLite VACUUM/ANALYZE,
+ *    Postgres ANALYZE). Activity, locks, and slow queries are gated on
+ *    the backend's capabilities.
+ *  - LSM (RocksDB): store size, key estimates, column families, and
+ *    per-level file counts, plus a Compact action.
  *
- * The table list is clickable — each row drills into
- * `/schema/tables/:name` for a per-table view
- * matching the Explore / Schema route's drill-down pattern.
+ * Polled every 15 s. Backed by `/lab/api/observability/maintenance/*`.
+ * The list of tables is clickable — each row drills into
+ * `/schema/tables/:name` for a per-table view.
  */
 
 import { useMemo } from "react";
-import { Info } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Info, Loader2, Wrench } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
+import { BackendUnavailable } from "@/components/lab/BackendUnavailable";
 import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { KpiTile } from "@/components/observability/KpiTile";
+import { useBackendInfo } from "@/hooks/useBackendInfo";
 import {
-  usePgActivity,
-  usePgDatabase,
-  usePgIndexes,
-  usePgLocks,
-  usePgSlowQueries,
-  usePgTables,
+  useLsmOverview,
+  useMaintenanceActivity,
+  useMaintenanceDatabase,
+  useMaintenanceIndexes,
+  useMaintenanceLocks,
+  useMaintenanceSlowQueries,
+  useMaintenanceTables,
 } from "@/hooks/useObservability";
-import type {
-  BlockingLock,
-  IndexStats,
-  PgActivity,
-  SlowQuery,
-  TableStats,
+import {
+  postCompact,
+  postOptimize,
+  type BlockingLock,
+  type Capabilities,
+  type IndexStats,
+  type LsmColumnFamily,
+  type LsmLevel,
+  type PgActivity,
+  type SlowQuery,
+  type TableStats,
 } from "@/lib/api";
 import {
   cn,
@@ -42,33 +54,88 @@ import {
   formatRelative,
 } from "@/lib/utils";
 
-export default function PostgresRoute() {
+export default function MaintenanceRoute() {
+  const { data: info } = useBackendInfo();
+  const maintenance = info?.capabilities.maintenance ?? null;
+
+  if (info && maintenance === null) {
+    return <BackendUnavailable feature="Maintenance" />;
+  }
+
+  if (maintenance === "lsm") {
+    return <LsmMaintenance />;
+  }
+
+  return <RelationalMaintenance capabilities={info?.capabilities} />;
+}
+
+// ---------- Relational backends (Postgres, SQLite) ----------
+
+function RelationalMaintenance({
+  capabilities,
+}: {
+  capabilities?: Capabilities;
+}) {
   return (
     <div className="h-full w-full overflow-y-auto">
       <div className="mx-auto max-w-6xl space-y-8 px-8 py-10">
-        <header>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Postgres Maintenance
-          </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Sizes, autovacuum, live activity, blocking locks, and slow queries.
-            Sampled every 15 seconds. Click a table to drill in. Read-only.
-          </p>
+        <header className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              Maintenance
+            </h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Storage, table, and index sizes and engine health. Sampled every
+              15 seconds. Click a table to drill in.
+            </p>
+          </div>
+          <OptimizeButton />
         </header>
 
         <DatabaseOverview />
         <TablesSection />
         <IndexesSection />
-        <ActivitySection />
-        <LocksSection />
-        <SlowQueriesSection />
+        {capabilities?.activity_and_locks && (
+          <>
+            <ActivitySection />
+            <LocksSection />
+          </>
+        )}
+        {capabilities?.slow_query_stats && <SlowQueriesSection />}
       </div>
     </div>
   );
 }
 
+function OptimizeButton() {
+  const qc = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: () => postOptimize(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lab", "obs", "maintenance"] });
+    },
+  });
+
+  return (
+    <button
+      type="button"
+      onClick={() => mutation.mutate()}
+      disabled={mutation.isPending}
+      className="inline-flex items-center gap-1.5 rounded-md border bg-background px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+      title="Reclaim space and refresh planner statistics"
+    >
+      {mutation.isPending ? (
+        <Loader2 size={12} className="animate-spin" />
+      ) : (
+        <Wrench size={12} />
+      )}
+      Optimize
+    </button>
+  );
+}
+
 function DatabaseOverview() {
-  const { data, isLoading, error } = usePgDatabase();
+  const { data, isLoading, error } = useMaintenanceDatabase();
 
   if (error) {
     return (
@@ -104,7 +171,7 @@ function DatabaseOverview() {
 }
 
 function TablesSection() {
-  const { data, isLoading, error } = usePgTables(200, 0);
+  const { data, isLoading, error } = useMaintenanceTables(200, 0);
   const navigate = useNavigate();
 
   const columns = useMemo<DataTableColumn<TableStats>[]>(
@@ -204,7 +271,7 @@ function TablesSection() {
     >
       {error ? (
         <ErrorBanner
-          title="Couldn't read pg_stat_user_tables"
+          title="Couldn't read table statistics"
           body={describeError(error)}
         />
       ) : isLoading && !data ? (
@@ -233,7 +300,7 @@ function deadPctOf(t: TableStats): number {
 }
 
 function IndexesSection() {
-  const { data, isLoading, error } = usePgIndexes(50);
+  const { data, isLoading, error } = useMaintenanceIndexes(50);
   const unused = useMemo(
     () => (data ?? []).filter((i) => i.idx_scan === 0).length,
     [data]
@@ -307,7 +374,7 @@ function IndexesSection() {
     >
       {error ? (
         <ErrorBanner
-          title="Couldn't read pg_stat_user_indexes"
+          title="Couldn't read index statistics"
           body={describeError(error)}
         />
       ) : isLoading && !data ? (
@@ -328,7 +395,7 @@ function IndexesSection() {
 }
 
 function ActivitySection() {
-  const { data, isLoading, error } = usePgActivity(50);
+  const { data, isLoading, error } = useMaintenanceActivity(50);
 
   const columns = useMemo<DataTableColumn<PgActivity>[]>(
     () => [
@@ -393,13 +460,10 @@ function ActivitySection() {
   );
 
   return (
-    <Panel
-      title="Live activity"
-      subtitle="pg_stat_activity · excl. our own backend"
-    >
+    <Panel title="Live activity" subtitle="excl. our own backend">
       {error ? (
         <ErrorBanner
-          title="Couldn't read pg_stat_activity"
+          title="Couldn't read live activity"
           body={describeError(error)}
         />
       ) : isLoading && !data ? (
@@ -420,7 +484,7 @@ function ActivitySection() {
 }
 
 function LocksSection() {
-  const { data, error } = usePgLocks();
+  const { data, error } = useMaintenanceLocks();
 
   const columns = useMemo<DataTableColumn<BlockingLock>[]>(
     () => [
@@ -486,10 +550,10 @@ function LocksSection() {
   );
 
   return (
-    <Panel title="Blocking locks" subtitle="pg_locks · blocker → blocked">
+    <Panel title="Blocking locks" subtitle="blocker → blocked">
       {error ? (
         <ErrorBanner
-          title="Couldn't read pg_locks"
+          title="Couldn't read blocking locks"
           body={describeError(error)}
         />
       ) : !data ? (
@@ -510,7 +574,7 @@ function LocksSection() {
 }
 
 function SlowQueriesSection() {
-  const { data, isLoading, error } = usePgSlowQueries(20);
+  const { data, isLoading, error } = useMaintenanceSlowQueries(20);
 
   const columns = useMemo<DataTableColumn<SlowQuery>[]>(
     () => [
@@ -581,13 +645,10 @@ function SlowQueriesSection() {
   );
 
   return (
-    <Panel
-      title="Slow queries"
-      subtitle="pg_stat_statements · top 20 by total time"
-    >
+    <Panel title="Slow queries" subtitle="top 20 by total time">
       {error ? (
         <ErrorBanner
-          title="Couldn't read pg_stat_statements"
+          title="Couldn't read slow queries"
           body={describeError(error)}
         />
       ) : isLoading && !data ? (
@@ -621,6 +682,238 @@ function NotInstalled({ hint }: { hint: string }) {
           {hint}
         </pre>
       </div>
+    </div>
+  );
+}
+
+// ---------- LSM backends (RocksDB) ----------
+
+function LsmMaintenance() {
+  const { data, isLoading, error } = useLsmOverview();
+
+  return (
+    <div className="h-full w-full overflow-y-auto">
+      <div className="mx-auto max-w-6xl space-y-8 px-8 py-10">
+        <header className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              Maintenance
+            </h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Store size, key estimates, column families, and per-level files.
+              Sampled every 15 seconds.
+            </p>
+          </div>
+          <CompactButton />
+        </header>
+
+        {error ? (
+          <ErrorBanner
+            title="Couldn't read store statistics"
+            body={describeError(error)}
+          />
+        ) : isLoading && !data ? (
+          <LsmSkeleton />
+        ) : !data ? null : (
+          <>
+            <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <KpiTile
+                label="total size"
+                value={formatBytes(data.total_bytes)}
+              />
+              <KpiTile
+                label="estimated keys"
+                value={data.estimated_keys.toLocaleString()}
+              />
+              <KpiTile
+                label="pending compaction"
+                value={formatBytes(data.pending_compaction_bytes)}
+                tone={data.pending_compaction_bytes > 0 ? "warn" : "default"}
+              />
+              <KpiTile
+                label="running compactions"
+                value={data.running_compactions}
+                tone={data.running_compactions > 0 ? "warn" : "default"}
+              />
+            </section>
+
+            <ColumnFamiliesSection families={data.column_families} />
+            <LevelsSection levels={data.levels} />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CompactButton() {
+  const qc = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: () => postCompact(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lab", "obs", "maintenance"] });
+    },
+  });
+
+  return (
+    <button
+      type="button"
+      onClick={() => mutation.mutate()}
+      disabled={mutation.isPending}
+      className="inline-flex items-center gap-1.5 rounded-md border bg-background px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+      title="Compact the store to reclaim space and merge files"
+    >
+      {mutation.isPending ? (
+        <Loader2 size={12} className="animate-spin" />
+      ) : (
+        <Wrench size={12} />
+      )}
+      Compact
+    </button>
+  );
+}
+
+function ColumnFamiliesSection({ families }: { families: LsmColumnFamily[] }) {
+  const columns = useMemo<DataTableColumn<LsmColumnFamily>[]>(
+    () => [
+      {
+        id: "name",
+        header: "column family",
+        width: 280,
+        sortValue: (f) => f.name,
+        filterValue: (f) => f.name,
+        cell: (f) => (
+          <span className="truncate font-mono text-foreground" title={f.name}>
+            {f.name}
+          </span>
+        ),
+      },
+      {
+        id: "files",
+        header: "files",
+        width: 100,
+        align: "right",
+        sortValue: (f) => f.num_files,
+        cell: (f) => (
+          <span className="tabular-nums text-muted-foreground">
+            {f.num_files.toLocaleString()}
+          </span>
+        ),
+      },
+      {
+        id: "size",
+        header: "size",
+        width: 120,
+        align: "right",
+        sortValue: (f) => f.size_bytes,
+        cell: (f) => (
+          <span className="tabular-nums text-foreground">
+            {formatBytes(f.size_bytes)}
+          </span>
+        ),
+      },
+      {
+        id: "keys",
+        header: "est. keys",
+        width: 120,
+        align: "right",
+        sortValue: (f) => f.estimated_keys,
+        cell: (f) => (
+          <span className="tabular-nums text-muted-foreground">
+            {f.estimated_keys.toLocaleString()}
+          </span>
+        ),
+      },
+    ],
+    []
+  );
+
+  return (
+    <Panel title="Column families" subtitle={`${families.length} total`}>
+      {families.length === 0 ? (
+        <Empty>No column families reported.</Empty>
+      ) : (
+        <DataTable
+          columns={columns}
+          rows={families}
+          rowKey={(f) => f.name}
+          filterable
+          defaultSort={{ id: "size", direction: "desc" }}
+        />
+      )}
+    </Panel>
+  );
+}
+
+function LevelsSection({ levels }: { levels: LsmLevel[] }) {
+  const columns = useMemo<DataTableColumn<LsmLevel>[]>(
+    () => [
+      {
+        id: "level",
+        header: "level",
+        width: 100,
+        align: "right",
+        sortValue: (l) => l.level,
+        cell: (l) => (
+          <span className="tabular-nums text-foreground">L{l.level}</span>
+        ),
+      },
+      {
+        id: "files",
+        header: "files",
+        width: 120,
+        align: "right",
+        sortValue: (l) => l.num_files,
+        cell: (l) => (
+          <span className="tabular-nums text-muted-foreground">
+            {l.num_files.toLocaleString()}
+          </span>
+        ),
+      },
+      {
+        id: "size",
+        header: "size",
+        width: 120,
+        align: "right",
+        sortValue: (l) => l.size_bytes,
+        cell: (l) => (
+          <span className="tabular-nums text-foreground">
+            {formatBytes(l.size_bytes)}
+          </span>
+        ),
+      },
+    ],
+    []
+  );
+
+  return (
+    <Panel title="Levels" subtitle={`${levels.length} levels`}>
+      {levels.length === 0 ? (
+        <Empty>No level data reported.</Empty>
+      ) : (
+        <DataTable
+          columns={columns}
+          rows={levels}
+          rowKey={(l) => String(l.level)}
+          defaultSort={{ id: "level", direction: "asc" }}
+        />
+      )}
+    </Panel>
+  );
+}
+
+function LsmSkeleton() {
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div
+            key={i}
+            className="h-24 animate-pulse rounded-lg border bg-card"
+          />
+        ))}
+      </div>
+      <div className="h-48 animate-pulse rounded-lg border bg-card" />
     </div>
   );
 }

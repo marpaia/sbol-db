@@ -496,4 +496,8 @@ impl JobQueue for JobRepository {
     async fn oldest_queued_age(&self) -> Result<Vec<OldestQueuedAge>, DomainError> {
         self.oldest_queued_age().await
     }
+
+    async fn recent_failure_count(&self, within_hours: i64) -> Result<i64, DomainError> {
+        self.recent_failure_count(within_hours).await
+    }
 }

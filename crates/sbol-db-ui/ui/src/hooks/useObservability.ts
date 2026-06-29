@@ -6,14 +6,15 @@ import {
   cancelJob,
   fetchJobAttempts,
   fetchJobLogs,
+  fetchLsmOverview,
+  fetchMaintenanceActivity,
+  fetchMaintenanceDatabase,
+  fetchMaintenanceIndexes,
+  fetchMaintenanceLocks,
+  fetchMaintenanceSlowQueries,
+  fetchMaintenanceTables,
+  fetchMaintenanceTableSchema,
   fetchObservabilitySummary,
-  fetchPgActivity,
-  fetchPgDatabase,
-  fetchPgIndexes,
-  fetchPgLocks,
-  fetchPgSlowQueries,
-  fetchPgTables,
-  fetchPgTableSchema,
   fetchRecentJobs,
   getJob,
   type RecentJob,
@@ -21,7 +22,7 @@ import {
 } from "@/lib/api";
 
 const SUMMARY_MS = 5_000;
-const POSTGRES_MS = 15_000;
+const MAINTENANCE_MS = 15_000;
 const JOBS_MS = 30_000;
 const JOB_DETAIL_MS = 1_000;
 
@@ -35,73 +36,83 @@ export function useObservabilitySummary() {
   });
 }
 
-export function usePgDatabase() {
+export function useMaintenanceDatabase() {
   return useQuery({
-    queryKey: ["lab", "obs", "pg", "database"],
-    queryFn: ({ signal }) => fetchPgDatabase(signal),
-    staleTime: POSTGRES_MS,
-    refetchInterval: POSTGRES_MS,
+    queryKey: ["lab", "obs", "maintenance", "database"],
+    queryFn: ({ signal }) => fetchMaintenanceDatabase(signal),
+    staleTime: MAINTENANCE_MS,
+    refetchInterval: MAINTENANCE_MS,
     placeholderData: (prev) => prev,
   });
 }
 
-export function usePgTables(limit = 20, offset = 0) {
+export function useMaintenanceTables(limit = 20, offset = 0) {
   return useQuery({
-    queryKey: ["lab", "obs", "pg", "tables", limit, offset],
-    queryFn: ({ signal }) => fetchPgTables(limit, offset, signal),
-    staleTime: POSTGRES_MS,
-    refetchInterval: POSTGRES_MS,
+    queryKey: ["lab", "obs", "maintenance", "tables", limit, offset],
+    queryFn: ({ signal }) => fetchMaintenanceTables(limit, offset, signal),
+    staleTime: MAINTENANCE_MS,
+    refetchInterval: MAINTENANCE_MS,
     placeholderData: (prev) => prev,
   });
 }
 
-export function usePgIndexes(limit = 30) {
+export function useMaintenanceIndexes(limit = 30) {
   return useQuery({
-    queryKey: ["lab", "obs", "pg", "indexes", limit],
-    queryFn: ({ signal }) => fetchPgIndexes(limit, signal),
-    staleTime: POSTGRES_MS,
-    refetchInterval: POSTGRES_MS,
+    queryKey: ["lab", "obs", "maintenance", "indexes", limit],
+    queryFn: ({ signal }) => fetchMaintenanceIndexes(limit, signal),
+    staleTime: MAINTENANCE_MS,
+    refetchInterval: MAINTENANCE_MS,
     placeholderData: (prev) => prev,
   });
 }
 
-export function usePgActivity(limit = 50) {
+export function useMaintenanceActivity(limit = 50) {
   return useQuery({
-    queryKey: ["lab", "obs", "pg", "activity", limit],
-    queryFn: ({ signal }) => fetchPgActivity(limit, signal),
-    staleTime: POSTGRES_MS,
-    refetchInterval: POSTGRES_MS,
+    queryKey: ["lab", "obs", "maintenance", "activity", limit],
+    queryFn: ({ signal }) => fetchMaintenanceActivity(limit, signal),
+    staleTime: MAINTENANCE_MS,
+    refetchInterval: MAINTENANCE_MS,
     placeholderData: (prev) => prev,
   });
 }
 
-export function usePgLocks() {
+export function useMaintenanceLocks() {
   return useQuery({
-    queryKey: ["lab", "obs", "pg", "locks"],
-    queryFn: ({ signal }) => fetchPgLocks(signal),
-    staleTime: POSTGRES_MS,
-    refetchInterval: POSTGRES_MS,
+    queryKey: ["lab", "obs", "maintenance", "locks"],
+    queryFn: ({ signal }) => fetchMaintenanceLocks(signal),
+    staleTime: MAINTENANCE_MS,
+    refetchInterval: MAINTENANCE_MS,
     placeholderData: (prev) => prev,
   });
 }
 
-export function usePgSlowQueries(limit = 20) {
+export function useMaintenanceSlowQueries(limit = 20) {
   return useQuery({
-    queryKey: ["lab", "obs", "pg", "slow-queries", limit],
-    queryFn: ({ signal }) => fetchPgSlowQueries(limit, signal),
-    staleTime: POSTGRES_MS,
-    refetchInterval: POSTGRES_MS,
+    queryKey: ["lab", "obs", "maintenance", "slow-queries", limit],
+    queryFn: ({ signal }) => fetchMaintenanceSlowQueries(limit, signal),
+    staleTime: MAINTENANCE_MS,
+    refetchInterval: MAINTENANCE_MS,
     placeholderData: (prev) => prev,
   });
 }
 
-export function usePgTableSchema(name: string) {
+export function useMaintenanceTableSchema(name: string) {
   return useQuery({
-    queryKey: ["lab", "obs", "pg", "table-schema", name],
-    queryFn: ({ signal }) => fetchPgTableSchema(name, signal),
+    queryKey: ["lab", "obs", "maintenance", "table-schema", name],
+    queryFn: ({ signal }) => fetchMaintenanceTableSchema(name, signal),
     enabled: name.length > 0,
     staleTime: 60_000,
     retry: false,
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useLsmOverview() {
+  return useQuery({
+    queryKey: ["lab", "obs", "maintenance", "lsm"],
+    queryFn: ({ signal }) => fetchLsmOverview(signal),
+    staleTime: MAINTENANCE_MS,
+    refetchInterval: MAINTENANCE_MS,
     placeholderData: (prev) => prev,
   });
 }

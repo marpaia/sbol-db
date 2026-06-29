@@ -40,7 +40,10 @@ async fn state() -> AppState {
         metrics,
         jobs,
         config: ServerConfig::default(),
-        pg_pool: Some(pool),
+        backend_kind: sbol_db_server::BackendKind::Postgres,
+        sql_console: Some(Arc::new(sbol_db_postgres::PgSqlConsole::new(pool.clone()))),
+        db_stats: Some(Arc::new(sbol_db_postgres::PgStatsRepository::new(pool))),
+        lsm_stats: None,
         schema_cache: Arc::new(sbol_db_server::SchemaCache::new()),
     }
 }

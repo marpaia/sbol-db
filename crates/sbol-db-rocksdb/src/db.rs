@@ -214,6 +214,32 @@ impl Db {
         Ok(())
     }
 
+    /// Read an integer-valued RocksDB property (e.g. `rocksdb.estimate-num-keys`)
+    /// for one column family. Returns `None` when the property is unset or the
+    /// engine cannot compute it.
+    pub fn property_int_cf(&self, cf: &str, name: &str) -> Option<u64> {
+        self.inner
+            .property_int_value_cf(&self.cf(cf), name)
+            .ok()
+            .flatten()
+    }
+
+    /// Every live SST file across all column families, each tagged with its
+    /// column family, level, and size. This is the per-level, per-family source
+    /// the LSM stats surface aggregates.
+    pub fn live_files(&self) -> Result<Vec<rocksdb::LiveFile>, DomainError> {
+        self.inner.live_files().map_err(db_err)
+    }
+
+    /// Trigger a full manual compaction of every column family. Synchronous and
+    /// potentially slow; callers run it on a blocking thread.
+    pub fn compact_all(&self) {
+        for cf in COLUMN_FAMILIES {
+            self.inner
+                .compact_range_cf(&self.cf(cf), None::<&[u8]>, None::<&[u8]>);
+        }
+    }
+
     /// Iterate every (key, value) in one column family in key order.
     pub fn for_each(
         &self,

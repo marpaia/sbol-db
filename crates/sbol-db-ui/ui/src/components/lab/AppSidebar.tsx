@@ -27,6 +27,8 @@ import {
 } from "lucide-react";
 import { NavLink, useMatch } from "react-router-dom";
 
+import { useBackendInfo } from "@/hooks/useBackendInfo";
+import type { Capabilities } from "@/lib/api";
 import {
   Collapsible,
   CollapsibleContent,
@@ -69,48 +71,60 @@ interface NavGroup {
   items: NavLeaf[];
 }
 
-const NAV_GROUPS: NavGroup[] = [
-  {
-    label: "Data",
-    icon: <Boxes className="text-sbol-rbs" />,
-    items: [
-      { to: "/import", icon: <Import />, label: "Import" },
-      { to: "/graphs", icon: <Share2 />, label: "Graphs" },
-      { to: "/objects", icon: <Boxes />, label: "Objects" },
-      { to: "/sequences", icon: <Dna />, label: "Sequences" },
-      { to: "/ontologies", icon: <Library />, label: "Ontologies" },
-    ],
-  },
-  {
-    label: "Query",
-    icon: <Search className="text-sbol-promoter" />,
-    items: [
-      { to: "/schema", icon: <Table2 />, label: "Schema" },
-      { to: "/sparql", icon: <Network />, label: "SPARQL" },
-      { to: "/sql", icon: <Database />, label: "SQL" },
-    ],
-  },
-  {
-    label: "Operations",
-    icon: <Activity className="text-sbol-terminator" />,
-    items: [
-      { to: "/observability", end: true, icon: <Gauge />, label: "Metrics" },
-      {
-        to: "/observability/jobs",
-        end: true,
-        icon: <ListChecks />,
-        label: "Jobs",
-      },
-      {
-        to: "/observability/postgres",
-        icon: <HardDrive />,
-        label: "Postgres",
-      },
-    ],
-  },
-];
+function navGroups(capabilities?: Capabilities): NavGroup[] {
+  const queryItems: NavLeaf[] = [
+    { to: "/schema", icon: <Table2 />, label: "Schema" },
+    { to: "/sparql", icon: <Network />, label: "SPARQL" },
+  ];
+  if (capabilities?.sql_console) {
+    queryItems.push({ to: "/sql", icon: <Database />, label: "SQL" });
+  }
+
+  const operationsItems: NavLeaf[] = [
+    { to: "/observability", end: true, icon: <Gauge />, label: "Metrics" },
+    {
+      to: "/observability/jobs",
+      end: true,
+      icon: <ListChecks />,
+      label: "Jobs",
+    },
+  ];
+  if (capabilities && capabilities.maintenance !== null) {
+    operationsItems.push({
+      to: "/observability/maintenance",
+      icon: <HardDrive />,
+      label: "Maintenance",
+    });
+  }
+
+  return [
+    {
+      label: "Data",
+      icon: <Boxes className="text-sbol-rbs" />,
+      items: [
+        { to: "/import", icon: <Import />, label: "Import" },
+        { to: "/graphs", icon: <Share2 />, label: "Graphs" },
+        { to: "/objects", icon: <Boxes />, label: "Objects" },
+        { to: "/sequences", icon: <Dna />, label: "Sequences" },
+        { to: "/ontologies", icon: <Library />, label: "Ontologies" },
+      ],
+    },
+    {
+      label: "Query",
+      icon: <Search className="text-sbol-promoter" />,
+      items: queryItems,
+    },
+    {
+      label: "Operations",
+      icon: <Activity className="text-sbol-terminator" />,
+      items: operationsItems,
+    },
+  ];
+}
 
 export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
+  const { data: info } = useBackendInfo();
+  const groups = navGroups(info?.capabilities);
   return (
     <Sidebar collapsible="icon" variant="sidebar">
       <SidebarHeader>
@@ -144,7 +158,7 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
                 icon={<Home className="text-primary" />}
                 label="Overview"
               />
-              {NAV_GROUPS.map((group) => (
+              {groups.map((group) => (
                 <CollapsibleNavGroup key={group.label} group={group} />
               ))}
             </SidebarMenu>

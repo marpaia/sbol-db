@@ -85,7 +85,9 @@ pub struct TableSchema {
 #[derive(Clone, Debug, Serialize)]
 pub struct TableColumn {
     pub name: String,
-    pub pg_type: String,
+    /// Column type in the engine's own vocabulary (`text`, `int4`, `INTEGER`,
+    /// …). Backend-neutral name; the value is whatever the engine reports.
+    pub column_type: String,
     pub nullable: bool,
     pub default_expr: Option<String>,
     pub ordinal: i32,
@@ -109,10 +111,40 @@ pub struct IncomingForeignKey {
     pub target_columns: Vec<String>,
 }
 
+/// A whole-schema listing of tables and their columns, for the lab's schema
+/// browser and SQL-editor click-to-insert sidebar.
+#[derive(Clone, Debug, Serialize)]
+pub struct RelationalSchema {
+    pub tables: Vec<RelationalTable>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RelationalTable {
+    pub name: String,
+    pub columns: Vec<RelationalColumn>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RelationalColumn {
+    pub name: String,
+    /// Column type in the engine's own vocabulary.
+    pub column_type: String,
+    pub nullable: bool,
+}
+
 /// Read-only introspection of a storage engine's tables, indexes, sessions,
-/// and locks. Provided only by backends that can expose these internals.
+/// and locks. Provided only by backends with a relational engine.
+///
+/// Postgres fills every method. SQLite, a single-writer embedded engine,
+/// fills the table/index/schema surfaces and reports an empty session/lock
+/// list with [`has_slow_query_stats`](DbStats::has_slow_query_stats)
+/// returning `false`; the lab UI gates those panels on the backend's
+/// [`crate::Capabilities`] so an empty surface is never rendered as a
+/// feature.
 #[async_trait]
 pub trait DbStats: Send + Sync {
+    /// Every browsable table with its columns, for the schema sidebar.
+    async fn schema_overview(&self) -> Result<RelationalSchema, DomainError>;
     async fn database_size(&self) -> Result<DatabaseSize, DomainError>;
     async fn table_stats(&self, limit: i64, offset: i64) -> Result<Vec<TableStats>, DomainError>;
     async fn index_stats(&self, limit: i64) -> Result<Vec<IndexStats>, DomainError>;
@@ -123,4 +155,12 @@ pub trait DbStats: Send + Sync {
     /// available on this engine right now.
     async fn has_slow_query_stats(&self) -> Result<bool, DomainError>;
     async fn slow_queries(&self, limit: i64) -> Result<Vec<SlowQuery>, DomainError>;
+
+    /// Run the engine's routine optimize/refresh-statistics maintenance
+    /// (SQLite `VACUUM`/`ANALYZE`, Postgres `ANALYZE`). The default is a
+    /// no-op so a backend without a meaningful action need not implement it;
+    /// the lab UI gates the button on the backend reporting one.
+    async fn optimize(&self) -> Result<(), DomainError> {
+        Ok(())
+    }
 }

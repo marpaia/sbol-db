@@ -69,10 +69,17 @@ pub async fn run(
         // Backend-neutral lab dashboard / graph browser.
         #[cfg(feature = "lab")]
         lab: backend.lab.clone(),
-        // The lab's SQL console and introspection are Postgres-only; they
-        // degrade to a clear error on other backends. Present only for Postgres.
+        // Capability handles for the lab's engine-specific pages. Each is
+        // present only on a backend that supports it; the pages degrade to a
+        // clear error otherwise and the UI gates them on `/lab/api/info`.
         #[cfg(feature = "lab")]
-        pg_pool: backend.postgres.as_ref().map(|pg| pg.pool.clone()),
+        backend_kind: backend.kind,
+        #[cfg(feature = "lab")]
+        sql_console: backend.sql_console.clone(),
+        #[cfg(feature = "lab")]
+        db_stats: backend.db_stats.clone(),
+        #[cfg(feature = "lab")]
+        lsm_stats: backend.lsm_stats.clone(),
         #[cfg(feature = "lab")]
         schema_cache: Arc::new(sbol_db_server::SchemaCache::new()),
     };

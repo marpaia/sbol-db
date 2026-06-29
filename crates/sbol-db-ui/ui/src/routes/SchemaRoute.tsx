@@ -1,12 +1,14 @@
 /**
  * Schema browser. Two surfaces in one page, switched via tabs:
  *
- *  - SQL: every table the lab exposes through PostgREST/SQL, with its
- *    columns, Postgres types, and nullability. Clicking a table copies
- *    a `SELECT * FROM <name> LIMIT 100` template into the SQL editor.
+ *  - SQL: every table the lab exposes through SQL, with its columns,
+ *    types, and nullability. Clicking a table copies a
+ *    `SELECT * FROM <name> LIMIT 100` template into the SQL editor.
+ *    Only shown on backends that report the `relational_schema`
+ *    capability.
  *  - SPARQL: the prefix table (built-in + ontology-derived) and the
- *    top classes by row count. Clicking a class loads a SPARQL
- *    template against that IRI into the SPARQL editor.
+ *    top classes by row count. Always available. Clicking a class
+ *    loads a SPARQL template against that IRI into the SPARQL editor.
  *
  * Data is sourced from the schema endpoints (`/lab/api/schema/sql`,
  * `/lab/api/schema/sparql`), cached via TanStack Query. There is no
@@ -18,6 +20,7 @@ import { ChevronRight, Copy, Database, Network, Play } from "lucide-react";
 
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useBackendInfo } from "@/hooks/useBackendInfo";
 import { useSparqlSchema, useSqlSchema } from "@/hooks/useSchema";
 import type {
   SparqlSchemaClass,
@@ -31,6 +34,8 @@ import { cn } from "@/lib/utils";
 export default function SchemaRoute() {
   const navigate = useNavigate();
   const setBuffer = useLabStore((s) => s.setBuffer);
+  const { data: info } = useBackendInfo();
+  const relationalSchema = info?.capabilities.relational_schema ?? false;
 
   const launch = (dialect: Dialect, query: string) => {
     setBuffer(dialect, query);
@@ -43,26 +48,34 @@ export default function SchemaRoute() {
         <header>
           <h1 className="text-2xl font-semibold tracking-tight">Schema</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Read-only browser for the SQL projection and SPARQL prefix table.
-            Click a table or class to drop a starter query into the editor.
+            {relationalSchema
+              ? "Read-only browser for the SQL projection and SPARQL prefix table. Click a table or class to drop a starter query into the editor."
+              : "Read-only browser for the SPARQL prefix table and top classes. Click a class to drop a starter query into the editor."}
           </p>
         </header>
 
-        <Tabs defaultValue="sql" className="w-full">
+        <Tabs
+          defaultValue={relationalSchema ? "sql" : "sparql"}
+          className="w-full"
+        >
           <TabsList>
-            <TabsTrigger value="sql" className="gap-1.5">
-              <Database className="size-3.5" />
-              SQL
-            </TabsTrigger>
+            {relationalSchema && (
+              <TabsTrigger value="sql" className="gap-1.5">
+                <Database className="size-3.5" />
+                SQL
+              </TabsTrigger>
+            )}
             <TabsTrigger value="sparql" className="gap-1.5">
               <Network className="size-3.5" />
               SPARQL
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="sql">
-            <SqlPanel onLaunch={(q) => launch("sql", q)} />
-          </TabsContent>
+          {relationalSchema && (
+            <TabsContent value="sql">
+              <SqlPanel onLaunch={(q) => launch("sql", q)} />
+            </TabsContent>
+          )}
 
           <TabsContent value="sparql">
             <SparqlPanel onLaunch={(q) => launch("sparql", q)} />
@@ -112,7 +125,7 @@ function TableCard({
   onLaunch: (query: string) => void;
 }) {
   const template = `SELECT *\nFROM ${table.name}\nLIMIT 100;\n`;
-  const detailHref = `/schema/tables/public/${encodeURIComponent(table.name)}`;
+  const detailHref = `/schema/tables/${encodeURIComponent(table.name)}`;
   return (
     <section className="rounded-lg border bg-card">
       <header className="flex items-center gap-2 border-b px-2 py-1.5">
@@ -173,7 +186,7 @@ function ColumnRow({ column }: { column: SqlSchemaColumn }) {
     >
       <span className="truncate font-mono text-foreground">{column.name}</span>
       <span className="ml-auto shrink-0 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-        {column.pg_type}
+        {column.column_type}
       </span>
       {column.nullable && (
         <span

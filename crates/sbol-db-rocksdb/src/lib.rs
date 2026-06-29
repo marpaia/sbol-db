@@ -14,6 +14,7 @@ mod jobs;
 mod keys;
 mod migrate;
 mod repo;
+mod stats;
 mod store;
 
 use std::path::Path;
@@ -23,6 +24,7 @@ use sbol_db_core::DomainError;
 pub use db::Db;
 pub use jobs::RocksdbJobs;
 pub use migrate::RocksdbMigrator;
+pub use stats::RocksdbStats;
 pub use store::RocksdbStore;
 
 /// Open (creating if absent) the database named by a `rocksdb://<path>`

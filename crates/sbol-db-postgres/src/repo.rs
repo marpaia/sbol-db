@@ -9,6 +9,7 @@ pub mod pg_stats;
 pub mod projection;
 pub mod projections;
 pub mod sequence_search;
+pub mod sql_console;
 pub mod triple;
 pub mod validation;
 
@@ -26,6 +27,7 @@ pub use pg_stats::{
 pub use projection::{ProjectionEvent, ProjectionEventRepository};
 pub use projections::{TypedProjectionCounts, TypedProjectionRepository};
 pub use sequence_search::SequenceSearchRepository;
+pub use sql_console::PgSqlConsole;
 pub use triple::TripleRepository;
 pub use validation::{RecordedValidation, ValidationRepository};
 

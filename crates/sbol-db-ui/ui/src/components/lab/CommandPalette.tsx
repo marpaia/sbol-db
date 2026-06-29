@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
+import { useBackendInfo } from "@/hooks/useBackendInfo";
 import { type Dialect, useLabStore } from "@/lib/store";
 import { cn, compactQuery, formatRelative } from "@/lib/utils";
 
@@ -50,6 +51,9 @@ export function CommandPalette({
   const saved = useLabStore((s) => s.saved);
   const history = useLabStore((s) => s.history);
   const navigate = useNavigate();
+  const { data: info } = useBackendInfo();
+  const sqlConsole = info?.capabilities.sql_console ?? false;
+  const hasMaintenance = (info?.capabilities.maintenance ?? null) !== null;
 
   const goTo = (path: string) => {
     navigate(path);
@@ -100,14 +104,16 @@ export function CommandPalette({
                 onOpenChange(false);
               }}
             />
-            <Item
-              icon={<Database size={14} />}
-              label="SQL"
-              onSelect={() => {
-                onSwitchDialect("sql");
-                onOpenChange(false);
-              }}
-            />
+            {sqlConsole && (
+              <Item
+                icon={<Database size={14} />}
+                label="SQL"
+                onSelect={() => {
+                  onSwitchDialect("sql");
+                  onOpenChange(false);
+                }}
+              />
+            )}
           </Command.Group>
 
           <Command.Group
@@ -164,11 +170,13 @@ export function CommandPalette({
               label="Metrics"
               onSelect={() => goTo("/observability")}
             />
-            <Item
-              icon={<HardDrive size={14} />}
-              label="Postgres"
-              onSelect={() => goTo("/observability/postgres")}
-            />
+            {hasMaintenance && (
+              <Item
+                icon={<HardDrive size={14} />}
+                label="Maintenance"
+                onSelect={() => goTo("/observability/maintenance")}
+              />
+            )}
           </Command.Group>
 
           {saved.length > 0 && (

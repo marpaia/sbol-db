@@ -45,7 +45,10 @@ async fn state() -> AppState {
         metrics,
         jobs,
         config: ServerConfig::default(),
-        pg_pool: Some(pool),
+        backend_kind: sbol_db_server::BackendKind::Postgres,
+        sql_console: Some(Arc::new(sbol_db_postgres::PgSqlConsole::new(pool.clone()))),
+        db_stats: Some(Arc::new(sbol_db_postgres::PgStatsRepository::new(pool))),
+        lsm_stats: None,
         schema_cache: Arc::new(sbol_db_server::SchemaCache::new()),
     }
 }
@@ -89,15 +92,15 @@ async fn select_literals_returns_shaped_rows() {
     );
     assert_eq!(columns[2].get("name").and_then(Value::as_str), Some("flag"));
     assert_eq!(
-        columns[0].get("pg_type").and_then(Value::as_str),
+        columns[0].get("column_type").and_then(Value::as_str),
         Some("INT4")
     );
     assert_eq!(
-        columns[1].get("pg_type").and_then(Value::as_str),
+        columns[1].get("column_type").and_then(Value::as_str),
         Some("TEXT")
     );
     assert_eq!(
-        columns[2].get("pg_type").and_then(Value::as_str),
+        columns[2].get("column_type").and_then(Value::as_str),
         Some("BOOL")
     );
 

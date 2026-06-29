@@ -1,30 +1,31 @@
 //! `/lab/api/observability/*` — in-app observability for the lab UI.
 //!
-//! Two surfaces:
+//! Three surfaces:
 //!
-//!  - **Summary** (`/summary`) returns a compact JSON blob covering
-//!    process health, pool capacity, job queue state, and a rolling
-//!    10-minute traffic window. The lab UI polls this every ~5 seconds.
-//!  - **Postgres** (`/postgres/*`) wraps the catalog views the database
-//!    maintenance page renders. Each handler is one bounded query; the
-//!    slow-queries endpoint detects-and-skips when
-//!    `pg_stat_statements` isn't installed.
+//!  - **Summary** (`/summary`) returns a compact JSON blob covering process
+//!    health, pool capacity, job queue state, and a rolling 10-minute traffic
+//!    window. The lab UI polls this every ~5 seconds. Every field is
+//!    backend-neutral.
+//!  - **Maintenance** (`/maintenance/*`) is the engine-internals surface. For
+//!    a relational engine (Postgres, SQLite) it reports tables, indexes,
+//!    schema, and — on Postgres — sessions, locks, and slow queries. For an
+//!    LSM key-value store (RocksDB) it reports column families, levels, and
+//!    compaction. Each handler requires the matching capability and answers a
+//!    clear "backend unsupported" error on a backend that lacks it.
+//!  - **Recent jobs** (`/jobs/recent`) lists the job queue, on every backend.
 //!
-//! All routes are read-only. Polling the summary at 5 s only adds two
-//! catalog queries (queue depth + oldest age) per call; the rolling
-//! traffic snapshot is in-memory and free.
+//! All read routes are bounded single queries; the two write routes
+//! (`optimize`, `compact`) trigger the engine's own maintenance.
 
 use axum::extract::{Path, Query, State};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
-use sbol_db_postgres::{
-    Activity, BlockingLock, DatabaseSize, IndexStats, PgStatsRepository, SlowQuery, TableSchema,
-    TableStats,
+use sbol_db_storage::{
+    Activity, BlockingLock, DatabaseSize, IndexStats, JobStatus, ListJobsFilter, LsmOverview,
+    OldestQueuedAge, QueueDepthRow, SbolJob, SlowQuery, TableSchema, TableStats,
 };
-use sbol_db_storage::{JobStatus, ListJobsFilter, OldestQueuedAge, QueueDepthRow, SbolJob};
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 
 use crate::error::ApiError;
 use crate::metrics::{rolling_snapshot, uptime_secs, PoolSnapshot, RollingSnapshot};
@@ -35,13 +36,18 @@ const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/summary", get(summary))
-        .route("/postgres/database", get(pg_database))
-        .route("/postgres/tables", get(pg_tables))
-        .route("/postgres/indexes", get(pg_indexes))
-        .route("/postgres/activity", get(pg_activity))
-        .route("/postgres/locks", get(pg_locks))
-        .route("/postgres/tables/:name/schema", get(pg_table_schema))
-        .route("/postgres/slow-queries", get(pg_slow_queries))
+        // Relational-engine maintenance (Postgres, SQLite).
+        .route("/maintenance/database", get(maint_database))
+        .route("/maintenance/tables", get(maint_tables))
+        .route("/maintenance/indexes", get(maint_indexes))
+        .route("/maintenance/activity", get(maint_activity))
+        .route("/maintenance/locks", get(maint_locks))
+        .route("/maintenance/tables/:name/schema", get(maint_table_schema))
+        .route("/maintenance/slow-queries", get(maint_slow_queries))
+        .route("/maintenance/optimize", post(maint_optimize))
+        // LSM-engine maintenance (RocksDB).
+        .route("/maintenance/lsm", get(lsm_overview))
+        .route("/maintenance/compact", post(lsm_compact))
         .route("/jobs/recent", get(jobs_recent))
 }
 
@@ -111,23 +117,8 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<Summary>, Api
         })
         .collect();
 
-    // Postgres-only refinement; other backends report 0 here (the rest of the
-    // summary is backend-neutral and still rendered).
-    let failures_24h: i64 = match &state.pg_pool {
-        Some(pool) => sqlx::query(
-            r#"
-            SELECT COUNT(*)::bigint AS n
-            FROM sbol_jobs
-            WHERE status IN ('failed', 'dead')
-              AND finished_at >= now() - interval '24 hours'
-            "#,
-        )
-        .fetch_one(pool)
-        .await
-        .map(|r| r.try_get::<i64, _>("n").unwrap_or(0))
-        .unwrap_or(0),
-        None => 0,
-    };
+    // Backend-neutral: every job queue can count its own recent failures.
+    let failures_24h = state.jobs.recent_failure_count(24).await.unwrap_or(0);
 
     Ok(Json(Summary {
         health: Health {
@@ -146,37 +137,35 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<Summary>, Api
     }))
 }
 
-// ---------- Postgres ----------------------------------------------------------
-
-fn pg_repo(state: &AppState) -> Result<PgStatsRepository, ApiError> {
-    Ok(PgStatsRepository::new(state.require_pg_pool()?.clone()))
-}
-
-pub async fn pg_database(State(state): State<AppState>) -> Result<Json<DatabaseSize>, ApiError> {
-    Ok(Json(pg_repo(&state)?.database_size().await?))
-}
+// ---------- Relational-engine maintenance -------------------------------------
 
 #[derive(Deserialize)]
-pub struct PgPageQuery {
+pub struct PageQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
 
-pub async fn pg_tables(
+pub async fn maint_database(State(state): State<AppState>) -> Result<Json<DatabaseSize>, ApiError> {
+    Ok(Json(state.require_db_stats()?.database_size().await?))
+}
+
+pub async fn maint_tables(
     State(state): State<AppState>,
-    Query(params): Query<PgPageQuery>,
+    Query(params): Query<PageQuery>,
 ) -> Result<Json<Vec<TableStats>>, ApiError> {
     let limit = params.limit.unwrap_or(20).clamp(1, 200);
     let offset = params.offset.unwrap_or(0).max(0);
-    Ok(Json(pg_repo(&state)?.table_stats(limit, offset).await?))
+    Ok(Json(
+        state.require_db_stats()?.table_stats(limit, offset).await?,
+    ))
 }
 
-pub async fn pg_indexes(
+pub async fn maint_indexes(
     State(state): State<AppState>,
-    Query(params): Query<PgPageQuery>,
+    Query(params): Query<PageQuery>,
 ) -> Result<Json<Vec<IndexStats>>, ApiError> {
     let limit = params.limit.unwrap_or(30).clamp(1, 200);
-    Ok(Json(pg_repo(&state)?.index_stats(limit).await?))
+    Ok(Json(state.require_db_stats()?.index_stats(limit).await?))
 }
 
 #[derive(Deserialize)]
@@ -184,23 +173,26 @@ pub struct ActivityQuery {
     pub limit: Option<i64>,
 }
 
-pub async fn pg_activity(
+pub async fn maint_activity(
     State(state): State<AppState>,
     Query(params): Query<ActivityQuery>,
 ) -> Result<Json<Vec<Activity>>, ApiError> {
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
-    Ok(Json(pg_repo(&state)?.activity(limit).await?))
+    Ok(Json(state.require_db_stats()?.activity(limit).await?))
 }
 
-pub async fn pg_locks(State(state): State<AppState>) -> Result<Json<Vec<BlockingLock>>, ApiError> {
-    Ok(Json(pg_repo(&state)?.blocking_locks().await?))
+pub async fn maint_locks(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<BlockingLock>>, ApiError> {
+    Ok(Json(state.require_db_stats()?.blocking_locks().await?))
 }
 
-pub async fn pg_table_schema(
+pub async fn maint_table_schema(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<TableSchema>, ApiError> {
-    pg_repo(&state)?
+    state
+        .require_db_stats()?
         .table_schema(&name)
         .await?
         .map(Json)
@@ -221,19 +213,40 @@ const SLOW_QUERIES_SETUP_HINT: &str = concat!(
     "  3. Run `CREATE EXTENSION pg_stat_statements;` as a superuser",
 );
 
-pub async fn pg_slow_queries(
+pub async fn maint_slow_queries(
     State(state): State<AppState>,
-    Query(params): Query<PgPageQuery>,
+    Query(params): Query<PageQuery>,
 ) -> Result<Json<SlowQueriesResponse>, ApiError> {
-    let repo = pg_repo(&state)?;
-    if !repo.has_pg_stat_statements().await? {
+    let stats = state.require_db_stats()?;
+    if !stats.has_slow_query_stats().await? {
         return Ok(Json(SlowQueriesResponse::NotInstalled {
             setup_hint: SLOW_QUERIES_SETUP_HINT,
         }));
     }
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
-    let rows = repo.slow_queries(limit).await?;
+    let rows = stats.slow_queries(limit).await?;
     Ok(Json(SlowQueriesResponse::Installed { rows }))
+}
+
+#[derive(Serialize)]
+pub struct ActionResult {
+    pub ok: bool,
+}
+
+pub async fn maint_optimize(State(state): State<AppState>) -> Result<Json<ActionResult>, ApiError> {
+    state.require_db_stats()?.optimize().await?;
+    Ok(Json(ActionResult { ok: true }))
+}
+
+// ---------- LSM-engine maintenance --------------------------------------------
+
+pub async fn lsm_overview(State(state): State<AppState>) -> Result<Json<LsmOverview>, ApiError> {
+    Ok(Json(state.require_lsm_stats()?.overview().await?))
+}
+
+pub async fn lsm_compact(State(state): State<AppState>) -> Result<Json<ActionResult>, ApiError> {
+    state.require_lsm_stats()?.compact().await?;
+    Ok(Json(ActionResult { ok: true }))
 }
 
 // ---------- Recent jobs -------------------------------------------------------

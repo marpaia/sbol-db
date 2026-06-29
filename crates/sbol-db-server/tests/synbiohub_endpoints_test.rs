@@ -42,7 +42,8 @@ async fn fresh_app() -> axum::Router {
         service.triple_writer(),
     ));
     let jobs = Arc::new(JobRepository::new(pool.clone()));
-    let pg_pool = Some(pool.clone());
+    let pool_console = pool.clone();
+    let pool_stats = pool.clone();
     let metrics = Metrics::install(Some(pool), env!("CARGO_PKG_VERSION"));
     let state = AppState {
         lab: service.clone(),
@@ -52,7 +53,12 @@ async fn fresh_app() -> axum::Router {
         metrics,
         jobs,
         config: ServerConfig::default(),
-        pg_pool,
+        backend_kind: sbol_db_server::BackendKind::Postgres,
+        sql_console: Some(Arc::new(sbol_db_postgres::PgSqlConsole::new(pool_console))),
+        db_stats: Some(Arc::new(sbol_db_postgres::PgStatsRepository::new(
+            pool_stats,
+        ))),
+        lsm_stats: None,
         schema_cache: Arc::new(sbol_db_server::SchemaCache::new()),
     };
     router(state, ServerConfig::default())

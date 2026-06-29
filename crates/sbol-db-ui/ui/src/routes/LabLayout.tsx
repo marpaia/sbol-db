@@ -120,7 +120,11 @@ const TOP_LEVEL_SECTIONS: Array<{
   { prefix: "/schema", section: "Query", page: "Schema" },
   { prefix: "/sparql", section: "Query", page: "SPARQL" },
   { prefix: "/sql", section: "Query", page: "SQL" },
-  { prefix: "/observability/postgres", section: "Operations", page: "Postgres" },
+  {
+    prefix: "/observability/maintenance",
+    section: "Operations",
+    page: "Maintenance",
+  },
   { prefix: "/observability/jobs", section: "Operations", page: "Jobs" },
   { prefix: "/observability", section: "Operations", page: "Metrics" },
 ];
@@ -129,10 +133,7 @@ function topLevelFor(
   pathname: string
 ): { section: string; page: string; root: string } | null {
   for (const entry of TOP_LEVEL_SECTIONS) {
-    if (
-      pathname === entry.prefix ||
-      pathname.startsWith(`${entry.prefix}/`)
-    ) {
+    if (pathname === entry.prefix || pathname.startsWith(`${entry.prefix}/`)) {
       return { section: entry.section, page: entry.page, root: entry.prefix };
     }
   }

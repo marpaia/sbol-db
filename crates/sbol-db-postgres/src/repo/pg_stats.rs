@@ -1,7 +1,7 @@
 //! Postgres maintenance/observability views.
 //!
 //! Thin wrappers around the `pg_stat_*`, `pg_locks`, and `pg_stat_statements`
-//! catalog views that the lab UI's `/observability/postgres` page reads. The
+//! catalog views that the lab UI's maintenance page reads on Postgres. The
 //! queries are intentionally small and bounded — these read-only handlers are
 //! polled every ~15 seconds by an open browser tab, so each method does at
 //! most a single index-friendly catalog scan.
@@ -27,7 +27,8 @@ use sqlx::Row;
 
 pub use sbol_db_storage::{
     Activity, BlockingLock, DatabaseSize, IncomingForeignKey, IndexStats, OutgoingForeignKey,
-    SlowQuery, TableColumn, TableSchema, TableStats,
+    RelationalColumn, RelationalSchema, RelationalTable, SlowQuery, TableColumn, TableSchema,
+    TableStats,
 };
 
 use crate::repo::db_err;
@@ -41,6 +42,66 @@ pub struct PgStatsRepository {
 impl PgStatsRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    /// Every table in the user schema with its columns, for the lab's schema
+    /// browser and SQL-editor click-to-insert sidebar. `_sqlx_migrations` is
+    /// sqlx's own bookkeeping table and is filtered out.
+    pub async fn schema_overview(&self) -> Result<RelationalSchema, DomainError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT table_name, column_name, data_type, udt_name, is_nullable, ordinal_position
+            FROM information_schema.columns
+            WHERE table_schema = $1
+              AND table_name <> '_sqlx_migrations'
+            ORDER BY table_name, ordinal_position
+            "#,
+        )
+        .bind(USER_SCHEMA)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+
+        let mut current: Option<RelationalTable> = None;
+        let mut tables: Vec<RelationalTable> = Vec::new();
+        for row in rows {
+            let table_name: String = row.try_get("table_name").map_err(db_err)?;
+            let column_name: String = row.try_get("column_name").map_err(db_err)?;
+            let data_type: String = row.try_get("data_type").map_err(db_err)?;
+            let udt_name: String = row.try_get("udt_name").map_err(db_err)?;
+            let is_nullable: String = row.try_get("is_nullable").map_err(db_err)?;
+
+            // information_schema reports `USER-DEFINED`/`ARRAY` for domains and
+            // arrays; the underlying udt name is the useful label.
+            let column_type = if data_type == "USER-DEFINED" || data_type == "ARRAY" {
+                udt_name
+            } else {
+                data_type
+            };
+            let column = RelationalColumn {
+                name: column_name,
+                column_type,
+                nullable: is_nullable == "YES",
+            };
+
+            match &mut current {
+                Some(t) if t.name == table_name => t.columns.push(column),
+                _ => {
+                    if let Some(prev) = current.take() {
+                        tables.push(prev);
+                    }
+                    current = Some(RelationalTable {
+                        name: table_name,
+                        columns: vec![column],
+                    });
+                }
+            }
+        }
+        if let Some(last) = current.take() {
+            tables.push(last);
+        }
+
+        Ok(RelationalSchema { tables })
     }
 
     pub async fn database_size(&self) -> Result<DatabaseSize, DomainError> {
@@ -285,7 +346,7 @@ impl PgStatsRepository {
             )
             SELECT
               a.attname::text                                        AS name,
-              pg_catalog.format_type(a.atttypid, a.atttypmod)::text  AS pg_type,
+              pg_catalog.format_type(a.atttypid, a.atttypmod)::text  AS column_type,
               (NOT a.attnotnull)                                     AS nullable,
               pg_get_expr(d.adbin, d.adrelid)                        AS default_expr,
               a.attnum::int                                          AS ordinal,
@@ -310,7 +371,7 @@ impl PgStatsRepository {
             .map(|r| {
                 Ok::<_, DomainError>(TableColumn {
                     name: r.try_get("name").map_err(db_err)?,
-                    pg_type: r.try_get("pg_type").map_err(db_err)?,
+                    column_type: r.try_get("column_type").map_err(db_err)?,
                     nullable: r.try_get("nullable").map_err(db_err)?,
                     default_expr: r.try_get("default_expr").map_err(db_err)?,
                     ordinal: r.try_get("ordinal").map_err(db_err)?,
@@ -471,6 +532,9 @@ impl PgStatsRepository {
 /// to the trait method and recursing.
 #[async_trait]
 impl DbStats for PgStatsRepository {
+    async fn schema_overview(&self) -> Result<RelationalSchema, DomainError> {
+        PgStatsRepository::schema_overview(self).await
+    }
     async fn database_size(&self) -> Result<DatabaseSize, DomainError> {
         PgStatsRepository::database_size(self).await
     }
@@ -494,5 +558,14 @@ impl DbStats for PgStatsRepository {
     }
     async fn slow_queries(&self, limit: i64) -> Result<Vec<SlowQuery>, DomainError> {
         PgStatsRepository::slow_queries(self, limit).await
+    }
+    async fn optimize(&self) -> Result<(), DomainError> {
+        // ANALYZE refreshes planner statistics without the heavy, blocking
+        // rewrite a full VACUUM does; autovacuum handles the rest.
+        sqlx::query("ANALYZE")
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(())
     }
 }
