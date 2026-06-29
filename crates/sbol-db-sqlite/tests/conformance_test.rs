@@ -1,6 +1,5 @@
-//! Runs the implemented `sbol-db-conformance` scenarios against the SQLite
-//! backend. Ontology, job-queue, neighborhood, and sequence-search scenarios
-//! are added here as those surfaces are ported.
+//! Runs the `sbol-db-conformance` scenarios against the SQLite backend, the
+//! same contract the Postgres and RocksDB backends pass.
 
 use sbol_db_sqlite::{connect_and_migrate, SqliteJobRepository, SqlitePool, SqliteStore};
 use tempfile::TempDir;

@@ -6,11 +6,11 @@
 //! trait objects, not on any concrete backend, so the same CLI and server
 //! binary can drive whichever backend the connection string selects.
 //!
-//! The scheme picks the backend: `postgres://` / `postgresql://` is the only
-//! one wired today; `sqlite://` and `rocksdb:` are planned. Features that are
-//! irreducibly specific to one backend (Postgres introspection, the SQL
-//! console) reach their backend through a typed handle such as
-//! [`PostgresHandle`] rather than through the neutral surface.
+//! The scheme picks the backend: `postgres://` / `postgresql://`, `sqlite://`,
+//! or `rocksdb://`. Features that are irreducibly specific to one backend
+//! (Postgres introspection, the SQL console) reach their backend through a
+//! typed handle such as [`PostgresHandle`] rather than through the neutral
+//! surface.
 
 use std::sync::Arc;
 use std::time::Duration;

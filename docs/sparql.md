@@ -3,9 +3,11 @@
 `sbol-db` exposes a read-only SPARQL 1.1 endpoint that evaluates
 queries directly against the storage backend's triples. There is no
 sidecar triplestore and no second index to operate: the evaluator
-reads through the `TripleSource` contract, and the default Postgres
-backend services each scan with an indexed SQL query against
-`sbol_triples`, so queries always see the latest committed state.
+reads through the `TripleSource` contract, so queries always see the
+latest committed state. Each backend services a scan its own way —
+Postgres and SQLite with an indexed SQL query against their triples
+table, RocksDB id-native from its permuted indexes (see
+[`storage.md`](storage.md)).
 
 The endpoint is implemented in the `sbol-db-sparql` crate on top of
 [`spareval`](https://crates.io/crates/spareval), the standalone SPARQL
@@ -137,11 +139,16 @@ SPARQL query string
   → sbol_triples (Postgres)
 ```
 
-The evaluator is called once per query; the dataset is called once
-per triple pattern in the query plan. Each pattern lookup translates
-to a single `SELECT … FROM sbol_triples WHERE …` with a dynamic
-`WHERE` clause built only from the bound positions. Postgres' planner
-picks the right SPOG / POSG / OSPG / GSPO index for the access shape.
+The diagram shows the Postgres path. The evaluator is called once per
+query; the dataset is called once per triple pattern in the query plan.
+On Postgres each pattern lookup translates to a single `SELECT … FROM
+sbol_triples WHERE …` with a dynamic `WHERE` clause built only from the
+bound positions, and the planner picks the right SPOG / POSG / OSPG /
+GSPO index for the access shape. SQLite follows the same shape against
+its own indexes; RocksDB instead resolves the bound positions to term
+ids and runs one prefix scan over the permuted index whose leading slots
+match them. The `QueryableDataset` boundary is identical across all
+three.
 
 ### The sync/async bridge
 

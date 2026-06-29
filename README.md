@@ -13,8 +13,9 @@ reverse-complement search, and ontology-aware role expansion.
 
 The persistence layer sits behind a backend-neutral storage contract
 (the `sbol-db-storage` crate), so the same query surface runs on
-different storage engines. Postgres is the default engine; a RocksDB
-engine is coming soon.
+Postgres, SQLite, or an embedded RocksDB engine. The connection-string
+scheme picks the backend; Postgres is the default. See
+[**docs/storage.md**](docs/storage.md).
 
 New to the codebase? Start with the [**crate guide**](docs/crate-guide.md).
 Want to see how a design flows through the tables? See the
@@ -34,8 +35,9 @@ Built on:
 
 - [`sbol-rs`](https://github.com/marpaia/sbol-rs) for SBOL parsing,
   validation, and RDF I/O.
-- Postgres 17 as the default storage engine, implementing the
-  `sbol-db-storage` contract. A RocksDB engine is coming soon.
+- Postgres, SQLite, or RocksDB as the storage engine, each implementing
+  the `sbol-db-storage` contract. The scheme in `--database-url` selects
+  the engine; Postgres is the default. See [storage.md](docs/storage.md).
 - The [Oxigraph](https://github.com/oxigraph/oxigraph) ecosystem
   (`oxrdf`, `spareval`, `spargebra`, `sparesults`) for SPARQL.
 
@@ -236,15 +238,21 @@ and operator-surface details.
 | `sbol-db-core`     | Domain types shared across the workspace. No I/O dependencies.                          |
 | `sbol-db-storage`  | Backend-neutral storage contract: the `SbolStore` / `TripleSource` traits and their request/response types. Names no concrete database. |
 | `sbol-db-rdf`      | `sbol::Document` ↔ triples projection, RDF export, content hashing.                       |
+| `sbol-db-derive`   | Pure import plan builder: parse, derive triples and object summaries, validate. No database. |
 | `sbol-db-postgres` | Postgres implementation of the storage contract: sqlx repositories, embedded migrations, the `SbolObjectService` entry point. |
+| `sbol-db-sqlite`   | SQLite implementation of the storage contract: a single-file, embedded SQL engine. |
+| `sbol-db-rocksdb`  | RocksDB implementation: an embedded, dictionary-encoded, permuted-index triplestore. |
+| `sbol-db-backend`  | Backend factory: `Backend::open` routes a connection string to the engine its scheme selects. |
+| `sbol-db-conformance` | Backend-neutral conformance suite every engine passes through the trait surface. |
 | `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over any `TripleSource`).        |
 | `sbol-db-jobs`     | Async job runtime — `JobHandler` trait, registry, worker, built-in handlers.            |
 | `sbol-db-ui`       | Embedded data-lab SPA served at `/lab` (React + Vite, baked in via `rust-embed`).        |
 | `sbol-db-server`   | axum HTTP API.                                                                          |
 | `sbol-db`          | CLI binary.                                                                             |
 
-The boundary between `sbol-db-postgres` and `sbol-db-sparql` is the
+The boundary between the storage backends and `sbol-db-sparql` is the
 `TripleSource` trait in `sbol-db-storage`: SPARQL evaluation never
-touches sqlx directly, only the trait's pattern-scan method. That seam
-is also what lets a non-Postgres backend drop in. See the
-[crate guide](docs/crate-guide.md) for details.
+touches a concrete database, only the trait's pattern-scan method. That
+seam is what lets SQLite and RocksDB serve the same query surface as
+Postgres. See the [crate guide](docs/crate-guide.md) and
+[storage.md](docs/storage.md) for details.

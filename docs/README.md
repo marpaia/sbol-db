@@ -14,9 +14,10 @@ Entry points to the project's documentation, organized by topic.
 `sbol-db` exposes five composable ways to read what you've imported:
 
 - **[SPARQL endpoint](sparql.md)**: read-only SPARQL 1.1 evaluated
-  directly against `sbol_triples`. SELECT, ASK, CONSTRUCT, and DESCRIBE
-  are supported; SPARQL Update is rejected. Postgres remains the
-  single source of truth, with no second index to operate.
+  directly against the active backend's triples through the
+  `TripleSource` contract. SELECT, ASK, CONSTRUCT, and DESCRIBE are
+  supported; SPARQL Update is rejected. The store is the single source
+  of truth, with no second index to operate.
 - **[Graph neighborhood](neighborhood.md)**: bounded recursive
   traversal in either direction. Filter by predicate, cap by depth
   and node count, emit JSON or a self-contained RDF subgraph.
@@ -32,10 +33,18 @@ Entry points to the project's documentation, organized by topic.
 
 ## Storage
 
-- **[Postgres schema](schema.md)**: table-by-table reference for the
-  embedded migrations. Documents, objects, the triplestore, typed
-  projections, validation, projection events, blank-node handling,
-  index choices.
+- **[Storage architecture](storage.md)**: the backend-neutral contract,
+  how a backend is selected by connection-string scheme, what is shared
+  across engines versus specific to one, the capability matrix, and the
+  conformance suite. **Start here for the storage layer.**
+- **[Postgres schema](schema-postgres.md)**: table-by-table reference for
+  the default backend. Documents, objects, the triplestore, set
+  semantics, typed projections, validation, the accelerator, index
+  choices.
+- **[SQLite schema](schema-sqlite.md)**: table-by-table reference for the
+  single-file embedded SQL backend.
+- **[RocksDB layout](schema-rocksdb.md)**: column-family, term-dictionary,
+  and permuted-index reference for the embedded key/value backend.
 
 ## Operations
 
