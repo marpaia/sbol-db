@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use sbol_db_core::{IriString, NeighborhoodQuery};
-use sbol_db_sparql::{parse_query, ResultFormat, SparqlEngine, SparqlOptions};
+use sbol_db_sparql::{parse_query, NativeSparql, ResultFormat, SparqlEngine, SparqlOptions};
 use sbol_db_storage::{SbolStore, SequenceSearchOptions, TripleSource};
 
 use crate::cli::QueryAction;
@@ -16,6 +16,7 @@ use crate::output::{print_json, write_jsonl};
 pub async fn run(
     service: Arc<dyn SbolStore>,
     triple_source: Arc<dyn TripleSource>,
+    native_sparql: Option<Arc<dyn NativeSparql>>,
     action: QueryAction,
 ) -> Result<()> {
     match action {
@@ -28,6 +29,7 @@ pub async fn run(
         } => {
             sparql(
                 triple_source,
+                native_sparql,
                 source,
                 format,
                 timeout_secs,
@@ -79,8 +81,10 @@ pub async fn run(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn sparql(
     triple_source: Arc<dyn TripleSource>,
+    native_sparql: Option<Arc<dyn NativeSparql>>,
     source: String,
     format: Option<String>,
     timeout_secs: u64,
@@ -92,7 +96,10 @@ async fn sparql(
         .map(|f| f.parse::<ResultFormat>())
         .transpose()
         .map_err(|e| anyhow!("{e}"))?;
-    let engine = SparqlEngine::new(triple_source);
+    let engine = match native_sparql {
+        Some(native) => SparqlEngine::with_native(triple_source, native),
+        None => SparqlEngine::new(triple_source),
+    };
     let options = SparqlOptions {
         timeout: Duration::from_secs(timeout_secs),
         max_rows,

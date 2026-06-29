@@ -73,6 +73,7 @@ spargebra = "0.4.6"
 sparesults = "0.3.3"
 oxrdf = "0.3.3"
 oxiri = "0.2.11"
+oxigraph = "0.5.7"
 
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
 

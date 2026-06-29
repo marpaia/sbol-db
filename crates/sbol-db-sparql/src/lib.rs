@@ -21,7 +21,11 @@ mod rewrite;
 mod update;
 
 pub use dataset::TripleDataset;
-pub use engine::{parse_query, ParsedQuery, QueryForm, SparqlEngine, SparqlOptions, SparqlOutcome};
+pub use engine::{
+    parse_query, NativeSparql, ParsedQuery, QueryForm, SparqlEngine, SparqlOptions, SparqlOutcome,
+};
 pub use error::SparqlError;
-pub use results::{ResultFormat, ResultPayload};
+pub use results::{
+    serialize_boolean, serialize_solutions, serialize_triples, ResultFormat, ResultPayload,
+};
 pub use update::{SparqlUpdateEngine, UpdateOutcome};

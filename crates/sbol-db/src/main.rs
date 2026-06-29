@@ -61,7 +61,13 @@ async fn main() -> Result<()> {
         Command::Graph { action } => cmd::graph::run(backend.store.clone(), action).await,
         Command::Object { action } => cmd::object::run(backend.store.clone(), action).await,
         Command::Query { action } => {
-            cmd::query::run(backend.store.clone(), backend.triple_source.clone(), action).await
+            cmd::query::run(
+                backend.store.clone(),
+                backend.triple_source.clone(),
+                backend.native_sparql.clone(),
+                action,
+            )
+            .await
         }
         Command::Ontology { action } => cmd::ontology::run(backend.store.clone(), action).await,
         Command::Jobs { action } => cmd::jobs::run(backend.jobs.clone(), action).await,

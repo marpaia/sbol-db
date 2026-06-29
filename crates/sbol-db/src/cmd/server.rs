@@ -26,7 +26,10 @@ pub async fn run(
     worker_queues: Option<String>,
     worker_id: Option<String>,
 ) -> Result<()> {
-    let engine = Arc::new(SparqlEngine::new(backend.triple_source.clone()));
+    let engine = Arc::new(match backend.native_sparql.clone() {
+        Some(native) => SparqlEngine::with_native(backend.triple_source.clone(), native),
+        None => SparqlEngine::new(backend.triple_source.clone()),
+    });
 
     let worker_setup = if !no_worker {
         Some(

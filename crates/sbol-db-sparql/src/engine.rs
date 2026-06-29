@@ -85,14 +85,47 @@ impl QueryForm {
     }
 }
 
+/// A native SPARQL evaluator owned by a backend that has its own id-native query
+/// engine (Oxigraph). When present, recognized queries still short-circuit
+/// through the accelerator first; everything else is handed to this evaluator
+/// instead of the workspace's term-materializing dataset path, and the
+/// `NOT EXISTS`→`MINUS` rewrite is skipped (the native engine evaluates the
+/// query as parsed). The method is synchronous and driven inside the engine's
+/// `spawn_blocking` task.
+pub trait NativeSparql: Send + Sync {
+    /// Evaluate a parsed query against the backend store and serialize the
+    /// result. `default_graph` is the protocol `default-graph-uri`, applied with
+    /// the same precedence as [`evaluate_blocking`].
+    fn evaluate(
+        &self,
+        query: &spargebra::Query,
+        format: ResultFormat,
+        max_rows: usize,
+        default_graph: Option<&str>,
+    ) -> Result<ResultPayload, SparqlError>;
+}
+
 #[derive(Clone)]
 pub struct SparqlEngine {
     source: Arc<dyn TripleSource>,
+    native: Option<Arc<dyn NativeSparql>>,
 }
 
 impl SparqlEngine {
     pub fn new(source: Arc<dyn TripleSource>) -> Self {
-        Self { source }
+        Self {
+            source,
+            native: None,
+        }
+    }
+
+    /// Build an engine backed by a native query evaluator. The accelerator
+    /// short-circuit still runs first; unrecognized queries go to `native`.
+    pub fn with_native(source: Arc<dyn TripleSource>, native: Arc<dyn NativeSparql>) -> Self {
+        Self {
+            source,
+            native: Some(native),
+        }
     }
 
     /// Run a SPARQL query and serialize the result.
@@ -139,6 +172,30 @@ impl SparqlEngine {
                     });
                 }
             }
+        }
+
+        // A backend with a native id-native engine (Oxigraph) evaluates the
+        // query directly, at full strength, without the workspace's
+        // `NOT EXISTS`→`MINUS` rewrite (the native engine handles the query as
+        // parsed). The accelerator short-circuit above still applies first.
+        if let Some(native) = &self.native {
+            let native = Arc::clone(native);
+            let parsed = parsed.clone();
+            let max_rows = options.max_rows;
+            let default_graph = options.default_graph.clone();
+            let blocking = tokio::task::spawn_blocking(move || {
+                native.evaluate(&parsed, format, max_rows, default_graph.as_deref())
+            });
+            let payload = match tokio::time::timeout(options.timeout, blocking).await {
+                Ok(Ok(Ok(payload))) => payload,
+                Ok(Ok(Err(e))) => return Err(e),
+                Ok(Err(join)) => return Err(SparqlError::Join(join.to_string())),
+                Err(_) => return Err(SparqlError::Timeout),
+            };
+            return Ok(SparqlOutcome {
+                payload,
+                query_form,
+            });
         }
 
         let query = crate::rewrite::optimize(parsed);

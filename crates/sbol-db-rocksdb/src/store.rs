@@ -1,49 +1,57 @@
-//! The RocksDB-backed SBOL store: ingest plus the derived-view read surface,
-//! the SPARQL read/write adapters, and the storage-trait implementations. Each
-//! high-level write composes one atomic [`WriteBatch`]; async trait methods run
-//! their RocksDB work on a blocking thread, while [`TripleSource`] (already
-//! synchronous, driven inside the SPARQL evaluator's blocking task) calls the
-//! engine directly.
+//! The Oxigraph-backed SBOL store, exposed under the historical `RocksdbStore`
+//! name. Triples and native SPARQL live in Oxigraph; the derived projections
+//! (objects, graphs, ontology, sequences), the job queue, the lab dashboard,
+//! and the SynBioHub accelerator index live in the SQLite companion.
+//!
+//! There is no cross-engine transaction: an import writes its triples to
+//! Oxigraph first, then its projections to the companion in one SQLite
+//! transaction (the companion graph row is the commit witness; re-inserting
+//! identical quads into Oxigraph is idempotent).
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rocksdb::WriteBatch;
+use oxigraph::store::Store;
+use oxrdf::{GraphNameRef, NamedNode};
 use sbol_db_core::{
     DomainError, GraphId, GraphRecord, ImportReport, IriString, NeighborhoodQuery,
     NeighborhoodResult, ObjectId, SbolObjectRecord, SerializationFormat, Triple,
 };
 use sbol_db_derive::{build_import_plan, to_rdf_format};
 use sbol_db_rdf::{rdf_graph_to_triples, GRAPH_IRI_PREFIX};
+use sbol_db_sparql::NativeSparql;
+use sbol_db_sqlite::repo::{
+    AccelRepository as SqliteAccelMark, GraphRepository, LabRepository, OntologyRepository,
+    SbolObjectRepository, SequenceSearchRepository,
+};
+use sbol_db_sqlite::SqlitePool;
 use sbol_db_storage::{
-    AccelSolutions, AcceleratedQuery, BatchSequenceMatch, ClassCount, CorpusCounts, GraphFilter,
-    GraphOverview, GraphStore, GraphTriplesPage, GraphWriteMode, IdGraphFilter, IdQuad,
-    ImportInput, LabStore, ListGraphsFilter, ListObjectsFilter, NeighborhoodStore, ObjectStore,
-    OntologyLoadReport, OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject,
-    PatternSubject, SbolStore, SequenceMatch, SequenceSearchOptions, SequenceSearchStore, TermId,
-    TermKey, TermValue, TripleChange, TripleSource, TripleWriter, UpdateOutcome,
+    BatchSequenceMatch, ClassCount, CorpusCounts, GraphOverview, GraphStore, GraphTriplesPage,
+    GraphWriteMode, ImportInput, LabStore, ListGraphsFilter, ListObjectsFilter, NeighborhoodStore,
+    ObjectStore, OntologyLoadReport, OntologyRecord, OntologyStore, OntologyTermRecord, SbolStore,
+    SequenceMatch, SequenceSearchOptions, SequenceSearchStore, TripleSource, TripleWriter,
 };
 
-use crate::codec::Term;
-use crate::db::Db;
-use crate::repo::accel::AccelRepository;
-use crate::repo::neighborhood;
-use crate::repo::{
-    GraphRepository, LabRepository, ObjectRepository, OntologyRepository, SequenceSearchRepository,
-    TripleRepository,
-};
+use crate::accel::AccelRepository;
+use crate::convert::triple_to_quad;
+use crate::db::OxigraphDb;
+use crate::db_err;
+use crate::neighborhood;
+use crate::sparql::OxigraphNativeSparql;
+use crate::triple_source::OxigraphTripleSource;
+use crate::triple_writer::OxigraphTripleWriter;
 
 /// Per-call cap on a Graph Store `GET`, matching the other backends.
 const GRAPH_READ_LIMIT: i64 = 5_000_000;
 
-/// The RocksDB SBOL store. Cloneable; all clones share one database handle.
+/// The Oxigraph-backed SBOL store. Cloneable; all clones share the one Oxigraph
+/// handle and the one SQLite companion pool.
 #[derive(Clone)]
 pub struct RocksdbStore {
-    db: Db,
+    store: Store,
+    pool: SqlitePool,
     graphs: GraphRepository,
-    objects: ObjectRepository,
-    triples: TripleRepository,
+    objects: SbolObjectRepository,
     ontology: OntologyRepository,
     sequences: SequenceSearchRepository,
     lab: LabRepository,
@@ -51,56 +59,136 @@ pub struct RocksdbStore {
 }
 
 impl RocksdbStore {
-    pub fn new(db: Db) -> Self {
+    pub fn new(db: OxigraphDb) -> Self {
+        let OxigraphDb { store, pool } = db;
         Self {
-            graphs: GraphRepository::new(db.clone()),
-            objects: ObjectRepository::new(db.clone()),
-            triples: TripleRepository::new(db.clone()),
-            ontology: OntologyRepository::new(db.clone()),
-            sequences: SequenceSearchRepository::new(db.clone()),
-            lab: LabRepository::new(db.clone()),
-            accel: AccelRepository::new(db.clone(), TripleRepository::new(db.clone())),
-            db,
+            graphs: GraphRepository::new(pool.clone()),
+            objects: SbolObjectRepository::new(pool.clone()),
+            ontology: OntologyRepository::new(pool.clone()),
+            sequences: SequenceSearchRepository::new(pool.clone()),
+            lab: LabRepository::new(pool.clone()),
+            accel: AccelRepository::new(pool.clone(), store.clone()),
+            store,
+            pool,
+        }
+    }
+
+    fn triple_source_inner(&self) -> OxigraphTripleSource {
+        OxigraphTripleSource {
+            store: self.store.clone(),
+            accel: self.accel.clone(),
         }
     }
 
     pub fn triple_source(&self) -> Arc<dyn TripleSource> {
-        Arc::new(RocksdbTripleSource {
-            triples: self.triples.clone(),
-            accel: self.accel.clone(),
-        })
+        Arc::new(self.triple_source_inner())
     }
 
     pub fn triple_writer(&self) -> Arc<dyn TripleWriter> {
-        Arc::new(RocksdbTripleWriter {
-            triples: self.triples.clone(),
-            db: self.db.clone(),
+        Arc::new(OxigraphTripleWriter {
+            store: self.store.clone(),
             accel: self.accel.clone(),
         })
     }
 
-    fn stage_import(
-        &self,
-        batch: &mut WriteBatch,
-        seen: &mut HashSet<Vec<u8>>,
-        input: ImportInput,
-    ) -> Result<ImportReport, DomainError> {
+    pub fn native_sparql(&self) -> Arc<dyn NativeSparql> {
+        Arc::new(OxigraphNativeSparql::new(self.store.clone()))
+    }
+
+    /// Insert `triples` into Oxigraph with set semantics, returning the number of
+    /// quads that were not already present. One transaction commits them all.
+    fn insert_triples_counting(&self, triples: &[Triple]) -> Result<usize, DomainError> {
+        let mut txn = self
+            .store
+            .start_transaction()
+            .map_err(|e| DomainError::Database(format!("oxigraph txn: {e}")))?;
+        let mut inserted = 0usize;
+        for triple in triples {
+            let quad = triple_to_quad(triple);
+            let exists = txn
+                .quads_for_pattern(
+                    Some(quad.subject.as_ref()),
+                    Some(quad.predicate.as_ref()),
+                    Some(quad.object.as_ref()),
+                    Some(quad.graph_name.as_ref()),
+                )
+                .next()
+                .is_some();
+            if !exists {
+                txn.insert(quad.as_ref());
+                inserted += 1;
+            }
+        }
+        txn.commit()
+            .map_err(|e| DomainError::Database(format!("oxigraph commit: {e}")))?;
+        Ok(inserted)
+    }
+
+    /// Clear every quad in a named graph, returning how many were removed.
+    fn clear_graph_counting(&self, graph: &str) -> Result<usize, DomainError> {
+        let node = NamedNode::new_unchecked(graph);
+        let quads: Vec<_> = self
+            .store
+            .quads_for_pattern(
+                None,
+                None,
+                None,
+                Some(GraphNameRef::NamedNode(node.as_ref())),
+            )
+            .collect::<Result<_, _>>()
+            .map_err(|e| DomainError::Database(format!("oxigraph clear scan: {e}")))?;
+        let count = quads.len();
+        if count == 0 {
+            return Ok(0);
+        }
+        let mut txn = self
+            .store
+            .start_transaction()
+            .map_err(|e| DomainError::Database(format!("oxigraph txn: {e}")))?;
+        for quad in &quads {
+            txn.remove(quad.as_ref());
+        }
+        txn.commit()
+            .map_err(|e| DomainError::Database(format!("oxigraph commit: {e}")))?;
+        Ok(count)
+    }
+
+    fn read_graph_triples(&self, graph: &str, limit: i64) -> Result<Vec<Triple>, DomainError> {
+        self.triple_source_inner()
+            .triples_for_graph(Some(graph), limit)
+    }
+
+    async fn import_one(&self, input: ImportInput) -> Result<ImportReport, DomainError> {
         let plan = build_import_plan(&input)?;
+
+        // Triples first (Oxigraph); then projections (companion). The companion
+        // graph row is the commit witness.
+        let triple_count = {
+            let this = self.clone();
+            let triples = plan.triples.clone();
+            tokio::task::spawn_blocking(move || this.insert_triples_counting(&triples))
+                .await
+                .map_err(|e| DomainError::Database(format!("oxigraph import task: {e}")))??
+        };
+
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
         self.graphs
-            .stage_insert(batch, plan.graph_id, &plan.new_graph)?;
-        let triple_count = self.triples.stage_insert(batch, seen, &plan.triples)?;
-        self.accel.stage_mark_dirty(batch, plan.graph_iri.as_str());
-        let object_count = plan.summaries.len();
+            .insert(&mut tx, plan.graph_id, plan.new_graph)
+            .await?;
         for summary in &plan.summaries {
             self.objects
-                .stage_upsert(batch, summary, Some(plan.graph_id))?;
+                .upsert(&mut tx, summary, Some(plan.graph_id))
+                .await?;
         }
         for sequence in &plan.projections.sequences {
-            self.sequences.stage_upsert(batch, sequence)?;
+            self.sequences.upsert_sequence(&mut tx, sequence).await?;
         }
+        SqliteAccelMark::mark_dirty(&mut tx, plan.graph_iri.as_str()).await?;
+        tx.commit().await.map_err(db_err)?;
+
         Ok(ImportReport {
             graph_id: plan.graph_id,
-            object_count,
+            object_count: plan.summaries.len(),
             triple_count,
             validation_status: plan.validation_status,
             validation_issue_count: plan.validation_issue_count,
@@ -108,298 +196,58 @@ impl RocksdbStore {
     }
 }
 
-async fn blocking<T, F>(f: F) -> Result<T, DomainError>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T, DomainError> + Send + 'static,
-{
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| DomainError::Database(format!("rocksdb task panicked: {e}")))?
-}
-
-impl RocksdbStore {
-    async fn import_document(&self, input: ImportInput) -> Result<ImportReport, DomainError> {
-        let this = self.clone();
-        blocking(move || {
-            let mut batch = WriteBatch::default();
-            let mut seen = HashSet::new();
-            let report = this.stage_import(&mut batch, &mut seen, input)?;
-            this.db.write(batch)?;
-            Ok(report)
-        })
-        .await
-    }
-
-    async fn import_documents(
-        &self,
-        inputs: Vec<ImportInput>,
-    ) -> Result<Vec<ImportReport>, DomainError> {
-        if inputs.is_empty() {
-            return Ok(Vec::new());
-        }
-        let this = self.clone();
-        blocking(move || {
-            let mut batch = WriteBatch::default();
-            let mut seen = HashSet::new();
-            let mut reports = Vec::with_capacity(inputs.len());
-            for input in inputs {
-                reports.push(this.stage_import(&mut batch, &mut seen, input)?);
-            }
-            this.db.write(batch)?;
-            Ok(reports)
-        })
-        .await
-    }
-
-    async fn graph_store_write(
-        &self,
-        graph: &str,
-        body: &str,
-        format: SerializationFormat,
-        mode: GraphWriteMode,
-    ) -> Result<usize, DomainError> {
-        let this = self.clone();
-        let graph = graph.to_owned();
-        let body = body.to_owned();
-        blocking(move || {
-            let rdf_format = to_rdf_format(format)?;
-            let parsed = sbol_rdf::Graph::parse(&body, rdf_format)
-                .map_err(|e| DomainError::Parse(e.to_string()))?;
-            let triples = rdf_graph_to_triples(&parsed, &IriString::unchecked(graph.clone()));
-
-            let mut batch = WriteBatch::default();
-            let mut seen = HashSet::new();
-            if mode == GraphWriteMode::Replace {
-                this.triples.stage_clear_graph(&mut batch, Some(&graph))?;
-            }
-            let inserted = this.triples.stage_insert(&mut batch, &mut seen, &triples)?;
-            this.accel.stage_mark_dirty(&mut batch, &graph);
-            this.db.write(batch)?;
-            Ok(inserted)
-        })
-        .await
-    }
-
-    async fn graph_store_clear(&self, graph: &str) -> Result<usize, DomainError> {
-        let this = self.clone();
-        let graph = graph.to_owned();
-        blocking(move || {
-            let mut batch = WriteBatch::default();
-            let deleted = this.triples.stage_clear_graph(&mut batch, Some(&graph))?;
-            this.accel.stage_mark_dirty(&mut batch, &graph);
-            this.db.write(batch)?;
-            Ok(deleted)
-        })
-        .await
-    }
-
-    async fn graph_store_read(&self, graph: &str) -> Result<Vec<Triple>, DomainError> {
-        self.triples
-            .triples_for_graph(Some(graph), GRAPH_READ_LIMIT)
-            .await
-    }
-}
-
-/// Synchronous [`TripleSource`] over the engine, for the SPARQL evaluator's
-/// blocking task. RocksDB is synchronous, so each call runs directly.
-#[derive(Clone)]
-struct RocksdbTripleSource {
-    triples: TripleRepository,
-    accel: AccelRepository,
-}
-
-impl TripleSource for RocksdbTripleSource {
-    fn scan_pattern(
-        &self,
-        subject: Option<&PatternSubject>,
-        predicate: Option<&str>,
-        object: Option<&PatternObject>,
-        graph: Option<&GraphFilter>,
-        limit: i64,
-    ) -> Result<Vec<Triple>, DomainError> {
-        self.triples
-            .scan_pattern(subject, predicate, object, graph, limit)
-    }
-
-    fn distinct_named_graphs(&self) -> Result<Vec<String>, DomainError> {
-        self.triples.distinct_named_graphs_blocking()
-    }
-
-    fn triples_for_graph(
-        &self,
-        graph: Option<&str>,
-        limit: i64,
-    ) -> Result<Vec<Triple>, DomainError> {
-        let filter = match graph {
-            Some(g) => GraphFilter::Iri(g.to_owned()),
-            None => GraphFilter::DefaultOnly,
-        };
-        self.triples
-            .scan_pattern(None, None, None, Some(&filter), limit)
-    }
-
-    fn triples_for_subject(&self, subject_iri: &str) -> Result<Vec<Triple>, DomainError> {
-        let subject = PatternSubject::Iri(subject_iri.to_owned());
-        self.triples
-            .scan_pattern(Some(&subject), None, None, None, i64::MAX)
-    }
-
-    fn supports_id_scan(&self) -> bool {
-        true
-    }
-
-    fn id_scan(
-        &self,
-        subject: Option<TermId>,
-        predicate: Option<TermId>,
-        object: Option<TermId>,
-        graph: &IdGraphFilter,
-        limit: i64,
-    ) -> Result<Vec<IdQuad>, DomainError> {
-        self.triples
-            .id_scan(subject, predicate, object, graph, limit)
-    }
-
-    fn term_to_id(&self, key: TermKey<'_>) -> Result<TermId, DomainError> {
-        Ok(TripleRepository::term_id(&key))
-    }
-
-    fn id_to_term(&self, id: TermId) -> Result<TermValue, DomainError> {
-        self.triples.resolve_value(id)
-    }
-
-    fn run_accelerated(
-        &self,
-        query: &AcceleratedQuery,
-    ) -> Result<Option<AccelSolutions>, DomainError> {
-        self.accel.run(query).map(Some)
-    }
-}
-
-/// Transactional [`TripleWriter`] for SPARQL Update: the whole batch commits or
-/// none of it does.
-#[derive(Clone)]
-struct RocksdbTripleWriter {
-    triples: TripleRepository,
-    db: Db,
-    accel: AccelRepository,
-}
-
-#[async_trait]
-impl TripleWriter for RocksdbTripleWriter {
-    async fn apply_update(&self, changes: Vec<TripleChange>) -> Result<UpdateOutcome, DomainError> {
-        let triples = self.triples.clone();
-        let db = self.db.clone();
-        let accel = self.accel.clone();
-        blocking(move || {
-            let mut outcome = UpdateOutcome::default();
-            let mut batch = WriteBatch::default();
-            let mut seen = HashSet::new();
-            let mut dirty: HashSet<String> = HashSet::new();
-            for change in &changes {
-                match change {
-                    TripleChange::Change { deletes, inserts } => {
-                        outcome.deleted += triples.stage_delete(&mut batch, deletes)?;
-                        outcome.inserted += triples.stage_insert(&mut batch, &mut seen, inserts)?;
-                        for t in deletes.iter().chain(inserts.iter()) {
-                            if let Some(g) = &t.graph_iri {
-                                dirty.insert(g.as_str().to_owned());
-                            }
-                        }
-                    }
-                    TripleChange::Clear(graph) => {
-                        outcome.deleted += triples
-                            .stage_clear_graph(&mut batch, graph.as_ref().map(|i| i.as_str()))?;
-                        if let Some(g) = graph {
-                            dirty.insert(g.as_str().to_owned());
-                        }
-                    }
-                }
-            }
-            for graph in &dirty {
-                accel.stage_mark_dirty(&mut batch, graph);
-            }
-            db.write(batch)?;
-            Ok(outcome)
-        })
-        .await
-    }
-}
-
 #[async_trait]
 impl ObjectStore for RocksdbStore {
     async fn get_object_by_iri(&self, iri: &str) -> Result<Option<SbolObjectRecord>, DomainError> {
-        let objects = self.objects.clone();
-        let iri = iri.to_owned();
-        blocking(move || objects.get_by_iri(&iri)).await
+        self.objects.get_by_iri(iri).await
     }
 
     async fn get_objects_by_iris(
         &self,
         iris: &[&str],
     ) -> Result<Vec<SbolObjectRecord>, DomainError> {
-        let objects = self.objects.clone();
-        let owned: Vec<String> = iris.iter().map(|s| s.to_string()).collect();
-        blocking(move || {
-            let refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
-            objects.get_by_iris(&refs)
-        })
-        .await
+        self.objects.get_by_iris(iris).await
     }
 
     async fn list_objects(
         &self,
         filter: &ListObjectsFilter,
     ) -> Result<Vec<SbolObjectRecord>, DomainError> {
-        let objects = self.objects.clone();
-        let filter = filter.clone();
-        blocking(move || objects.list(&filter)).await
+        self.objects.list(filter).await
     }
 
     async fn get_object_iri_by_id(&self, id: ObjectId) -> Result<Option<String>, DomainError> {
-        let objects = self.objects.clone();
-        blocking(move || objects.get_iri_by_id(id)).await
+        self.objects.get_iri_by_id(id).await
     }
 }
 
 #[async_trait]
 impl GraphStore for RocksdbStore {
     async fn get_graph(&self, id: GraphId) -> Result<Option<GraphRecord>, DomainError> {
-        let graphs = self.graphs.clone();
-        blocking(move || graphs.get(id)).await
+        self.graphs.get(id).await
     }
 
     async fn list_graphs(
         &self,
         filter: &ListGraphsFilter,
     ) -> Result<Vec<GraphRecord>, DomainError> {
-        let graphs = self.graphs.clone();
-        let filter = filter.clone();
-        blocking(move || graphs.list(&filter)).await
+        self.graphs.list(filter).await
     }
 
     async fn delete_graph(&self, id: GraphId) -> Result<bool, DomainError> {
+        let graph_iri = format!("{GRAPH_IRI_PREFIX}{}", id.0);
         let this = self.clone();
-        blocking(move || {
-            let mut batch = WriteBatch::default();
-            let Some(_record) = this.graphs.stage_delete(&mut batch, id)? else {
-                return Ok(false);
-            };
-            let iri = format!("{GRAPH_IRI_PREFIX}{}", id.0);
-            let gid = Term::named(&iri).id();
-            this.triples.stage_delete_named_graph(&mut batch, gid)?;
-            this.objects.stage_delete_for_graph(&mut batch, id)?;
-            this.db.write(batch)?;
-            Ok(true)
-        })
-        .await
+        let iri = graph_iri.clone();
+        tokio::task::spawn_blocking(move || this.clear_graph_counting(&iri))
+            .await
+            .map_err(|e| DomainError::Database(format!("oxigraph delete task: {e}")))??;
+        let removed = self.graphs.delete(id).await?;
+        self.accel.mark_dirty_pool(&graph_iri).await?;
+        Ok(removed)
     }
 
     async fn graph_exists_by_hash(&self, hash: &[u8]) -> Result<bool, DomainError> {
-        let graphs = self.graphs.clone();
-        let hash = hash.to_vec();
-        blocking(move || graphs.exists_by_hash(&hash)).await
+        self.graphs.exists_by_hash(hash).await
     }
 }
 
@@ -425,7 +273,8 @@ impl OntologyStore for RocksdbStore {
             .text()
             .await
             .map_err(|e| DomainError::InvalidInput(format!("decode {source_url}: {e}")))?;
-        self.load_ontology_from_text(prefix, name, Some(source_url), &body)
+        self.ontology
+            .load_from_text(prefix, name, Some(source_url), &body)
             .await
     }
 
@@ -436,30 +285,21 @@ impl OntologyStore for RocksdbStore {
         source_url: Option<&str>,
         text: &str,
     ) -> Result<OntologyLoadReport, DomainError> {
-        let ontology = self.ontology.clone();
-        let prefix = prefix.to_owned();
-        let name = name.to_owned();
-        let source_url = source_url.map(|s| s.to_owned());
-        let text = text.to_owned();
-        blocking(move || ontology.load_from_text(&prefix, &name, source_url.as_deref(), &text))
+        self.ontology
+            .load_from_text(prefix, name, source_url, text)
             .await
     }
 
     async fn list_ontologies(&self) -> Result<Vec<OntologyRecord>, DomainError> {
-        let ontology = self.ontology.clone();
-        blocking(move || ontology.list_ontologies()).await
+        self.ontology.list_ontologies().await
     }
 
     async fn canonicalize(&self, iri: &str) -> Result<Option<String>, DomainError> {
-        let ontology = self.ontology.clone();
-        let iri = iri.to_owned();
-        blocking(move || ontology.canonicalize(&iri)).await
+        self.ontology.canonicalize(iri).await
     }
 
     async fn descendants(&self, iri: &str) -> Result<Vec<(String, i16)>, DomainError> {
-        let ontology = self.ontology.clone();
-        let iri = iri.to_owned();
-        blocking(move || ontology.descendants(&iri)).await
+        self.ontology.descendants(iri).await
     }
 
     async fn list_ontology_terms(
@@ -469,29 +309,24 @@ impl OntologyStore for RocksdbStore {
         offset: i64,
         search: Option<&str>,
     ) -> Result<(Vec<OntologyTermRecord>, i64), DomainError> {
-        let ontology = self.ontology.clone();
-        let prefix = prefix.to_owned();
-        let search = search.map(|s| s.to_owned());
-        blocking(move || ontology.list_terms(&prefix, limit, offset, search.as_deref())).await
+        self.ontology
+            .list_terms(prefix, limit, offset, search)
+            .await
     }
 
     async fn get_ontology_term(
         &self,
         iri: &str,
     ) -> Result<Option<OntologyTermRecord>, DomainError> {
-        let ontology = self.ontology.clone();
-        let iri = iri.to_owned();
-        blocking(move || ontology.get_term(&iri)).await
+        self.ontology.get_term(iri).await
     }
 }
 
 #[async_trait]
 impl NeighborhoodStore for RocksdbStore {
     async fn walk(&self, query: &NeighborhoodQuery) -> Result<NeighborhoodResult, DomainError> {
-        let triples = self.triples.clone();
-        let objects = self.objects.clone();
-        let query = query.clone();
-        blocking(move || neighborhood::walk(&triples, &objects, &query)).await
+        let source = self.triple_source_inner();
+        neighborhood::walk(&source, &self.objects, query).await
     }
 }
 
@@ -502,9 +337,7 @@ impl SequenceSearchStore for RocksdbStore {
         pattern: &str,
         options: SequenceSearchOptions,
     ) -> Result<Vec<SequenceMatch>, DomainError> {
-        let sequences = self.sequences.clone();
-        let pattern = pattern.to_owned();
-        blocking(move || sequences.search(&pattern, options)).await
+        self.sequences.search(pattern, options).await
     }
 
     async fn search_many(
@@ -512,33 +345,26 @@ impl SequenceSearchStore for RocksdbStore {
         patterns: &[String],
         options: SequenceSearchOptions,
     ) -> Result<Vec<BatchSequenceMatch>, DomainError> {
-        let sequences = self.sequences.clone();
-        let patterns = patterns.to_vec();
-        blocking(move || sequences.search_many(&patterns, options)).await
+        self.sequences.search_many(patterns, options).await
     }
 }
 
 #[async_trait]
 impl LabStore for RocksdbStore {
     async fn corpus_counts(&self) -> Result<CorpusCounts, DomainError> {
-        let lab = self.lab.clone();
-        blocking(move || lab.corpus_counts()).await
+        self.lab.corpus_counts().await
     }
 
     async fn recent_graphs(&self, limit: i64) -> Result<Vec<GraphOverview>, DomainError> {
-        let lab = self.lab.clone();
-        blocking(move || lab.list_graph_overviews(None, limit, 0)).await
+        self.lab.list_graph_overviews(None, limit, 0).await
     }
 
     async fn top_classes(&self, limit: i64) -> Result<Vec<ClassCount>, DomainError> {
-        let lab = self.lab.clone();
-        blocking(move || lab.top_classes(limit)).await
+        self.lab.top_classes(limit).await
     }
 
     async fn count_graphs(&self, kind: Option<&str>) -> Result<i64, DomainError> {
-        let lab = self.lab.clone();
-        let kind = kind.map(|k| k.to_owned());
-        blocking(move || lab.count_graphs(kind.as_deref())).await
+        self.lab.count_graphs(kind).await
     }
 
     async fn list_graph_overviews(
@@ -547,14 +373,11 @@ impl LabStore for RocksdbStore {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<GraphOverview>, DomainError> {
-        let lab = self.lab.clone();
-        let kind = kind.map(|k| k.to_owned());
-        blocking(move || lab.list_graph_overviews(kind.as_deref(), limit, offset)).await
+        self.lab.list_graph_overviews(kind, limit, offset).await
     }
 
     async fn get_graph_overview(&self, id: GraphId) -> Result<Option<GraphOverview>, DomainError> {
-        let lab = self.lab.clone();
-        blocking(move || lab.get_graph_overview(id)).await
+        self.lab.get_graph_overview(id).await
     }
 
     async fn graph_triples(
@@ -563,22 +386,25 @@ impl LabStore for RocksdbStore {
         limit: i64,
         offset: i64,
     ) -> Result<Option<GraphTriplesPage>, DomainError> {
-        let lab = self.lab.clone();
-        blocking(move || lab.graph_triples(id, limit, offset)).await
+        self.lab.graph_triples(id, limit, offset).await
     }
 }
 
 #[async_trait]
 impl SbolStore for RocksdbStore {
     async fn import_document(&self, input: ImportInput) -> Result<ImportReport, DomainError> {
-        RocksdbStore::import_document(self, input).await
+        self.import_one(input).await
     }
 
     async fn import_documents(
         &self,
         inputs: Vec<ImportInput>,
     ) -> Result<Vec<ImportReport>, DomainError> {
-        RocksdbStore::import_documents(self, inputs).await
+        let mut reports = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            reports.push(self.import_one(input).await?);
+        }
+        Ok(reports)
     }
 
     async fn graph_store_write(
@@ -588,25 +414,59 @@ impl SbolStore for RocksdbStore {
         format: SerializationFormat,
         mode: GraphWriteMode,
     ) -> Result<usize, DomainError> {
-        RocksdbStore::graph_store_write(self, graph, body, format, mode).await
+        let rdf_format = to_rdf_format(format)?;
+        let parsed = sbol_rdf::Graph::parse(body, rdf_format)
+            .map_err(|e| DomainError::Parse(e.to_string()))?;
+        let triples = rdf_graph_to_triples(&parsed, &IriString::unchecked(graph));
+
+        let this = self.clone();
+        let graph_owned = graph.to_owned();
+        let inserted = tokio::task::spawn_blocking(move || {
+            if mode == GraphWriteMode::Replace {
+                this.clear_graph_counting(&graph_owned)?;
+            }
+            this.insert_triples_counting(&triples)
+        })
+        .await
+        .map_err(|e| DomainError::Database(format!("oxigraph write task: {e}")))??;
+
+        self.accel.mark_dirty_pool(graph).await?;
+        Ok(inserted)
     }
 
     async fn graph_store_clear(&self, graph: &str) -> Result<usize, DomainError> {
-        RocksdbStore::graph_store_clear(self, graph).await
+        let this = self.clone();
+        let graph_owned = graph.to_owned();
+        let deleted = tokio::task::spawn_blocking(move || this.clear_graph_counting(&graph_owned))
+            .await
+            .map_err(|e| DomainError::Database(format!("oxigraph clear task: {e}")))??;
+        self.accel.mark_dirty_pool(graph).await?;
+        Ok(deleted)
     }
 
     async fn graph_store_read(&self, graph: &str) -> Result<Vec<Triple>, DomainError> {
-        RocksdbStore::graph_store_read(self, graph).await
+        let this = self.clone();
+        let graph_owned = graph.to_owned();
+        tokio::task::spawn_blocking(move || this.read_graph_triples(&graph_owned, GRAPH_READ_LIMIT))
+            .await
+            .map_err(|e| DomainError::Database(format!("oxigraph read task: {e}")))?
     }
 
     async fn triples_for_subject(&self, subject_iri: &str) -> Result<Vec<Triple>, DomainError> {
-        self.triples.triples_for_subject(subject_iri).await
+        let this = self.clone();
+        let subject = subject_iri.to_owned();
+        tokio::task::spawn_blocking(move || {
+            this.triple_source_inner().triples_for_subject(&subject)
+        })
+        .await
+        .map_err(|e| DomainError::Database(format!("oxigraph subject task: {e}")))?
     }
 
     async fn ping(&self) -> Result<(), DomainError> {
-        // Opening the database already proved it is reachable; a cheap read
-        // confirms the handle still works.
-        let db = self.db.clone();
-        blocking(move || db.get_cf("meta", b"ping").map(|_| ())).await
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(db_err)
     }
 }

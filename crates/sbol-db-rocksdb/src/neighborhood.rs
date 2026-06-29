@@ -1,33 +1,37 @@
-//! Breadth-first neighborhood traversal over the triplestore.
+//! Graph-neighborhood traversal as a breadth-first walk over the Oxigraph
+//! triples, enriched with derived-view metadata from the SQLite companion.
 //!
-//! Mirrors the SQL backends: expand the frontier one hop at a time via pattern
-//! scans (forward, backward, or both), dedup nodes and edges, respect the
-//! depth and node caps, then enrich resource nodes with derived-view metadata.
+//! From the root, each level expands resource-position edges in the requested
+//! direction(s): forward follows `root -> object`, backward follows
+//! `subject -> root`. Literal objects never widen the frontier and are included
+//! as edges only when `include_literals` is set. Visited resource nodes are
+//! then enriched with their companion object metadata.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use sbol_db_core::{
     Direction, DomainError, EdgeInfo, EdgeObject, NeighborhoodQuery, NeighborhoodResult, NodeInfo,
     ObjectTerm, SubjectTerm,
 };
-use sbol_db_storage::{PatternObject, PatternSubject};
+use sbol_db_sqlite::repo::SbolObjectRepository;
+use sbol_db_storage::{PatternObject, PatternSubject, TripleSource};
 
-use super::object::ObjectRepository;
-use super::triple::TripleRepository;
+use crate::triple_source::OxigraphTripleSource;
 
+/// Per-node scan cap. Far above any real fan-out for one subject/object.
 const SCAN_LIMIT: i64 = 100_000;
 
-pub fn walk(
-    triples: &TripleRepository,
-    objects: &ObjectRepository,
+pub async fn walk(
+    source: &OxigraphTripleSource,
+    objects: &SbolObjectRepository,
     query: &NeighborhoodQuery,
 ) -> Result<NeighborhoodResult, DomainError> {
-    let allow: BTreeSet<String> = query
+    let allow: HashSet<String> = query
         .predicate_allowlist
         .iter()
-        .map(|p| p.as_str().to_owned())
+        .map(|i| i.as_str().to_owned())
         .collect();
-    let max_nodes = query.max_nodes.map(|n| n as usize);
+    let max_nodes = query.max_nodes.map(|m| m as usize);
     let root = query.root_iri.as_str().to_owned();
 
     let mut nodes: BTreeMap<String, NodeInfo> = BTreeMap::new();
@@ -40,21 +44,20 @@ pub fn walk(
     let mut frontier: Vec<(String, bool)> = vec![(root.clone(), false)];
 
     'levels: for depth in 0..query.depth {
-        let next_depth = depth + 1;
         let mut next: Vec<(String, bool)> = Vec::new();
+        let child_depth = depth + 1;
 
         for (node_id, node_blank) in &frontier {
             if matches!(query.direction, Direction::Forward | Direction::Both) {
                 let subject = pattern_subject(node_id, *node_blank);
-                let rows = triples.scan_pattern(Some(&subject), None, None, None, SCAN_LIMIT)?;
-                for triple in rows {
+                let found = source.scan_pattern(Some(&subject), None, None, None, SCAN_LIMIT)?;
+                for triple in found {
                     let predicate = triple.predicate.as_str().to_owned();
                     if !allow.is_empty() && !allow.contains(&predicate) {
                         continue;
                     }
-                    let (edge_object, child) = object_to_edge(&triple.object);
-                    if matches!(edge_object, EdgeObject::Literal { .. }) && !query.include_literals
-                    {
+                    let (object, child) = object_to_edge(&triple.object);
+                    if matches!(object, EdgeObject::Literal { .. }) && !query.include_literals {
                         continue;
                     }
                     push_edge(
@@ -63,8 +66,8 @@ pub fn walk(
                         node_id.clone(),
                         *node_blank,
                         predicate,
-                        edge_object,
-                        next_depth,
+                        object,
+                        child_depth,
                     );
                     if let Some((child_id, child_blank)) = child {
                         if add_node(
@@ -72,12 +75,13 @@ pub fn walk(
                             &mut next,
                             &child_id,
                             child_blank,
-                            next_depth,
+                            child_depth,
                             max_nodes,
                             &mut truncated,
                         ) {
-                            max_depth = max_depth.max(next_depth);
-                        } else if truncated {
+                            max_depth = max_depth.max(child_depth);
+                        }
+                        if truncated {
                             break 'levels;
                         }
                     }
@@ -86,14 +90,14 @@ pub fn walk(
 
             if matches!(query.direction, Direction::Backward | Direction::Both) {
                 let object = pattern_object(node_id, *node_blank);
-                let rows = triples.scan_pattern(None, None, Some(&object), None, SCAN_LIMIT)?;
-                for triple in rows {
+                let found = source.scan_pattern(None, None, Some(&object), None, SCAN_LIMIT)?;
+                for triple in found {
                     let predicate = triple.predicate.as_str().to_owned();
                     if !allow.is_empty() && !allow.contains(&predicate) {
                         continue;
                     }
                     let (subject_id, subject_blank) = subject_id(&triple.subject);
-                    let edge_object = if *node_blank {
+                    let object_edge = if *node_blank {
                         EdgeObject::BlankNode {
                             value: node_id.clone(),
                         }
@@ -108,20 +112,21 @@ pub fn walk(
                         subject_id.clone(),
                         subject_blank,
                         predicate,
-                        edge_object,
-                        next_depth,
+                        object_edge,
+                        child_depth,
                     );
                     if add_node(
                         &mut nodes,
                         &mut next,
                         &subject_id,
                         subject_blank,
-                        next_depth,
+                        child_depth,
                         max_nodes,
                         &mut truncated,
                     ) {
-                        max_depth = max_depth.max(next_depth);
-                    } else if truncated {
+                        max_depth = max_depth.max(child_depth);
+                    }
+                    if truncated {
                         break 'levels;
                     }
                 }
@@ -138,7 +143,7 @@ pub fn walk(
         if info.is_blank {
             continue;
         }
-        if let Some(obj) = objects.get_by_iri(id)? {
+        if let Some(obj) = objects.get_by_iri(id).await? {
             info.sbol_class = Some(obj.sbol_class);
             info.display_id = obj.display_id;
             info.name = obj.name;
@@ -249,7 +254,6 @@ fn push_edge(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn add_node(
     nodes: &mut BTreeMap<String, NodeInfo>,
     next: &mut Vec<(String, bool)>,

@@ -1,37 +1,61 @@
-//! RocksDB persistence layer for sbol-db.
+//! Oxigraph persistence layer for sbol-db, exposed under the historical
+//! `rocksdb://` scheme and `sbol-db-rocksdb` crate name.
 //!
-//! A dictionary-encoded, permuted-index triplestore tuned for single-node
-//! performance: every RDF term is interned to a content-derived id, and a
-//! triple is stored as a key in each permuted index so that any triple pattern
-//! resolves to one prefix range scan and set semantics hold for free. The
-//! derived views (objects, graphs, ontology, sequences, the job queue) are
-//! hand-built over their own column families to match the contract the SQL
-//! backends implement.
+//! Triples and SPARQL are evaluated natively by Oxigraph's id-native engine
+//! against a persistent RocksDB-backed store; the derived projections (objects,
+//! graphs, ontology, sequences), the job queue, the lab dashboard, and the
+//! SynBioHub query accelerator index live in a SQLite companion database. This
+//! is an isolated experiment to benchmark Oxigraph against a hand-tuned
+//! permuted-index triplestore.
+//!
+//! `rocksdb://<dir>` opens `<dir>/triples` (the Oxigraph store) and
+//! `<dir>/companion.sqlite` (the companion, migrated on open).
 
-mod codec;
+mod accel;
+mod convert;
 mod db;
-mod jobs;
-mod keys;
-mod migrate;
-mod repo;
+mod neighborhood;
+mod sparql;
 mod store;
-
-use std::path::Path;
+mod triple_source;
+mod triple_writer;
 
 use sbol_db_core::DomainError;
+use sbol_db_sqlite::{SqliteJobRepository, SqliteMigrator};
 
-pub use db::Db;
-pub use jobs::RocksdbJobs;
-pub use migrate::RocksdbMigrator;
+pub use db::OxigraphDb as Db;
+pub use sparql::OxigraphNativeSparql;
 pub use store::RocksdbStore;
 
-/// Open (creating if absent) the database named by a `rocksdb://<path>`
-/// connection string. The column families are created on open, so the store is
-/// usable immediately without a separate migration step.
-pub fn connect(conn: &str) -> Result<Db, DomainError> {
-    let path = conn
-        .strip_prefix("rocksdb://")
-        .or_else(|| conn.strip_prefix("rocksdb:"))
-        .unwrap_or(conn);
-    Db::open(Path::new(path))
+/// Open (creating if absent) the stores named by a `rocksdb://<dir>` connection
+/// string, migrating the SQLite companion. Async because the companion's open +
+/// migrate is async.
+pub async fn connect(conn: &str) -> Result<Db, DomainError> {
+    Db::connect(conn).await
+}
+
+pub(crate) fn db_err<E: std::fmt::Display>(e: E) -> DomainError {
+    DomainError::Database(e.to_string())
+}
+
+/// The job queue for the `rocksdb://` backend: the SQLite companion's job
+/// repository over the companion pool.
+pub struct RocksdbJobs;
+
+impl RocksdbJobs {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(db: Db) -> SqliteJobRepository {
+        SqliteJobRepository::new(db.pool)
+    }
+}
+
+/// The migration capability for the `rocksdb://` backend: the SQLite companion's
+/// migrator over the companion pool.
+pub struct RocksdbMigrator;
+
+impl RocksdbMigrator {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(db: Db) -> SqliteMigrator {
+        SqliteMigrator::new(db.pool)
+    }
 }

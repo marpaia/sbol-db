@@ -7,7 +7,7 @@
 //! yet ported.
 
 pub mod pool;
-mod repo;
+pub mod repo;
 mod store;
 
 pub use pool::{connect, connect_and_migrate, run_migrations, SqliteMigrator, SqlitePool};

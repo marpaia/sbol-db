@@ -12,6 +12,7 @@ sbol-db-storage.workspace = true
 sbol-db-postgres.workspace = true
 sbol-db-sqlite.workspace = true
 sbol-db-rocksdb.workspace = true
+sbol-db-sparql.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]

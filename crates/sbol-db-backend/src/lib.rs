@@ -18,6 +18,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use sbol_db_postgres::{JobRepository, PgMigrator, PgPool, PgStatsRepository, SbolObjectService};
 use sbol_db_rocksdb::{RocksdbJobs, RocksdbMigrator, RocksdbStore};
+use sbol_db_sparql::NativeSparql;
 use sbol_db_sqlite::{SqliteJobRepository, SqliteMigrator, SqlitePool, SqliteStore};
 use sbol_db_storage::{
     DbStats, JobQueue, LabStore, Migrator, SbolStore, TripleSource, TripleWriter,
@@ -34,6 +35,9 @@ pub struct Backend {
     pub triple_source: Arc<dyn TripleSource>,
     /// Transactional triple writes for SPARQL Update.
     pub triple_writer: Arc<dyn TripleWriter>,
+    /// A backend's own native SPARQL evaluator (Oxigraph), when it has one. The
+    /// SPARQL engine routes unrecognized queries to it at full strength.
+    pub native_sparql: Option<Arc<dyn NativeSparql>>,
     /// Dashboard / graph-browser reads for the lab UI.
     pub lab: Arc<dyn LabStore>,
     /// Schema migrations, when the backend has a migratable schema.
@@ -77,6 +81,7 @@ impl Backend {
             }
             Some("rocksdb") => {
                 let db = sbol_db_rocksdb::connect(conn)
+                    .await
                     .map_err(|e| anyhow::anyhow!("{e}"))
                     .with_context(|| format!("opening {conn}"))?;
                 Ok(Self::from_rocksdb(db))
@@ -111,6 +116,7 @@ impl Backend {
             jobs,
             triple_source,
             triple_writer,
+            native_sparql: None,
             lab,
             migrator: Some(migrator),
             // SQLite introspection is not yet implemented.
@@ -123,6 +129,7 @@ impl Backend {
         let store = Arc::new(RocksdbStore::new(db.clone()));
         let triple_source = store.triple_source();
         let triple_writer = store.triple_writer();
+        let native_sparql: Arc<dyn NativeSparql> = store.native_sparql();
         let jobs: Arc<dyn JobQueue> = Arc::new(RocksdbJobs::new(db.clone()));
         let migrator: Arc<dyn Migrator> = Arc::new(RocksdbMigrator::new(db));
         let lab: Arc<dyn LabStore> = store.clone();
@@ -131,6 +138,7 @@ impl Backend {
             jobs,
             triple_source,
             triple_writer,
+            native_sparql: Some(native_sparql),
             lab,
             migrator: Some(migrator),
             // RocksDB introspection is not yet implemented.
@@ -153,6 +161,7 @@ impl Backend {
             jobs,
             triple_source,
             triple_writer,
+            native_sparql: None,
             lab,
             migrator: Some(migrator),
             db_stats: Some(db_stats),
