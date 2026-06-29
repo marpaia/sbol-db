@@ -109,7 +109,7 @@ impl SparqlEngine {
             return Err(SparqlError::QueryTooLarge);
         }
 
-        let query = parse_query_strict(query_str)?;
+        let query = crate::rewrite::optimize(parse_query_strict(query_str)?);
         let query_form = classify_query(&query);
         let format = requested_format.unwrap_or_else(|| query_form.default_format());
         if !query_form.allows(format) {

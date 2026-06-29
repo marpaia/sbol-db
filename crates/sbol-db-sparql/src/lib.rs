@@ -16,6 +16,7 @@ mod dataset;
 mod engine;
 mod error;
 mod results;
+mod rewrite;
 mod update;
 
 pub use dataset::TripleDataset;

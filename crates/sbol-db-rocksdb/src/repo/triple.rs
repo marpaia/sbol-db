@@ -6,7 +6,7 @@
 //! Pattern scans pick the single index whose key orders the bound positions
 //! first, turning the match into one prefix range scan.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use rocksdb::WriteBatch;
 use sbol_db_core::{DomainError, IriString, Triple};
@@ -211,16 +211,14 @@ impl TripleRepository {
     pub fn distinct_named_graphs_blocking(&self) -> Result<Vec<String>, DomainError> {
         let mut out = Vec::new();
         let mut last: Option<TermId> = None;
-        let mut cache = TermCache::default();
         self.for_each_distinct_graph(&mut |gid| {
             if last != Some(gid) {
                 last = Some(gid);
-                let term = cache.get(&self.db, &gid)?;
+                let term = self.db.resolve_term(&gid)?;
                 out.push(term.into_graph_iri()?.into_inner());
             }
             Ok(())
         })?;
-        let _ = &mut cache;
         Ok(out)
     }
 
@@ -254,7 +252,6 @@ impl TripleRepository {
 
         let plans = plan_scans(sid, pid, oid, graph, gid);
         let mut out = Vec::new();
-        let mut cache = TermCache::default();
         let limit = if limit < 0 { i64::MAX } else { limit };
 
         for (index, prefix) in plans {
@@ -263,16 +260,16 @@ impl TripleRepository {
             }
             self.db.for_each_prefix(index.cf, &prefix, |key, _| {
                 let quad = keys::decode_key(index, key);
-                out.push(self.materialize(&quad, &mut cache)?);
+                out.push(self.materialize(&quad)?);
                 Ok((out.len() as i64) < limit)
             })?;
         }
         Ok(out)
     }
 
-    fn materialize(&self, quad: &Quad, cache: &mut TermCache) -> Result<Triple, DomainError> {
-        let subject = cache.get(&self.db, &quad.s)?.into_subject()?;
-        let predicate = match cache.get(&self.db, &quad.p)? {
+    fn materialize(&self, quad: &Quad) -> Result<Triple, DomainError> {
+        let subject = self.db.resolve_term(&quad.s)?.into_subject()?;
+        let predicate = match self.db.resolve_term(&quad.p)? {
             Term::Named(iri) => IriString::unchecked(iri),
             _ => {
                 return Err(DomainError::Database(
@@ -280,9 +277,9 @@ impl TripleRepository {
                 ))
             }
         };
-        let object = cache.get(&self.db, &quad.o)?.into_object();
+        let object = self.db.resolve_term(&quad.o)?.into_object();
         let graph_iri = match quad.g {
-            Some(gid) => Some(cache.get(&self.db, &gid)?.into_graph_iri()?),
+            Some(gid) => Some(self.db.resolve_term(&gid)?.into_graph_iri()?),
             None => None,
         };
         Ok(Triple {
@@ -291,27 +288,6 @@ impl TripleRepository {
             predicate,
             object,
         })
-    }
-}
-
-/// Resolve term ids to terms, caching within one scan so repeated ids (such as
-/// a shared predicate) are decoded once.
-#[derive(Default)]
-struct TermCache {
-    map: HashMap<TermId, Term>,
-}
-
-impl TermCache {
-    fn get(&mut self, db: &Db, id: &TermId) -> Result<Term, DomainError> {
-        if let Some(term) = self.map.get(id) {
-            return Ok(term.clone());
-        }
-        let bytes = db
-            .get_cf("id2term", id)?
-            .ok_or_else(|| DomainError::Database("dangling term id".into()))?;
-        let term = Term::decode(&bytes)?;
-        self.map.insert(*id, term.clone());
-        Ok(term)
     }
 }
 

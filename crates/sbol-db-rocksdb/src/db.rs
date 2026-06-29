@@ -6,14 +6,17 @@
 //! All families share tuned options (LZ4 compression and a bloom filter for
 //! fast point lookups, which the get-before-put insert path leans on).
 
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use rocksdb::{
     BlockBasedOptions, BoundColumnFamily, Cache, DBCompressionType, DBWithThreadMode,
     MultiThreaded, Options, WriteBatch,
 };
 use sbol_db_core::DomainError;
+
+use crate::codec::{Term, TermId};
 
 /// The multi-threaded RocksDB handle. Multi-threaded mode returns column-family
 /// handles as `Arc<BoundColumnFamily>`, which clone cleanly into the blocking
@@ -74,6 +77,20 @@ pub const SEP: u8 = 0x1F;
 #[derive(Clone)]
 pub struct Db {
     inner: Arc<Inner>,
+    terms: Arc<TermDict>,
+}
+
+/// Shared id->term cache backing [`Db::resolve_term`]. A term id is a content
+/// address (id = hash of the term) and `id2term` is append-only, so a cached
+/// id->term mapping is immutable and never needs invalidation. Sharing it across
+/// every pattern scan collapses the repeated `id2term` lookups a nested-loop
+/// join makes (a join over N members revisits the same predicate, type, and
+/// member terms N times). Its size tracks the number of distinct terms read, so
+/// it stays within the term dictionary's footprint; a server over a very large
+/// corpus could cap it with an LRU.
+#[derive(Default)]
+struct TermDict {
+    map: RwLock<HashMap<TermId, Term>>,
 }
 
 fn cf_options(cache: &Cache) -> Options {
@@ -111,7 +128,24 @@ impl Db {
             .map_err(|e| DomainError::Database(format!("opening rocksdb at {path:?}: {e}")))?;
         Ok(Self {
             inner: Arc::new(inner),
+            terms: Arc::new(TermDict::default()),
         })
+    }
+
+    /// Resolve a term id to its term, caching the decode in the shared
+    /// dictionary. Repeated ids across scans (a shared predicate, the rdf:type
+    /// objects, a collection IRI revisited per member) are decoded once and then
+    /// served from memory instead of a fresh `id2term` get and decode each time.
+    pub fn resolve_term(&self, id: &TermId) -> Result<Term, DomainError> {
+        if let Some(term) = self.terms.map.read().unwrap().get(id) {
+            return Ok(term.clone());
+        }
+        let bytes = self
+            .get_cf("id2term", id)?
+            .ok_or_else(|| DomainError::Database("dangling term id".into()))?;
+        let term = Term::decode(&bytes)?;
+        self.terms.map.write().unwrap().insert(*id, term.clone());
+        Ok(term)
     }
 
     /// Handle for a column family by name. The family always exists (every name
