@@ -7,6 +7,7 @@ members = [
     "crates/sbol-db-derive",
     "crates/sbol-db-postgres",
     "crates/sbol-db-sqlite",
+    "crates/sbol-db-rocksdb",
     "crates/sbol-db-backend",
     "crates/sbol-db-conformance",
     "crates/sbol-db-sparql",
@@ -75,6 +76,8 @@ oxiri = "0.2.11"
 
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
 
+rocksdb = { version = "0.22", default-features = false, features = ["lz4"] }
+
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.16", default-features = false }
 
@@ -84,6 +87,7 @@ sbol-db-rdf = { path = "crates/sbol-db-rdf", version = "0.1.0" }
 sbol-db-derive = { path = "crates/sbol-db-derive", version = "0.1.0" }
 sbol-db-postgres = { path = "crates/sbol-db-postgres", version = "0.1.0" }
 sbol-db-sqlite = { path = "crates/sbol-db-sqlite", version = "0.1.0" }
+sbol-db-rocksdb = { path = "crates/sbol-db-rocksdb", version = "0.1.0" }
 sbol-db-backend = { path = "crates/sbol-db-backend", version = "0.1.0" }
 sbol-db-conformance = { path = "crates/sbol-db-conformance", version = "0.1.0" }
 sbol-db-sparql = { path = "crates/sbol-db-sparql", version = "0.1.0" }

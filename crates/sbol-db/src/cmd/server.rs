@@ -32,6 +32,7 @@ pub async fn run(
         Some(
             build_worker_setup(
                 database_url,
+                Some((backend.store.clone(), backend.jobs.clone())),
                 worker_concurrency,
                 worker_queues.as_deref(),
                 worker_id.as_deref(),
@@ -133,11 +134,14 @@ impl WorkerSetup {
     }
 }
 
-/// Build the worker's store, job queue, and config for any backend. On Postgres
-/// the worker opens its own right-sized pool so long-running handlers cannot
-/// starve inbound HTTP requests; other backends open through the factory.
+/// Build the worker's store, job queue, and config. On Postgres the worker opens
+/// its own right-sized pool so long-running handlers cannot starve inbound HTTP
+/// requests. Other backends reuse the already-open API handle: SQLite avoids a
+/// redundant second pool, and RocksDB must (its database lock is exclusive to a
+/// single open handle per process).
 pub(crate) async fn build_worker_setup(
     database_url: &str,
+    reuse: Option<(Arc<dyn SbolStore>, Arc<dyn JobQueue>)>,
     concurrency: Option<usize>,
     queues: Option<&str>,
     worker_id: Option<&str>,
@@ -157,7 +161,9 @@ pub(crate) async fn build_worker_setup(
             .collect(),
     };
 
-    let backend = if is_postgres(database_url) {
+    // Postgres opens a dedicated worker pool; every other backend reuses the
+    // store and queue the API already opened.
+    let (listener_pool, store, jobs) = if is_postgres(database_url) {
         let mut worker_pool_cfg = sbol_db_postgres::PoolConfig::from_env();
         let override_max = std::env::var("SBOL_DB_WORKER_POOL_MAX")
             .ok()
@@ -166,9 +172,19 @@ pub(crate) async fn build_worker_setup(
         let pool = sbol_db_postgres::pool::connect_with_config(database_url, &worker_pool_cfg)
             .await
             .context("opening worker connection pool")?;
-        Backend::from_postgres_pool(pool)
+        let backend = Backend::from_postgres_pool(pool.clone());
+        (Some(pool), backend.store, backend.jobs)
     } else {
-        Backend::open(database_url).await?
+        // Reuse the API's already-open handle when there is one (required for
+        // RocksDB, whose lock is exclusive); otherwise open it ourselves.
+        let (store, jobs) = match reuse {
+            Some(pair) => pair,
+            None => {
+                let backend = Backend::open(database_url).await?;
+                (backend.store, backend.jobs)
+            }
+        };
+        (None, store, jobs)
     };
 
     let mut config = WorkerConfig {
@@ -181,9 +197,9 @@ pub(crate) async fn build_worker_setup(
     }
 
     Ok(WorkerSetup {
-        listener_pool: backend.postgres.as_ref().map(|pg| pg.pool.clone()),
-        store: backend.store,
-        jobs: backend.jobs,
+        listener_pool,
+        store,
+        jobs,
         config,
     })
 }

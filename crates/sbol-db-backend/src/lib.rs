@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use sbol_db_postgres::{JobRepository, PgMigrator, PgPool, PgStatsRepository, SbolObjectService};
+use sbol_db_rocksdb::{RocksdbJobs, RocksdbMigrator, RocksdbStore};
 use sbol_db_sqlite::{SqliteJobRepository, SqliteMigrator, SqlitePool, SqliteStore};
 use sbol_db_storage::{
     DbStats, JobQueue, LabStore, Migrator, SbolStore, TripleSource, TripleWriter,
@@ -74,9 +75,15 @@ impl Backend {
                     .with_context(|| format!("opening {conn}"))?;
                 Ok(Self::from_sqlite(pool))
             }
+            Some("rocksdb") => {
+                let db = sbol_db_rocksdb::connect(conn)
+                    .map_err(|e| anyhow::anyhow!("{e}"))
+                    .with_context(|| format!("opening {conn}"))?;
+                Ok(Self::from_rocksdb(db))
+            }
             Some(other) => bail!(
                 "unsupported storage backend scheme `{other}://` \
-                 (supported: postgres://, sqlite://)"
+                 (supported: postgres://, sqlite://, rocksdb://)"
             ),
             None => bail!(
                 "connection string `{conn}` has no scheme; \
@@ -107,6 +114,26 @@ impl Backend {
             lab,
             migrator: Some(migrator),
             // SQLite introspection is not yet implemented.
+            db_stats: None,
+            postgres: None,
+        }
+    }
+
+    fn from_rocksdb(db: sbol_db_rocksdb::Db) -> Self {
+        let store = Arc::new(RocksdbStore::new(db.clone()));
+        let triple_source = store.triple_source();
+        let triple_writer = store.triple_writer();
+        let jobs: Arc<dyn JobQueue> = Arc::new(RocksdbJobs::new(db.clone()));
+        let migrator: Arc<dyn Migrator> = Arc::new(RocksdbMigrator::new(db));
+        let lab: Arc<dyn LabStore> = store.clone();
+        Self {
+            store,
+            jobs,
+            triple_source,
+            triple_writer,
+            lab,
+            migrator: Some(migrator),
+            // RocksDB introspection is not yet implemented.
             db_stats: None,
             postgres: None,
         }
@@ -159,7 +186,19 @@ mod tests {
             Some("postgres")
         );
         assert_eq!(backend_scheme("sqlite:///tmp/x.db"), Some("sqlite"));
+        assert_eq!(backend_scheme("rocksdb:///tmp/x.rocksdb"), Some("rocksdb"));
         assert_eq!(backend_scheme("nonsense"), None);
+    }
+
+    #[tokio::test]
+    async fn opens_rocksdb_backend() {
+        let dir =
+            std::env::temp_dir().join(format!("sbol-db-backend-rocks-{}", std::process::id()));
+        let url = format!("rocksdb://{}", dir.display());
+        let backend = Backend::open(&url).await.expect("open rocksdb backend");
+        backend.store.ping().await.expect("ping");
+        assert!(backend.migrator.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
