@@ -3,9 +3,9 @@ use sbol_db_derive::{build_import_plan, to_rdf_format};
 use sbol_db_rdf::rdf_graph_to_triples;
 
 use crate::repo::{
-    GraphRepository, LabRepository, NeighborhoodRepository, OntologyRepository, ProjectionEvent,
-    ProjectionEventRepository, SbolObjectRepository, SequenceSearchRepository, TripleRepository,
-    TypedProjectionRepository, ValidationRepository,
+    AccelRepository, GraphRepository, LabRepository, NeighborhoodRepository, OntologyRepository,
+    ProjectionEvent, ProjectionEventRepository, SbolObjectRepository, SequenceSearchRepository,
+    TripleRepository, TypedProjectionRepository, ValidationRepository,
 };
 use crate::PgPool;
 
@@ -16,6 +16,7 @@ pub struct SbolObjectService {
     graphs: GraphRepository,
     objects: SbolObjectRepository,
     triples: TripleRepository,
+    accel: AccelRepository,
     validation: ValidationRepository,
     projection: ProjectionEventRepository,
     typed: TypedProjectionRepository,
@@ -36,6 +37,7 @@ impl SbolObjectService {
             graphs: GraphRepository::new(pool.clone()),
             objects: SbolObjectRepository::new(pool.clone()),
             triples: TripleRepository::new(pool.clone()),
+            accel: AccelRepository::new(pool.clone(), TripleRepository::new(pool.clone())),
             validation: ValidationRepository::new(pool.clone()),
             projection: ProjectionEventRepository::new(pool.clone()),
             typed: TypedProjectionRepository::new(pool.clone()),
@@ -76,6 +78,10 @@ impl SbolObjectService {
 
     pub fn triples(&self) -> &TripleRepository {
         &self.triples
+    }
+
+    pub fn accel(&self) -> &AccelRepository {
+        &self.accel
     }
 
     pub fn neighborhood(&self) -> &NeighborhoodRepository {
@@ -160,6 +166,7 @@ impl SbolObjectService {
             .triples
             .insert_triples(&mut tx, &triples, "graph-store")
             .await?;
+        AccelRepository::mark_dirty(&mut tx, graph).await?;
         tx.commit().await.map_err(db_err)?;
         Ok(inserted)
     }
@@ -170,6 +177,7 @@ impl SbolObjectService {
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         let deleted = self.triples.clear_graph(&mut tx, Some(graph)).await?;
         self.triples.delete_graph(&mut tx, graph).await?;
+        AccelRepository::mark_dirty(&mut tx, graph).await?;
         tx.commit().await.map_err(db_err)?;
         Ok(deleted)
     }
@@ -199,6 +207,7 @@ impl SbolObjectService {
             .triples
             .insert_triples(&mut *conn, &plan.triples, "sbol")
             .await?;
+        AccelRepository::mark_dirty(&mut *conn, plan.graph_iri.as_str()).await?;
 
         let object_count = plan.summaries.len();
         for summary in &plan.summaries {

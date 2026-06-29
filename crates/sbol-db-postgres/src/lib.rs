@@ -7,8 +7,8 @@ mod store_impls;
 
 pub use pool::{connect, connect_with_retry, run_migrations, PgMigrator, PgPool, PoolConfig};
 pub use repo::{
-    Activity, BlockingLock, DatabaseSize, GraphRepository, IncomingForeignKey, IndexStats,
-    JobRepository, NeighborhoodRepository, OntologyRepository, OutgoingForeignKey,
+    AccelRepository, Activity, BlockingLock, DatabaseSize, GraphRepository, IncomingForeignKey,
+    IndexStats, JobRepository, NeighborhoodRepository, OntologyRepository, OutgoingForeignKey,
     PgStatsRepository, ProjectionEvent, ProjectionEventRepository, RecordedValidation,
     SbolObjectRepository, SequenceSearchRepository, SlowQuery, TableColumn, TableSchema,
     TableStats, TripleRepository, TypedProjectionCounts, TypedProjectionRepository,

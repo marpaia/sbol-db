@@ -16,19 +16,19 @@ use sbol_db_core::{
     ObjectId, SbolObjectRecord, SerializationFormat, Triple,
 };
 use sbol_db_storage::{
-    BatchSequenceMatch, ClassCount, CorpusCounts, EnqueueOutcome, GraphFilter, GraphOverview,
-    GraphStore, GraphTriplesPage, GraphWriteMode, ImportInput, JobAttempt, JobLogRecord, JobQueue,
-    JobStatus, LabStore, ListGraphsFilter, ListJobsFilter, ListObjectsFilter, NeighborhoodStore,
-    NewJob, ObjectStore, OldestQueuedAge, OntologyLoadReport, OntologyRecord, OntologyStore,
-    OntologyTermRecord, PatternObject, PatternSubject, QueueDepthRow, SbolJob, SbolStore,
-    SequenceMatch, SequenceSearchOptions, SequenceSearchStore, TripleChange, TripleSource,
-    TripleWriter, UpdateOutcome,
+    AccelSolutions, AcceleratedQuery, BatchSequenceMatch, ClassCount, CorpusCounts, EnqueueOutcome,
+    GraphFilter, GraphOverview, GraphStore, GraphTriplesPage, GraphWriteMode, ImportInput,
+    JobAttempt, JobLogRecord, JobQueue, JobStatus, LabStore, ListGraphsFilter, ListJobsFilter,
+    ListObjectsFilter, NeighborhoodStore, NewJob, ObjectStore, OldestQueuedAge, OntologyLoadReport,
+    OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject, PatternSubject,
+    QueueDepthRow, SbolJob, SbolStore, SequenceMatch, SequenceSearchOptions, SequenceSearchStore,
+    TripleChange, TripleSource, TripleWriter, UpdateOutcome,
 };
 use serde_json::Value;
 use tokio::runtime::Handle;
 
 use crate::repo::db_err;
-use crate::{JobRepository, PgPool, SbolObjectService, TripleRepository};
+use crate::{AccelRepository, JobRepository, PgPool, SbolObjectService, TripleRepository};
 
 /// Verbatim source tag for triples written by SPARQL Update.
 const UPDATE_SOURCE: &str = "sparql-update";
@@ -42,11 +42,12 @@ const UPDATE_SOURCE: &str = "sparql-update";
 #[derive(Clone)]
 pub struct PostgresTripleSource {
     triples: Arc<TripleRepository>,
+    accel: AccelRepository,
 }
 
 impl PostgresTripleSource {
-    pub fn new(triples: Arc<TripleRepository>) -> Self {
-        Self { triples }
+    pub fn new(triples: Arc<TripleRepository>, accel: AccelRepository) -> Self {
+        Self { triples, accel }
     }
 }
 
@@ -80,6 +81,13 @@ impl TripleSource for PostgresTripleSource {
     fn triples_for_subject(&self, subject_iri: &str) -> Result<Vec<Triple>, DomainError> {
         Handle::current().block_on(self.triples.triples_for_subject(subject_iri))
     }
+
+    fn run_accelerated(
+        &self,
+        query: &AcceleratedQuery,
+    ) -> Result<Option<AccelSolutions>, DomainError> {
+        Handle::current().block_on(self.accel.run(query)).map(Some)
+    }
 }
 
 /// Transactional [`TripleWriter`] for SPARQL Update.
@@ -98,6 +106,30 @@ impl PostgresTripleWriter {
     pub fn new(triples: Arc<TripleRepository>, pool: PgPool) -> Self {
         Self { triples, pool }
     }
+}
+
+/// Every named graph an update touches (insert, delete, or clear), whose
+/// accelerator indexes must be marked stale. The default (graphless) partition
+/// has no named graph and is never accelerated, so it is skipped.
+fn touched_named_graphs(changes: &[TripleChange]) -> std::collections::HashSet<String> {
+    let mut graphs = std::collections::HashSet::new();
+    for change in changes {
+        match change {
+            TripleChange::Change { deletes, inserts } => {
+                for triple in deletes.iter().chain(inserts) {
+                    if let Some(graph) = &triple.graph_iri {
+                        graphs.insert(graph.as_str().to_owned());
+                    }
+                }
+            }
+            TripleChange::Clear(graph) => {
+                if let Some(graph) = graph {
+                    graphs.insert(graph.as_str().to_owned());
+                }
+            }
+        }
+    }
+    graphs
 }
 
 #[async_trait]
@@ -132,6 +164,9 @@ impl TripleWriter for PostgresTripleWriter {
                 }
             }
         }
+        for graph in touched_named_graphs(&changes) {
+            AccelRepository::mark_dirty(&mut tx, &graph).await?;
+        }
         tx.commit().await.map_err(db_err)?;
         Ok(outcome)
     }
@@ -141,7 +176,10 @@ impl SbolObjectService {
     /// A [`TripleSource`] view of this service's triple store, for the SPARQL
     /// read engine.
     pub fn triple_source(&self) -> Arc<dyn TripleSource> {
-        Arc::new(PostgresTripleSource::new(Arc::new(self.triples().clone())))
+        Arc::new(PostgresTripleSource::new(
+            Arc::new(self.triples().clone()),
+            self.accel().clone(),
+        ))
     }
 
     /// A [`TripleWriter`] view of this service's triple store, for SPARQL Update.

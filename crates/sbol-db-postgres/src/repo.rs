@@ -1,3 +1,4 @@
+pub mod accel;
 pub mod graph;
 pub mod job;
 pub mod lab;
@@ -11,6 +12,7 @@ pub mod sequence_search;
 pub mod triple;
 pub mod validation;
 
+pub use accel::AccelRepository;
 pub use graph::GraphRepository;
 pub use job::JobRepository;
 pub use lab::LabRepository;

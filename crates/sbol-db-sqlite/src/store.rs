@@ -14,18 +14,18 @@ use sbol_db_core::{
 use sbol_db_derive::{build_import_plan, to_rdf_format};
 use sbol_db_rdf::rdf_graph_to_triples;
 use sbol_db_storage::{
-    BatchSequenceMatch, ClassCount, CorpusCounts, GraphFilter, GraphOverview, GraphStore,
-    GraphTriplesPage, GraphWriteMode, ImportInput, LabStore, ListGraphsFilter, ListObjectsFilter,
-    NeighborhoodStore, ObjectStore, OntologyLoadReport, OntologyRecord, OntologyStore,
-    OntologyTermRecord, PatternObject, PatternSubject, SbolStore, SequenceMatch,
-    SequenceSearchOptions, SequenceSearchStore, TripleChange, TripleSource, TripleWriter,
-    UpdateOutcome,
+    AccelSolutions, AcceleratedQuery, BatchSequenceMatch, ClassCount, CorpusCounts, GraphFilter,
+    GraphOverview, GraphStore, GraphTriplesPage, GraphWriteMode, ImportInput, LabStore,
+    ListGraphsFilter, ListObjectsFilter, NeighborhoodStore, ObjectStore, OntologyLoadReport,
+    OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject, PatternSubject, SbolStore,
+    SequenceMatch, SequenceSearchOptions, SequenceSearchStore, TripleChange, TripleSource,
+    TripleWriter, UpdateOutcome,
 };
 use tokio::runtime::Handle;
 
 use crate::pool::db_err;
 use crate::repo::{
-    GraphRepository, LabRepository, OntologyRepository, SbolObjectRepository,
+    AccelRepository, GraphRepository, LabRepository, OntologyRepository, SbolObjectRepository,
     SequenceSearchRepository, TripleRepository,
 };
 use crate::SqlitePool;
@@ -41,6 +41,7 @@ pub struct SqliteStore {
     graphs: GraphRepository,
     objects: SbolObjectRepository,
     triples: TripleRepository,
+    accel: AccelRepository,
     ontology: OntologyRepository,
     sequences: SequenceSearchRepository,
     lab: LabRepository,
@@ -52,6 +53,7 @@ impl SqliteStore {
             graphs: GraphRepository::new(pool.clone()),
             objects: SbolObjectRepository::new(pool.clone()),
             triples: TripleRepository::new(pool.clone()),
+            accel: AccelRepository::new(pool.clone(), TripleRepository::new(pool.clone())),
             ontology: OntologyRepository::new(pool.clone()),
             sequences: SequenceSearchRepository::new(pool.clone()),
             lab: LabRepository::new(pool.clone()),
@@ -74,6 +76,7 @@ impl SqliteStore {
     pub fn triple_source(&self) -> Arc<dyn TripleSource> {
         Arc::new(SqliteTripleSource {
             triples: Arc::new(self.triples.clone()),
+            accel: self.accel.clone(),
         })
     }
 
@@ -121,6 +124,7 @@ impl SqliteStore {
             .triples
             .insert_triples(&mut *conn, &plan.triples, "sbol")
             .await?;
+        AccelRepository::mark_dirty(&mut *conn, plan.graph_iri.as_str()).await?;
         let object_count = plan.summaries.len();
         for summary in &plan.summaries {
             self.objects
@@ -166,6 +170,7 @@ impl SqliteStore {
             .triples
             .insert_triples(&mut tx, &triples, "graph-store")
             .await?;
+        AccelRepository::mark_dirty(&mut tx, graph).await?;
         tx.commit().await.map_err(db_err)?;
         Ok(inserted)
     }
@@ -174,6 +179,7 @@ impl SqliteStore {
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         let deleted = self.triples.clear_graph(&mut tx, Some(graph)).await?;
         self.triples.delete_graph(&mut tx, graph).await?;
+        AccelRepository::mark_dirty(&mut tx, graph).await?;
         tx.commit().await.map_err(db_err)?;
         Ok(deleted)
     }
@@ -192,6 +198,7 @@ impl SqliteStore {
 #[derive(Clone)]
 struct SqliteTripleSource {
     triples: Arc<TripleRepository>,
+    accel: AccelRepository,
 }
 
 impl TripleSource for SqliteTripleSource {
@@ -224,6 +231,13 @@ impl TripleSource for SqliteTripleSource {
     fn triples_for_subject(&self, subject_iri: &str) -> Result<Vec<Triple>, DomainError> {
         Handle::current().block_on(self.triples.triples_for_subject(subject_iri))
     }
+
+    fn run_accelerated(
+        &self,
+        query: &AcceleratedQuery,
+    ) -> Result<Option<AccelSolutions>, DomainError> {
+        Handle::current().block_on(self.accel.run(query)).map(Some)
+    }
 }
 
 /// Transactional [`TripleWriter`] for SPARQL Update: the whole batch commits or
@@ -232,6 +246,30 @@ impl TripleSource for SqliteTripleSource {
 struct SqliteTripleWriter {
     triples: Arc<TripleRepository>,
     pool: SqlitePool,
+}
+
+/// Every named graph an update touches (insert, delete, or clear), whose
+/// accelerator indexes must be marked stale. The default (graphless) partition
+/// has no named graph and is never accelerated, so it is skipped.
+fn touched_named_graphs(changes: &[TripleChange]) -> HashSet<String> {
+    let mut graphs = HashSet::new();
+    for change in changes {
+        match change {
+            TripleChange::Change { deletes, inserts } => {
+                for triple in deletes.iter().chain(inserts) {
+                    if let Some(graph) = &triple.graph_iri {
+                        graphs.insert(graph.as_str().to_owned());
+                    }
+                }
+            }
+            TripleChange::Clear(graph) => {
+                if let Some(graph) = graph {
+                    graphs.insert(graph.as_str().to_owned());
+                }
+            }
+        }
+    }
+    graphs
 }
 
 #[async_trait]
@@ -265,6 +303,9 @@ impl TripleWriter for SqliteTripleWriter {
                         .await?;
                 }
             }
+        }
+        for graph in touched_named_graphs(&changes) {
+            AccelRepository::mark_dirty(&mut tx, &graph).await?;
         }
         tx.commit().await.map_err(db_err)?;
         Ok(outcome)

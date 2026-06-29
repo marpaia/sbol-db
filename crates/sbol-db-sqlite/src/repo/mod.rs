@@ -1,3 +1,4 @@
+pub mod accel;
 pub mod graph;
 pub mod job;
 pub mod lab;
@@ -7,6 +8,7 @@ pub mod ontology;
 pub mod sequence_search;
 pub mod triple;
 
+pub use accel::AccelRepository;
 pub use graph::GraphRepository;
 pub use job::SqliteJobRepository;
 pub use lab::LabRepository;

@@ -21,7 +21,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use sbol_db_core::IriString;
-use sbol_db_postgres::{connect, run_migrations, SbolObjectService};
+use sbol_db_postgres::{connect, run_migrations, AccelRepository, SbolObjectService};
 use sbol_db_rdf::rdf_graph_to_triples;
 use sbol_db_sparql::{ResultFormat, SparqlEngine, SparqlOptions};
 use tokio::sync::{Mutex, MutexGuard};
@@ -52,7 +52,8 @@ async fn fresh_engine() -> SparqlEngine {
         "TRUNCATE sbol_graphs, sbol_objects, sbol_triples, sbol_validation_findings, \
          sbol_validation_runs, sbol_object_revisions, sbol_rdf_projection_events, sbol_components, \
          sbol_sequences, sbol_features, sbol_locations, sbol_constraints, \
-         sbol_interactions, sbol_participations RESTART IDENTITY CASCADE",
+         sbol_interactions, sbol_participations, accel_dirty, accel_object, accel_type, \
+         accel_member, accel_facet RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
     .await
@@ -70,10 +71,17 @@ async fn fresh_engine() -> SparqlEngine {
             .ensure_graph(&mut conn, PUBLIC_GRAPH, "verbatim")
             .await
             .expect("ensure_graph");
-        svc.triples()
+        let n = svc
+            .triples()
             .insert_triples(&mut conn, &triples, "graph-store")
             .await
-            .expect("insert_triples")
+            .expect("insert_triples");
+        // The raw insert bypasses the Graph Store write path, so mark the graph
+        // dirty by hand for the accelerator (the write path does this itself).
+        AccelRepository::mark_dirty(&mut conn, PUBLIC_GRAPH)
+            .await
+            .expect("mark dirty");
+        n
     };
     assert_eq!(
         inserted,
@@ -256,10 +264,13 @@ async fn default_graph_uri_scopes_reads() {
         .unwrap_or_else(|_| "postgres://sbol:sbol@localhost:5432/sbol".to_owned());
     let pool = connect(&database_url).await.expect("connect");
     run_migrations(&pool).await.expect("migrate");
-    sqlx::query("TRUNCATE sbol_graphs, sbol_triples RESTART IDENTITY CASCADE")
-        .execute(&pool)
-        .await
-        .expect("truncate");
+    sqlx::query(
+        "TRUNCATE sbol_graphs, sbol_triples, accel_dirty, accel_object, accel_type, \
+         accel_member, accel_facet RESTART IDENTITY CASCADE",
+    )
+    .execute(&pool)
+    .await
+    .expect("truncate");
     let svc = SbolObjectService::new(pool);
 
     // Public graph: the SBOL2 fixture. User graph: one unrelated collection.
@@ -290,6 +301,14 @@ async fn default_graph_uri_scopes_reads() {
             .insert_triples(&mut conn, &user_triples, "graph-store")
             .await
             .expect("seed user");
+        // The raw inserts bypass the Graph Store write path, so mark both graphs
+        // dirty by hand for the accelerator (the write path does this itself).
+        AccelRepository::mark_dirty(&mut conn, PUBLIC_GRAPH)
+            .await
+            .expect("mark public dirty");
+        AccelRepository::mark_dirty(&mut conn, USER_GRAPH)
+            .await
+            .expect("mark user dirty");
     }
     let engine = SparqlEngine::new(svc.triple_source());
 
