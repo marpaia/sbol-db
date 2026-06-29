@@ -402,7 +402,7 @@ impl JobRepository {
             out.push(decode::<JobAttempt>(blob)?);
             Ok(true)
         })?;
-        out.sort_by(|a, b| b.attempt_no.cmp(&a.attempt_no));
+        out.sort_by_key(|r| std::cmp::Reverse(r.attempt_no));
         Ok(out)
     }
 

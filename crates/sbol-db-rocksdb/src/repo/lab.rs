@@ -56,7 +56,7 @@ impl LabRepository {
             return Ok(Vec::new());
         }
         let mut records = self.all_graph_records()?;
-        records.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        records.sort_by_key(|r| std::cmp::Reverse(r.created_at));
         records
             .into_iter()
             .skip(offset.max(0) as usize)
