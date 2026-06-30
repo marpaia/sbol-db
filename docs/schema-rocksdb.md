@@ -18,7 +18,7 @@ and `keys.rs` (the permuted-index keys).
 ## Database handle and options
 
 One database holds every keyspace as a separate column family. All families
-share tuned options: LZ4 compression, a bloom filter (10 bits per key) with
+share tuned options: Snappy compression, a bloom filter (10 bits per key) with
 cached index and filter blocks, and a shared 256 MiB LRU block cache. Opening
 sets `create_if_missing`, `create_missing_column_families`, parallelism scaled
 to the machine, and `bytes_per_sync`.

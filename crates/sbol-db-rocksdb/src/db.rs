@@ -3,7 +3,7 @@
 //! One database holds every keyspace as a separate column family: the term
 //! dictionary, the nine permuted triple indexes, the named-graph set, and a
 //! column family per derived view (objects, graphs, ontology, sequences, jobs).
-//! All families share tuned options (LZ4 compression and a bloom filter for
+//! All families share tuned options (Snappy compression and a bloom filter for
 //! fast point lookups, which the get-before-put insert path leans on).
 
 use std::collections::HashMap;
@@ -105,7 +105,7 @@ struct TermDict {
 
 fn cf_options(cache: &Cache) -> Options {
     let mut opts = Options::default();
-    opts.set_compression_type(DBCompressionType::Lz4);
+    opts.set_compression_type(DBCompressionType::Snappy);
     let mut block = BlockBasedOptions::default();
     block.set_block_cache(cache);
     block.set_bloom_filter(10.0, false);
