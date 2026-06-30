@@ -18,7 +18,7 @@ scheme picks the backend; Postgres is the default. See
 [**docs/storage.md**](docs/storage.md).
 
 <p align="center">
-  <img src="docs/images/overview.png" alt="SBOL Data Lab overview dashboard showing corpus stats, top SBOL classes, and recent graphs" width="900">
+  <img src="https://raw.githubusercontent.com/marpaia/sbol-db/master/docs/images/overview.png" alt="SBOL Data Lab overview dashboard showing corpus stats, top SBOL classes, and recent graphs" width="900">
 </p>
 
 New to the codebase? Start with the [**crate guide**](docs/crate-guide.md).
@@ -171,14 +171,14 @@ Read-only SPARQL 1.1, with a prefix and class sidebar, saved queries,
 and history:
 
 <p align="center">
-  <img src="docs/images/sparql.png" alt="SBOL Data Lab SPARQL editor with query results" width="900">
+  <img src="https://raw.githubusercontent.com/marpaia/sbol-db/master/docs/images/sparql.png" alt="SBOL Data Lab SPARQL editor with query results" width="900">
 </p>
 
 Or query the relational projection directly in SQL, with a browsable
 table list:
 
 <p align="center">
-  <img src="docs/images/sql.png" alt="SBOL Data Lab SQL editor with query results" width="900">
+  <img src="https://raw.githubusercontent.com/marpaia/sbol-db/master/docs/images/sql.png" alt="SBOL Data Lab SQL editor with query results" width="900">
 </p>
 
 ## REST surface
