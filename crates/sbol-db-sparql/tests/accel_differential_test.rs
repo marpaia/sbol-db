@@ -246,9 +246,9 @@ fn templates() -> Vec<(&'static str, String)> {
     ]
 }
 
-/// Seed the fixture through the real Graph Store write path (which marks the
-/// graph dirty), then assert the accelerator answers each template exactly as
-/// the generic engine does, and that the accelerator was actually used.
+/// Seed the fixture through the real Graph Store write path, then assert the
+/// accelerator answers each template exactly as the generic engine does, and
+/// that the accelerator was actually used.
 async fn assert_accel_matches_generic(store: &dyn SbolStore, source: Arc<dyn TripleSource>) {
     store
         .graph_store_write(
@@ -259,7 +259,43 @@ async fn assert_accel_matches_generic(store: &dyn SbolStore, source: Arc<dyn Tri
         )
         .await
         .expect("seed public graph");
+    compare_templates(source).await;
+}
 
+/// Regression: re-posting a document with `Merge` must not inflate the
+/// accelerator. A backend that reconstructs a graph's post-write triple set by
+/// concatenating the committed scan with the batch's inserts (RocksDB) counts a
+/// re-posted, already-committed triple twice unless it dedups, so
+/// `build_accel_index` derives duplicate metadata (a doubled `dcterms:title`
+/// yields duplicate rows from a single-row metadata query). After two Merge
+/// re-writes of the same document the accelerator must still match the generic
+/// engine — the triple store holds a set, and the indexes derive from that set.
+async fn assert_accel_stable_across_merge_rewrite(
+    store: &dyn SbolStore,
+    source: Arc<dyn TripleSource>,
+) {
+    for mode in [
+        GraphWriteMode::Replace,
+        GraphWriteMode::Merge,
+        GraphWriteMode::Merge,
+    ] {
+        store
+            .graph_store_write(
+                PUBLIC_GRAPH,
+                SBOL2,
+                sbol_db_core::SerializationFormat::Turtle,
+                mode,
+            )
+            .await
+            .expect("seed public graph");
+    }
+    compare_templates(source).await;
+}
+
+/// Build an accelerator-backed engine and a generic engine over the same source
+/// and assert every recognized template returns identical bindings, with the
+/// accelerator actually engaged.
+async fn compare_templates(source: Arc<dyn TripleSource>) {
     let hits = Arc::new(AtomicUsize::new(0));
     let accel_engine = SparqlEngine::new(Arc::new(Probe {
         inner: Arc::clone(&source),
@@ -312,6 +348,28 @@ async fn rocksdb_accelerator_matches_generic_engine() {
     let store = RocksdbStore::new(db);
     let source = store.triple_source();
     assert_accel_matches_generic(&store, source).await;
+}
+
+#[tokio::test]
+async fn sqlite_accelerator_stable_across_merge_rewrite() {
+    use sbol_db_sqlite::{connect_and_migrate, SqliteStore};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let url = format!("sqlite://{}", dir.path().join("accel.db").display());
+    let pool = connect_and_migrate(&url).await.expect("connect + migrate");
+    let store = SqliteStore::new(pool);
+    let source = store.triple_source();
+    assert_accel_stable_across_merge_rewrite(&store, source).await;
+}
+
+#[tokio::test]
+async fn rocksdb_accelerator_stable_across_merge_rewrite() {
+    use sbol_db_rocksdb::{connect, RocksdbStore};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let url = format!("rocksdb://{}", dir.path().join("accel.rocksdb").display());
+    let db = connect(&url).expect("open rocksdb");
+    let store = RocksdbStore::new(db);
+    let source = store.triple_source();
+    assert_accel_stable_across_merge_rewrite(&store, source).await;
 }
 
 /// Opt-in (it truncates the shared Postgres database, so it must not run

@@ -9,7 +9,7 @@
 //! own batch, so the indexes commit atomically with the triples. Reads (which
 //! never rebuild) always see indexes consistent with the committed triples.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rocksdb::WriteBatch;
 use sbol_db_core::{DomainError, Triple};
@@ -97,7 +97,20 @@ impl AccelRepository {
             self.stage_clear_prefix(batch, cf, &gp)?;
         }
 
-        let index = build_accel_index(triples);
+        // Callers reconstruct the post-write triple set by concatenating the
+        // committed scan with the batch's inserts (the batch's writes are not yet
+        // visible to a scan). A triple that is both already committed and
+        // re-posted therefore appears twice, which would inflate the derived
+        // metadata (e.g. duplicate `dcterms:title` values yield duplicate
+        // metadata rows). Dedup to the true triple set before deriving, so the
+        // index matches a clean rescan (what the SQL backends feed).
+        let mut seen: HashSet<&Triple> = HashSet::with_capacity(triples.len());
+        let deduped: Vec<Triple> = triples
+            .iter()
+            .filter(|t| seen.insert(*t))
+            .cloned()
+            .collect();
+        let index = build_accel_index(&deduped);
 
         let meta_cf = self.db.cf("acc_meta");
         let tl_cf = self.db.cf("acc_toplevel");
