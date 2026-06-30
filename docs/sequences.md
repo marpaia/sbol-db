@@ -7,10 +7,12 @@ restriction-site finding, exact primer matching, and motif lookup --
 shapes that are awkward to express in SPARQL and pointless to express
 in typed-IRI lookup.
 
-The k-mer seed index sits beside the typed `sbol_sequences` projection
-and is maintained automatically by the import pipeline. There is no
-external `blastn`; the implementation is a few hundred lines of Rust
-plus one Postgres table.
+The k-mer seed index sits beside the stored sequences and is maintained
+automatically by the import pipeline. There is no external `blastn`; the
+implementation is a few hundred lines of Rust plus a backend-specific
+k-mer index (a table on Postgres and SQLite, a pair of column families
+on RocksDB). On Postgres it sits beside the typed `sbol_sequences`
+projection.
 
 ## CLI
 

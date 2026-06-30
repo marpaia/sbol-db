@@ -7,7 +7,8 @@ This guide orients a newcomer to the codebase. It complements:
 - [`neighborhood.md`](neighborhood.md): graph traversal API.
 - [`sequences.md`](sequences.md): nucleotide substring + RC search.
 - [`ontology.md`](ontology.md): ontology loading and term closure.
-- [`schema.md`](schema.md): Postgres schema reference.
+- [`storage.md`](storage.md): the storage contract, backend selection, and the capability matrix.
+- [`schema-postgres.md`](schema-postgres.md): Postgres schema reference (and the SQLite / RocksDB layout siblings).
 
 Read this first to know *where* things live and *why* the workspace is
 shaped the way it is. Read the others when you need depth on a
@@ -16,9 +17,9 @@ particular surface.
 ## Scope
 
 `sbol-db` is a database for synthetic biology data. Its query surface
-runs over a pluggable storage engine (Postgres by default, with a
-RocksDB engine coming soon). It is **not** a
-DBTL workflow tracker. Projects, cycles, predictive model runs,
+runs over a pluggable storage engine — Postgres, SQLite, or RocksDB,
+selected by the connection-string scheme (see [`storage.md`](storage.md)).
+It is **not** a DBTL workflow tracker. Projects, cycles, predictive model runs,
 builds, samples, measurements, and decision records are
 intentionally **out of scope** -- the goal is a best-in-class
 query surface for SBOL itself, not the surrounding lab pipeline.
@@ -45,18 +46,21 @@ the build state of this design".
 
 ## Workspace layout
 
-Eight crates:
-
 | Crate              | Purpose                                                                                |
 | ------------------ | -------------------------------------------------------------------------------------- |
 | `sbol-db-core`     | Domain types (`Triple`, `IriString`, `GraphId`, `NeighborhoodQuery`, …), the k-mer encoder, the OBO parser. No I/O. |
 | `sbol-db-storage`  | Backend-neutral storage contract: the `SbolStore` / `TripleSource` / `JobQueue` traits and their request/response types. Names no concrete database. |
 | `sbol-db-rdf`      | `sbol::Document` ↔ triples projection, RDF (re-)serialization, content hashing.           |
-| `sbol-db-postgres` | Postgres implementation of the storage contract: sqlx repositories, embedded migrations, the `SbolObjectService` entry point. Hosts the sequence-search + ontology repositories.    |
+| `sbol-db-derive`   | Pure import plan builder: parse a document, derive its triples and object summaries, validate. No database; every backend commits the same plan. |
+| `sbol-db-postgres` | Postgres implementation of the storage contract: sqlx repositories, embedded migrations, the `SbolObjectService` entry point. Hosts the typed projections, validation audit, and engine introspection. |
+| `sbol-db-sqlite`   | SQLite implementation: the same contract over a single-file, embedded SQL engine. |
+| `sbol-db-rocksdb`  | RocksDB implementation: a dictionary-encoded, permuted-index triplestore over an embedded key/value store. |
+| `sbol-db-backend`  | Backend factory: `Backend::open` routes a connection string to the engine its scheme selects and returns the neutral trait-object bundle. |
+| `sbol-db-conformance` | Backend-neutral conformance scenarios every engine passes through the trait surface alone. |
 | `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over any `TripleSource`).        |
 | `sbol-db-ui`       | Embedded data-lab SPA served at `/lab` (React + Vite, baked in via `rust-embed`).        |
 | `sbol-db-server`   | axum HTTP API. Thin layer over the storage + sparql crates.                             |
-| `sbol-db`          | CLI binary. Wires the postgres + server + sparql crates into clap subcommands.          |
+| `sbol-db`          | CLI binary. Wires the backend factory + server + sparql crates into clap subcommands.    |
 
 The boundaries matter:
 
@@ -65,14 +69,17 @@ The boundaries matter:
   it can be tested without a database.
 - `sbol-db-storage` defines the persistence contract every backend
   satisfies. It names no concrete database, only traits and the
-  request/response types they exchange. A new backend (RocksDB) is a
-  new crate that implements these traits; nothing above the contract
-  changes.
-- `sbol-db-postgres` is the only crate that talks to sqlx. It
-  implements the storage traits over a repository layer
-  (`GraphRepository`, `SbolObjectRepository`, `TripleRepository`,
-  `NeighborhoodRepository`, `TypedProjectionRepository`,
-  `ValidationRepository`, `ProjectionEventRepository`).
+  request/response types they exchange. A backend is a crate that
+  implements these traits; nothing above the contract changes when a new
+  one is added. See [`storage.md`](storage.md).
+- `sbol-db-postgres`, `sbol-db-sqlite`, and `sbol-db-rocksdb` each
+  implement the contract over their own storage. The two SQL backends
+  talk to sqlx through a repository layer (`GraphRepository`,
+  `SbolObjectRepository`, `TripleRepository`, and so on); RocksDB builds
+  its repositories over column families.
+- `sbol-db-backend` is the only crate that depends on more than one
+  backend. It dispatches on the connection-string scheme and hands every
+  consumer the neutral `Arc<dyn ...>` trait objects.
 - `sbol-db-sparql` reaches storage only through the `TripleSource`
   trait. SPARQL evaluation never sees sqlx types, migrations, or any
   concrete backend.
@@ -80,8 +87,10 @@ The boundaries matter:
 ## Storage model
 
 This section describes the default Postgres backend's layout; the
-contract it satisfies is the `sbol-db-storage` traits, and another
-backend is free to lay the same data out differently.
+contract it satisfies is the `sbol-db-storage` traits, and the SQLite
+and RocksDB backends lay the same data out differently. See
+[`storage.md`](storage.md) for the contract and the per-backend layout
+references.
 
 Three Postgres tables carry the bulk of the data:
 
@@ -98,7 +107,7 @@ Three Postgres tables carry the bulk of the data:
   back-reference to the owning graph. Blank nodes live in
   companion `subject_blank` / `object_blank` text columns because
   the `sbol_iri` domain rejects `_:b0`-shaped values; see
-  [`schema.md`](schema.md) for the full schema.
+  [`schema-postgres.md`](schema-postgres.md) for the full schema.
 
 Typed projection tables (`sbol_components`, `sbol_sequences`,
 `sbol_features`, `sbol_locations`, `sbol_constraints`,
@@ -270,11 +279,12 @@ and a re-import deterministically replaces all three. The
 
 There is no sidecar SPARQL store. `sbol-db-sparql` implements
 `spareval::QueryableDataset` against a `TripleSource` and translates
-each triple-pattern lookup to a single backend scan. The default
-Postgres backend services that scan with an indexed SQL query against
-`sbol_triples`; a future backend implements the same trait. The
-trade-off: queries are always strongly consistent with committed
-writes, but evaluation makes per-pattern round-trips. For the
+each triple-pattern lookup to a single backend scan. Postgres and SQLite
+service that scan with an indexed SQL query against their triples table;
+RocksDB serves it id-native from its permuted indexes (it joins on term
+ids and materializes terms only for output rows). The trade-off: queries
+are always strongly consistent with committed writes, but evaluation
+makes per-pattern round-trips. For the
 workloads `sbol-db` targets (SBOL designs, tens of millions of
 triples, exploratory queries from a human-in-the-loop), this is a
 deliberate choice. See [`sparql.md`](sparql.md) for the perf

@@ -15,8 +15,11 @@ IRI threads through all of it.
 
 This two-layer model is the backend-neutral contract. The table names below
 (`sbol_graphs`, `sbol_triples`, `sbol_objects`, ...) are the default Postgres
-backend's realization of it; another storage engine satisfies the same contract
-with its own layout.
+backend's realization of it; the SQLite and RocksDB backends satisfy the same
+contract with their own layouts. See [`storage.md`](storage.md) for the contract
+and [`schema-postgres.md`](schema-postgres.md),
+[`schema-sqlite.md`](schema-sqlite.md), and
+[`schema-rocksdb.md`](schema-rocksdb.md) for each realization.
 
 ```
 STORAGE (RDF truth)                      DERIVED VIEW (typed index)

@@ -588,6 +588,22 @@ impl JobRepository {
             })
             .collect()
     }
+
+    pub async fn recent_failure_count(&self, within_hours: i64) -> Result<i64, DomainError> {
+        let row = sqlx::query(
+            r#"
+            SELECT COUNT(*)::bigint AS n
+            FROM sbol_jobs
+            WHERE status IN ('failed', 'dead')
+              AND finished_at >= now() - make_interval(hours => $1)
+            "#,
+        )
+        .bind(within_hours.max(0) as i32)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db_err)?;
+        row.try_get::<i64, _>("n").map_err(db_err)
+    }
 }
 
 async fn finalize_attempt(

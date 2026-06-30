@@ -1,27 +1,30 @@
 /**
  * Per-table drill-down. Reached by clicking a row on the Schema page
- * (or the Postgres maintenance page) at `/schema/tables/:name`.
+ * (or the Maintenance page) at `/schema/tables/:name`.
  *
  * Shows table-level metadata: size, dead percentage, last vacuum,
  * column definitions, foreign-key references, and indexes. Includes a
  * "Query" launcher that drops a starter `SELECT * FROM <table>` into
  * the SQL editor.
  *
- * Postgres schemas are not exposed as a domain concept — every table
- * here is read from `public` on the server. The URL is name-only.
+ * Relational schema (tables and columns) is only available on backends
+ * that report the `relational_schema` capability; the route renders a
+ * friendly placeholder otherwise so deep links degrade gracefully.
  */
 
 import { useMemo } from "react";
 import { ChevronLeft, ChevronRight, HardDrive, Key, Play } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
+import { BackendUnavailable } from "@/components/lab/BackendUnavailable";
 import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { KpiTile } from "@/components/observability/KpiTile";
+import { useBackendInfo } from "@/hooks/useBackendInfo";
 import {
-  usePgIndexes,
-  usePgTables,
-  usePgTableSchema,
+  useMaintenanceIndexes,
+  useMaintenanceTables,
+  useMaintenanceTableSchema,
 } from "@/hooks/useObservability";
 import type {
   IncomingForeignKey,
@@ -34,15 +37,18 @@ import type {
 import { useLabStore } from "@/lib/store";
 import { cn, describeError, formatBytes, formatRelative } from "@/lib/utils";
 
-export default function PgTableDetailRoute() {
+export default function TableDetailRoute() {
   const params = useParams<{ name: string }>();
   const name = decodeURIComponent(params.name ?? "");
   const navigate = useNavigate();
   const setBuffer = useLabStore((s) => s.setBuffer);
+  const { data: info } = useBackendInfo();
 
-  const tablesQuery = usePgTables(200, 0);
-  const indexesQuery = usePgIndexes(200);
-  const schemaQuery = usePgTableSchema(name);
+  const relationalSchema = info?.capabilities.relational_schema ?? true;
+
+  const tablesQuery = useMaintenanceTables(200, 0);
+  const indexesQuery = useMaintenanceIndexes(200);
+  const schemaQuery = useMaintenanceTableSchema(name);
 
   const table = useMemo<TableStats | undefined>(
     () => tablesQuery.data?.find((t) => t.name === name),
@@ -60,6 +66,10 @@ export default function PgTableDetailRoute() {
     setBuffer("sql", template);
     navigate("/sql");
   };
+
+  if (info && !relationalSchema) {
+    return <BackendUnavailable feature="Table browsing" />;
+  }
 
   return (
     <div className="h-full w-full overflow-y-auto">
@@ -98,7 +108,7 @@ export default function PgTableDetailRoute() {
 
         {tablesQuery.error ? (
           <ErrorBanner
-            title="Couldn't read pg_stat_user_tables"
+            title="Couldn't read table statistics"
             body={describeError(tablesQuery.error)}
           />
         ) : tablesQuery.isLoading && !table ? (
@@ -211,14 +221,14 @@ function ColumnsPanel({ columns }: { columns: TableColumn[] }) {
         id: "type",
         header: "type",
         width: 180,
-        sortValue: (c) => c.pg_type,
-        filterValue: (c) => c.pg_type,
+        sortValue: (c) => c.column_type,
+        filterValue: (c) => c.column_type,
         cell: (c) => (
           <span
             className="truncate font-mono text-muted-foreground"
-            title={c.pg_type}
+            title={c.column_type}
           >
-            {c.pg_type}
+            {c.column_type}
           </span>
         ),
       },
@@ -480,7 +490,7 @@ function IndexesPanel({
       </header>
       {error ? (
         <ErrorBanner
-          title="Couldn't read pg_stat_user_indexes"
+          title="Couldn't read index statistics"
           body={error.message}
         />
       ) : loading ? (

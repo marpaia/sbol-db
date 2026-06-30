@@ -4,19 +4,17 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use sbol_db_core::{GraphId, ObjectId, SerializationFormat};
-use sbol_db_postgres::SbolObjectService;
-use sbol_db_storage::ListObjectsFilter;
+use sbol_db_storage::{ListObjectsFilter, SbolStore};
 
 use crate::cli::ObjectAction;
 use crate::format::parse_format;
 use crate::output::{print_json, write_jsonl};
 
-pub async fn run(service: Arc<SbolObjectService>, action: ObjectAction) -> Result<()> {
+pub async fn run(service: Arc<dyn SbolStore>, action: ObjectAction) -> Result<()> {
     match action {
         ObjectAction::Get { iri, json } => {
             let obj = service
-                .objects()
-                .get_by_iri(&iri)
+                .get_object_by_iri(&iri)
                 .await?
                 .ok_or_else(|| anyhow!("not found: {iri}"))?;
             if json {
@@ -29,8 +27,7 @@ pub async fn run(service: Arc<SbolObjectService>, action: ObjectAction) -> Resul
             let format =
                 parse_format(&format).ok_or_else(|| anyhow!("unknown format: {format}"))?;
             let obj = service
-                .objects()
-                .get_by_iri(&iri)
+                .get_object_by_iri(&iri)
                 .await?
                 .ok_or_else(|| anyhow!("not found: {iri}"))?;
             let body = render_subgraph(service.clone(), obj.id, format).await?;
@@ -47,13 +44,12 @@ pub async fn run(service: Arc<SbolObjectService>, action: ObjectAction) -> Resul
 }
 
 async fn render_subgraph(
-    service: Arc<SbolObjectService>,
+    service: Arc<dyn SbolStore>,
     object_id: ObjectId,
     format: SerializationFormat,
 ) -> Result<String> {
     let iri = service
-        .objects()
-        .get_iri_by_id(object_id)
+        .get_object_iri_by_id(object_id)
         .await?
         .ok_or_else(|| anyhow!("object id not found"))?;
     let body = sbol_db_server::export_subject_rdf(service.as_ref(), &iri, format).await?;
@@ -61,7 +57,7 @@ async fn render_subgraph(
 }
 
 async fn export_all(
-    service: Arc<SbolObjectService>,
+    service: Arc<dyn SbolStore>,
     sbol_class: Option<String>,
     role: Option<String>,
     graph_id: Option<uuid::Uuid>,
@@ -79,7 +75,7 @@ async fn export_all(
             after_iri: cursor.clone(),
             limit,
         };
-        let page = service.objects().list(&filter).await?;
+        let page = service.list_objects(&filter).await?;
         let page_len = page.len();
         for record in &page {
             write_jsonl(&mut out, record)?;

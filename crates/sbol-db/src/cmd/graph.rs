@@ -6,15 +6,14 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use sbol_db_core::{GraphId, ImportReport, IriString, SerializationFormat};
-use sbol_db_postgres::{GraphRepository, PgPool, SbolObjectService};
 use sbol_db_rdf::hash_bytes;
-use sbol_db_storage::{ImportInput, ListGraphsFilter};
+use sbol_db_storage::{ImportInput, ListGraphsFilter, SbolStore};
 
 use crate::cli::GraphAction;
 use crate::format::{parse_format, resolve_format};
 use crate::output::print_json;
 
-pub async fn run(pool: PgPool, service: Arc<SbolObjectService>, action: GraphAction) -> Result<()> {
+pub async fn run(service: Arc<dyn SbolStore>, action: GraphAction) -> Result<()> {
     match action {
         GraphAction::Import {
             path,
@@ -44,13 +43,12 @@ pub async fn run(pool: PgPool, service: Arc<SbolObjectService>, action: GraphAct
             name,
             format,
         } => {
-            let repo = GraphRepository::new(pool);
             let format = format
                 .as_deref()
                 .map(|f| parse_format(f).ok_or_else(|| anyhow!("unknown format: {f}")))
                 .transpose()?;
-            let rows = repo
-                .list(&ListGraphsFilter {
+            let rows = service
+                .list_graphs(&ListGraphsFilter {
                     name,
                     format,
                     limit,
@@ -59,14 +57,13 @@ pub async fn run(pool: PgPool, service: Arc<SbolObjectService>, action: GraphAct
             print_json(&rows)
         }
         GraphAction::Show { id } => {
-            let repo = GraphRepository::new(pool);
-            let doc = repo
-                .get(GraphId(id))
+            let doc = service
+                .get_graph(GraphId(id))
                 .await?
                 .ok_or_else(|| anyhow!("no document with id {id}"))?;
             print_json(&doc)
         }
-        GraphAction::Delete { id, yes } => delete(pool, id, yes).await,
+        GraphAction::Delete { id, yes } => delete(service, id, yes).await,
         GraphAction::Validate { graph_id } => {
             println!(
                 "Revalidation is not yet implemented: it requires re-parseable raw \
@@ -81,7 +78,7 @@ pub async fn run(pool: PgPool, service: Arc<SbolObjectService>, action: GraphAct
 
 #[allow(clippy::too_many_arguments)]
 async fn import(
-    service: Arc<SbolObjectService>,
+    service: Arc<dyn SbolStore>,
     path: PathBuf,
     format: Option<String>,
     namespace: Option<String>,
@@ -132,7 +129,7 @@ async fn import(
         let namespace = namespace.or_else(|| default_namespace_for_path(&path, format));
         if skip_existing {
             let hash = hash_bytes(body.as_bytes());
-            if service.graphs().exists_by_hash(&hash).await? {
+            if service.graph_exists_by_hash(&hash).await? {
                 println!("[skipped] {} (already imported)", path.display());
                 return Ok(());
             }
@@ -154,7 +151,7 @@ async fn import(
     }
 }
 
-async fn delete(pool: PgPool, id: uuid::Uuid, yes: bool) -> Result<()> {
+async fn delete(service: Arc<dyn SbolStore>, id: uuid::Uuid, yes: bool) -> Result<()> {
     if !yes {
         if !std::io::stdin().is_terminal() {
             return Err(anyhow!(
@@ -171,8 +168,7 @@ async fn delete(pool: PgPool, id: uuid::Uuid, yes: bool) -> Result<()> {
             return Ok(());
         }
     }
-    let repo = GraphRepository::new(pool);
-    let deleted = repo.delete(GraphId(id)).await?;
+    let deleted = service.delete_graph(GraphId(id)).await?;
     print_json(&serde_json::json!({
         "id": id,
         "deleted": deleted,
@@ -180,7 +176,7 @@ async fn delete(pool: PgPool, id: uuid::Uuid, yes: bool) -> Result<()> {
 }
 
 async fn run_directory_import_atomic(
-    service: Arc<SbolObjectService>,
+    service: Arc<dyn SbolStore>,
     root: &Path,
     explicit_format: Option<&str>,
     namespace: Option<&str>,
@@ -208,7 +204,7 @@ async fn run_directory_import_atomic(
             .or_else(|| default_namespace_for_path(path, format));
         if skip_existing {
             let hash = hash_bytes(body.as_bytes());
-            if service.graphs().exists_by_hash(&hash).await? {
+            if service.graph_exists_by_hash(&hash).await? {
                 skipped += 1;
                 println!("[skip] {}", path.display());
                 continue;
@@ -245,7 +241,7 @@ async fn run_directory_import_atomic(
 }
 
 async fn run_directory_import_per_file(
-    service: Arc<SbolObjectService>,
+    service: Arc<dyn SbolStore>,
     root: &Path,
     explicit_format: Option<&str>,
     namespace: Option<&str>,
@@ -321,7 +317,7 @@ enum OutcomeOfFile {
 }
 
 async fn import_one(
-    service: Arc<SbolObjectService>,
+    service: Arc<dyn SbolStore>,
     path: &Path,
     explicit_format: Option<&str>,
     namespace: Option<&str>,
@@ -340,7 +336,7 @@ async fn import_one(
         .or_else(|| default_namespace_for_path(path, format));
     if skip_existing {
         let hash = hash_bytes(body.as_bytes());
-        match service.graphs().exists_by_hash(&hash).await {
+        match service.graph_exists_by_hash(&hash).await {
             Ok(true) => return OutcomeOfFile::Skipped,
             Ok(false) => {}
             Err(e) => return OutcomeOfFile::Failed(e.to_string()),

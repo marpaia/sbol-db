@@ -27,15 +27,19 @@ async fn state() -> AppState {
         service.triple_writer(),
     ));
     let jobs = Arc::new(JobRepository::new(pool.clone()));
-    let metrics = Metrics::install(pool.clone(), env!("CARGO_PKG_VERSION"));
+    let metrics = Metrics::install(Some(pool.clone()), env!("CARGO_PKG_VERSION"));
     AppState {
+        lab: service.clone(),
         service,
         sparql,
         sparql_update,
         metrics,
         jobs,
         config: ServerConfig::default(),
-        pg_pool: pool,
+        backend_kind: sbol_db_server::BackendKind::Postgres,
+        sql_console: Some(Arc::new(sbol_db_postgres::PgSqlConsole::new(pool.clone()))),
+        db_stats: Some(Arc::new(sbol_db_postgres::PgStatsRepository::new(pool))),
+        lsm_stats: None,
         schema_cache: Arc::new(SchemaCache::new()),
     }
 }
@@ -100,7 +104,7 @@ async fn sql_schema_lists_project_tables() {
         .iter()
         .find(|c| c.get("name").and_then(Value::as_str) == Some("iri"))
         .expect("iri column");
-    assert!(iri_col.get("pg_type").and_then(Value::as_str).is_some());
+    assert!(iri_col.get("column_type").and_then(Value::as_str).is_some());
     assert!(iri_col.get("nullable").and_then(Value::as_bool).is_some());
 }
 

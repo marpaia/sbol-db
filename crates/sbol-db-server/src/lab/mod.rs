@@ -8,9 +8,8 @@
 //! schema introspection for both dialects, document listing, and the
 //! nested observability endpoints. See [`router`] for the full map.
 
-mod cancel;
-mod convert;
 mod graphs;
+mod info;
 mod observability;
 mod overview;
 mod schema;
@@ -30,6 +29,7 @@ use crate::AppState;
 /// before the SPA fallback consumes them.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/info", get(info::handler))
         .route("/overview", get(overview::handler))
         .route("/sql/execute", post(sql::execute))
         .route("/sql/validate", post(sql::validate))

@@ -26,6 +26,35 @@ async function asApiError(res: Response): Promise<ApiError> {
   );
 }
 
+// ---------- Backend info & capabilities ----------
+
+export type BackendKind = "postgres" | "sqlite" | "rocksdb";
+
+export interface Capabilities {
+  /** SQL editor works (postgres, sqlite). */
+  sql_console: boolean;
+  /** Relational tables/columns browser works (postgres, sqlite). */
+  relational_schema: boolean;
+  /** Which maintenance dashboard to render, if any. */
+  maintenance: "relational" | "lsm" | null;
+  /** Slow-query statistics are available (postgres only). */
+  slow_query_stats: boolean;
+  /** Live activity and blocking-lock views are available (postgres only). */
+  activity_and_locks: boolean;
+}
+
+export interface LabInfo {
+  backend: BackendKind;
+  backend_name: string;
+  capabilities: Capabilities;
+}
+
+export async function fetchLabInfo(signal?: AbortSignal): Promise<LabInfo> {
+  const res = await fetch("/lab/api/info", { signal });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as LabInfo;
+}
+
 // ---------- SPARQL ----------
 
 /** Outcome shape returned by `executeSparql`. */
@@ -106,8 +135,8 @@ export function isSparqlAsk(b: SparqlOutcome["body"]): b is SparqlAskResult {
 
 export interface SqlColumn {
   name: string;
-  /** Postgres type name as reported by the server (`TEXT`, `INT4`, …). */
-  pg_type: string;
+  /** Backend type name as reported by the server (`TEXT`, `INT4`, …). */
+  column_type: string;
 }
 
 export type SqlCell = string | number | boolean | null | unknown[] | object;
@@ -124,7 +153,7 @@ export interface SqlExecuteResponse {
   row_count: number;
   truncated: boolean;
   elapsed_ms: number;
-  backend_pid: number;
+  backend_pid: number | null;
 }
 
 export async function executeSql(
@@ -189,7 +218,7 @@ async function validateImpl(
 
 export interface SqlSchemaColumn {
   name: string;
-  pg_type: string;
+  column_type: string;
   nullable: boolean;
 }
 
@@ -473,10 +502,10 @@ export interface DatabaseSize {
   total_bytes: number;
 }
 
-export async function fetchPgDatabase(
+export async function fetchMaintenanceDatabase(
   signal?: AbortSignal
 ): Promise<DatabaseSize> {
-  const res = await fetch("/lab/api/observability/postgres/database", {
+  const res = await fetch("/lab/api/observability/maintenance/database", {
     signal,
   });
   if (!res.ok) throw await asApiError(res);
@@ -495,13 +524,13 @@ export interface TableStats {
   last_analyze: string | null;
 }
 
-export async function fetchPgTables(
+export async function fetchMaintenanceTables(
   limit = 20,
   offset = 0,
   signal?: AbortSignal
 ): Promise<TableStats[]> {
   const res = await fetch(
-    `/lab/api/observability/postgres/tables?limit=${limit}&offset=${offset}`,
+    `/lab/api/observability/maintenance/tables?limit=${limit}&offset=${offset}`,
     { signal }
   );
   if (!res.ok) throw await asApiError(res);
@@ -515,12 +544,12 @@ export interface IndexStats {
   bytes: number;
 }
 
-export async function fetchPgIndexes(
+export async function fetchMaintenanceIndexes(
   limit = 30,
   signal?: AbortSignal
 ): Promise<IndexStats[]> {
   const res = await fetch(
-    `/lab/api/observability/postgres/indexes?limit=${limit}`,
+    `/lab/api/observability/maintenance/indexes?limit=${limit}`,
     { signal }
   );
   if (!res.ok) throw await asApiError(res);
@@ -539,12 +568,12 @@ export interface PgActivity {
   client_addr: string | null;
 }
 
-export async function fetchPgActivity(
+export async function fetchMaintenanceActivity(
   limit = 50,
   signal?: AbortSignal
 ): Promise<PgActivity[]> {
   const res = await fetch(
-    `/lab/api/observability/postgres/activity?limit=${limit}`,
+    `/lab/api/observability/maintenance/activity?limit=${limit}`,
     { signal }
   );
   if (!res.ok) throw await asApiError(res);
@@ -560,10 +589,12 @@ export interface BlockingLock {
   locktype: string | null;
 }
 
-export async function fetchPgLocks(
+export async function fetchMaintenanceLocks(
   signal?: AbortSignal
 ): Promise<BlockingLock[]> {
-  const res = await fetch("/lab/api/observability/postgres/locks", { signal });
+  const res = await fetch("/lab/api/observability/maintenance/locks", {
+    signal,
+  });
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as BlockingLock[];
 }
@@ -579,7 +610,7 @@ export interface SlowQuery {
 
 export interface TableColumn {
   name: string;
-  pg_type: string;
+  column_type: string;
   nullable: boolean;
   default_expr: string | null;
   ordinal: number;
@@ -609,12 +640,14 @@ export interface TableSchema {
   foreign_keys_in: IncomingForeignKey[];
 }
 
-export async function fetchPgTableSchema(
+export async function fetchMaintenanceTableSchema(
   name: string,
   signal?: AbortSignal
 ): Promise<TableSchema> {
   const res = await fetch(
-    `/lab/api/observability/postgres/tables/${encodeURIComponent(name)}/schema`,
+    `/lab/api/observability/maintenance/tables/${encodeURIComponent(
+      name
+    )}/schema`,
     { signal }
   );
   if (!res.ok) throw await asApiError(res);
@@ -625,16 +658,66 @@ export type SlowQueriesResponse =
   | { status: "not_installed"; setup_hint: string }
   | { status: "installed"; rows: SlowQuery[] };
 
-export async function fetchPgSlowQueries(
+export async function fetchMaintenanceSlowQueries(
   limit = 20,
   signal?: AbortSignal
 ): Promise<SlowQueriesResponse> {
   const res = await fetch(
-    `/lab/api/observability/postgres/slow-queries?limit=${limit}`,
+    `/lab/api/observability/maintenance/slow-queries?limit=${limit}`,
     { signal }
   );
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as SlowQueriesResponse;
+}
+
+// ---------- LSM maintenance (RocksDB) ----------
+
+export interface LsmColumnFamily {
+  name: string;
+  num_files: number;
+  size_bytes: number;
+  estimated_keys: number;
+}
+
+export interface LsmLevel {
+  level: number;
+  num_files: number;
+  size_bytes: number;
+}
+
+export interface LsmOverview {
+  total_bytes: number;
+  estimated_keys: number;
+  pending_compaction_bytes: number;
+  running_compactions: number;
+  column_families: LsmColumnFamily[];
+  levels: LsmLevel[];
+}
+
+export async function fetchLsmOverview(
+  signal?: AbortSignal
+): Promise<LsmOverview> {
+  const res = await fetch("/lab/api/observability/maintenance/lsm", { signal });
+  if (!res.ok) throw await asApiError(res);
+  return (await res.json()) as LsmOverview;
+}
+
+/** Trigger a relational optimize (SQLite VACUUM/ANALYZE, Postgres ANALYZE). */
+export async function postOptimize(signal?: AbortSignal): Promise<void> {
+  const res = await fetch("/lab/api/observability/maintenance/optimize", {
+    method: "POST",
+    signal,
+  });
+  if (!res.ok) throw await asApiError(res);
+}
+
+/** Trigger a full RocksDB compaction. */
+export async function postCompact(signal?: AbortSignal): Promise<void> {
+  const res = await fetch("/lab/api/observability/maintenance/compact", {
+    method: "POST",
+    signal,
+  });
+  if (!res.ok) throw await asApiError(res);
 }
 
 export type JobStatus =
@@ -899,7 +982,9 @@ export async function listGraphs(
   if (typeof query.offset === "number") qs.set("offset", String(query.offset));
   if (query.kind) qs.set("kind", query.kind);
   const tail = qs.toString();
-  const res = await fetch(`/lab/api/graphs${tail ? `?${tail}` : ""}`, { signal });
+  const res = await fetch(`/lab/api/graphs${tail ? `?${tail}` : ""}`, {
+    signal,
+  });
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as GraphsPage;
 }
@@ -908,7 +993,9 @@ export async function getGraph(
   id: string,
   signal?: AbortSignal
 ): Promise<GraphSummary> {
-  const res = await fetch(`/lab/api/graphs/${encodeURIComponent(id)}`, { signal });
+  const res = await fetch(`/lab/api/graphs/${encodeURIComponent(id)}`, {
+    signal,
+  });
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as GraphSummary;
 }

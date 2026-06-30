@@ -26,8 +26,11 @@ serde.workspace = true
 
 [dev-dependencies]
 sbol-db-postgres.workspace = true
+sbol-db-sqlite.workspace = true
 sbol.workspace = true
+serde_json.workspace = true
 sqlx.workspace = true
+tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 criterion = { workspace = true }
 

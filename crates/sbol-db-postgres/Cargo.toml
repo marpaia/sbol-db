@@ -11,12 +11,13 @@ description = "Postgres persistence layer for sbol-db."
 sbol-db-core.workspace = true
 sbol-db-storage.workspace = true
 sbol-db-rdf.workspace = true
+sbol-db-derive.workspace = true
 async-trait.workspace = true
 sbol.workspace = true
 sbol-rdf.workspace = true
-sbol-genbank.workspace = true
-sbol-fasta.workspace = true
 sqlx.workspace = true
+pg_query = "6"
+hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
@@ -29,4 +30,5 @@ reqwest.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
 sbol-db-rdf.workspace = true
+sbol-db-conformance.workspace = true
 sbol.workspace = true

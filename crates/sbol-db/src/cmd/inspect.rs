@@ -1,27 +1,28 @@
-//! `sbol-db inspect` — read-only Postgres inspection. Each subcommand
-//! wraps one method on `PgStatsRepository`, or prints the effective
-//! `ServerConfig`. Output is always JSON.
+//! `sbol-db inspect` — read-only database introspection via the backend's
+//! [`DbStats`] capability, or printing the effective `ServerConfig`. Output is
+//! always JSON.
+
+use std::sync::Arc;
 
 use anyhow::Result;
-use sbol_db_postgres::{PgPool, PgStatsRepository};
 use sbol_db_server::ServerConfig;
+use sbol_db_storage::DbStats;
 
 use crate::cli::InspectAction;
 use crate::output::print_json;
 
-pub async fn run(pool: PgPool, action: InspectAction) -> Result<()> {
-    let repo = PgStatsRepository::new(pool);
+pub async fn run(stats: Arc<dyn DbStats>, action: InspectAction) -> Result<()> {
     match action {
         InspectAction::Size => {
-            let size = repo.database_size().await?;
+            let size = stats.database_size().await?;
             print_json(&size)
         }
         InspectAction::Tables { limit, offset } => {
-            let rows = repo.table_stats(limit, offset).await?;
+            let rows = stats.table_stats(limit, offset).await?;
             print_json(&rows)
         }
         InspectAction::Table { name } => {
-            let schema = repo.table_schema(&name).await?;
+            let schema = stats.table_schema(&name).await?;
             match schema {
                 Some(s) => print_json(&s),
                 None => Err(anyhow::anyhow!(
@@ -33,7 +34,7 @@ pub async fn run(pool: PgPool, action: InspectAction) -> Result<()> {
             limit,
             include_idle,
         } => {
-            let rows = repo.activity(limit).await?;
+            let rows = stats.activity(limit).await?;
             let filtered: Vec<_> = if include_idle {
                 rows
             } else {
@@ -44,15 +45,15 @@ pub async fn run(pool: PgPool, action: InspectAction) -> Result<()> {
             print_json(&filtered)
         }
         InspectAction::Locks => {
-            let rows = repo.blocking_locks().await?;
+            let rows = stats.blocking_locks().await?;
             print_json(&rows)
         }
         InspectAction::Indexes { limit } => {
-            let rows = repo.index_stats(limit).await?;
+            let rows = stats.index_stats(limit).await?;
             print_json(&rows)
         }
         InspectAction::SlowQueries { limit } => {
-            if !repo.has_pg_stat_statements().await? {
+            if !stats.has_slow_query_stats().await? {
                 println!(
                     "{}",
                     serde_json::json!({
@@ -63,7 +64,7 @@ pub async fn run(pool: PgPool, action: InspectAction) -> Result<()> {
                 );
                 return Ok(());
             }
-            let rows = repo.slow_queries(limit).await?;
+            let rows = stats.slow_queries(limit).await?;
             print_json(&rows)
         }
         InspectAction::Config => {

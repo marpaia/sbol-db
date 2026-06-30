@@ -1,14 +1,18 @@
 # Postgres schema
 
-`sbol-db` ships nine embedded migrations under
-`crates/sbol-db-postgres/migrations/`. They're applied via
-`sqlx::migrate!` either through the library
-(`sbol_db_postgres::run_migrations`) or the CLI (`sbol-db db migrate`).
+This is the on-disk layout of the Postgres backend, the default of three engines
+that satisfy the backend-neutral `sbol-db-storage` contract. For the contract
+itself and how a backend is selected, see [storage.md](storage.md); for the
+SQLite and RocksDB layouts, see [schema-sqlite.md](schema-sqlite.md) and
+[schema-rocksdb.md](schema-rocksdb.md).
 
-This is the schema of the default Postgres backend specifically: the
-concrete tables that satisfy the backend-neutral `sbol-db-storage`
-contract. Another storage engine satisfies the same contract with its
-own layout.
+Postgres carries surfaces the other two engines do not: the validation-findings
+audit trail, the typed projection tables, and engine introspection. Those are
+documented here and are not part of the neutral contract.
+
+The embedded migrations live under `crates/sbol-db-postgres/migrations/` and are
+applied via `sqlx::migrate!` either through the library
+(`sbol_db_postgres::run_migrations`) or the CLI (`sbol-db db migrate`).
 
 This document is the table-by-table reference; rationale and the
 "why this shape" lives in [`crate-guide.md`](crate-guide.md).
@@ -103,16 +107,19 @@ The RDF triplestore. One row per imported triple.
 | `subject_iri`    | `sbol_iri`    | Mutually exclusive with `subject_blank`.                                                  |
 | `subject_blank`  | `text`        | Blank node identifier (without the `_:` prefix). See [Blank nodes](#blank-nodes).         |
 | `predicate_iri`  | `sbol_iri`    | Required.                                                                                 |
-| `object_iri`     | `sbol_iri`    | Mutually exclusive with `object_blank` and `object_literal`.                              |
+| `object_iri`     | `sbol_iri`    | Mutually exclusive with the other object columns.                                         |
 | `object_blank`   | `text`        | Blank node identifier.                                                                    |
 | `object_literal` | `text`        | Literal lexical form.                                                                     |
+| `object_json`    | `jsonb`       | JSON-valued object (`rdf:JSON` literal), gin-indexed.                                      |
 | `datatype_iri`   | `sbol_iri`    | Populated alongside `object_literal`.                                                     |
 | `language`       | `text`        | BCP-47 language tag for language-tagged literals.                                         |
 | `source`         | `text`        | Provenance tag; `'sbol'` (import), `'graph-store'`, or `'sparql-update'`.                  |
+| `triple_key`     | `text`        | Generated, unique. The set-identity digest. See [Set semantics](#set-semantics).          |
 | `created_at`     | `timestamptz` |                                                                                           |
 
 CHECK constraints enforce "exactly one" of (subject_iri,
-subject_blank) and (object_iri, object_blank, object_literal).
+subject_blank) and (object_iri, object_blank, object_literal,
+object_json).
 
 Indexes:
 
@@ -123,9 +130,28 @@ Indexes:
 - `gspo` `(graph_iri, subject_iri, predicate_iri, object_iri)`.
 - trgm on `object_literal` for fuzzy string search in literal
   positions.
+- gin (`jsonb_path_ops`) on `object_json`.
+- unique on `triple_key` for set-semantics enforcement.
 
 These cover the access shapes the SPARQL pattern scanner emits;
 Postgres picks the right one based on which positions are bound.
+
+### Set semantics
+
+An RDF graph is a set of triples: the same triple asserted twice in a graph is
+one triple. `sbol_triples` enforces this with `triple_key`, a `GENERATED ALWAYS
+AS ... STORED` column carrying an `md5` over a delimited encoding of every RDF
+position (graph, subject, predicate, object in all four forms, datatype,
+language), with a unique index. Re-writing an already-present triple is a no-op.
+
+The digest is an `md5` over the concatenated positions rather than a unique index
+on the columns directly for two reasons: `object_literal` holds SBOL sequence
+literals that can exceed the btree index row-size limit, and several positions
+are nullable (default graph, IRI vs blank node, typed vs language literal). The
+unit-separator delimiter (`chr(31)`) cannot occur in an IRI and is not produced
+by the serializers, so distinct triples cannot collide by concatenation. The
+SQLite and RocksDB backends enforce the same rule with a hash computed in Rust;
+see the [capability matrix](storage.md#capability-matrix).
 
 ### Blank nodes
 
@@ -258,6 +284,30 @@ table yet. It exists so any future async projection target — an
 Oxigraph sidecar, a search index, a materialized view refresher —
 can tail the log deterministically. The partial index
 `WHERE processed_at IS NULL` is the natural cursor for a consumer.
+
+## SynBioHub query accelerator
+
+`20260628000002_accelerator.sql` adds per-graph derived indexes that answer
+SynBioHub's fixed query templates with point lookups and range scans instead of
+full graph-pattern evaluation. The indexes derive from a graph's triples (the
+same derivation every backend shares); a write marks the graph dirty in
+`accel_dirty`, and the next read that needs the indexes rebuilds them in one
+pass.
+
+| Table | Key | What it holds |
+| --- | --- | --- |
+| `accel_dirty` | `graph_iri` | Presence means the graph's indexes are stale. |
+| `accel_object` | `(graph_iri, iri)` | One row per object: `sort_key`, a `top_level` flag, and the projected metadata as a JSON `MetaRecord`. |
+| `accel_type` | `(graph_iri, type_iri, iri)` | One row per `(object, rdf:type)`, for `ByType` enumeration and counts. |
+| `accel_member` | `(graph_iri, collection_iri, member_iri)` | One row per collection membership; `is_root` is the precomputed `FILTER NOT EXISTS` anti-join. |
+| `accel_facet` | `(graph_iri, kind, value)` | Distinct facet values over top-level objects: kind 1 = `rdf:type` (getTypes), 2 = `sbol2:role` (getRoles), 3 = `dc:creator` (getCreators). |
+
+Supporting indexes: `accel_object_toplevel_idx` on
+`(graph_iri, sort_key, iri) WHERE top_level`, `accel_type_scan_idx` on
+`(graph_iri, type_iri, sort_key, iri)`, `accel_member_scan_idx` on
+`(graph_iri, collection_iri, sort_key, member_iri)`. The SQLite and RocksDB
+backends carry the same accelerator in their own idioms. See
+[`synbiohub.md`](synbiohub.md) for the query surface this serves.
 
 ## Conventions
 

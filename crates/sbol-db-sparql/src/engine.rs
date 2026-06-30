@@ -13,14 +13,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use oxrdf::{GraphName, NamedNode};
+use sbol_db_core::DomainError;
 use sbol_db_storage::TripleSource;
-use spareval::{QueryEvaluator, QueryResults};
+use spareval::{QueryEvaluator, QueryResults, QueryableDataset};
 use spargebra::SparqlParser;
 
-use crate::dataset::TripleDataset;
+use crate::dataset::{IdTripleDataset, TripleDataset};
 use crate::error::SparqlError;
 use crate::results::{
-    serialize_boolean, serialize_solutions, serialize_triples, ResultFormat, ResultPayload,
+    serialize_accel_solutions, serialize_boolean, serialize_solutions, serialize_triples,
+    ResultFormat, ResultPayload,
 };
 
 #[derive(Clone, Debug)]
@@ -109,8 +111,8 @@ impl SparqlEngine {
             return Err(SparqlError::QueryTooLarge);
         }
 
-        let query = parse_query_strict(query_str)?;
-        let query_form = classify_query(&query);
+        let parsed = parse_query_strict(query_str)?;
+        let query_form = classify_query(&parsed);
         let format = requested_format.unwrap_or_else(|| query_form.default_format());
         if !query_form.allows(format) {
             return Err(SparqlError::UnsupportedFormat(format!(
@@ -118,12 +120,44 @@ impl SparqlEngine {
             )));
         }
 
-        let dataset = TripleDataset::new(Arc::clone(&self.source));
+        // SynBioHub query accelerator: if the query matches a known template and
+        // the backend can answer it from its purpose-built indexes, serve it
+        // directly. This runs on the original parse, before the NOT EXISTS->MINUS
+        // rewrite, so the recognizer still sees the template's shape. Anything not
+        // recognized, not supported, or failing falls through to generic
+        // evaluation, so results never depend on this path.
+        if format.is_solution_format() {
+            if let Some(plan) = crate::accel::recognize(&parsed, options.default_graph.as_deref()) {
+                let source = Arc::clone(&self.source);
+                let accel =
+                    tokio::task::spawn_blocking(move || source.run_accelerated(&plan)).await;
+                if let Ok(Ok(Some(solutions))) = accel {
+                    let payload = serialize_accel_solutions(solutions, format, options.max_rows)?;
+                    return Ok(SparqlOutcome {
+                        payload,
+                        query_form,
+                    });
+                }
+            }
+        }
+
+        let query = crate::rewrite::optimize(parsed);
+
+        let source = Arc::clone(&self.source);
+        let use_ids = source.supports_id_scan();
         let max_rows = options.max_rows;
         let default_graph = options.default_graph.clone();
 
+        // An id-native backend joins on term ids and materializes terms only at
+        // the edges; otherwise fall back to the term-materializing dataset.
         let blocking = tokio::task::spawn_blocking(move || {
-            evaluate_blocking(query, dataset, format, max_rows, default_graph)
+            if use_ids {
+                let dataset = IdTripleDataset::new(source);
+                evaluate_blocking(query, &dataset, format, max_rows, default_graph)
+            } else {
+                let dataset = TripleDataset::new(source);
+                evaluate_blocking(query, &dataset, format, max_rows, default_graph)
+            }
         });
 
         let payload = match tokio::time::timeout(options.timeout, blocking).await {
@@ -190,13 +224,16 @@ fn classify_query(query: &spargebra::Query) -> QueryForm {
     }
 }
 
-fn evaluate_blocking(
+fn evaluate_blocking<'a, D>(
     query: spargebra::Query,
-    dataset: TripleDataset,
+    dataset: &'a D,
     format: ResultFormat,
     max_rows: usize,
     default_graph: Option<String>,
-) -> Result<ResultPayload, SparqlError> {
+) -> Result<ResultPayload, SparqlError>
+where
+    &'a D: QueryableDataset<'a, Error = DomainError>,
+{
     let evaluator = QueryEvaluator::new();
     let mut prepared = evaluator.prepare(&query);
     // Dataset selection precedence:
@@ -216,7 +253,7 @@ fn evaluate_blocking(
         }
     }
     let results = prepared
-        .execute(&dataset)
+        .execute(dataset)
         .map_err(|e| SparqlError::Evaluation(e.to_string()))?;
     match results {
         QueryResults::Solutions(iter) => serialize_solutions(iter, format, max_rows),

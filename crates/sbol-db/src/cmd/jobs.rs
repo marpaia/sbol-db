@@ -1,15 +1,16 @@
 //! `sbol-db jobs` — operator surface for the async job queue.
 
+use std::sync::Arc;
+
 use anyhow::{anyhow, Context, Result};
 use sbol_db_core::JobId;
 use sbol_db_jobs::default_registry;
-use sbol_db_postgres::{JobRepository, PgPool};
-use sbol_db_storage::{EnqueueOutcome, JobStatus, ListJobsFilter, NewJob};
+use sbol_db_storage::{EnqueueOutcome, JobQueue, JobStatus, ListJobsFilter, NewJob};
 
 use crate::cli::JobsAction;
 use crate::output::print_json;
 
-pub async fn run(pool: PgPool, action: JobsAction) -> Result<()> {
+pub async fn run(jobs: Arc<dyn JobQueue>, action: JobsAction) -> Result<()> {
     match action {
         JobsAction::Enqueue {
             kind,
@@ -20,8 +21,7 @@ pub async fn run(pool: PgPool, action: JobsAction) -> Result<()> {
             idempotency_key,
         } => {
             let payload = read_payload(&payload)?;
-            let repo = JobRepository::new(pool);
-            let outcome = repo
+            let outcome = jobs
                 .enqueue(NewJob {
                     kind,
                     payload,
@@ -44,8 +44,7 @@ pub async fn run(pool: PgPool, action: JobsAction) -> Result<()> {
             }))
         }
         JobsAction::Status { id } => {
-            let repo = JobRepository::new(pool);
-            let job = repo
+            let job = jobs
                 .get(JobId(id))
                 .await?
                 .ok_or_else(|| anyhow!("no job with id {id}"))?;
@@ -61,8 +60,7 @@ pub async fn run(pool: PgPool, action: JobsAction) -> Result<()> {
                 None => None,
                 Some(s) => Some(parse_cli_job_status(s)?),
             };
-            let repo = JobRepository::new(pool);
-            let jobs = repo
+            let rows = jobs
                 .list(&ListJobsFilter {
                     kind,
                     status,
@@ -72,24 +70,21 @@ pub async fn run(pool: PgPool, action: JobsAction) -> Result<()> {
                     limit,
                 })
                 .await?;
-            print_json(&jobs)
+            print_json(&rows)
         }
         JobsAction::Cancel { id } => {
-            let repo = JobRepository::new(pool);
-            let cancelled = repo.cancel(JobId(id)).await?;
+            let cancelled = jobs.cancel(JobId(id)).await?;
             print_json(&serde_json::json!({ "cancelled": cancelled }))
         }
         JobsAction::Attempts { id } => {
-            let repo = JobRepository::new(pool);
-            let attempts = repo.list_attempts(JobId(id)).await?;
+            let attempts = jobs.list_attempts(JobId(id)).await?;
             print_json(&attempts)
         }
         JobsAction::Replay {
             id,
             keep_idempotency_key,
         } => {
-            let repo = JobRepository::new(pool);
-            let original = repo
+            let original = jobs
                 .get(JobId(id))
                 .await?
                 .ok_or_else(|| anyhow!("no job with id {id}"))?;
@@ -102,7 +97,7 @@ pub async fn run(pool: PgPool, action: JobsAction) -> Result<()> {
                     original.kind
                 ));
             }
-            let outcome = repo
+            let outcome = jobs
                 .enqueue(NewJob {
                     kind: original.kind.clone(),
                     payload: original.payload.clone(),
@@ -130,8 +125,7 @@ pub async fn run(pool: PgPool, action: JobsAction) -> Result<()> {
             }))
         }
         JobsAction::QueueDepth => {
-            let repo = JobRepository::new(pool);
-            let rows = repo.queue_depth_snapshot().await?;
+            let rows = jobs.queue_depth_snapshot().await?;
             let payload: Vec<serde_json::Value> = rows
                 .into_iter()
                 .map(|r| {
@@ -145,8 +139,7 @@ pub async fn run(pool: PgPool, action: JobsAction) -> Result<()> {
             print_json(&payload)
         }
         JobsAction::QueueAge => {
-            let repo = JobRepository::new(pool);
-            let rows = repo.oldest_queued_age().await?;
+            let rows = jobs.oldest_queued_age().await?;
             let payload: Vec<serde_json::Value> = rows
                 .into_iter()
                 .map(|r| {

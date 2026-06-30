@@ -5,28 +5,54 @@
 //! (`sbol-db-postgres`) implements this contract; the types here never name a
 //! concrete database.
 
+mod accel;
+mod capabilities;
 mod graph;
 mod import;
 mod job;
+mod lab;
+mod lsm;
+mod migrate;
 mod object;
 mod ontology;
 mod sequence;
+mod sql_console;
+mod stats;
 mod traits;
 mod triple;
 mod update;
 
+pub use accel::{
+    build_accel_index, generate_metadata_rows, generate_rows, integer, AccelIndex, AccelObject,
+    AccelSolutions, AcceleratedQuery, FacetKind, Field, LitVal, MetaRecord, Scope, BIOPAX_PREFIX,
+    SO_PREFIX,
+};
+pub use capabilities::{BackendKind, Capabilities, MaintenanceStyle};
 pub use graph::ListGraphsFilter;
 pub use import::{GraphWriteMode, ImportInput};
 pub use job::{
     EnqueueOutcome, JobAttempt, JobLogRecord, JobStatus, ListJobsFilter, NewJob, OldestQueuedAge,
     QueueDepthRow, SbolJob, DEFAULT_QUEUE,
 };
+pub use lab::{ClassCount, CorpusCounts, GraphOverview, GraphTriplesPage, LabStore};
+pub use lsm::{ColumnFamilyStats, LevelStats, LsmOverview, LsmStats};
+pub use migrate::{MigrationEntry, Migrator};
 pub use object::ListObjectsFilter;
 pub use ontology::{OntologyLoadReport, OntologyRecord, OntologyTermRecord};
 pub use sequence::{BatchSequenceMatch, SequenceMatch, SequenceSearchOptions};
+pub use sql_console::{
+    SqlConsole, SqlConsoleColumn, SqlExecuteRequest, SqlExecuteResult, SqlValidateError,
+};
+pub use stats::{
+    Activity, BlockingLock, DatabaseSize, DbStats, IncomingForeignKey, IndexStats,
+    OutgoingForeignKey, RelationalColumn, RelationalSchema, RelationalTable, SlowQuery,
+    TableColumn, TableSchema, TableStats,
+};
 pub use traits::{
     GraphStore, JobQueue, NeighborhoodStore, ObjectStore, OntologyStore, SbolStore,
     SequenceSearchStore, TripleSource, TripleWriter,
 };
-pub use triple::{GraphFilter, PatternObject, PatternSubject};
+pub use triple::{
+    GraphFilter, IdGraphFilter, IdQuad, PatternObject, PatternSubject, TermId, TermKey, TermValue,
+};
 pub use update::{TripleChange, UpdateOutcome};

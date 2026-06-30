@@ -16,13 +16,16 @@ impl TripleRepository {
         Self { pool }
     }
 
-    /// Append a batch of triples in one `UNNEST`-backed round-trip, without
-    /// deleting anything first. This is the verbatim-RDF write primitive
-    /// (Graph Store CRUD `POST`, SPARQL `INSERT`, and SBOL document import):
-    /// triples are stored exactly as given, tagged with `source` (e.g.
-    /// `"graph-store"`, `"sparql-update"`, `"sbol"`). Each triple's `graph_iri`
-    /// is its owner (the graph row must already exist; see
-    /// [`Self::ensure_graph`]). Returns the inserted count.
+    /// Write a batch of triples in one `UNNEST`-backed round-trip. This is the
+    /// RDF write primitive (Graph Store CRUD `POST`, SPARQL `INSERT`, and SBOL
+    /// document import), tagged with `source` (e.g. `"graph-store"`,
+    /// `"sparql-update"`, `"sbol"`). Each triple's `graph_iri` is its owner (the
+    /// graph row must already exist; see [`Self::ensure_graph`]).
+    ///
+    /// A graph is a set of triples, so a triple already present in its graph is
+    /// not stored again: the `sbol_triples` identity index makes the write a
+    /// no-op via `ON CONFLICT DO NOTHING`, including duplicates within this same
+    /// batch. Returns the count of triples actually inserted (new to the graph).
     pub async fn insert_triples(
         &self,
         conn: &mut sqlx::PgConnection,
@@ -80,6 +83,7 @@ impl TripleRepository {
                 datatype_iri,
                 language
             )
+            ON CONFLICT DO NOTHING
             "#,
         )
         .bind(&cols.graph_iri)

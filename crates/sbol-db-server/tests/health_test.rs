@@ -26,20 +26,27 @@ async fn state() -> AppState {
         service.triple_writer(),
     ));
     let jobs = Arc::new(JobRepository::new(pool.clone()));
-    let pg_pool = pool.clone();
-    let metrics = Metrics::install(pool.clone(), env!("CARGO_PKG_VERSION"));
+    let pool_console = pool.clone();
+    let pool_stats = pool.clone();
+    let metrics = Metrics::install(Some(pool.clone()), env!("CARGO_PKG_VERSION"));
     // Wire the worker pool + jobs repo so the /metrics test sees the
     // scrape-time gauges. In a serve setup these come from
     // `build_worker_setup`; for the test we reuse the same pool.
     let metrics = metrics.with_worker_pool(pool).with_jobs_repo(jobs.clone());
     AppState {
+        lab: service.clone(),
         service,
         sparql,
         sparql_update,
         metrics,
         jobs,
         config: ServerConfig::default(),
-        pg_pool,
+        backend_kind: sbol_db_server::BackendKind::Postgres,
+        sql_console: Some(Arc::new(sbol_db_postgres::PgSqlConsole::new(pool_console))),
+        db_stats: Some(Arc::new(sbol_db_postgres::PgStatsRepository::new(
+            pool_stats,
+        ))),
+        lsm_stats: None,
         schema_cache: std::sync::Arc::new(sbol_db_server::SchemaCache::new()),
     }
 }

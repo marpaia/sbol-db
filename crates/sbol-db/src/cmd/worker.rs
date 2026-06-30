@@ -17,6 +17,7 @@ pub async fn run(
     let cancel = CancellationToken::new();
     let setup = build_worker_setup(
         database_url,
+        None,
         concurrency,
         queues.as_deref(),
         worker_id.as_deref(),

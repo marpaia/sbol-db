@@ -18,7 +18,6 @@ use axum::extract::State;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use sqlx::Row;
 
 use crate::error::ApiError;
 use crate::AppState;
@@ -71,100 +70,44 @@ pub async fn handler(State(state): State<AppState>) -> Result<Json<Arc<Overview>
         return Ok(Json(hit));
     }
     let started = Instant::now();
-    let pool = &state.pg_pool;
 
-    // Run the count queries in a single statement so we pay one round
-    // trip + one parse plan, not six. SELECT-from-no-table is cheap
-    // and the per-table `count(*)` is index-only on the primary key.
-    let counts_row = sqlx::query::<sqlx::Postgres>(
-        r#"
-        SELECT
-          (SELECT count(*) FROM sbol_objects)         AS objects,
-          (SELECT count(*) FROM sbol_graphs)          AS graphs,
-          (SELECT count(*) FROM sbol_triples)           AS triples,
-          (SELECT count(*) FROM sbol_sequences)       AS sequences,
-          (SELECT count(*) FROM sbol_validation_runs) AS validation_runs,
-          (SELECT count(*) FROM sbol_ontologies)      AS ontologies
-        "#,
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(db)?;
-
+    let c = state.lab.corpus_counts().await?;
     let counts = Counts {
-        objects: counts_row.try_get("objects").map_err(db)?,
-        graphs: counts_row.try_get("graphs").map_err(db)?,
-        triples: counts_row.try_get("triples").map_err(db)?,
-        sequences: counts_row.try_get("sequences").map_err(db)?,
-        validation_runs: counts_row.try_get("validation_runs").map_err(db)?,
-        ontologies: counts_row.try_get("ontologies").map_err(db)?,
+        objects: c.objects,
+        graphs: c.graphs,
+        triples: c.triples,
+        sequences: c.sequences,
+        validation_runs: c.validation_runs,
+        ontologies: c.ontologies,
     };
 
-    let recent_rows = sqlx::query::<sqlx::Postgres>(
-        r#"
-        SELECT
-          g.id,
-          g.iri,
-          g.kind,
-          g.name,
-          g.source_uri,
-          g.serialization_format,
-          g.created_at,
-          coalesce(o.n, 0) AS object_count
-        FROM sbol_graphs g
-        LEFT JOIN (
-          SELECT graph_id, count(*) AS n
-          FROM sbol_objects
-          WHERE graph_id IS NOT NULL
-          GROUP BY graph_id
-        ) o ON o.graph_id = g.id
-        ORDER BY g.created_at DESC
-        LIMIT 5
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(db)?;
-
-    let recent_graphs = recent_rows
+    let recent_graphs = state
+        .lab
+        .recent_graphs(5)
+        .await?
         .into_iter()
-        .map(|row| {
-            Ok::<_, ApiError>(RecentGraph {
-                id: row.try_get("id").map_err(db)?,
-                iri: row.try_get("iri").map_err(db)?,
-                kind: row.try_get("kind").map_err(db)?,
-                name: row.try_get("name").map_err(db)?,
-                source_uri: row.try_get("source_uri").map_err(db)?,
-                serialization_format: row.try_get("serialization_format").map_err(db)?,
-                created_at: row.try_get("created_at").map_err(db)?,
-                object_count: row.try_get("object_count").map_err(db)?,
-            })
+        .map(|g| RecentGraph {
+            id: g.id.0,
+            iri: g.iri,
+            kind: g.kind,
+            name: g.name,
+            source_uri: g.source_uri,
+            serialization_format: g.serialization_format,
+            created_at: g.created_at,
+            object_count: g.object_count,
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect();
 
-    let top_rows = sqlx::query::<sqlx::Postgres>(
-        r#"
-        SELECT sbol_class, count(*) AS n
-        FROM sbol_objects
-        WHERE sbol_class IS NOT NULL
-        GROUP BY sbol_class
-        ORDER BY n DESC
-        LIMIT 10
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(db)?;
-
-    let top_classes = top_rows
+    let top_classes = state
+        .lab
+        .top_classes(10)
+        .await?
         .into_iter()
-        .map(|row| {
-            Ok::<_, ApiError>(TopClass {
-                iri: row.try_get("sbol_class").map_err(db)?,
-                count: row.try_get("n").map_err(db)?,
-            })
+        .map(|c| TopClass {
+            iri: c.iri,
+            count: c.count,
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect();
 
     let loaded_ontologies = state
         .service
@@ -191,8 +134,4 @@ pub async fn handler(State(state): State<AppState>) -> Result<Json<Arc<Overview>
         "lab overview computed"
     );
     Ok(Json(arc))
-}
-
-fn db(e: sqlx::Error) -> ApiError {
-    ApiError::Domain(sbol_db_core::DomainError::Database(e.to_string()))
 }

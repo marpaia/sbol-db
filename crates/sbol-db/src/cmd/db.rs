@@ -1,21 +1,28 @@
 //! `sbol-db db` — migrations and composite health check.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use sbol_db_jobs::default_registry;
-use sbol_db_postgres::{JobRepository, PgPool, SbolObjectService};
+use sbol_db_storage::{JobQueue, Migrator, SbolStore};
 use serde::Serialize;
 
 use crate::cli::DbAction;
 
-pub async fn run(pool: PgPool, action: DbAction) -> Result<()> {
+pub async fn run(
+    migrator: Arc<dyn Migrator>,
+    store: Arc<dyn SbolStore>,
+    jobs: Arc<dyn JobQueue>,
+    action: DbAction,
+) -> Result<()> {
     match action {
         DbAction::Migrate => {
-            sbol_db_postgres::run_migrations(&pool).await?;
+            migrator.run_migrations().await?;
             println!("migrations applied");
             Ok(())
         }
         DbAction::MigrateStatus => {
-            let entries = sbol_db_postgres::pool::migration_status(&pool).await?;
+            let entries = migrator.migration_status().await?;
             for entry in entries {
                 let marker = if entry.applied { "[x]" } else { "[ ]" };
                 println!("{marker} {} {}", entry.version, entry.description);
@@ -26,7 +33,17 @@ pub async fn run(pool: PgPool, action: DbAction) -> Result<()> {
             json,
             require_ontologies,
             max_queued_age_secs,
-        } => doctor(pool, json, require_ontologies, max_queued_age_secs).await,
+        } => {
+            doctor(
+                migrator,
+                store,
+                jobs,
+                json,
+                require_ontologies,
+                max_queued_age_secs,
+            )
+            .await
+        }
     }
 }
 
@@ -44,7 +61,9 @@ struct Report {
 }
 
 async fn doctor(
-    pool: PgPool,
+    migrator: Arc<dyn Migrator>,
+    store: Arc<dyn SbolStore>,
+    jobs: Arc<dyn JobQueue>,
     json: bool,
     require_ontologies: String,
     max_queued_age_secs: i64,
@@ -54,24 +73,21 @@ async fn doctor(
         checks: Vec::new(),
     };
 
-    // 1. DB connectivity: a trivial SELECT so we never claim healthy on a stale pool.
-    let connect_ok = sqlx::query_scalar::<_, i32>("SELECT 1")
-        .fetch_one(&pool)
-        .await
-        .is_ok();
+    // 1. Store connectivity: a liveness probe so we never claim healthy on a stale handle.
+    let connect_ok = store.ping().await.is_ok();
     push(
         &mut report,
         "database",
         connect_ok,
         if connect_ok {
-            "SELECT 1 succeeded".to_owned()
+            "ping succeeded".to_owned()
         } else {
-            "SELECT 1 failed".to_owned()
+            "ping failed".to_owned()
         },
     );
 
     // 2. Migrations: every entry must be applied.
-    match sbol_db_postgres::pool::migration_status(&pool).await {
+    match migrator.migration_status().await {
         Ok(entries) => {
             let pending: Vec<String> = entries
                 .iter()
@@ -108,7 +124,6 @@ async fn doctor(
     push(&mut report, "worker_registry", ok, detail);
 
     // 4. Queue health.
-    let jobs = JobRepository::new(pool.clone());
     let budget = max_queued_age_secs as f64;
     match jobs.oldest_queued_age().await {
         Ok(ages) => {
@@ -147,8 +162,7 @@ async fn doctor(
         .filter(|s| !s.is_empty())
         .collect();
     if !want.is_empty() {
-        let service = SbolObjectService::new(pool.clone());
-        match service.ontology().list_ontologies().await {
+        match store.list_ontologies().await {
             Ok(rows) => {
                 let have: std::collections::HashSet<String> =
                     rows.iter().map(|r| r.prefix.to_ascii_uppercase()).collect();

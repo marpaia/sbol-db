@@ -41,26 +41,3 @@ impl ValidateResp {
         }
     }
 }
-
-/// Translate a byte offset into a 1-indexed (line, column) pair against
-/// the original query string. Handles UTF-8 cleanly — the position
-/// counts characters past the last newline, not bytes, so multi-byte
-/// codepoints don't push columns out of register with the editor.
-pub fn offset_to_line_col(source: &str, byte_offset: usize) -> (u32, u32) {
-    let mut line: u32 = 1;
-    let mut col: u32 = 1;
-    let mut consumed_bytes = 0usize;
-    for ch in source.chars() {
-        if consumed_bytes >= byte_offset {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-        consumed_bytes += ch.len_utf8();
-    }
-    (line, col)
-}

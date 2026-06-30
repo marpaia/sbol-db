@@ -731,57 +731,75 @@
         }
       }
     },
-    "/lab/api/observability/postgres/database": {
+    "/lab/api/info": {
       "get": {
-        "tags": ["Lab Observability"],
-        "summary": "Total + per-schema database size",
-        "operationId": "labObsPgDatabase",
+        "tags": ["Lab"],
+        "summary": "Active backend and its capabilities",
+        "description": "Reports the running engine (`postgres`/`sqlite`/`rocksdb`), its display name, and capability flags (sql_console, relational_schema, maintenance, slow_query_stats, activity_and_locks). The lab UI fetches this once and gates features on it.",
+        "operationId": "labInfo",
         "responses": {
           "200": {
-            "description": "Total bytes for the current database plus top-10 schemas.",
+            "description": "Backend identity and capability flags.",
             "content": { "application/json": { "schema": { "type": "object" } } }
           }
         }
       }
     },
-    "/lab/api/observability/postgres/tables": {
+    "/lab/api/observability/maintenance/database": {
       "get": {
         "tags": ["Lab Observability"],
-        "summary": "Top tables by total relation size",
-        "operationId": "labObsPgTables",
+        "summary": "Total database size",
+        "description": "Relational engines only (Postgres, SQLite). 501 on a key-value backend.",
+        "operationId": "labMaintDatabase",
+        "responses": {
+          "200": {
+            "description": "Total bytes for the database.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/lab/api/observability/maintenance/tables": {
+      "get": {
+        "tags": ["Lab Observability"],
+        "summary": "Top tables by size",
+        "description": "Relational engines only (Postgres, SQLite). 501 on a key-value backend.",
+        "operationId": "labMaintTables",
         "parameters": [
           { "name": "limit",  "in": "query", "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 200 } },
           { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0,  "minimum": 0 } }
         ],
         "responses": {
           "200": {
-            "description": "Per-table stats joined from pg_stat_user_tables + pg_total_relation_size.",
+            "description": "Per-table stats (rows, total and index bytes, and on Postgres dead-tuple and vacuum metadata).",
             "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
           }
         }
       }
     },
-    "/lab/api/observability/postgres/indexes": {
+    "/lab/api/observability/maintenance/indexes": {
       "get": {
         "tags": ["Lab Observability"],
-        "summary": "Top indexes by on-disk size (with idx_scan)",
-        "operationId": "labObsPgIndexes",
+        "summary": "Top indexes by on-disk size",
+        "description": "Relational engines only (Postgres, SQLite). 501 on a key-value backend.",
+        "operationId": "labMaintIndexes",
         "parameters": [
           { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 30, "minimum": 1, "maximum": 200 } }
         ],
         "responses": {
           "200": {
-            "description": "Index stats with idx_scan = 0 entries flagged for review.",
+            "description": "Index stats; idx_scan is reported on Postgres.",
             "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
           }
         }
       }
     },
-    "/lab/api/observability/postgres/activity": {
+    "/lab/api/observability/maintenance/activity": {
       "get": {
         "tags": ["Lab Observability"],
-        "summary": "Live activity from pg_stat_activity",
-        "operationId": "labObsPgActivity",
+        "summary": "Live sessions",
+        "description": "Postgres only (from pg_stat_activity). Empty on other backends.",
+        "operationId": "labMaintActivity",
         "parameters": [
           { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50, "minimum": 1, "maximum": 200 } }
         ],
@@ -793,25 +811,26 @@
         }
       }
     },
-    "/lab/api/observability/postgres/locks": {
+    "/lab/api/observability/maintenance/locks": {
       "get": {
         "tags": ["Lab Observability"],
-        "summary": "Blocker → blocked pairs from pg_locks",
-        "operationId": "labObsPgLocks",
+        "summary": "Blocking lock pairs",
+        "description": "Postgres only (from pg_locks). Empty on other backends.",
+        "operationId": "labMaintLocks",
         "responses": {
           "200": {
-            "description": "Blocking lock pairs (read-only — no terminate action in v1).",
+            "description": "Blocker to blocked pairs (read-only).",
             "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
           }
         }
       }
     },
-    "/lab/api/observability/postgres/tables/{name}/schema": {
+    "/lab/api/observability/maintenance/tables/{name}/schema": {
       "get": {
         "tags": ["Lab Observability"],
         "summary": "Schema introspection for a single table",
-        "description": "Columns (with type, nullability, default, comment, primary-key flag) plus outgoing and incoming foreign-key references. Always reads from the `public` schema; sbol-db doesn't expose Postgres schemas as a domain concept. Returns 404 when the relation does not exist.",
-        "operationId": "labObsPgTableSchema",
+        "description": "Columns (name, column_type, nullability, default, comment, primary-key flag) plus outgoing and incoming foreign-key references. Relational engines only. Returns 404 when the relation does not exist.",
+        "operationId": "labMaintTableSchema",
         "parameters": [
           { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }
         ],
@@ -824,18 +843,60 @@
         }
       }
     },
-    "/lab/api/observability/postgres/slow-queries": {
+    "/lab/api/observability/maintenance/slow-queries": {
       "get": {
         "tags": ["Lab Observability"],
-        "summary": "Top slow queries from pg_stat_statements (if installed)",
+        "summary": "Top slow queries (Postgres, if pg_stat_statements is installed)",
         "description": "Returns `{ status: \"not_installed\", setup_hint }` when the extension isn't present; otherwise `{ status: \"installed\", rows }`.",
-        "operationId": "labObsPgSlowQueries",
+        "operationId": "labMaintSlowQueries",
         "parameters": [
           { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 100 } }
         ],
         "responses": {
           "200": {
             "description": "Tagged union: not_installed vs installed.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/lab/api/observability/maintenance/optimize": {
+      "post": {
+        "tags": ["Lab Observability"],
+        "summary": "Run routine optimize maintenance",
+        "description": "Refreshes planner statistics and reclaims space (SQLite VACUUM/ANALYZE, Postgres ANALYZE). Relational engines only.",
+        "operationId": "labMaintOptimize",
+        "responses": {
+          "200": {
+            "description": "`{ ok: true }` when the maintenance ran.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/lab/api/observability/maintenance/lsm": {
+      "get": {
+        "tags": ["Lab Observability"],
+        "summary": "LSM engine internals",
+        "description": "RocksDB only. Total size, estimated keys, pending compaction bytes, running compactions, and per-column-family and per-level breakdowns. 501 on other backends.",
+        "operationId": "labMaintLsm",
+        "responses": {
+          "200": {
+            "description": "Column families, levels, and compaction state.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/lab/api/observability/maintenance/compact": {
+      "post": {
+        "tags": ["Lab Observability"],
+        "summary": "Trigger a full manual compaction",
+        "description": "RocksDB only. Compacts every column family; can be slow on a large store. 501 on other backends.",
+        "operationId": "labMaintCompact",
+        "responses": {
+          "200": {
+            "description": "`{ ok: true }` when compaction completed.",
             "content": { "application/json": { "schema": { "type": "object" } } }
           }
         }

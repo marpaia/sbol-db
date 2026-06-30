@@ -13,12 +13,14 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(version, about = "sbol-db CLI", long_about = None)]
 pub struct Cli {
-    /// Postgres connection string.
+    /// Storage backend connection string. The scheme selects the backend:
+    /// `postgres://`, `sqlite://`, or `rocksdb://`. With `--backend` set, a
+    /// bare path (no scheme) is also accepted.
     #[arg(
         long,
         env = "DATABASE_URL",
@@ -26,8 +28,43 @@ pub struct Cli {
     )]
     pub database_url: String,
 
+    /// Storage backend. When omitted it is inferred from `--database-url`'s
+    /// scheme. When set, it must agree with that scheme (or the URL may be a
+    /// bare path, which this scheme then completes).
+    #[arg(long, value_enum, env = "SBOL_DB_BACKEND")]
+    pub backend: Option<BackendKind>,
+
     #[command(subcommand)]
     pub command: Command,
+}
+
+/// The storage backend selectors accepted by `--backend` / `SBOL_DB_BACKEND`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum BackendKind {
+    Postgres,
+    Sqlite,
+    Rocksdb,
+}
+
+impl BackendKind {
+    /// The canonical connection-string scheme for this backend.
+    pub fn scheme(self) -> &'static str {
+        match self {
+            BackendKind::Postgres => "postgres",
+            BackendKind::Sqlite => "sqlite",
+            BackendKind::Rocksdb => "rocksdb",
+        }
+    }
+
+    /// Whether a connection-string scheme belongs to this backend (Postgres
+    /// answers to both `postgres` and `postgresql`).
+    pub fn accepts_scheme(self, scheme: &str) -> bool {
+        match self {
+            BackendKind::Postgres => scheme == "postgres" || scheme == "postgresql",
+            BackendKind::Sqlite => scheme == "sqlite",
+            BackendKind::Rocksdb => scheme == "rocksdb",
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]

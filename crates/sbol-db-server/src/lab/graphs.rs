@@ -12,8 +12,8 @@
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use chrono::{DateTime, Utc};
+use sbol_db_core::{GraphId, ObjectTerm, SubjectTerm, Triple};
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 use uuid::Uuid;
 
 use crate::error::ApiError;
@@ -128,57 +128,16 @@ pub async fn list_graphs(
 ) -> Result<Json<ListResponse>, ApiError> {
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
-    let pool = &state.pg_pool;
+    let kind = q.kind.as_deref();
 
-    let total: i64 = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM sbol_graphs WHERE ($1::text IS NULL OR kind = $1)",
-    )
-    .bind(q.kind.as_deref())
-    .fetch_one(pool)
-    .await
-    .map_err(db)?;
-
-    let rows = sqlx::query(
-        r#"
-        SELECT
-          g.id,
-          g.iri,
-          g.kind,
-          g.name,
-          g.serialization_format,
-          g.source_uri,
-          g.created_at,
-          coalesce(o.n, 0) AS object_count,
-          coalesce(q.n, 0) AS triple_count
-        FROM sbol_graphs g
-        LEFT JOIN (
-          SELECT graph_id, count(*) AS n
-          FROM sbol_objects
-          WHERE graph_id IS NOT NULL
-          GROUP BY graph_id
-        ) o ON o.graph_id = g.id
-        LEFT JOIN (
-          SELECT graph_iri, count(*) AS n
-          FROM sbol_triples
-          WHERE graph_iri IS NOT NULL
-          GROUP BY graph_iri
-        ) q ON q.graph_iri = g.iri
-        WHERE ($1::text IS NULL OR g.kind = $1)
-        ORDER BY g.created_at DESC
-        LIMIT $2 OFFSET $3
-        "#,
-    )
-    .bind(q.kind.as_deref())
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await
-    .map_err(db)?;
-
-    let graphs = rows
+    let total = state.lab.count_graphs(kind).await?;
+    let graphs = state
+        .lab
+        .list_graph_overviews(kind, limit, offset)
+        .await?
         .into_iter()
-        .map(row_to_summary)
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(overview_to_summary)
+        .collect();
 
     Ok(Json(ListResponse {
         total,
@@ -192,31 +151,9 @@ pub async fn get_graph_detail(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<GraphSummary>, ApiError> {
-    let pool = &state.pg_pool;
-    let row = sqlx::query(
-        r#"
-        SELECT
-          g.id,
-          g.iri,
-          g.kind,
-          g.name,
-          g.serialization_format,
-          g.source_uri,
-          g.created_at,
-          (SELECT count(*) FROM sbol_objects WHERE graph_id = g.id) AS object_count,
-          (SELECT count(*) FROM sbol_triples   WHERE graph_iri = g.iri) AS triple_count
-        FROM sbol_graphs g
-        WHERE g.id = $1
-        "#,
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .map_err(db)?;
-
-    match row {
+    match state.lab.get_graph_overview(GraphId(id)).await? {
+        Some(g) => Ok(Json(overview_to_summary(g))),
         None => Err(ApiError::NotFound(format!("graph {id}"))),
-        Some(row) => Ok(Json(row_to_summary(row)?)),
     }
 }
 
@@ -233,96 +170,52 @@ pub async fn get_graph_triples(
         .unwrap_or(DEFAULT_TRIPLE_LIMIT)
         .clamp(1, MAX_TRIPLE_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
-    let pool = &state.pg_pool;
 
-    let iri: Option<String> =
-        sqlx::query_scalar::<_, String>("SELECT iri FROM sbol_graphs WHERE id = $1")
-            .bind(id)
-            .fetch_optional(pool)
-            .await
-            .map_err(db)?;
-    let iri = iri.ok_or_else(|| ApiError::NotFound(format!("graph {id}")))?;
-
-    let total: i64 =
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sbol_triples WHERE graph_iri = $1")
-            .bind(&iri)
-            .fetch_one(pool)
-            .await
-            .map_err(db)?;
-
-    let rows = sqlx::query(
-        r#"
-        SELECT subject_iri, subject_blank, predicate_iri,
-               object_iri, object_blank, object_literal, datatype_iri, language
-        FROM sbol_triples
-        WHERE graph_iri = $1
-        ORDER BY subject_iri NULLS LAST, subject_blank NULLS LAST, predicate_iri, id
-        LIMIT $2 OFFSET $3
-        "#,
-    )
-    .bind(&iri)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await
-    .map_err(db)?;
-
-    let triples = rows
-        .into_iter()
-        .map(row_to_triple_row)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(Json(TriplesResponse {
-        total,
-        limit,
-        offset,
-        triples,
-    }))
+    match state.lab.graph_triples(GraphId(id), limit, offset).await? {
+        None => Err(ApiError::NotFound(format!("graph {id}"))),
+        Some(page) => {
+            let triples = page.triples.into_iter().map(triple_to_row).collect();
+            Ok(Json(TriplesResponse {
+                total: page.total,
+                limit,
+                offset,
+                triples,
+            }))
+        }
+    }
 }
 
-fn row_to_triple_row(row: sqlx::postgres::PgRow) -> Result<TripleRow, ApiError> {
-    let subject_iri: Option<String> = row.try_get("subject_iri").map_err(db)?;
-    let subject_blank: Option<String> = row.try_get("subject_blank").map_err(db)?;
-    let predicate_iri: String = row.try_get("predicate_iri").map_err(db)?;
-    let object_iri: Option<String> = row.try_get("object_iri").map_err(db)?;
-    let object_blank: Option<String> = row.try_get("object_blank").map_err(db)?;
-    let object_literal: Option<String> = row.try_get("object_literal").map_err(db)?;
-    let datatype_iri: Option<String> = row.try_get("datatype_iri").map_err(db)?;
-    let language: Option<String> = row.try_get("language").map_err(db)?;
+fn overview_to_summary(g: sbol_db_storage::GraphOverview) -> GraphSummary {
+    GraphSummary {
+        id: g.id.0,
+        iri: g.iri,
+        kind: g.kind,
+        name: g.name,
+        serialization_format: g.serialization_format,
+        source_uri: g.source_uri,
+        created_at: g.created_at,
+        object_count: g.object_count,
+        triple_count: g.triple_count,
+    }
+}
 
-    let subject = match (subject_iri, subject_blank) {
-        (Some(v), _) => Term::uri(v),
-        (None, Some(v)) => Term::bnode(v),
-        (None, None) => Term::uri(String::new()),
+fn triple_to_row(triple: Triple) -> TripleRow {
+    let subject = match triple.subject {
+        SubjectTerm::Iri(iri) => Term::uri(iri.into_inner()),
+        SubjectTerm::BlankNode(node) => Term::bnode(node),
     };
-    let object = match (object_iri, object_blank, object_literal) {
-        (Some(v), _, _) => Term::uri(v),
-        (None, Some(v), _) => Term::bnode(v),
-        (None, None, Some(v)) => Term::literal(v, datatype_iri, language),
-        (None, None, None) => Term::literal(String::new(), None, None),
+    let object = match triple.object {
+        ObjectTerm::Iri(iri) => Term::uri(iri.into_inner()),
+        ObjectTerm::BlankNode(node) => Term::bnode(node),
+        ObjectTerm::Literal {
+            value,
+            datatype,
+            language,
+        } => Term::literal(value, Some(datatype.into_inner()), language),
     };
-
-    Ok(TripleRow {
+    TripleRow {
         subject,
-        predicate: Term::uri(predicate_iri),
+        predicate: Term::uri(triple.predicate.into_inner()),
         object,
-    })
-}
-
-fn row_to_summary(row: sqlx::postgres::PgRow) -> Result<GraphSummary, ApiError> {
-    Ok(GraphSummary {
-        id: row.try_get("id").map_err(db)?,
-        iri: row.try_get("iri").map_err(db)?,
-        kind: row.try_get("kind").map_err(db)?,
-        name: row.try_get("name").map_err(db)?,
-        serialization_format: row.try_get("serialization_format").map_err(db)?,
-        source_uri: row.try_get("source_uri").map_err(db)?,
-        created_at: row.try_get("created_at").map_err(db)?,
-        object_count: row.try_get("object_count").map_err(db)?,
-        triple_count: row.try_get("triple_count").map_err(db)?,
-    })
-}
-
-fn db(e: sqlx::Error) -> ApiError {
-    ApiError::Domain(sbol_db_core::DomainError::Database(e.to_string()))
+    }
 }

@@ -3,11 +3,13 @@
 # Multi-stage build for sbol-db.
 #
 # - cargo-chef caches workspace dependency builds in their own layer.
-# - The binary is statically linked against musl libc, so the final
-#   image has zero shared-library surface (all TLS in this project is
-#   rustls, so no OpenSSL is required).
-# - The runtime stage is gcr.io/distroless/static-debian12:nonroot,
-#   ~2 MB, no shell, no package manager, runs as UID 65532.
+# - The binary links glibc dynamically. The RocksDB backend compiles a C++
+#   library (librocksdb-sys), which a static musl target cannot link without a
+#   musl C++ toolchain, so the build targets glibc and the runtime image
+#   carries the C/C++ runtime. All TLS in this project is rustls, so no OpenSSL
+#   is required.
+# - The runtime stage is gcr.io/distroless/cc-debian12:nonroot: glibc plus
+#   libstdc++/libgcc, no shell, no package manager, runs as UID 65532.
 
 ARG RUST_VERSION=1.93
 
@@ -16,8 +18,7 @@ ARG RUST_VERSION=1.93
 ############################
 FROM rust:${RUST_VERSION}-bookworm AS chef
 # Node.js 20 is required by `sbol-db-ui`'s build.rs, which drives the
-# Vite build of the embedded TypeScript SPA. The Rust binary still
-# links statically against musl; npm runs on the host glibc.
+# Vite build of the embedded TypeScript SPA.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
@@ -34,38 +35,34 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 ############################
-# Stage 3 — builder: cook deps, then build the binary statically
+# Stage 3 — builder: cook deps, then build the binary
 ############################
 FROM chef AS builder
-# musl-tools for the static target; clang/libclang for crates that run
-# bindgen at build time (e.g. aws-lc-sys behind rustls).
+# g++ (build-essential) builds the bundled RocksDB C++; clang/libclang drive
+# bindgen (librocksdb-sys, aws-lc-sys behind rustls); protobuf-compiler and
+# rustfmt are used by pg_query's and RocksDB's build scripts.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends musl-tools clang libclang-dev \
+    && apt-get install -y --no-install-recommends \
+        build-essential clang libclang-dev protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
-
-RUN rust_target="$(uname -m)-unknown-linux-musl" \
-    && rustup target add "${rust_target}" \
-    && echo "${rust_target}" > /tmp/rust_target
+RUN rustup component add rustfmt
 
 COPY --from=planner /work/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target \
-    rust_target="$(cat /tmp/rust_target)" \
-    && cargo chef cook --release --target "${rust_target}" \
-         --bin sbol-db --recipe-path recipe.json
+    cargo chef cook --release --bin sbol-db --recipe-path recipe.json
 
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target \
-    rust_target="$(cat /tmp/rust_target)" \
-    && cargo build --release --target "${rust_target}" --bin sbol-db \
-    && cp "target/${rust_target}/release/sbol-db" /usr/local/bin/sbol-db \
+    cargo build --release --bin sbol-db \
+    && cp target/release/sbol-db /usr/local/bin/sbol-db \
     && strip /usr/local/bin/sbol-db
 
 ############################
-# Stage 4 — runtime: distroless static, nonroot
+# Stage 4 — runtime: distroless cc (glibc + libstdc++), nonroot
 ############################
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=builder /usr/local/bin/sbol-db /usr/local/bin/sbol-db
 EXPOSE 8080
 USER nonroot:nonroot

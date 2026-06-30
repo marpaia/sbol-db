@@ -8,10 +8,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { Play, Square } from "lucide-react";
 
+import { BackendUnavailable } from "@/components/lab/BackendUnavailable";
 import { EditorPane } from "@/components/lab/EditorPane";
 import { ResultsPane, type ResultsState } from "@/components/lab/ResultsPane";
 import { StatusBar } from "@/components/lab/StatusBar";
 import { WorkbenchShell } from "@/components/lab/WorkbenchShell";
+import { useBackendInfo } from "@/hooks/useBackendInfo";
 import { executeSql, validateSql, type SqlExecuteResponse } from "@/lib/api";
 import { downloadCsv, downloadJson } from "@/lib/export";
 import { SQL_LANGUAGE_ID } from "@/lib/monaco/sql-lang";
@@ -22,6 +24,7 @@ export default function SqlRoute() {
   const setBuffer = useLabStore((s) => s.setBuffer);
   const pushHistory = useLabStore((s) => s.pushHistory);
   const setDialect = useLabStore((s) => s.setDialect);
+  const { data: info } = useBackendInfo();
   useEffect(() => setDialect("sql"), [setDialect]);
 
   const [state, setState] = useState<ResultsState>({ kind: "idle" });
@@ -84,6 +87,10 @@ export default function SqlRoute() {
         : `${existing} ${text}`;
     setBuffer("sql", next);
   };
+
+  if (info && !info.capabilities.sql_console) {
+    return <BackendUnavailable feature="SQL console" />;
+  }
 
   return (
     <WorkbenchShell
@@ -181,7 +188,7 @@ function toResultsState(resp: SqlExecuteResponse): ResultsState {
     kind: "table",
     columns: resp.columns.map((c) => ({
       name: c.name,
-      typeHint: c.pg_type.toLowerCase(),
+      typeHint: c.column_type.toLowerCase(),
     })),
     rows: resp.rows.map((row) =>
       row.map((cell) => (cell as string | number | boolean | null) ?? null)

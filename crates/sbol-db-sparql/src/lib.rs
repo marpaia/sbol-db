@@ -12,10 +12,12 @@
 //! are synchronous and a `TripleSource` may block while fetching per-pattern
 //! rows. Each query is bounded by a timeout and a max-row cap.
 
+mod accel;
 mod dataset;
 mod engine;
 mod error;
 mod results;
+mod rewrite;
 mod update;
 
 pub use dataset::TripleDataset;

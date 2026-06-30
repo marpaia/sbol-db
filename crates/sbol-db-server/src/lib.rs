@@ -14,6 +14,8 @@ pub use export::export_subject_rdf;
 #[cfg(feature = "lab")]
 pub use lab::SchemaCache;
 pub use metrics::Metrics;
+#[cfg(feature = "lab")]
+pub use sbol_db_storage::{BackendKind, Capabilities, MaintenanceStyle};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +26,8 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
+#[cfg(feature = "lab")]
+use sbol_db_storage::{DbStats, LabStore, LsmStats, SqlConsole};
 use sbol_db_storage::{JobQueue, SbolStore};
 use serde_json::json;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -36,14 +40,28 @@ pub struct AppState {
     pub sparql_update: Arc<SparqlUpdateEngine>,
     pub metrics: Arc<Metrics>,
     pub jobs: Arc<dyn JobQueue>,
+    /// Backend-neutral dashboard / graph-browser reads for the lab UI.
+    #[cfg(feature = "lab")]
+    pub lab: Arc<dyn LabStore>,
     /// Runtime configuration visible to handlers (lab SQL limits, etc).
     /// Cloned in once at server startup; never mutated.
     pub config: ServerConfig,
-    /// Postgres connection handle for the lab's SQL and introspection
-    /// endpoints, which are irreducibly Postgres-specific. Present whenever
-    /// the `lab` feature and a Postgres backend are active.
+    /// Which engine is running, so the lab can advertise its capabilities.
     #[cfg(feature = "lab")]
-    pub pg_pool: sbol_db_postgres::PgPool,
+    pub backend_kind: BackendKind,
+    /// The SQL console, when the engine is a SQL database (Postgres, SQLite).
+    /// `None` on a key-value backend; the SQL pages degrade with a clear
+    /// "backend unsupported" error (see [`AppState::require_sql_console`]).
+    #[cfg(feature = "lab")]
+    pub sql_console: Option<Arc<dyn SqlConsole>>,
+    /// Relational-engine introspection (tables, indexes, schema, sessions),
+    /// when the backend has one (Postgres, SQLite).
+    #[cfg(feature = "lab")]
+    pub db_stats: Option<Arc<dyn DbStats>>,
+    /// LSM-engine introspection (column families, levels, compaction), when
+    /// the backend is a key-value store (RocksDB).
+    #[cfg(feature = "lab")]
+    pub lsm_stats: Option<Arc<dyn LsmStats>>,
     /// Per-process TTL cache for the `/lab/api/schema/*` endpoints.
     #[cfg(feature = "lab")]
     pub schema_cache: Arc<lab::SchemaCache>,
@@ -155,7 +173,69 @@ impl AppState {
             tokio::spawn(async move { cache.invalidate_all().await });
         }
     }
+
+    /// What the running backend can do, for the lab `/info` endpoint and the
+    /// UI's feature gating. Derived from which capability handles the backend
+    /// populated, plus the engine-specific refinements (slow-query stats and
+    /// live sessions/locks are Postgres-only).
+    #[cfg(feature = "lab")]
+    pub fn capabilities(&self) -> Capabilities {
+        let maintenance = if self.db_stats.is_some() {
+            Some(MaintenanceStyle::Relational)
+        } else if self.lsm_stats.is_some() {
+            Some(MaintenanceStyle::Lsm)
+        } else {
+            None
+        };
+        let is_postgres = self.backend_kind == BackendKind::Postgres;
+        Capabilities {
+            sql_console: self.sql_console.is_some(),
+            relational_schema: self.db_stats.is_some(),
+            maintenance,
+            slow_query_stats: is_postgres,
+            activity_and_locks: is_postgres,
+        }
+    }
+
+    /// The SQL console, or a "backend unsupported" error. The SQL execute /
+    /// validate pages call this so they degrade cleanly on a key-value
+    /// backend.
+    #[cfg(feature = "lab")]
+    pub fn require_sql_console(&self) -> Result<&Arc<dyn SqlConsole>, ApiError> {
+        self.sql_console
+            .as_ref()
+            .ok_or_else(|| ApiError::Unavailable(SQL_UNSUPPORTED.to_owned()))
+    }
+
+    /// Relational-engine introspection, or a "backend unsupported" error.
+    #[cfg(feature = "lab")]
+    pub fn require_db_stats(&self) -> Result<&Arc<dyn DbStats>, ApiError> {
+        self.db_stats.as_ref().ok_or_else(|| {
+            ApiError::Unavailable(
+                "this lab page requires a relational engine (Postgres or SQLite); the server is \
+                 running on a different backend"
+                    .to_owned(),
+            )
+        })
+    }
+
+    /// LSM-engine introspection, or a "backend unsupported" error.
+    #[cfg(feature = "lab")]
+    pub fn require_lsm_stats(&self) -> Result<&Arc<dyn LsmStats>, ApiError> {
+        self.lsm_stats.as_ref().ok_or_else(|| {
+            ApiError::Unavailable(
+                "this lab page requires the RocksDB backend; the server is running on a \
+                 different backend"
+                    .to_owned(),
+            )
+        })
+    }
 }
+
+#[cfg(feature = "lab")]
+const SQL_UNSUPPORTED: &str =
+    "the SQL console requires a SQL engine (Postgres or SQLite); the server is running on a \
+     key-value backend";
 
 pub fn router(state: AppState, config: ServerConfig) -> Router {
     let api = Router::new()

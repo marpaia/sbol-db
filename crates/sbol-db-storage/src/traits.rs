@@ -15,11 +15,12 @@ use sbol_db_core::{
 use serde_json::Value;
 
 use crate::{
-    BatchSequenceMatch, EnqueueOutcome, GraphFilter, GraphWriteMode, ImportInput, JobAttempt,
-    JobLogRecord, JobStatus, ListGraphsFilter, ListJobsFilter, ListObjectsFilter, NewJob,
-    OldestQueuedAge, OntologyLoadReport, OntologyRecord, OntologyTermRecord, PatternObject,
-    PatternSubject, QueueDepthRow, SbolJob, SequenceMatch, SequenceSearchOptions, TripleChange,
-    UpdateOutcome,
+    AccelSolutions, AcceleratedQuery, BatchSequenceMatch, EnqueueOutcome, GraphFilter,
+    GraphWriteMode, IdGraphFilter, IdQuad, ImportInput, JobAttempt, JobLogRecord, JobStatus,
+    ListGraphsFilter, ListJobsFilter, ListObjectsFilter, NewJob, OldestQueuedAge,
+    OntologyLoadReport, OntologyRecord, OntologyTermRecord, PatternObject, PatternSubject,
+    QueueDepthRow, SbolJob, SequenceMatch, SequenceSearchOptions, TermId, TermKey, TermValue,
+    TripleChange, UpdateOutcome,
 };
 
 /// Synchronous triple-pattern reads, as required by the SPARQL evaluator.
@@ -48,6 +49,56 @@ pub trait TripleSource: Send + Sync {
 
     /// Every triple with the given subject IRI.
     fn triples_for_subject(&self, subject_iri: &str) -> Result<Vec<Triple>, DomainError>;
+
+    /// Whether this backend can scan by term id ([`Self::id_scan`]). An id-native
+    /// backend lets the SPARQL evaluator join on term ids and materialize terms
+    /// only for output rows; the default is `false` and the evaluator uses the
+    /// term-materializing [`Self::scan_pattern`] path.
+    fn supports_id_scan(&self) -> bool {
+        false
+    }
+
+    /// Scan a pattern returning term ids rather than materialized triples. Bound
+    /// positions are given as ids (see [`Self::term_to_id`]). Only meaningful when
+    /// [`Self::supports_id_scan`] is true.
+    fn id_scan(
+        &self,
+        _subject: Option<TermId>,
+        _predicate: Option<TermId>,
+        _object: Option<TermId>,
+        _graph: &IdGraphFilter,
+        _limit: i64,
+    ) -> Result<Vec<IdQuad>, DomainError> {
+        Err(DomainError::Database(
+            "id_scan is not supported by this backend".into(),
+        ))
+    }
+
+    /// Resolve a term to its id (the same id stored in the indexes), for binding
+    /// query constants into an id-native scan.
+    fn term_to_id(&self, _key: TermKey<'_>) -> Result<TermId, DomainError> {
+        Err(DomainError::Database(
+            "term_to_id is not supported by this backend".into(),
+        ))
+    }
+
+    /// Resolve a term id back to its value, for materializing output rows and
+    /// filter operands.
+    fn id_to_term(&self, _id: TermId) -> Result<TermValue, DomainError> {
+        Err(DomainError::Database(
+            "id_to_term is not supported by this backend".into(),
+        ))
+    }
+
+    /// Answer a recognized SynBioHub query from purpose-built indexes. Returns
+    /// `Ok(None)` when this backend has no accelerator or declines the query, so
+    /// the caller falls back to generic SPARQL evaluation.
+    fn run_accelerated(
+        &self,
+        _query: &AcceleratedQuery,
+    ) -> Result<Option<AccelSolutions>, DomainError> {
+        Ok(None)
+    }
 }
 
 /// Atomic batch application of SPARQL-update changes.
@@ -209,4 +260,25 @@ pub trait JobQueue: Send + Sync {
     async fn current_status(&self, id: JobId) -> Result<Option<JobStatus>, DomainError>;
     async fn queue_depth_snapshot(&self) -> Result<Vec<QueueDepthRow>, DomainError>;
     async fn oldest_queued_age(&self) -> Result<Vec<OldestQueuedAge>, DomainError>;
+
+    /// Count jobs that reached a terminal failure (`failed` or `dead`) in the
+    /// last `within_hours`. Backed by [`Self::list`] so every backend reports
+    /// the same number without backend-specific SQL; the dashboard's
+    /// failures tile reads it.
+    async fn recent_failure_count(&self, within_hours: i64) -> Result<i64, DomainError> {
+        let since = chrono::Utc::now() - chrono::Duration::hours(within_hours.max(0));
+        let mut total = 0i64;
+        for status in [JobStatus::Failed, JobStatus::Dead] {
+            let filter = ListJobsFilter {
+                kind: None,
+                status: Some(status),
+                queue: None,
+                correlation_id: None,
+                since: Some(since),
+                limit: 10_000,
+            };
+            total += self.list(&filter).await?.len() as i64;
+        }
+        Ok(total)
+    }
 }

@@ -1,0 +1,17 @@
+[package]
+name = "sbol-db-derive"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure SBOL ingest derivation: parse a document and plan what a backend must persist, independent of any database."
+
+[dependencies]
+sbol-db-core.workspace = true
+sbol-db-storage.workspace = true
+sbol-db-rdf.workspace = true
+sbol.workspace = true
+sbol-genbank.workspace = true
+sbol-fasta.workspace = true
+uuid.workspace = true

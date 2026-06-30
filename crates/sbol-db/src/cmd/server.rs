@@ -1,23 +1,24 @@
 //! `sbol-db server` — start the HTTP listener and, by default, an embedded
-//! async-job worker. The worker uses its own connection pool so long-running
-//! handlers can't starve inbound HTTP requests.
+//! async-job worker. On Postgres the worker opens its own right-sized
+//! connection pool so long-running handlers can't starve inbound HTTP; other
+//! backends open through the factory.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use sbol_db_backend::Backend;
 use sbol_db_jobs::{default_registry, Worker, WorkerConfig};
-use sbol_db_postgres::{JobRepository, SbolObjectService};
 use sbol_db_server::{router, AppState, Metrics};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
+use sbol_db_storage::{JobQueue, SbolStore};
 use tokio_util::sync::CancellationToken;
 
 use crate::signal::shutdown_signal;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
-    pool: sbol_db_postgres::PgPool,
-    service: Arc<SbolObjectService>,
+    backend: Backend,
     database_url: &str,
     bind: SocketAddr,
     no_worker: bool,
@@ -25,13 +26,13 @@ pub async fn run(
     worker_queues: Option<String>,
     worker_id: Option<String>,
 ) -> Result<()> {
-    let engine = Arc::new(SparqlEngine::new(service.triple_source()));
-    let jobs_repo = Arc::new(JobRepository::new(pool.clone()));
+    let engine = Arc::new(SparqlEngine::new(backend.triple_source.clone()));
 
     let worker_setup = if !no_worker {
         Some(
             build_worker_setup(
                 database_url,
+                Some((backend.store.clone(), backend.jobs.clone())),
                 worker_concurrency,
                 worker_queues.as_deref(),
                 worker_id.as_deref(),
@@ -43,28 +44,42 @@ pub async fn run(
         None
     };
 
-    let metrics = Metrics::install(pool.clone(), env!("CARGO_PKG_VERSION"));
-    let metrics = metrics.with_jobs_repo(jobs_repo.clone());
-    let metrics = if let Some(setup) = worker_setup.as_ref() {
-        metrics.with_worker_pool(setup.pool.clone())
-    } else {
-        metrics
+    // The API pool, when the backend exposes one, drives the connection-pool
+    // gauges; poolless backends simply omit them.
+    let api_pool = backend.postgres.as_ref().map(|pg| pg.pool.clone());
+    let metrics = Metrics::install(api_pool, env!("CARGO_PKG_VERSION"));
+    let metrics = metrics.with_jobs_repo(backend.jobs.clone());
+    let metrics = match worker_setup.as_ref().and_then(|s| s.listener_pool.as_ref()) {
+        Some(pool) => metrics.with_worker_pool(pool.clone()),
+        None => metrics,
     };
 
     let config = sbol_db_server::ServerConfig::from_env();
     let sparql_update = Arc::new(SparqlUpdateEngine::new(
-        service.triple_source(),
-        service.triple_writer(),
+        backend.triple_source.clone(),
+        backend.triple_writer.clone(),
     ));
     let state = AppState {
-        service: service.clone(),
+        service: backend.store.clone(),
         sparql: engine,
         sparql_update,
         metrics,
-        jobs: jobs_repo,
+        jobs: backend.jobs.clone(),
         config: config.clone(),
+        // Backend-neutral lab dashboard / graph browser.
         #[cfg(feature = "lab")]
-        pg_pool: pool.clone(),
+        lab: backend.lab.clone(),
+        // Capability handles for the lab's engine-specific pages. Each is
+        // present only on a backend that supports it; the pages degrade to a
+        // clear error otherwise and the UI gates them on `/lab/api/info`.
+        #[cfg(feature = "lab")]
+        backend_kind: backend.kind,
+        #[cfg(feature = "lab")]
+        sql_console: backend.sql_console.clone(),
+        #[cfg(feature = "lab")]
+        db_stats: backend.db_stats.clone(),
+        #[cfg(feature = "lab")]
+        lsm_stats: backend.lsm_stats.clone(),
         #[cfg(feature = "lab")]
         schema_cache: Arc::new(sbol_db_server::SchemaCache::new()),
     };
@@ -94,21 +109,30 @@ pub async fn run(
     Ok(())
 }
 
-/// Constructed setup for an embedded / standalone worker: the separate
-/// connection pool, the service that wraps it, and the worker config.
-/// Split from spawning so callers (e.g. `serve`) can hand the pool to
-/// `Metrics::with_worker_pool` before the worker starts taking work.
+/// Constructed setup for an embedded / standalone worker: the backend-neutral
+/// store + job queue, an optional Postgres pool (the LISTEN/NOTIFY channel and
+/// worker-pool gauge source), and the worker config. Split from spawning so
+/// callers can hand the pool to `Metrics::with_worker_pool` before the worker
+/// starts taking work.
 pub(crate) struct WorkerSetup {
-    pub pool: sbol_db_postgres::PgPool,
-    pub service: Arc<SbolObjectService>,
+    pub listener_pool: Option<sbol_db_postgres::PgPool>,
+    pub store: Arc<dyn SbolStore>,
+    pub jobs: Arc<dyn JobQueue>,
     pub config: WorkerConfig,
 }
 
 impl WorkerSetup {
     pub fn spawn(self, cancel: CancellationToken) -> tokio::task::JoinHandle<()> {
         let registry = Arc::new(default_registry());
-        let jobs = Arc::new(JobRepository::new(self.pool.clone()));
-        let worker = Worker::new(jobs, self.service, Some(self.pool), registry, self.config);
+        // `listener_pool` (Postgres only) doubles as the LISTEN/NOTIFY channel
+        // for low-latency wakeups; without it the worker falls back to polling.
+        let worker = Worker::new(
+            self.jobs,
+            self.store,
+            self.listener_pool,
+            registry,
+            self.config,
+        );
         tokio::spawn(async move {
             if let Err(err) = worker.run(cancel).await {
                 tracing::error!(error = %err, "embedded worker exited with error");
@@ -117,11 +141,14 @@ impl WorkerSetup {
     }
 }
 
-/// Build the worker pool, service, and config. The worker shares Postgres
-/// with the API but keeps its own connection pool so long-running handlers
-/// cannot starve inbound HTTP requests.
+/// Build the worker's store, job queue, and config. On Postgres the worker opens
+/// its own right-sized pool so long-running handlers cannot starve inbound HTTP
+/// requests. Other backends reuse the already-open API handle: SQLite avoids a
+/// redundant second pool, and RocksDB must (its database lock is exclusive to a
+/// single open handle per process).
 pub(crate) async fn build_worker_setup(
     database_url: &str,
+    reuse: Option<(Arc<dyn SbolStore>, Arc<dyn JobQueue>)>,
     concurrency: Option<usize>,
     queues: Option<&str>,
     worker_id: Option<&str>,
@@ -141,16 +168,31 @@ pub(crate) async fn build_worker_setup(
             .collect(),
     };
 
-    let mut worker_pool_cfg = sbol_db_postgres::PoolConfig::from_env();
-    let override_max = std::env::var("SBOL_DB_WORKER_POOL_MAX")
-        .ok()
-        .and_then(|s| s.parse::<u32>().ok());
-    worker_pool_cfg.max_connections = override_max.unwrap_or((concurrency as u32) + 4);
-
-    let pool = sbol_db_postgres::pool::connect_with_config(database_url, &worker_pool_cfg)
-        .await
-        .context("opening worker connection pool")?;
-    let service = Arc::new(SbolObjectService::new(pool.clone()));
+    // Postgres opens a dedicated worker pool; every other backend reuses the
+    // store and queue the API already opened.
+    let (listener_pool, store, jobs) = if is_postgres(database_url) {
+        let mut worker_pool_cfg = sbol_db_postgres::PoolConfig::from_env();
+        let override_max = std::env::var("SBOL_DB_WORKER_POOL_MAX")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok());
+        worker_pool_cfg.max_connections = override_max.unwrap_or((concurrency as u32) + 4);
+        let pool = sbol_db_postgres::pool::connect_with_config(database_url, &worker_pool_cfg)
+            .await
+            .context("opening worker connection pool")?;
+        let backend = Backend::from_postgres_pool(pool.clone());
+        (Some(pool), backend.store, backend.jobs)
+    } else {
+        // Reuse the API's already-open handle when there is one (required for
+        // RocksDB, whose lock is exclusive); otherwise open it ourselves.
+        let (store, jobs) = match reuse {
+            Some(pair) => pair,
+            None => {
+                let backend = Backend::open(database_url).await?;
+                (backend.store, backend.jobs)
+            }
+        };
+        (None, store, jobs)
+    };
 
     let mut config = WorkerConfig {
         concurrency,
@@ -162,8 +204,13 @@ pub(crate) async fn build_worker_setup(
     }
 
     Ok(WorkerSetup {
-        pool,
-        service,
+        listener_pool,
+        store,
+        jobs,
         config,
     })
+}
+
+fn is_postgres(url: &str) -> bool {
+    url.starts_with("postgres://") || url.starts_with("postgresql://")
 }

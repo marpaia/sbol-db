@@ -51,8 +51,8 @@ interface ColumnMeta {
   numeric: boolean;
 }
 
-// Lowercased Postgres type hints that should be right-aligned. We
-// match as a substring (e.g. `int4`, `bigint`, `numeric`, `float8`).
+// Lowercased SQL type hints that should be right-aligned. We match as
+// a substring (e.g. `int4`, `bigint`, `numeric`, `float8`).
 const NUMERIC_HINT = /int|num|dec|float|real|double|serial/i;
 
 function detectNumeric(

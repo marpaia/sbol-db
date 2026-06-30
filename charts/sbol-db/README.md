@@ -50,6 +50,18 @@ helm install sbol-db ./charts/sbol-db \
   --set serviceMonitor.enabled=true
 ```
 
+## Storage backend
+
+The chart deploys the Postgres backend. `sbol-db` also runs on SQLite or
+RocksDB (the `DATABASE_URL` scheme selects the engine — see
+[`docs/storage.md`](../../docs/storage.md)), but those are embedded,
+single-node engines whose store is a filesystem path, not a shared
+database. The multi-replica, shared-database, connection-pool shape this
+chart provisions is Postgres-specific; running an embedded backend in
+Kubernetes means a single replica with a persistent volume, which this
+chart does not template. The `DATABASE_*` pool settings below apply to
+the SQL backends only.
+
 ## DSN resolution
 
 Exactly one of these three sources is used, in priority order:

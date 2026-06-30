@@ -1,7 +1,7 @@
 //! Postgres maintenance/observability views.
 //!
 //! Thin wrappers around the `pg_stat_*`, `pg_locks`, and `pg_stat_statements`
-//! catalog views that the lab UI's `/observability/postgres` page reads. The
+//! catalog views that the lab UI's maintenance page reads on Postgres. The
 //! queries are intentionally small and bounded — these read-only handlers are
 //! polled every ~15 seconds by an open browser tab, so each method does at
 //! most a single index-friendly catalog scan.
@@ -20,10 +20,16 @@
 /// extension-owned schemas (or the catalog's own).
 const USER_SCHEMA: &str = "public";
 
-use chrono::{DateTime, Utc};
+use async_trait::async_trait;
 use sbol_db_core::DomainError;
-use serde::Serialize;
+use sbol_db_storage::DbStats;
 use sqlx::Row;
+
+pub use sbol_db_storage::{
+    Activity, BlockingLock, DatabaseSize, IncomingForeignKey, IndexStats, OutgoingForeignKey,
+    RelationalColumn, RelationalSchema, RelationalTable, SlowQuery, TableColumn, TableSchema,
+    TableStats,
+};
 
 use crate::repo::db_err;
 use crate::PgPool;
@@ -33,105 +39,69 @@ pub struct PgStatsRepository {
     pool: PgPool,
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct DatabaseSize {
-    pub database: String,
-    pub total_bytes: i64,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct TableStats {
-    pub name: String,
-    pub rows_estimate: i64,
-    pub total_bytes: i64,
-    pub index_bytes: i64,
-    pub n_live_tup: i64,
-    pub n_dead_tup: i64,
-    pub last_vacuum: Option<DateTime<Utc>>,
-    pub last_autovacuum: Option<DateTime<Utc>>,
-    pub last_analyze: Option<DateTime<Utc>>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct IndexStats {
-    pub table: String,
-    pub index: String,
-    pub idx_scan: i64,
-    pub bytes: i64,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct Activity {
-    pub pid: i32,
-    pub application_name: Option<String>,
-    pub state: Option<String>,
-    pub wait_event_type: Option<String>,
-    pub wait_event: Option<String>,
-    pub query: Option<String>,
-    pub query_start: Option<DateTime<Utc>>,
-    pub duration_secs: Option<f64>,
-    pub client_addr: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct BlockingLock {
-    pub blocker_pid: i32,
-    pub blocker_query: Option<String>,
-    pub blocked_pid: i32,
-    pub blocked_query: Option<String>,
-    pub mode: Option<String>,
-    pub locktype: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct SlowQuery {
-    pub queryid: String,
-    pub query: Option<String>,
-    pub calls: i64,
-    pub total_exec_ms: f64,
-    pub mean_exec_ms: f64,
-    pub rows: i64,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct TableSchema {
-    pub name: String,
-    pub comment: Option<String>,
-    pub columns: Vec<TableColumn>,
-    pub foreign_keys_out: Vec<OutgoingForeignKey>,
-    pub foreign_keys_in: Vec<IncomingForeignKey>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct TableColumn {
-    pub name: String,
-    pub pg_type: String,
-    pub nullable: bool,
-    pub default_expr: Option<String>,
-    pub ordinal: i32,
-    pub comment: Option<String>,
-    pub is_primary_key: bool,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct OutgoingForeignKey {
-    pub name: String,
-    pub columns: Vec<String>,
-    pub target_table: String,
-    pub target_columns: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct IncomingForeignKey {
-    pub name: String,
-    pub source_table: String,
-    pub source_columns: Vec<String>,
-    pub target_columns: Vec<String>,
-}
-
 impl PgStatsRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    /// Every table in the user schema with its columns, for the lab's schema
+    /// browser and SQL-editor click-to-insert sidebar. `_sqlx_migrations` is
+    /// sqlx's own bookkeeping table and is filtered out.
+    pub async fn schema_overview(&self) -> Result<RelationalSchema, DomainError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT table_name, column_name, data_type, udt_name, is_nullable, ordinal_position
+            FROM information_schema.columns
+            WHERE table_schema = $1
+              AND table_name <> '_sqlx_migrations'
+            ORDER BY table_name, ordinal_position
+            "#,
+        )
+        .bind(USER_SCHEMA)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+
+        let mut current: Option<RelationalTable> = None;
+        let mut tables: Vec<RelationalTable> = Vec::new();
+        for row in rows {
+            let table_name: String = row.try_get("table_name").map_err(db_err)?;
+            let column_name: String = row.try_get("column_name").map_err(db_err)?;
+            let data_type: String = row.try_get("data_type").map_err(db_err)?;
+            let udt_name: String = row.try_get("udt_name").map_err(db_err)?;
+            let is_nullable: String = row.try_get("is_nullable").map_err(db_err)?;
+
+            // information_schema reports `USER-DEFINED`/`ARRAY` for domains and
+            // arrays; the underlying udt name is the useful label.
+            let column_type = if data_type == "USER-DEFINED" || data_type == "ARRAY" {
+                udt_name
+            } else {
+                data_type
+            };
+            let column = RelationalColumn {
+                name: column_name,
+                column_type,
+                nullable: is_nullable == "YES",
+            };
+
+            match &mut current {
+                Some(t) if t.name == table_name => t.columns.push(column),
+                _ => {
+                    if let Some(prev) = current.take() {
+                        tables.push(prev);
+                    }
+                    current = Some(RelationalTable {
+                        name: table_name,
+                        columns: vec![column],
+                    });
+                }
+            }
+        }
+        if let Some(last) = current.take() {
+            tables.push(last);
+        }
+
+        Ok(RelationalSchema { tables })
     }
 
     pub async fn database_size(&self) -> Result<DatabaseSize, DomainError> {
@@ -376,7 +346,7 @@ impl PgStatsRepository {
             )
             SELECT
               a.attname::text                                        AS name,
-              pg_catalog.format_type(a.atttypid, a.atttypmod)::text  AS pg_type,
+              pg_catalog.format_type(a.atttypid, a.atttypmod)::text  AS column_type,
               (NOT a.attnotnull)                                     AS nullable,
               pg_get_expr(d.adbin, d.adrelid)                        AS default_expr,
               a.attnum::int                                          AS ordinal,
@@ -401,7 +371,7 @@ impl PgStatsRepository {
             .map(|r| {
                 Ok::<_, DomainError>(TableColumn {
                     name: r.try_get("name").map_err(db_err)?,
-                    pg_type: r.try_get("pg_type").map_err(db_err)?,
+                    column_type: r.try_get("column_type").map_err(db_err)?,
                     nullable: r.try_get("nullable").map_err(db_err)?,
                     default_expr: r.try_get("default_expr").map_err(db_err)?,
                     ordinal: r.try_get("ordinal").map_err(db_err)?,
@@ -554,5 +524,48 @@ impl PgStatsRepository {
                 })
             })
             .collect()
+    }
+}
+
+/// The introspection capability, delegating to the inherent query methods.
+/// Explicit `PgStatsRepository::method(self, ...)` paths avoid resolving back
+/// to the trait method and recursing.
+#[async_trait]
+impl DbStats for PgStatsRepository {
+    async fn schema_overview(&self) -> Result<RelationalSchema, DomainError> {
+        PgStatsRepository::schema_overview(self).await
+    }
+    async fn database_size(&self) -> Result<DatabaseSize, DomainError> {
+        PgStatsRepository::database_size(self).await
+    }
+    async fn table_stats(&self, limit: i64, offset: i64) -> Result<Vec<TableStats>, DomainError> {
+        PgStatsRepository::table_stats(self, limit, offset).await
+    }
+    async fn index_stats(&self, limit: i64) -> Result<Vec<IndexStats>, DomainError> {
+        PgStatsRepository::index_stats(self, limit).await
+    }
+    async fn activity(&self, limit: i64) -> Result<Vec<Activity>, DomainError> {
+        PgStatsRepository::activity(self, limit).await
+    }
+    async fn blocking_locks(&self) -> Result<Vec<BlockingLock>, DomainError> {
+        PgStatsRepository::blocking_locks(self).await
+    }
+    async fn table_schema(&self, name: &str) -> Result<Option<TableSchema>, DomainError> {
+        PgStatsRepository::table_schema(self, name).await
+    }
+    async fn has_slow_query_stats(&self) -> Result<bool, DomainError> {
+        PgStatsRepository::has_pg_stat_statements(self).await
+    }
+    async fn slow_queries(&self, limit: i64) -> Result<Vec<SlowQuery>, DomainError> {
+        PgStatsRepository::slow_queries(self, limit).await
+    }
+    async fn optimize(&self) -> Result<(), DomainError> {
+        // ANALYZE refreshes planner statistics without the heavy, blocking
+        // rewrite a full VACUUM does; autovacuum handles the rest.
+        sqlx::query("ANALYZE")
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(())
     }
 }

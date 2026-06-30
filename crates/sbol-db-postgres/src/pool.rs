@@ -1,10 +1,35 @@
 use std::time::Duration;
 
+use async_trait::async_trait;
 use sbol_db_core::DomainError;
+use sbol_db_storage::{MigrationEntry, Migrator};
 
 pub use sqlx::PgPool;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
+/// The migration capability for a Postgres backend, over its connection pool.
+#[derive(Clone)]
+pub struct PgMigrator {
+    pool: PgPool,
+}
+
+impl PgMigrator {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl Migrator for PgMigrator {
+    async fn run_migrations(&self) -> Result<(), DomainError> {
+        run_migrations(&self.pool).await
+    }
+
+    async fn migration_status(&self) -> Result<Vec<MigrationEntry>, DomainError> {
+        migration_status(&self.pool).await
+    }
+}
 
 fn db_err<E: std::fmt::Display>(e: E) -> DomainError {
     DomainError::Database(e.to_string())
@@ -151,13 +176,6 @@ pub async fn migration_status(pool: &PgPool) -> Result<Vec<MigrationEntry>, Doma
             applied: applied_versions.contains(&v),
         })
         .collect())
-}
-
-#[derive(Debug, Clone)]
-pub struct MigrationEntry {
-    pub version: i64,
-    pub description: String,
-    pub applied: bool,
 }
 
 fn env_u32(name: &str, default: u32) -> u32 {

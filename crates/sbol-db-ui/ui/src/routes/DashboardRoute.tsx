@@ -85,8 +85,8 @@ export default function DashboardRoute() {
             what's loaded, with a few templates to get you started.
           </p>
           <p className="mt-2 text-sm text-muted-foreground">
-            This UI is powered by sbol-db, a Postgres-backed data management
-            system for synthetic biology data. Check out sbol-db on{" "}
+            This UI is powered by sbol-db, a data management system for
+            synthetic biology data. Check out sbol-db on{" "}
             <a
               href="https://github.com/marpaia/sbol-db"
               target="_blank"

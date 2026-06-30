@@ -7,6 +7,7 @@ import ImportRoute from "@/routes/ImportRoute";
 import JobDetailRoute from "@/routes/JobDetailRoute";
 import JobsRoute from "@/routes/JobsRoute";
 import LabLayout from "@/routes/LabLayout";
+import MaintenanceRoute from "@/routes/MaintenanceRoute";
 import NeighborhoodRoute from "@/routes/NeighborhoodRoute";
 import ObjectDetailRoute from "@/routes/ObjectDetailRoute";
 import ObjectLookupRoute from "@/routes/ObjectLookupRoute";
@@ -14,9 +15,8 @@ import ObjectsRoute from "@/routes/ObjectsRoute";
 import ObservabilityRoute from "@/routes/ObservabilityRoute";
 import OntologyDetailRoute from "@/routes/OntologyDetailRoute";
 import OntologyRoute from "@/routes/OntologyRoute";
-import PgTableDetailRoute from "@/routes/PgTableDetailRoute";
-import PostgresRoute from "@/routes/PostgresRoute";
 import SchemaRoute from "@/routes/SchemaRoute";
+import TableDetailRoute from "@/routes/TableDetailRoute";
 import SequencesRoute from "@/routes/SequencesRoute";
 import SparqlRoute from "@/routes/SparqlRoute";
 import SqlRoute from "@/routes/SqlRoute";
@@ -29,7 +29,7 @@ export default function App() {
         <Route path="sparql" element={<SparqlRoute />} />
         <Route path="sql" element={<SqlRoute />} />
         <Route path="schema" element={<SchemaRoute />} />
-        <Route path="schema/tables/:name" element={<PgTableDetailRoute />} />
+        <Route path="schema/tables/:name" element={<TableDetailRoute />} />
         <Route
           path="schema/tables/:schema/:name"
           element={<RedirectToSchemaTable />}
@@ -47,7 +47,14 @@ export default function App() {
         <Route path="observability" element={<ObservabilityRoute />} />
         <Route path="observability/jobs" element={<JobsRoute />} />
         <Route path="observability/jobs/:id" element={<JobDetailRoute />} />
-        <Route path="observability/postgres" element={<PostgresRoute />} />
+        <Route
+          path="observability/maintenance"
+          element={<MaintenanceRoute />}
+        />
+        <Route
+          path="observability/postgres"
+          element={<Navigate to="/observability/maintenance" replace />}
+        />
         <Route
           path="observability/postgres/tables/:schema/:name"
           element={<RedirectToSchemaTable />}
@@ -59,11 +66,10 @@ export default function App() {
 }
 
 /**
- * Legacy URL: the table detail page used to live under
- * `/observability/postgres/tables/:schema/:name` (and briefly under
- * `/schema/tables/:schema/:name`). The canonical form is now
- * `/schema/tables/:name`; Postgres schemas aren't a domain concept in
- * the UI. Redirect both legacy shapes so old bookmarks keep working.
+ * The canonical table detail URL is `/schema/tables/:name`; SQL schemas
+ * aren't a domain concept in the UI. Redirect the schema-qualified
+ * shapes (under `/observability/postgres/tables` and `/schema/tables`)
+ * to the canonical form so bookmarks survive.
  */
 function RedirectToSchemaTable() {
   const { name } = useParams<{ schema: string; name: string }>();

@@ -40,6 +40,29 @@ The HTTP surface exposes the SBOL query API, the async-job operator
 surface (`POST /jobs`, etc.), and three operational endpoints
 (`/healthz`, `/readyz`, `/metrics`) on a single port.
 
+### Backend selection
+
+The connection-string scheme in `DATABASE_URL` selects the storage
+engine: `postgres://` (or `postgresql://`), `sqlite://`, or `rocksdb://`.
+`SBOL_DB_BACKEND` (`postgres` / `sqlite` / `rocksdb`) selects it
+explicitly and must agree with the URL's scheme. See
+[`storage.md`](storage.md) for the full contract and capability matrix.
+
+The choice shapes the deployment:
+
+- **Postgres** is the only engine that runs as a separate server and the
+  only one that supports the multi-node shapes below. Several `sbol-db
+  server` pods share one database; work is distributed by `FOR UPDATE
+  SKIP LOCKED`. This is the production default, and the rest of this
+  guide assumes it.
+- **SQLite** (`sqlite:///path/to/sbol.db`) and **RocksDB**
+  (`rocksdb:///path/to/store.rocksdb`) are embedded and single-node. The
+  store is a path on the pod's filesystem, so it wants a single replica
+  with a `ReadWriteOnce` volume — no shared database, no leader election.
+  They suit development, single-node deployments, and embedding sbol-db
+  in another tool. The connection-pool, multi-pod, and PgBouncer guidance
+  below does not apply to them.
+
 ### Async job runtime
 
 `sbol-db` ships a Postgres-backed async job runtime for work that
@@ -357,9 +380,10 @@ inline comments for every key.
 
 #### Database pool
 
-These knobs apply to the API pool. They also apply to the worker pool
-*except* `max_connections`, which the worker pool sizes from
-`worker_concurrency` (override with `SBOL_DB_WORKER_POOL_MAX`).
+These knobs apply to the SQL backends' connection pools; the embedded
+RocksDB backend has no pool and ignores them. They apply to the API pool
+and to the worker pool *except* `max_connections`, which the worker pool
+sizes from `worker_concurrency` (override with `SBOL_DB_WORKER_POOL_MAX`).
 
 | Chart value | Env | Default | Purpose |
 |---|---|---|---|

@@ -65,7 +65,7 @@ function TableNode({
   onInsert,
 }: {
   name: string;
-  columns: { name: string; pg_type: string; nullable: boolean }[];
+  columns: { name: string; column_type: string; nullable: boolean }[];
   onInsert: (s: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -100,11 +100,11 @@ function TableNode({
                 type="button"
                 onClick={() => onInsert(c.name)}
                 className="flex w-full items-center gap-2 px-2 py-0.5 text-left font-mono text-xs transition-colors hover:bg-accent"
-                title={`${c.pg_type}${c.nullable ? " · nullable" : ""}`}
+                title={`${c.column_type}${c.nullable ? " · nullable" : ""}`}
               >
                 <span className="truncate text-foreground/90">{c.name}</span>
                 <span className="ml-auto text-[10px] uppercase text-muted-foreground/70">
-                  {c.pg_type}
+                  {c.column_type}
                 </span>
               </button>
             </li>
