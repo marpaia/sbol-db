@@ -1,4 +1,4 @@
-# Data lab UI
+# Data Lab UI
 
 `sbol-db` ships an embedded TypeScript SPA — the **data lab bench** — at
 `/lab`, alongside the rest of the HTTP API (`/docs`, `/sparql`,
@@ -6,6 +6,47 @@
 crate; production builds bake the compiled assets into the binary via
 `rust-embed`, so deploying it is exactly the same as deploying any
 other route on the server.
+
+## A tour of the UI
+
+The UI opens on an Overview and fans out into data, query, and
+operations views from the left nav.
+
+The Overview lands on corpus totals, the most common SBOL classes,
+loaded ontologies, and your most recent graphs:
+
+<p align="center">
+  <img src="images/overview.png" alt="SBOL Data Lab overview dashboard" width="900">
+</p>
+
+The SPARQL editor pairs a prefix and class sidebar with a results grid,
+saved queries, and history:
+
+<p align="center">
+  <img src="images/sparql.png" alt="SBOL Data Lab SPARQL editor with query results" width="900">
+</p>
+
+The SQL editor runs against the relational projection, with the full
+table list one click away:
+
+<p align="center">
+  <img src="images/sql.png" alt="SBOL Data Lab SQL editor with query results" width="900">
+</p>
+
+Operations > Metrics is a live observability view: request rate, p95
+latency, connection pools, and the job runner, sampled every few
+seconds:
+
+<p align="center">
+  <img src="images/metrics.png" alt="SBOL Data Lab observability metrics view" width="900">
+</p>
+
+The API docs link opens the Scalar-rendered OpenAPI reference served at
+`/docs`, with ready-to-run client snippets:
+
+<p align="center">
+  <img src="images/api-docs.png" alt="Scalar-rendered OpenAPI reference at /docs" width="900">
+</p>
 
 The lab is fronted by two knobs:
 

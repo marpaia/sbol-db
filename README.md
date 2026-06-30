@@ -17,6 +17,10 @@ Postgres, SQLite, or an embedded RocksDB engine. The connection-string
 scheme picks the backend; Postgres is the default. See
 [**docs/storage.md**](docs/storage.md).
 
+<p align="center">
+  <img src="docs/images/overview.png" alt="SBOL Data Lab overview dashboard showing corpus stats, top SBOL classes, and recent graphs" width="900">
+</p>
+
 New to the codebase? Start with the [**crate guide**](docs/crate-guide.md).
 Want to see how a design flows through the tables? See the
 [**domain model**](docs/domain-model.md). Deploying it? See
@@ -152,6 +156,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+## Data Lab
+
+`sbol-db server` also serves the **SBOL Data Lab**, an embedded web UI
+at [http://127.0.0.1:8888/lab](http://127.0.0.1:8888/lab). It's a
+single front end over the whole query surface: write SPARQL or SQL
+against your corpus, browse the relational schema and RDF prefixes,
+load ontology packs, and watch jobs and metrics. The compiled assets
+are baked into the binary, so the lab ships wherever the server does.
+See [`docs/ui.md`](docs/ui.md).
+
+Read-only SPARQL 1.1, with a prefix and class sidebar, saved queries,
+and history:
+
+<p align="center">
+  <img src="docs/images/sparql.png" alt="SBOL Data Lab SPARQL editor with query results" width="900">
+</p>
+
+Or query the relational projection directly in SQL, with a browsable
+table list:
+
+<p align="center">
+  <img src="docs/images/sql.png" alt="SBOL Data Lab SQL editor with query results" width="900">
+</p>
 
 ## REST surface
 
