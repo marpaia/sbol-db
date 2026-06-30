@@ -3,19 +3,19 @@
 //! instead of graph-pattern evaluation.
 //!
 //! The indexes are derived from a graph's triples (via the backend-neutral
-//! [`build_accel_index`]) and maintained on the verbatim write path: a write
-//! marks the graph dirty (in the write's own transaction), and the next read
-//! that needs the indexes rebuilds them in one pass. The rebuild clears the
-//! dirty flag *before* scanning, so a write that lands during a rebuild re-marks
-//! the graph and the next read rebuilds again (never serving stale data). A
-//! per-graph Postgres advisory lock serializes concurrent rebuilds.
+//! [`build_accel_index`]) and maintained synchronously on the write path:
+//! [`AccelRepository::refresh_graph`] rebuilds a graph's indexes inside the
+//! write's own transaction, scanning the triples through that transaction's
+//! connection so the indexes it writes reflect the triples the same transaction
+//! wrote. Indexes and triples therefore commit together, and reads (which never
+//! rebuild) always see indexes consistent with the committed triples.
 
 use std::collections::{HashMap, HashSet};
 
 use sbol_db_core::DomainError;
 use sbol_db_storage::{
     build_accel_index, generate_metadata_rows, generate_rows, integer, AccelSolutions,
-    AcceleratedQuery, FacetKind, Field, GraphFilter, MetaRecord, Scope, TermValue,
+    AcceleratedQuery, FacetKind, Field, MetaRecord, Scope, TermValue,
 };
 use sqlx::{QueryBuilder, Row};
 
@@ -42,18 +42,9 @@ impl AccelRepository {
         Self { pool, triples }
     }
 
-    /// Mark a graph's accelerator indexes stale, in the caller's write
-    /// transaction (atomic with the triple write).
-    pub async fn mark_dirty(conn: &mut sqlx::PgConnection, graph: &str) -> Result<(), DomainError> {
-        sqlx::query("INSERT INTO accel_dirty (graph_iri) VALUES ($1) ON CONFLICT DO NOTHING")
-            .bind(graph)
-            .execute(&mut *conn)
-            .await
-            .map_err(db_err)?;
-        Ok(())
-    }
-
-    /// Answer a recognized query, rebuilding the graph's indexes first if stale.
+    /// Answer a recognized query from the graph's accelerator indexes, which the
+    /// write path keeps in sync with the committed triples (see
+    /// [`Self::refresh_graph`]).
     pub async fn run(&self, query: &AcceleratedQuery) -> Result<AccelSolutions, DomainError> {
         match query {
             AcceleratedQuery::ObjectList {
@@ -64,7 +55,6 @@ impl AccelRepository {
                 limit,
                 subject_prefix,
             } => {
-                self.ensure_fresh(graph).await?;
                 self.object_list(
                     graph,
                     scope,
@@ -81,82 +71,34 @@ impl AccelRepository {
                 var,
                 subject_prefix,
             } => {
-                self.ensure_fresh(graph).await?;
                 self.count(graph, scope, var, subject_prefix.as_deref())
                     .await
             }
-            AcceleratedQuery::Facet { graph, kind, var } => {
-                self.ensure_fresh(graph).await?;
-                self.facet(graph, *kind, var).await
-            }
+            AcceleratedQuery::Facet { graph, kind, var } => self.facet(graph, *kind, var).await,
             AcceleratedQuery::ObjectMetadata {
                 graph,
                 subject,
                 projection,
                 required,
             } => {
-                self.ensure_fresh(graph).await?;
                 self.object_metadata(graph, subject, projection, required)
                     .await
             }
         }
     }
 
-    async fn ensure_fresh(&self, graph: &str) -> Result<(), DomainError> {
-        if !self.is_dirty(graph).await? {
-            return Ok(());
-        }
-        // Serialize rebuilds for this graph on a connection holding a session
-        // advisory lock; re-check after acquiring (another rebuild may have
-        // cleared the flag while we waited).
-        let mut conn = self.pool.acquire().await.map_err(db_err)?;
-        sqlx::query("SELECT pg_advisory_lock(hashtextextended($1, 0))")
-            .bind(graph)
-            .execute(&mut *conn)
-            .await
-            .map_err(db_err)?;
-        let result = self.rebuild_if_dirty(graph).await;
-        let _ = sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1, 0))")
-            .bind(graph)
-            .execute(&mut *conn)
-            .await;
-        result
-    }
-
-    async fn rebuild_if_dirty(&self, graph: &str) -> Result<(), DomainError> {
-        if !self.is_dirty(graph).await? {
-            return Ok(());
-        }
-        // Clear the dirty flag before scanning so a write landing during the
-        // rebuild re-marks the graph and the next read rebuilds again.
-        sqlx::query("DELETE FROM accel_dirty WHERE graph_iri = $1")
-            .bind(graph)
-            .execute(&self.pool)
-            .await
-            .map_err(db_err)?;
-        self.rebuild(graph).await
-    }
-
-    async fn is_dirty(&self, graph: &str) -> Result<bool, DomainError> {
-        let row = sqlx::query_scalar::<_, i32>("SELECT 1 FROM accel_dirty WHERE graph_iri = $1")
-            .bind(graph)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(db_err)?;
-        Ok(row.is_some())
-    }
-
-    async fn rebuild(&self, graph: &str) -> Result<(), DomainError> {
-        let triples = self
-            .triples
-            .scan_pattern(
-                None,
-                None,
-                None,
-                Some(&GraphFilter::Iri(graph.to_owned())),
-                i64::MAX,
-            )
-            .await?;
+    /// Rebuild a graph's accelerator indexes from its triples, inside the
+    /// caller's write transaction (atomic with the triple write). The triple
+    /// scan runs through `conn`, so it sees the triples the same transaction
+    /// just wrote; the rebuilt indexes are deleted and reinserted on `conn` and
+    /// commit together with the triples. Callers invoke this after every write
+    /// that changes a graph's triples.
+    pub async fn refresh_graph(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        graph: &str,
+    ) -> Result<(), DomainError> {
+        let triples = self.triples.scan_graph_in_conn(conn, graph).await?;
         let index = build_accel_index(&triples);
 
         let sort_of: HashMap<&str, &str> = index
@@ -232,11 +174,10 @@ impl AccelRepository {
             mem_root.push(root_set.contains(&(collection.as_str(), member.as_str())));
         }
 
-        let mut tx = self.pool.begin().await.map_err(db_err)?;
         for table in ["accel_object", "accel_type", "accel_member", "accel_facet"] {
             sqlx::query(&format!("DELETE FROM {table} WHERE graph_iri = $1"))
                 .bind(graph)
-                .execute(&mut *tx)
+                .execute(&mut *conn)
                 .await
                 .map_err(db_err)?;
         }
@@ -252,7 +193,7 @@ impl AccelRepository {
             .bind(&obj_sort)
             .bind(&obj_top)
             .bind(&obj_meta)
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await
             .map_err(db_err)?;
         }
@@ -268,7 +209,7 @@ impl AccelRepository {
             .bind(&ty_type)
             .bind(&ty_iri)
             .bind(&ty_sort)
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await
             .map_err(db_err)?;
         }
@@ -285,7 +226,7 @@ impl AccelRepository {
             .bind(&mem_iri)
             .bind(&mem_sort)
             .bind(&mem_root)
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await
             .map_err(db_err)?;
         }
@@ -299,11 +240,10 @@ impl AccelRepository {
             .bind(graph)
             .bind(&facet_kind)
             .bind(&facet_value)
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await
             .map_err(db_err)?;
         }
-        tx.commit().await.map_err(db_err)?;
         Ok(())
     }
 

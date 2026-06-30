@@ -26,6 +26,7 @@ serde.workspace = true
 
 [dev-dependencies]
 sbol-db-postgres.workspace = true
+sbol-db-rocksdb.workspace = true
 sbol-db-sqlite.workspace = true
 sbol.workspace = true
 serde_json.workspace = true

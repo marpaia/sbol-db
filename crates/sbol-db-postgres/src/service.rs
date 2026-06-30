@@ -166,7 +166,7 @@ impl SbolObjectService {
             .triples
             .insert_triples(&mut tx, &triples, "graph-store")
             .await?;
-        AccelRepository::mark_dirty(&mut tx, graph).await?;
+        self.accel.refresh_graph(&mut tx, graph).await?;
         tx.commit().await.map_err(db_err)?;
         Ok(inserted)
     }
@@ -177,7 +177,7 @@ impl SbolObjectService {
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         let deleted = self.triples.clear_graph(&mut tx, Some(graph)).await?;
         self.triples.delete_graph(&mut tx, graph).await?;
-        AccelRepository::mark_dirty(&mut tx, graph).await?;
+        self.accel.refresh_graph(&mut tx, graph).await?;
         tx.commit().await.map_err(db_err)?;
         Ok(deleted)
     }
@@ -207,7 +207,9 @@ impl SbolObjectService {
             .triples
             .insert_triples(&mut *conn, &plan.triples, "sbol")
             .await?;
-        AccelRepository::mark_dirty(&mut *conn, plan.graph_iri.as_str()).await?;
+        self.accel
+            .refresh_graph(&mut *conn, plan.graph_iri.as_str())
+            .await?;
 
         let object_count = plan.summaries.len();
         for summary in &plan.summaries {

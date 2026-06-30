@@ -252,6 +252,27 @@ impl TripleRepository {
         rows.into_iter().map(row_to_triple).collect()
     }
 
+    /// Fetch every triple in one named graph through the caller's connection, so
+    /// it sees triples the same transaction has written but not yet committed.
+    /// The accelerator uses this to rebuild a graph's indexes inside the write
+    /// transaction.
+    pub async fn scan_graph_in_conn(
+        &self,
+        conn: &mut SqliteConnection,
+        graph: &str,
+    ) -> Result<Vec<Triple>, DomainError> {
+        let rows = sqlx::query(
+            "SELECT graph_iri, subject_iri, subject_blank, predicate_iri, object_iri, \
+             object_blank, object_literal, datatype_iri, language FROM sbol_triples \
+             WHERE graph_iri = ?",
+        )
+        .bind(graph)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(db_err)?;
+        rows.into_iter().map(row_to_triple).collect()
+    }
+
     pub async fn distinct_named_graphs(&self) -> Result<Vec<String>, DomainError> {
         let rows =
             sqlx::query("SELECT DISTINCT graph_iri FROM sbol_triples WHERE graph_iri IS NOT NULL")

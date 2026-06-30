@@ -126,7 +126,11 @@ impl SparqlEngine {
         // rewrite, so the recognizer still sees the template's shape. Anything not
         // recognized, not supported, or failing falls through to generic
         // evaluation, so results never depend on this path.
-        if format.is_solution_format() {
+        //
+        // Setting `SBOL_DB_ACCEL_DISABLED` to `1`/`true` skips the accelerator
+        // entirely, forcing generic evaluation for every query — an escape hatch
+        // when a query must bypass the indexes.
+        if format.is_solution_format() && !accel_disabled() {
             if let Some(plan) = crate::accel::recognize(&parsed, options.default_graph.as_deref()) {
                 let source = Arc::clone(&self.source);
                 let accel =
@@ -222,6 +226,15 @@ fn classify_query(query: &spargebra::Query) -> QueryForm {
         spargebra::Query::Construct { .. } => QueryForm::Construct,
         spargebra::Query::Describe { .. } => QueryForm::Describe,
     }
+}
+
+/// Whether `SBOL_DB_ACCEL_DISABLED` requests that the accelerator be bypassed so
+/// every query is evaluated generically.
+fn accel_disabled() -> bool {
+    matches!(
+        std::env::var("SBOL_DB_ACCEL_DISABLED").as_deref(),
+        Ok("1") | Ok("true")
+    )
 }
 
 fn evaluate_blocking<'a, D>(

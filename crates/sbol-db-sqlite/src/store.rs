@@ -83,6 +83,7 @@ impl SqliteStore {
     pub fn triple_writer(&self) -> Arc<dyn TripleWriter> {
         Arc::new(SqliteTripleWriter {
             triples: Arc::new(self.triples.clone()),
+            accel: self.accel.clone(),
             pool: self.pool.clone(),
         })
     }
@@ -124,7 +125,9 @@ impl SqliteStore {
             .triples
             .insert_triples(&mut *conn, &plan.triples, "sbol")
             .await?;
-        AccelRepository::mark_dirty(&mut *conn, plan.graph_iri.as_str()).await?;
+        self.accel
+            .refresh_graph(&mut *conn, plan.graph_iri.as_str())
+            .await?;
         let object_count = plan.summaries.len();
         for summary in &plan.summaries {
             self.objects
@@ -170,7 +173,7 @@ impl SqliteStore {
             .triples
             .insert_triples(&mut tx, &triples, "graph-store")
             .await?;
-        AccelRepository::mark_dirty(&mut tx, graph).await?;
+        self.accel.refresh_graph(&mut tx, graph).await?;
         tx.commit().await.map_err(db_err)?;
         Ok(inserted)
     }
@@ -179,7 +182,7 @@ impl SqliteStore {
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         let deleted = self.triples.clear_graph(&mut tx, Some(graph)).await?;
         self.triples.delete_graph(&mut tx, graph).await?;
-        AccelRepository::mark_dirty(&mut tx, graph).await?;
+        self.accel.refresh_graph(&mut tx, graph).await?;
         tx.commit().await.map_err(db_err)?;
         Ok(deleted)
     }
@@ -245,6 +248,7 @@ impl TripleSource for SqliteTripleSource {
 #[derive(Clone)]
 struct SqliteTripleWriter {
     triples: Arc<TripleRepository>,
+    accel: AccelRepository,
     pool: SqlitePool,
 }
 
@@ -305,7 +309,7 @@ impl TripleWriter for SqliteTripleWriter {
             }
         }
         for graph in touched_named_graphs(&changes) {
-            AccelRepository::mark_dirty(&mut tx, &graph).await?;
+            self.accel.refresh_graph(&mut tx, &graph).await?;
         }
         tx.commit().await.map_err(db_err)?;
         Ok(outcome)

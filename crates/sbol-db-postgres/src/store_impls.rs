@@ -99,12 +99,17 @@ impl TripleSource for PostgresTripleSource {
 #[derive(Clone)]
 pub struct PostgresTripleWriter {
     triples: Arc<TripleRepository>,
+    accel: AccelRepository,
     pool: PgPool,
 }
 
 impl PostgresTripleWriter {
-    pub fn new(triples: Arc<TripleRepository>, pool: PgPool) -> Self {
-        Self { triples, pool }
+    pub fn new(triples: Arc<TripleRepository>, accel: AccelRepository, pool: PgPool) -> Self {
+        Self {
+            triples,
+            accel,
+            pool,
+        }
     }
 }
 
@@ -165,7 +170,7 @@ impl TripleWriter for PostgresTripleWriter {
             }
         }
         for graph in touched_named_graphs(&changes) {
-            AccelRepository::mark_dirty(&mut tx, &graph).await?;
+            self.accel.refresh_graph(&mut tx, &graph).await?;
         }
         tx.commit().await.map_err(db_err)?;
         Ok(outcome)
@@ -186,6 +191,7 @@ impl SbolObjectService {
     pub fn triple_writer(&self) -> Arc<dyn TripleWriter> {
         Arc::new(PostgresTripleWriter::new(
             Arc::new(self.triples().clone()),
+            self.accel().clone(),
             self.pool().clone(),
         ))
     }

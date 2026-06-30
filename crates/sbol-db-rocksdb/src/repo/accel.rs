@@ -3,24 +3,22 @@
 //! of graph-pattern evaluation.
 //!
 //! The indexes are derived from a graph's triples (not from an SBOL parse), so
-//! they are maintained on the verbatim Graph Store write path SynBioHub uses.
-//! Derivation is deferred: a write marks the graph dirty, and the next read that
-//! needs the indexes rebuilds them in one pass. The rebuild clears the dirty
-//! flag *before* scanning, so a write that lands during a rebuild re-marks the
-//! graph and the next read rebuilds again (never serving stale data).
+//! they are maintained synchronously on the verbatim Graph Store write path
+//! SynBioHub uses: [`AccelRepository::stage_refresh`] derives a graph's indexes
+//! from its post-write triples and stages the deletes and puts into the write's
+//! own batch, so the indexes commit atomically with the triples. Reads (which
+//! never rebuild) always see indexes consistent with the committed triples.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 use rocksdb::WriteBatch;
-use sbol_db_core::DomainError;
+use sbol_db_core::{DomainError, Triple};
 use sbol_db_storage::{
     build_accel_index, generate_metadata_rows, generate_rows, integer, AccelSolutions,
-    AcceleratedQuery, FacetKind, Field, GraphFilter, MetaRecord, Scope, TermValue,
+    AcceleratedQuery, FacetKind, Field, MetaRecord, Scope, TermValue,
 };
 
 use crate::db::{compose, Db, SEP};
-use crate::repo::triple::TripleRepository;
 
 const FK_TYPES: u8 = 1;
 const FK_ROLES: u8 = 2;
@@ -32,28 +30,16 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 #[derive(Clone)]
 pub struct AccelRepository {
     db: Db,
-    triples: TripleRepository,
-    /// Serializes rebuilds so two readers don't derive the same graph at once.
-    rebuild: Arc<Mutex<()>>,
 }
 
 impl AccelRepository {
-    pub fn new(db: Db, triples: TripleRepository) -> Self {
-        Self {
-            db,
-            triples,
-            rebuild: Arc::new(Mutex::new(())),
-        }
+    pub fn new(db: Db) -> Self {
+        Self { db }
     }
 
-    /// Mark a graph's indexes stale within an existing write batch (atomic with
-    /// the triple write).
-    pub fn stage_mark_dirty(&self, batch: &mut WriteBatch, graph: &str) {
-        let cf = self.db.cf("acc_dirty");
-        batch.put_cf(&cf, graph.as_bytes(), []);
-    }
-
-    /// Answer a recognized query, rebuilding the graph's indexes first if stale.
+    /// Answer a recognized query from the graph's accelerator indexes, which the
+    /// write path keeps in sync with the committed triples (see
+    /// [`Self::stage_refresh`]).
     pub fn run(&self, query: &AcceleratedQuery) -> Result<AccelSolutions, DomainError> {
         match query {
             AcceleratedQuery::ObjectList {
@@ -63,53 +49,41 @@ impl AccelRepository {
                 offset,
                 limit,
                 subject_prefix,
-            } => {
-                self.ensure_fresh(graph)?;
-                self.object_list(
-                    graph,
-                    scope,
-                    projection,
-                    *offset,
-                    *limit,
-                    subject_prefix.as_deref(),
-                )
-            }
+            } => self.object_list(
+                graph,
+                scope,
+                projection,
+                *offset,
+                *limit,
+                subject_prefix.as_deref(),
+            ),
             AcceleratedQuery::Count {
                 graph,
                 scope,
                 var,
                 subject_prefix,
-            } => {
-                self.ensure_fresh(graph)?;
-                self.count(graph, scope, var, subject_prefix.as_deref())
-            }
-            AcceleratedQuery::Facet { graph, kind, var } => {
-                self.ensure_fresh(graph)?;
-                self.facet(graph, *kind, var)
-            }
+            } => self.count(graph, scope, var, subject_prefix.as_deref()),
+            AcceleratedQuery::Facet { graph, kind, var } => self.facet(graph, *kind, var),
             AcceleratedQuery::ObjectMetadata {
                 graph,
                 subject,
                 projection,
                 required,
-            } => {
-                self.ensure_fresh(graph)?;
-                self.object_metadata(graph, subject, projection, required)
-            }
+            } => self.object_metadata(graph, subject, projection, required),
         }
     }
 
-    fn ensure_fresh(&self, graph: &str) -> Result<(), DomainError> {
-        let _guard = self.rebuild.lock().unwrap();
-        if !self.db.exists_cf("acc_dirty", graph.as_bytes())? {
-            return Ok(());
-        }
-        // Clear before scanning: a write during the rebuild re-marks the graph.
-        self.db.delete_cf("acc_dirty", graph.as_bytes())?;
-        self.derive(graph)
-    }
-
-    fn derive(&self, graph: &str) -> Result<(), DomainError> {
+    /// Rebuild a graph's accelerator indexes from `triples` (the graph's
+    /// post-write triple set), staging the work into the caller's write batch so
+    /// it commits atomically with the triple write. Old per-graph index keys are
+    /// deleted and the freshly derived keys put. Callers invoke this after every
+    /// write that changes a graph's triples; reads never rebuild.
+    pub fn stage_refresh(
+        &self,
+        batch: &mut WriteBatch,
+        graph: &str,
+        triples: &[Triple],
+    ) -> Result<(), DomainError> {
         let gp = prefix(&[graph.as_bytes()]);
         for cf in [
             "acc_meta",
@@ -120,19 +94,11 @@ impl AccelRepository {
             "acc_facet",
             "acc_count",
         ] {
-            self.clear_prefix(cf, &gp)?;
+            self.stage_clear_prefix(batch, cf, &gp)?;
         }
 
-        let triples = self.triples.scan_pattern(
-            None,
-            None,
-            None,
-            Some(&GraphFilter::Iri(graph.to_owned())),
-            i64::MAX,
-        )?;
-        let index = build_accel_index(&triples);
+        let index = build_accel_index(triples);
 
-        let mut batch = WriteBatch::default();
         let meta_cf = self.db.cf("acc_meta");
         let tl_cf = self.db.cf("acc_toplevel");
         let bt_cf = self.db.cf("acc_bytype");
@@ -243,7 +209,7 @@ impl AccelRepository {
                 root.to_le_bytes(),
             );
         }
-        self.db.write(batch)
+        Ok(())
     }
 
     fn object_list(
@@ -395,18 +361,24 @@ impl AccelRepository {
         }
     }
 
-    fn clear_prefix(&self, cf: &str, scan_prefix: &[u8]) -> Result<(), DomainError> {
+    /// Stage deletes for every key under `scan_prefix` in `cf` into `batch`, so
+    /// the old per-graph index entries are removed atomically with the rebuild.
+    fn stage_clear_prefix(
+        &self,
+        batch: &mut WriteBatch,
+        cf: &str,
+        scan_prefix: &[u8],
+    ) -> Result<(), DomainError> {
         let mut keys = Vec::new();
         self.db.for_each_prefix(cf, scan_prefix, |key, _| {
             keys.push(key.to_owned());
             Ok(true)
         })?;
-        let mut batch = WriteBatch::default();
         let handle = self.db.cf(cf);
         for key in keys {
             batch.delete_cf(&handle, key);
         }
-        self.db.write(batch)
+        Ok(())
     }
 }
 

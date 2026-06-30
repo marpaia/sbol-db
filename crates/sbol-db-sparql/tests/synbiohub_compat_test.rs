@@ -21,7 +21,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use sbol_db_core::IriString;
-use sbol_db_postgres::{connect, run_migrations, AccelRepository, SbolObjectService};
+use sbol_db_postgres::{connect, run_migrations, SbolObjectService};
 use sbol_db_rdf::rdf_graph_to_triples;
 use sbol_db_sparql::{ResultFormat, SparqlEngine, SparqlOptions};
 use tokio::sync::{Mutex, MutexGuard};
@@ -76,11 +76,12 @@ async fn fresh_engine() -> SparqlEngine {
             .insert_triples(&mut conn, &triples, "graph-store")
             .await
             .expect("insert_triples");
-        // The raw insert bypasses the Graph Store write path, so mark the graph
-        // dirty by hand for the accelerator (the write path does this itself).
-        AccelRepository::mark_dirty(&mut conn, PUBLIC_GRAPH)
+        // The raw insert bypasses the Graph Store write path, so refresh the
+        // accelerator by hand (the write path does this within its transaction).
+        svc.accel()
+            .refresh_graph(&mut conn, PUBLIC_GRAPH)
             .await
-            .expect("mark dirty");
+            .expect("refresh accel");
         n
     };
     assert_eq!(
@@ -301,14 +302,16 @@ async fn default_graph_uri_scopes_reads() {
             .insert_triples(&mut conn, &user_triples, "graph-store")
             .await
             .expect("seed user");
-        // The raw inserts bypass the Graph Store write path, so mark both graphs
-        // dirty by hand for the accelerator (the write path does this itself).
-        AccelRepository::mark_dirty(&mut conn, PUBLIC_GRAPH)
+        // The raw inserts bypass the Graph Store write path, so refresh the
+        // accelerator by hand (the write path does this within its transaction).
+        svc.accel()
+            .refresh_graph(&mut conn, PUBLIC_GRAPH)
             .await
-            .expect("mark public dirty");
-        AccelRepository::mark_dirty(&mut conn, USER_GRAPH)
+            .expect("refresh public accel");
+        svc.accel()
+            .refresh_graph(&mut conn, USER_GRAPH)
             .await
-            .expect("mark user dirty");
+            .expect("refresh user accel");
     }
     let engine = SparqlEngine::new(svc.triple_source());
 

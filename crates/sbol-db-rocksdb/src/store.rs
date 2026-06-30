@@ -5,7 +5,7 @@
 //! synchronous, driven inside the SPARQL evaluator's blocking task) calls the
 //! engine directly.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -59,7 +59,7 @@ impl RocksdbStore {
             ontology: OntologyRepository::new(db.clone()),
             sequences: SequenceSearchRepository::new(db.clone()),
             lab: LabRepository::new(db.clone()),
-            accel: AccelRepository::new(db.clone(), TripleRepository::new(db.clone())),
+            accel: AccelRepository::new(db.clone()),
             db,
         }
     }
@@ -89,7 +89,10 @@ impl RocksdbStore {
         self.graphs
             .stage_insert(batch, plan.graph_id, &plan.new_graph)?;
         let triple_count = self.triples.stage_insert(batch, seen, &plan.triples)?;
-        self.accel.stage_mark_dirty(batch, plan.graph_iri.as_str());
+        // The graph is freshly minted by the plan, so its post-write triple set
+        // is exactly the document's triples.
+        self.accel
+            .stage_refresh(batch, plan.graph_iri.as_str(), &plan.triples)?;
         let object_count = plan.summaries.len();
         for summary in &plan.summaries {
             self.objects
@@ -174,7 +177,22 @@ impl RocksdbStore {
                 this.triples.stage_clear_graph(&mut batch, Some(&graph))?;
             }
             let inserted = this.triples.stage_insert(&mut batch, &mut seen, &triples)?;
-            this.accel.stage_mark_dirty(&mut batch, &graph);
+            // The graph's post-write triples: just the posted ones for Replace, or
+            // the existing committed triples plus the posted ones for Merge.
+            let post = if mode == GraphWriteMode::Replace {
+                triples
+            } else {
+                let mut existing = this.triples.scan_pattern(
+                    None,
+                    None,
+                    None,
+                    Some(&GraphFilter::Iri(graph.clone())),
+                    i64::MAX,
+                )?;
+                existing.extend(triples);
+                existing
+            };
+            this.accel.stage_refresh(&mut batch, &graph, &post)?;
             this.db.write(batch)?;
             Ok(inserted)
         })
@@ -187,7 +205,8 @@ impl RocksdbStore {
         blocking(move || {
             let mut batch = WriteBatch::default();
             let deleted = this.triples.stage_clear_graph(&mut batch, Some(&graph))?;
-            this.accel.stage_mark_dirty(&mut batch, &graph);
+            // The graph is now empty, so its accelerator indexes are dropped.
+            this.accel.stage_refresh(&mut batch, &graph, &[])?;
             this.db.write(batch)?;
             Ok(deleted)
         })
@@ -296,15 +315,31 @@ impl TripleWriter for RocksdbTripleWriter {
             let mut outcome = UpdateOutcome::default();
             let mut batch = WriteBatch::default();
             let mut seen = HashSet::new();
-            let mut dirty: HashSet<String> = HashSet::new();
+            // Per named graph, the inserts and deletes this update applies and
+            // whether it was cleared, so each touched graph's accelerator indexes
+            // can be rebuilt from its post-write triple set in the same batch.
+            let mut inserts_by_graph: HashMap<String, Vec<Triple>> = HashMap::new();
+            let mut deletes_by_graph: HashMap<String, Vec<Triple>> = HashMap::new();
+            let mut cleared: HashSet<String> = HashSet::new();
             for change in &changes {
                 match change {
                     TripleChange::Change { deletes, inserts } => {
                         outcome.deleted += triples.stage_delete(&mut batch, deletes)?;
                         outcome.inserted += triples.stage_insert(&mut batch, &mut seen, inserts)?;
-                        for t in deletes.iter().chain(inserts.iter()) {
+                        for t in deletes {
                             if let Some(g) = &t.graph_iri {
-                                dirty.insert(g.as_str().to_owned());
+                                deletes_by_graph
+                                    .entry(g.as_str().to_owned())
+                                    .or_default()
+                                    .push(t.clone());
+                            }
+                        }
+                        for t in inserts {
+                            if let Some(g) = &t.graph_iri {
+                                inserts_by_graph
+                                    .entry(g.as_str().to_owned())
+                                    .or_default()
+                                    .push(t.clone());
                             }
                         }
                     }
@@ -312,13 +347,38 @@ impl TripleWriter for RocksdbTripleWriter {
                         outcome.deleted += triples
                             .stage_clear_graph(&mut batch, graph.as_ref().map(|i| i.as_str()))?;
                         if let Some(g) = graph {
-                            dirty.insert(g.as_str().to_owned());
+                            cleared.insert(g.as_str().to_owned());
                         }
                     }
                 }
             }
-            for graph in &dirty {
-                accel.stage_mark_dirty(&mut batch, graph);
+            let mut touched: HashSet<String> = cleared.clone();
+            touched.extend(inserts_by_graph.keys().cloned());
+            touched.extend(deletes_by_graph.keys().cloned());
+            for graph in &touched {
+                // Post-write triples: empty if the graph was cleared, otherwise the
+                // committed triples minus this update's deletes; then plus its
+                // inserts.
+                let mut post: Vec<Triple> = if cleared.contains(graph) {
+                    Vec::new()
+                } else {
+                    let dels = deletes_by_graph.get(graph);
+                    triples
+                        .scan_pattern(
+                            None,
+                            None,
+                            None,
+                            Some(&GraphFilter::Iri(graph.clone())),
+                            i64::MAX,
+                        )?
+                        .into_iter()
+                        .filter(|t| dels.is_none_or(|d| !d.contains(t)))
+                        .collect()
+                };
+                if let Some(ins) = inserts_by_graph.get(graph) {
+                    post.extend(ins.iter().cloned());
+                }
+                accel.stage_refresh(&mut batch, graph, &post)?;
             }
             db.write(batch)?;
             Ok(outcome)

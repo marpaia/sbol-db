@@ -303,6 +303,17 @@ async fn sqlite_accelerator_matches_generic_engine() {
     assert_accel_matches_generic(&store, source).await;
 }
 
+#[tokio::test]
+async fn rocksdb_accelerator_matches_generic_engine() {
+    use sbol_db_rocksdb::{connect, RocksdbStore};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let url = format!("rocksdb://{}", dir.path().join("accel.rocksdb").display());
+    let db = connect(&url).expect("open rocksdb");
+    let store = RocksdbStore::new(db);
+    let source = store.triple_source();
+    assert_accel_matches_generic(&store, source).await;
+}
+
 /// Opt-in (it truncates the shared Postgres database, so it must not run
 /// alongside the other Postgres-backed test binaries): `ACCEL_DIFF_PG=1`.
 #[tokio::test]

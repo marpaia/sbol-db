@@ -2961,6 +2961,7 @@ dependencies = [
  "sbol-db-core",
  "sbol-db-postgres",
  "sbol-db-rdf",
+ "sbol-db-rocksdb",
  "sbol-db-sqlite",
  "sbol-db-storage",
  "sbol-rdf",

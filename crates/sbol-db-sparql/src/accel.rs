@@ -86,9 +86,26 @@ pub fn recognize(query: &Query, default_graph: Option<&str>) -> Option<Accelerat
     // (those not referenced by another member); the anti-join is precomputed.
     let root_only = has_not_exists(p);
 
+    // The accelerated templates are single-shape BGPs (with OPTIONALs). A query
+    // whose graph pattern contains a `UNION` or `MINUS` is a different shape:
+    // pattern collection would flatten the alternatives into one set and match a
+    // scope the query does not actually express — e.g. SynBioHub's member
+    // types/roles query, `<c> sbol2:member ?m . {?m a ?u} UNION {?m sbol2:type ?u}
+    // UNION {?m sbol2:role ?u}`, would be served as a single member field and
+    // yield null/incorrect rows. Decline so the engine evaluates it. (The member
+    // anti-join's `UNION` lives inside a `FILTER NOT EXISTS` expression, not the
+    // pattern tree, so the root-member template is unaffected.)
+    if has_union_or_minus(p) {
+        return None;
+    }
+
     if is_aggregate {
         let var = projection.first()?.as_str().to_owned();
         let (scope, subject_var) = detect_scope(&patterns, root_only)?;
+        if pins_subject(p, &subject_var) || !scope_subject_predicates_known(&patterns, &subject_var)
+        {
+            return None;
+        }
         let subject_prefix = strstarts_prefix(p, &subject_var);
         return Some(AcceleratedQuery::Count {
             graph,
@@ -117,6 +134,9 @@ pub fn recognize(query: &Query, default_graph: Option<&str>) -> Option<Accelerat
     }
 
     let (scope, subject_var) = detect_scope(&patterns, root_only)?;
+    if pins_subject(p, &subject_var) || !scope_subject_predicates_known(&patterns, &subject_var) {
+        return None;
+    }
     let fields = field_map(&patterns);
     let mut proj = Vec::with_capacity(vars.len());
     for v in &vars {
@@ -188,6 +208,16 @@ fn detect_scope(patterns: &[&TriplePattern], root_only: bool) -> Option<(Scope, 
             if let (TermPattern::NamedNode(coll), TermPattern::Variable(uri)) =
                 (&t.subject, &t.object)
             {
+                // The membership index enumerates a collection's members without
+                // filtering by type. A query that also pins the member to a
+                // constant rdf:type (e.g. SynBioHub's "sub-collections":
+                // `?c a sbol2:Collection . <parent> sbol2:member ?c`) asks for
+                // members *of that type*, which this scope cannot filter to.
+                // Decline so the engine evaluates it generically rather than
+                // returning every member regardless of type.
+                if has_const_type(patterns, uri.as_str()) {
+                    return None;
+                }
                 let scope = Scope::Collection {
                     collection: coll.as_str().to_owned(),
                     root_only,
@@ -199,6 +229,15 @@ fn detect_scope(patterns: &[&TriplePattern], root_only: bool) -> Option<(Scope, 
     for t in patterns {
         if is_toplevel(t) {
             if let TermPattern::Variable(s) = &t.subject {
+                // The top-level index is type-agnostic and carries no member
+                // anti-join. A query that also pins the subject to a constant
+                // rdf:type, or that adds `FILTER NOT EXISTS { ?o sbol2:member ?s }`
+                // (root_only), asks for a narrower set than the index holds
+                // (SynBioHub's "manage"/root-collections query does both). Neither
+                // is filterable here, so decline and let the engine evaluate it.
+                if has_const_type(patterns, s.as_str()) || root_only {
+                    return None;
+                }
                 return Some((Scope::TopLevel, s.as_str().to_owned()));
             }
         }
@@ -206,11 +245,30 @@ fn detect_scope(patterns: &[&TriplePattern], root_only: bool) -> Option<(Scope, 
     for t in patterns {
         if pred(t) == Some(RDF_TYPE) {
             if let (TermPattern::Variable(s), TermPattern::NamedNode(n)) = (&t.subject, &t.object) {
+                // The by-type index enumerates every object of a type; the member
+                // anti-join (`FILTER NOT EXISTS { ?o sbol2:member ?s }`, root_only)
+                // that SynBioHub's public "browse root collections" query adds is
+                // not precomputed for it. Decline so those root-only listings are
+                // evaluated generically rather than including nested members.
+                if root_only {
+                    return None;
+                }
                 return Some((Scope::ByType(n.as_str().to_owned()), s.as_str().to_owned()));
             }
         }
     }
     None
+}
+
+/// Whether some pattern restricts `subject` to a constant rdf:type
+/// (`?subject a <NamedNode>`), as opposed to the type-projection pattern
+/// `?subject a ?type`.
+fn has_const_type(patterns: &[&TriplePattern], subject: &str) -> bool {
+    patterns.iter().any(|t| {
+        pred(t) == Some(RDF_TYPE)
+            && matches!(&t.subject, TermPattern::Variable(s) if s.as_str() == subject)
+            && matches!(&t.object, TermPattern::NamedNode(_))
+    })
 }
 
 /// Map each metadata predicate's object variable to the field it projects.
@@ -467,6 +525,117 @@ fn facet_kind(patterns: &[&TriplePattern], var: &str) -> Option<FacetKind> {
     None
 }
 
+/// Whether a `FILTER` restricts the scope's subject variable to a constant term
+/// (`FILTER(?s = <iri>)`, `sameTerm(?s, <iri>)`, or `?s IN (<iri>, ...)`). The
+/// accelerator's scopes enumerate every object of a type / top-level set /
+/// collection and cannot apply a subject restriction, so a query that pins the
+/// subject this way — e.g. SynBioHub's "is <X> a Collection?" probe,
+/// `?c a sbol2:Collection . FILTER(?c = <X>)` — must be declined and evaluated
+/// generically. Otherwise the accelerator answers for the whole type, ignoring
+/// the filter, and reports a match for a subject that is not of that type.
+/// The predicates an accelerated scope can carry on its *enumerated* subject:
+/// the type assertion, the top-level self-edge, and the projected metadata
+/// fields. Anything else (e.g. `?s sbol2:member <x>`, which restricts the
+/// enumerated subject to collections containing `<x>`) is a constraint the scope
+/// indexes don't encode.
+const SCOPE_SUBJECT_PREDS: &[&str] = &[
+    RDF_TYPE,
+    TOPLEVEL,
+    DISPLAY_ID,
+    VERSION,
+    TITLE,
+    DESCRIPTION,
+    SBOL_TYPE,
+    ROLE,
+    CREATOR,
+];
+
+/// Whether every triple pattern whose subject is the scope's enumerated variable
+/// uses only [`SCOPE_SUBJECT_PREDS`]. A pattern that puts another predicate on
+/// the enumerated subject is an extra constraint the scope cannot honor (e.g.
+/// SynBioHub's "collections containing <x>" query, `?s a sbol2:Collection . ?s
+/// sbol2:member <x>`), so the recognizer must decline rather than enumerate the
+/// whole type. (Scope-defining patterns like `<coll> sbol2:member ?s` put the
+/// constant collection — not `?s` — in subject position, so they are unaffected.)
+fn scope_subject_predicates_known(patterns: &[&TriplePattern], subject_var: &str) -> bool {
+    patterns.iter().all(|t| match &t.subject {
+        TermPattern::Variable(s) if s.as_str() == subject_var => {
+            matches!(pred(t), Some(p) if SCOPE_SUBJECT_PREDS.contains(&p))
+        }
+        _ => true,
+    })
+}
+
+/// Whether the graph pattern tree contains a `UNION` or `MINUS` node. Only the
+/// pattern tree is walked, not filter expressions, so a `FILTER NOT EXISTS`
+/// whose sub-pattern uses `UNION` (the root-member anti-join) is not flagged.
+fn has_union_or_minus(pattern: &GraphPattern) -> bool {
+    use GraphPattern::*;
+    match pattern {
+        Union { .. } | Minus { .. } => true,
+        Join { left, right } | LeftJoin { left, right, .. } => {
+            has_union_or_minus(left) || has_union_or_minus(right)
+        }
+        Filter { inner, .. }
+        | Graph { inner, .. }
+        | Extend { inner, .. }
+        | OrderBy { inner, .. }
+        | Project { inner, .. }
+        | Distinct { inner }
+        | Reduced { inner }
+        | Slice { inner, .. }
+        | Group { inner, .. }
+        | Service { inner, .. } => has_union_or_minus(inner),
+        _ => false,
+    }
+}
+
+fn pins_subject(pattern: &GraphPattern, subject_var: &str) -> bool {
+    use GraphPattern::*;
+    match pattern {
+        Filter { expr, inner } => {
+            expr_pins_subject(expr, subject_var) || pins_subject(inner, subject_var)
+        }
+        Join { left, right }
+        | LeftJoin { left, right, .. }
+        | Union { left, right }
+        | Minus { left, right } => {
+            pins_subject(left, subject_var) || pins_subject(right, subject_var)
+        }
+        Graph { inner, .. }
+        | Extend { inner, .. }
+        | OrderBy { inner, .. }
+        | Project { inner, .. }
+        | Distinct { inner }
+        | Reduced { inner }
+        | Slice { inner, .. }
+        | Group { inner, .. }
+        | Service { inner, .. } => pins_subject(inner, subject_var),
+        _ => false,
+    }
+}
+
+fn expr_pins_subject(expr: &spargebra::algebra::Expression, subject_var: &str) -> bool {
+    use spargebra::algebra::Expression::{self, *};
+    fn is_subject(e: &Expression, subject_var: &str) -> bool {
+        matches!(e, Expression::Variable(v) if v.as_str() == subject_var)
+    }
+    fn is_const(e: &Expression) -> bool {
+        matches!(e, Expression::NamedNode(_) | Expression::Literal(_))
+    }
+    match expr {
+        And(a, b) | Or(a, b) => {
+            expr_pins_subject(a, subject_var) || expr_pins_subject(b, subject_var)
+        }
+        Equal(a, b) | SameTerm(a, b) => {
+            (is_subject(a, subject_var) && is_const(b))
+                || (is_const(a) && is_subject(b, subject_var))
+        }
+        In(e, list) => is_subject(e, subject_var) && !list.is_empty() && list.iter().all(is_const),
+        _ => false,
+    }
+}
+
 fn is_toplevel(t: &TriplePattern) -> bool {
     pred(t) == Some(TOPLEVEL)
         && matches!((&t.subject, &t.object),
@@ -691,5 +860,128 @@ mod tests {
     #[test]
     fn declines_unknown() {
         assert!(rec("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1").is_none());
+    }
+
+    // SynBioHub's "manage" / root-collections query pins the subject to a constant
+    // type *and* requires it to be top-level. The top-level index is type-agnostic,
+    // so serving it as `Scope::TopLevel` would return every top-level object
+    // (component definitions, sequences, ...) regardless of type. The recognizer
+    // must decline these so the engine evaluates them generically.
+    #[test]
+    fn declines_toplevel_with_constant_type() {
+        let q = format!(
+            "SELECT DISTINCT ?subject ?displayId ?version ?name ?description ?type ?sbolType ?role \
+             FROM <{G}> WHERE {{ ?subject a sbol2:Collection . \
+             FILTER NOT EXISTS {{ ?otherCollection sbol2:member ?subject }} \
+             ?subject a ?type . ?subject sbh:topLevel ?subject . \
+             OPTIONAL{{?subject sbol2:displayId ?displayId}} \
+             OPTIONAL{{?subject sbol2:version ?version}} \
+             OPTIONAL{{?subject dcterms:title ?name}} \
+             OPTIONAL{{?subject dcterms:description ?description}} \
+             OPTIONAL{{?subject sbol2:type ?sbolType}} \
+             OPTIONAL{{?subject sbol2:role ?role}} }}"
+        );
+        assert!(
+            rec(&q).is_none(),
+            "manage/root-collections query must decline"
+        );
+    }
+
+    // SynBioHub's "sub-collections" query restricts a collection's members to a
+    // constant type (`?c a sbol2:Collection . <parent> sbol2:member ?c`). The
+    // membership index can't filter members by type, so the recognizer must
+    // decline rather than return every member.
+    // SynBioHub's public "browse" lists root collections: a by-type listing with
+    // a member anti-join (`?s a sbol2:Collection . FILTER NOT EXISTS { ?o member
+    // ?s }`). The by-type index has no root anti-join, so the recognizer must
+    // decline rather than include nested (member) collections.
+    // SynBioHub's download path probes "is <X> a Collection?" with
+    // `?c a sbol2:Collection . FILTER(?c = <X>)`. The by-type index can't apply
+    // the subject-equality filter, so the recognizer must decline — otherwise it
+    // answers for every Collection and wrongly reports <X> as a Collection.
+    // SynBioHub's member types/roles query unions three alternatives over a
+    // collection's members. Flattening the union would match a single member
+    // field and yield null/incorrect rows, so a query with a UNION must decline.
+    // SynBioHub's "collections containing <x>" query restricts the enumerated
+    // collection to those with <x> as a member: `?s a sbol2:Collection . ?s
+    // sbol2:member <x>`. The by-type index can't apply that membership
+    // constraint, so the recognizer must decline rather than list every
+    // collection.
+    #[test]
+    fn declines_bytype_with_member_constraint() {
+        let q = format!(
+            "SELECT ?subject ?displayId FROM <{G}> WHERE {{ ?subject a sbol2:Collection . \
+             ?subject sbol2:member <{G}/x/1> . \
+             OPTIONAL {{ ?subject sbol2:displayId ?displayId }} }}"
+        );
+        assert!(
+            rec(&q).is_none(),
+            "collections-containing-<x> query must decline"
+        );
+    }
+
+    #[test]
+    fn declines_union_member_types_roles() {
+        let q = format!(
+            "SELECT DISTINCT ?uri FROM <{G}> WHERE {{ <{G}/c/1> sbol2:member ?m . \
+             {{ ?m a ?uri }} UNION {{ ?m sbol2:type ?uri }} UNION {{ ?m sbol2:role ?uri }} }}"
+        );
+        assert!(
+            rec(&q).is_none(),
+            "union member types/roles query must decline"
+        );
+    }
+
+    #[test]
+    fn declines_bytype_with_subject_equality_filter() {
+        let q = format!(
+            "SELECT ?c FROM <{G}> WHERE {{ ?c a sbol2:Collection . \
+             FILTER(?c = <{G}/part_pIKE_Toggle_1/1>) }}"
+        );
+        assert!(
+            rec(&q).is_none(),
+            "is-X-a-Collection probe (subject-equality filter) must decline"
+        );
+    }
+
+    #[test]
+    fn declines_bytype_root_only() {
+        let q = format!(
+            "SELECT ?object ?name FROM <{G}> WHERE {{ ?object a sbol2:Collection . \
+             FILTER NOT EXISTS {{ ?otherCollection sbol2:member ?object }} \
+             OPTIONAL{{?object dcterms:title ?name}} }}"
+        );
+        assert!(
+            rec(&q).is_none(),
+            "browse root-collections query must decline"
+        );
+    }
+
+    #[test]
+    fn declines_member_with_constant_type() {
+        let q = format!(
+            "SELECT ?Collection ?name ?displayId FROM <{G}> WHERE {{ \
+             ?Collection a sbol2:Collection . \
+             <{G}/parent/1> sbol2:member ?Collection . \
+             OPTIONAL{{?Collection dcterms:title ?name}} \
+             OPTIONAL{{?Collection sbol2:displayId ?displayId}} \
+             FILTER NOT EXISTS {{ <{G}/parent/1> sbol2:member ?o . ?o sbol2:member ?Collection }} }}"
+        );
+        assert!(rec(&q).is_none(), "sub-collections query must decline");
+    }
+
+    #[test]
+    fn declines_toplevel_with_constant_type_count() {
+        let q = format!(
+            "SELECT (sum(?tc) AS ?count) FROM <{G}> WHERE {{ \
+             {{ SELECT (count(distinct ?subject) AS ?tc) WHERE {{ \
+             ?subject a sbol2:Collection . \
+             FILTER NOT EXISTS {{ ?otherCollection sbol2:member ?subject }} \
+             ?subject a ?type . ?subject sbh:topLevel ?subject }} }} }}"
+        );
+        assert!(
+            rec(&q).is_none(),
+            "manage/root-collections count query must decline"
+        );
     }
 }
