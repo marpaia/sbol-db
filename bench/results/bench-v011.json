@@ -1,0 +1,413 @@
+{
+  "meta": {
+    "host": "Mikes-MacBook-Pro.local",
+    "os": "macOS-26.6-arm64-arm-64bit",
+    "cpu": "Apple M4 Max",
+    "cores": 16,
+    "mem_bytes": 137438953472,
+    "python": "3.12.8",
+    "corpus_dir": "/Users/marpaia/git/SynBioHub/synbiohub/tests/Emulated",
+    "corpus_files": 189,
+    "corpus_bytes": 16363387,
+    "graph": "http://synbiohub.org/public",
+    "iterations": 40,
+    "warmup": 8,
+    "ingest_runs": 3,
+    "settled": true,
+    "backends": [
+      "virtuoso",
+      "postgres",
+      "sqlite",
+      "rocksdb"
+    ],
+    "endpoints": {
+      "virtuoso": "http://localhost:18901/sparql",
+      "postgres": "http://localhost:18902/sparql",
+      "sqlite": "http://localhost:18903/sparql",
+      "rocksdb": "http://localhost:18904/sparql"
+    },
+    "virtuoso_image": "tenforce/virtuoso:virtuoso7.2.5",
+    "sboldb_image": "ghcr.io/marpaia/sbol-db:v0.1.1",
+    "triples": {
+      "virtuoso": 81488,
+      "postgres": 81488,
+      "sqlite": 81488,
+      "rocksdb": 81488
+    },
+    "uris": {
+      "collection": "http://localhost:7777/user/testuser/Tester_1/Tester_1_collection/1",
+      "toplevel": "http://localhost:7777/user/testuser/Tester_1/Tester_1_collection/1",
+      "componentdefinition": "http://localhost:7777/user/testuser/Tester_1/BBa_J23119/1"
+    }
+  },
+  "ingest": {
+    "virtuoso": {
+      "runs_s": [
+        1.6824126249994151,
+        1.531921959016472,
+        1.485774916014634
+      ],
+      "mean_s": 1.5667031666768405,
+      "min_s": 1.485774916014634,
+      "files": 189,
+      "files_per_s": 120.63548732137369
+    },
+    "postgres": {
+      "runs_s": [
+        69.87348120799288,
+        66.35757337498944,
+        64.75199366599554
+      ],
+      "mean_s": 66.99434941632596,
+      "min_s": 64.75199366599554,
+      "files": 189,
+      "files_per_s": 2.8211334485165147
+    },
+    "sqlite": {
+      "runs_s": [
+        53.03061949997209,
+        54.34345945896348,
+        55.63079583295621
+      ],
+      "mean_s": 54.33495826396393,
+      "min_s": 53.03061949997209,
+      "files": 189,
+      "files_per_s": 3.4784235791959506
+    },
+    "rocksdb": {
+      "runs_s": [
+        33.885801542026456,
+        40.21871583297616,
+        41.924057625001296
+      ],
+      "mean_s": 38.67619166666797,
+      "min_s": 33.885801542026456,
+      "files": 189,
+      "files_per_s": 4.886727256626059
+    }
+  },
+  "reads": [
+    {
+      "name": "getCollections",
+      "query": "PREFIX sbol2: <http://sbols.org/v2#>\nPREFIX dcterms: <http://purl.org/dc/terms/>\nPREFIX sbh: <http://wiki.synbiohub.org/wiki/Terms/synbiohub#>\nPREFIX biopax: <http://www.biopax.org/release/biopax-level3.owl#>\nPREFIX so: <http://identifiers.org/so/>\nSELECT DISTINCT ?subject ?displayId ?name FROM <http://synbiohub.org/public> WHERE {\n    ?subject a sbol2:Collection .\n    OPTIONAL { ?subject sbol2:displayId ?displayId . }\n    OPTIONAL { ?subject dcterms:title ?name . }\n}",
+      "backends": {
+        "virtuoso": {
+          "n": 40,
+          "mean_ms": 4.254515549109783,
+          "p50_ms": 4.147208004724234,
+          "p95_ms": 5.237419120385311,
+          "min_ms": 3.655666019767523,
+          "max_ms": 5.764333007391542,
+          "qps": 235.04438718275233,
+          "result_rows": 23
+        },
+        "postgres": {
+          "n": 40,
+          "mean_ms": 2.236458277911879,
+          "p50_ms": 2.1281880035530776,
+          "p95_ms": 2.7518871822394426,
+          "min_ms": 1.7595829558558762,
+          "max_ms": 2.9921249952167273,
+          "qps": 447.13554904036624,
+          "result_rows": 23
+        },
+        "sqlite": {
+          "n": 40,
+          "mean_ms": 2.199277118779719,
+          "p50_ms": 2.039770974079147,
+          "p95_ms": 3.0048972781514744,
+          "min_ms": 1.569041982293129,
+          "max_ms": 3.236458986066282,
+          "qps": 454.6948592612356,
+          "result_rows": 23
+        },
+        "rocksdb": {
+          "n": 40,
+          "mean_ms": 1.439345751714427,
+          "p50_ms": 1.2248955317772925,
+          "p95_ms": 2.2994827042566612,
+          "min_ms": 1.0335000115446746,
+          "max_ms": 2.5231249746866524,
+          "qps": 694.7601011146103,
+          "result_rows": 23
+        }
+      }
+    },
+    {
+      "name": "countComponentDefinition",
+      "query": "PREFIX sbol2: <http://sbols.org/v2#>\nPREFIX dcterms: <http://purl.org/dc/terms/>\nPREFIX sbh: <http://wiki.synbiohub.org/wiki/Terms/synbiohub#>\nPREFIX biopax: <http://www.biopax.org/release/biopax-level3.owl#>\nPREFIX so: <http://identifiers.org/so/>\nSELECT (COUNT(DISTINCT ?cd) AS ?count) FROM <http://synbiohub.org/public> WHERE { ?cd a sbol2:ComponentDefinition }",
+      "backends": {
+        "virtuoso": {
+          "n": 40,
+          "mean_ms": 3.525110421469435,
+          "p50_ms": 3.4855004923883826,
+          "p95_ms": 4.10343091643881,
+          "min_ms": 2.795292006339878,
+          "max_ms": 6.08950003515929,
+          "qps": 283.67905694799543,
+          "result_rows": 1
+        },
+        "postgres": {
+          "n": 40,
+          "mean_ms": 1.4628843768150546,
+          "p50_ms": 1.4713335258420557,
+          "p95_ms": 2.1833204838912934,
+          "min_ms": 1.0799579904414713,
+          "max_ms": 2.5284590083174407,
+          "qps": 683.5810237970879,
+          "result_rows": 1
+        },
+        "sqlite": {
+          "n": 40,
+          "mean_ms": 1.1245541245443746,
+          "p50_ms": 1.1126870231237262,
+          "p95_ms": 1.2774601258570328,
+          "min_ms": 1.012749969959259,
+          "max_ms": 1.4427919522859156,
+          "qps": 889.2413252275971,
+          "result_rows": 1
+        },
+        "rocksdb": {
+          "n": 40,
+          "mean_ms": 1.10553125559818,
+          "p50_ms": 1.0345210321247578,
+          "p95_ms": 1.4161416940623892,
+          "min_ms": 0.8517500245943666,
+          "max_ms": 1.7917919903993607,
+          "qps": 904.5424947835787,
+          "result_rows": 1
+        }
+      }
+    },
+    {
+      "name": "search",
+      "query": "PREFIX sbol2: <http://sbols.org/v2#>\nPREFIX dcterms: <http://purl.org/dc/terms/>\nPREFIX sbh: <http://wiki.synbiohub.org/wiki/Terms/synbiohub#>\nPREFIX biopax: <http://www.biopax.org/release/biopax-level3.owl#>\nPREFIX so: <http://identifiers.org/so/>\nSELECT DISTINCT ?subject ?displayId ?version ?name ?description ?type ?sbolType ?role\nFROM <http://synbiohub.org/public>\nWHERE {\n    ?subject a ?type .\n    ?subject sbh:topLevel ?subject .\n    OPTIONAL { ?subject sbol2:displayId ?displayId . }\n    OPTIONAL { ?subject sbol2:version ?version . }\n    OPTIONAL { ?subject dcterms:title ?name . }\n    OPTIONAL { ?subject dcterms:description ?description . }\n    OPTIONAL { ?subject sbol2:type ?sbolType . FILTER(STRSTARTS(str(?sbolType),'http://www.biopax.org/release/biopax-level3.owl')) }\n    OPTIONAL { ?subject sbol2:role ?role . FILTER(STRSTARTS(str(?role),'http://identifiers.org/so/')) }\n}\nLIMIT 50 OFFSET 0",
+      "backends": {
+        "virtuoso": {
+          "n": 40,
+          "mean_ms": 17.72986239520833,
+          "p50_ms": 17.639541998505592,
+          "p95_ms": 18.969360418850552,
+          "min_ms": 16.364999988581985,
+          "max_ms": 20.875082991551608,
+          "qps": 56.40201698746742,
+          "result_rows": 50
+        },
+        "postgres": {
+          "n": 40,
+          "mean_ms": 4.001058297581039,
+          "p50_ms": 3.776291006943211,
+          "p95_ms": 4.948070537648163,
+          "min_ms": 3.2479999936185777,
+          "max_ms": 9.088833001442254,
+          "qps": 249.9338738964589,
+          "result_rows": 50
+        },
+        "sqlite": {
+          "n": 40,
+          "mean_ms": 3.1732791801914573,
+          "p50_ms": 2.1815620129927993,
+          "p95_ms": 5.055674706818521,
+          "min_ms": 1.7513749771751463,
+          "max_ms": 26.317708019632846,
+          "qps": 315.1314281586992,
+          "result_rows": 50
+        },
+        "rocksdb": {
+          "n": 40,
+          "mean_ms": 4.956962504365947,
+          "p50_ms": 4.920563020277768,
+          "p95_ms": 5.618641315959393,
+          "min_ms": 4.123791994061321,
+          "max_ms": 7.951167004648596,
+          "qps": 201.73644628524613,
+          "result_rows": 50
+        }
+      }
+    },
+    {
+      "name": "searchCount",
+      "query": "PREFIX sbol2: <http://sbols.org/v2#>\nPREFIX dcterms: <http://purl.org/dc/terms/>\nPREFIX sbh: <http://wiki.synbiohub.org/wiki/Terms/synbiohub#>\nPREFIX biopax: <http://www.biopax.org/release/biopax-level3.owl#>\nPREFIX so: <http://identifiers.org/so/>\nSELECT (sum(?tempcount) as ?count)\nFROM <http://synbiohub.org/public>\nWHERE {\n{\n    SELECT (count(distinct ?subject) as ?tempcount)\n    WHERE {\n        ?subject a ?type .\n        ?subject sbh:topLevel ?subject .\n        OPTIONAL { ?subject sbol2:displayId ?displayId . }\n        OPTIONAL { ?subject sbol2:version ?version . }\n        OPTIONAL { ?subject dcterms:title ?name . }\n        OPTIONAL { ?subject dcterms:description ?description . }\n    }\n}\n}",
+      "backends": {
+        "virtuoso": {
+          "n": 40,
+          "mean_ms": 6.6056001000106335,
+          "p50_ms": 6.42247949144803,
+          "p95_ms": 7.9903729842044395,
+          "min_ms": 5.670082988217473,
+          "max_ms": 9.931207983754575,
+          "qps": 151.38669990004243,
+          "result_rows": 1
+        },
+        "postgres": {
+          "n": 40,
+          "mean_ms": 2.026751027733553,
+          "p50_ms": 1.9809585064649582,
+          "p95_ms": 2.4227729038102552,
+          "min_ms": 1.5705000259913504,
+          "max_ms": 2.581042004749179,
+          "qps": 493.4005145754217,
+          "result_rows": 1
+        },
+        "sqlite": {
+          "n": 40,
+          "mean_ms": 1.4943488786229864,
+          "p50_ms": 1.3999580114614218,
+          "p95_ms": 1.928905636304989,
+          "min_ms": 1.1794170131906867,
+          "max_ms": 2.5064999936148524,
+          "qps": 669.1877742241027,
+          "result_rows": 1
+        },
+        "rocksdb": {
+          "n": 40,
+          "mean_ms": 1.0340562483179383,
+          "p50_ms": 0.9028539643622935,
+          "p95_ms": 1.6253687412245195,
+          "min_ms": 0.8331660064868629,
+          "max_ms": 2.3547090240754187,
+          "qps": 967.0653812369139,
+          "result_rows": 1
+        }
+      }
+    },
+    {
+      "name": "getCollectionMembers",
+      "query": "PREFIX sbol2: <http://sbols.org/v2#>\nPREFIX dcterms: <http://purl.org/dc/terms/>\nPREFIX sbh: <http://wiki.synbiohub.org/wiki/Terms/synbiohub#>\nPREFIX biopax: <http://www.biopax.org/release/biopax-level3.owl#>\nPREFIX so: <http://identifiers.org/so/>\nSELECT ?uri ?displayId ?name ?description ?type ?sbolType ?role\nFROM <http://synbiohub.org/public>\nWHERE { {\nSELECT DISTINCT ?uri ?displayId ?name ?description ?type ?sbolType ?role\nWHERE {\n<http://localhost:7777/user/testuser/Tester_1/Tester_1_collection/1> a sbol2:Collection .\n<http://localhost:7777/user/testuser/Tester_1/Tester_1_collection/1> sbol2:member ?uri .\nOPTIONAL { ?uri a ?type . }\nOPTIONAL { ?uri sbol2:displayId ?displayId . }\nOPTIONAL { ?uri dcterms:title ?name . }\nOPTIONAL { ?uri dcterms:description ?description . }\nOPTIONAL { ?uri sbol2:type ?sbolType . FILTER(STRSTARTS(str(?sbolType),'http://www.biopax.org/release/biopax-level3.owl')) }\nOPTIONAL { ?uri sbol2:role ?role . FILTER(STRSTARTS(str(?role),'http://identifiers.org/so/')) }\nFILTER(STRSTARTS(str(?uri), 'http://localhost:7777/'))\nFILTER NOT EXISTS {\n<http://localhost:7777/user/testuser/Tester_1/Tester_1_collection/1> sbol2:member ?otherMember .\n{ ?otherMember ?ref ?uri . }\nUNION\n{ ?otherMember ?ref ?child . ?child ?childRef ?uri . }\nFILTER(?otherMember != ?uri)\n}\n}\n}}\nLIMIT 50 OFFSET 0",
+      "backends": {
+        "virtuoso": {
+          "n": 40,
+          "mean_ms": 16.880256176227704,
+          "p50_ms": 16.796562500530854,
+          "p95_ms": 18.048608326353133,
+          "min_ms": 14.98633302981034,
+          "max_ms": 18.520958023145795,
+          "qps": 59.240807103880925,
+          "result_rows": 50
+        },
+        "postgres": {
+          "n": 40,
+          "mean_ms": 4.889922845177352,
+          "p50_ms": 4.798999987542629,
+          "p95_ms": 5.630445797578431,
+          "min_ms": 4.235374974086881,
+          "max_ms": 6.194790999870747,
+          "qps": 204.50220415772858,
+          "result_rows": 50
+        },
+        "sqlite": {
+          "n": 40,
+          "mean_ms": 5.18175519828219,
+          "p50_ms": 5.2035414846614,
+          "p95_ms": 6.770995765691622,
+          "min_ms": 3.695000021252781,
+          "max_ms": 6.988957989960909,
+          "qps": 192.98480181609338,
+          "result_rows": 50
+        },
+        "rocksdb": {
+          "n": 40,
+          "mean_ms": 2.726555122353602,
+          "p50_ms": 2.466249978169799,
+          "p95_ms": 3.9221952261868864,
+          "min_ms": 2.172416017856449,
+          "max_ms": 4.213708976749331,
+          "qps": 366.76317005349426,
+          "result_rows": 50
+        }
+      }
+    },
+    {
+      "name": "getMetadata",
+      "query": "PREFIX sbol2: <http://sbols.org/v2#>\nPREFIX dcterms: <http://purl.org/dc/terms/>\nPREFIX sbh: <http://wiki.synbiohub.org/wiki/Terms/synbiohub#>\nPREFIX biopax: <http://www.biopax.org/release/biopax-level3.owl#>\nPREFIX so: <http://identifiers.org/so/>\nSELECT ?name ?description FROM <http://synbiohub.org/public> WHERE {\n    <http://localhost:7777/user/testuser/Tester_1/Tester_1_collection/1> dcterms:title ?name .\n    OPTIONAL { <http://localhost:7777/user/testuser/Tester_1/Tester_1_collection/1> dcterms:description ?description }\n}",
+      "backends": {
+        "virtuoso": {
+          "n": 40,
+          "mean_ms": 2.7960946783423424,
+          "p50_ms": 2.5937289756257087,
+          "p95_ms": 4.1664003365440285,
+          "min_ms": 2.140833006706089,
+          "max_ms": 4.783125012181699,
+          "qps": 357.641680643249,
+          "result_rows": 1
+        },
+        "postgres": {
+          "n": 40,
+          "mean_ms": 1.5935854986310005,
+          "p50_ms": 1.5533124969806522,
+          "p95_ms": 1.9047639361815527,
+          "min_ms": 1.334125001449138,
+          "max_ms": 1.9540829816833138,
+          "qps": 627.515750400006,
+          "result_rows": 1
+        },
+        "sqlite": {
+          "n": 40,
+          "mean_ms": 1.3212687728810124,
+          "p50_ms": 1.3061669887974858,
+          "p95_ms": 1.5505693969316778,
+          "min_ms": 1.111958990804851,
+          "max_ms": 1.8117079744115472,
+          "qps": 756.8482813829852,
+          "result_rows": 1
+        },
+        "rocksdb": {
+          "n": 40,
+          "mean_ms": 1.1832427480840124,
+          "p50_ms": 1.163916487712413,
+          "p95_ms": 1.285750331589952,
+          "min_ms": 1.020291994791478,
+          "max_ms": 1.4045829884707928,
+          "qps": 845.1351184017552,
+          "result_rows": 1
+        }
+      }
+    },
+    {
+      "name": "describe",
+      "query": "DESCRIBE <http://localhost:7777/user/testuser/Tester_1/BBa_J23119/1> FROM <http://synbiohub.org/public>",
+      "backends": {
+        "virtuoso": {
+          "n": 40,
+          "mean_ms": 2.9511895976611413,
+          "p50_ms": 2.8879159945063293,
+          "p95_ms": 3.5939791792770848,
+          "min_ms": 2.1950420341454446,
+          "max_ms": 4.450791981071234,
+          "qps": 338.84640986553825,
+          "result_bytes": 4678
+        },
+        "postgres": {
+          "n": 40,
+          "mean_ms": 1.5790594276040792,
+          "p50_ms": 1.5653544978704304,
+          "p95_ms": 1.853156858123839,
+          "min_ms": 1.2814999790862203,
+          "max_ms": 2.1916250116191804,
+          "qps": 633.2883883397022,
+          "result_bytes": 3171
+        },
+        "sqlite": {
+          "n": 40,
+          "mean_ms": 19.14053961954778,
+          "p50_ms": 20.48581250710413,
+          "p95_ms": 21.26329373277258,
+          "min_ms": 15.259041974786669,
+          "max_ms": 21.819624991621822,
+          "qps": 52.245131008674576,
+          "result_bytes": 3171
+        },
+        "rocksdb": {
+          "n": 40,
+          "mean_ms": 1.9537782543920912,
+          "p50_ms": 1.7636254779063165,
+          "p95_ms": 2.653229492716489,
+          "min_ms": 1.2855409877374768,
+          "max_ms": 6.323375040665269,
+          "qps": 511.8288105377369,
+          "result_bytes": 3171
+        }
+      }
+    }
+  ]
+}

@@ -24,7 +24,9 @@ scheme picks the backend; Postgres is the default. See
 New to the codebase? Start with the [**crate guide**](docs/crate-guide.md).
 Want to see how a design flows through the tables? See the
 [**domain model**](docs/domain-model.md). Deploying it? See
-[**docs/deployment.md**](docs/deployment.md).
+[**docs/deployment.md**](docs/deployment.md). Curious how it compares with
+Virtuoso? See [**docs/benchmarks.md**](docs/benchmarks.md) and the
+[`bench/`](bench/) harness.
 
 ## Scope
 

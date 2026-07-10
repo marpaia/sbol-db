@@ -1,0 +1,25 @@
+\begin{tikzpicture}
+\begin{axis}[
+    ybar=1pt,
+    width=0.95\linewidth, height=5.2cm,
+    ymode=log, log origin=infty,
+    ylabel={median latency (ms)},
+    ymajorgrids, grid style={gray!25},
+    bar width=4.5pt,
+    enlarge x limits=0.10,
+    symbolic x coords={List collections, Count parts, Object metadata, Browse / search, Search count, Collection members},
+    xtick=data, x tick label style={rotate=30, anchor=east, font=\tiny},
+    y tick label style={font=\tiny}, ylabel style={font=\scriptsize},
+    legend style={font=\tiny, at={(0.5,1.02)}, anchor=south, legend columns=-1, draw=none, fill=none, /tikz/every even column/.append style={column sep=6pt}},
+    legend cell align=left,
+]
+\addplot[fill=biosand, draw=black!55] coordinates {(List collections, 4.147) (Count parts, 3.486) (Object metadata, 2.594) (Browse / search, 17.640) (Search count, 6.422) (Collection members, 16.797)};
+\addlegendentry{Virtuoso}
+\addplot[fill=bioteal!35, draw=black!55] coordinates {(List collections, 2.128) (Count parts, 1.471) (Object metadata, 1.553) (Browse / search, 3.776) (Search count, 1.981) (Collection members, 4.799)};
+\addlegendentry{Postgres}
+\addplot[fill=bioteal!65, draw=black!55] coordinates {(List collections, 2.040) (Count parts, 1.113) (Object metadata, 1.306) (Browse / search, 2.182) (Search count, 1.400) (Collection members, 5.204)};
+\addlegendentry{SQLite}
+\addplot[fill=bioteal, draw=black!55] coordinates {(List collections, 1.225) (Count parts, 1.035) (Object metadata, 1.164) (Browse / search, 4.921) (Search count, 0.903) (Collection members, 2.466)};
+\addlegendentry{RocksDB}
+\end{axis}
+\end{tikzpicture}
