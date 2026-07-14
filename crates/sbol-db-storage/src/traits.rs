@@ -20,7 +20,7 @@ use crate::{
     ListGraphsFilter, ListJobsFilter, ListObjectsFilter, NewJob, OldestQueuedAge,
     OntologyLoadReport, OntologyRecord, OntologyTermRecord, PatternObject, PatternSubject,
     QueueDepthRow, SbolJob, SequenceMatch, SequenceSearchOptions, TermId, TermKey, TermValue,
-    TripleChange, UpdateOutcome,
+    TextSearchQuery, TripleChange, UpdateOutcome,
 };
 
 /// Synchronous triple-pattern reads, as required by the SPARQL evaluator.
@@ -132,6 +132,12 @@ pub trait GraphStore: Send + Sync {
         -> Result<Vec<GraphRecord>, DomainError>;
     async fn delete_graph(&self, id: GraphId) -> Result<bool, DomainError>;
     async fn graph_exists_by_hash(&self, hash: &[u8]) -> Result<bool, DomainError>;
+    /// Resolve a document graph's surrogate id from its document IRI, for
+    /// delete-by-IRI. Returns `None` when no `sbol3`-kind graph carries it.
+    async fn graph_id_by_document_iri(
+        &self,
+        document_iri: &str,
+    ) -> Result<Option<GraphId>, DomainError>;
 }
 
 /// Ontology loading and lookup.
@@ -185,10 +191,22 @@ pub trait SequenceSearchStore: Send + Sync {
     ) -> Result<Vec<BatchSequenceMatch>, DomainError>;
 }
 
+/// Substring search over the derived object view.
+#[async_trait]
+pub trait TextSearchStore: Send + Sync {
+    /// Search objects by substring, returning one page plus the total match
+    /// count. A `limit` of 0 returns an empty page with the total only, so a
+    /// caller wanting just the count pays for no row materialization.
+    async fn search_objects(
+        &self,
+        query: &TextSearchQuery,
+    ) -> Result<(Vec<SbolObjectRecord>, i64), DomainError>;
+}
+
 /// The full SBOL-aware store: ingest plus every derived-view read surface.
 #[async_trait]
 pub trait SbolStore:
-    ObjectStore + GraphStore + OntologyStore + NeighborhoodStore + SequenceSearchStore
+    ObjectStore + GraphStore + OntologyStore + NeighborhoodStore + SequenceSearchStore + TextSearchStore
 {
     async fn import_document(&self, input: ImportInput) -> Result<ImportReport, DomainError>;
     async fn import_documents(

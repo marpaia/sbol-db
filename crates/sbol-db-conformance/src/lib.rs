@@ -97,6 +97,7 @@ pub async fn import_and_read_back(store: &dyn SbolStore) {
             created_by: None,
             name: Some("conformance import".to_owned()),
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         })
         .await
         .expect("import_document");
@@ -243,6 +244,7 @@ pub async fn neighborhood_walk(store: &dyn SbolStore) {
             created_by: None,
             name: None,
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         })
         .await
         .expect("import_document");
@@ -313,6 +315,7 @@ pub async fn sequence_search(store: &dyn SbolStore) {
             created_by: None,
             name: None,
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         })
         .await
         .expect("import_document");

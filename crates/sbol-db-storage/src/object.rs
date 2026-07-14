@@ -13,3 +13,18 @@ pub struct ListObjectsFilter {
     pub after_iri: Option<String>,
     pub limit: u32,
 }
+
+/// Offset-paginated substring search over the derived object view. `text`
+/// matches an object's `name`, `display_id`, or `description`; `sbol_class`
+/// restricts by type; `property_uri` scopes the match to the literal value of
+/// one predicate on the object rather than its summary fields. A `limit` of 0
+/// asks for the total match count only, with no rows (the count-only path that
+/// backs a "search count" query).
+#[derive(Clone, Debug, Default)]
+pub struct TextSearchQuery {
+    pub text: String,
+    pub sbol_class: Option<String>,
+    pub property_uri: Option<String>,
+    pub offset: i64,
+    pub limit: i64,
+}

@@ -72,6 +72,7 @@ async fn imported_document_owns_a_graph_and_delete_cascades() {
             created_by: None,
             name: None,
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         })
         .await
         .expect("import");

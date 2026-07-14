@@ -2,6 +2,24 @@
 
 use sbol_db_core::{IriString, SerializationFormat};
 
+/// How an import combines with an existing document graph that carries the same
+/// `document_iri`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ImportOverwrite {
+    /// Reject the import if `document_iri` already exists (the `UNIQUE`
+    /// constraint surfaces as an error). The default.
+    #[default]
+    Fail,
+    /// Delete the existing graph with this `document_iri`, then import the new
+    /// document in its place, atomically.
+    Replace,
+    /// Union the existing graph's triples with the new document's, then import
+    /// the combined document in place of the old one. Objects present in both
+    /// versions accumulate the union of their properties; conflicting
+    /// single-valued properties surface as a validation error.
+    Merge,
+}
+
 /// One document to import: its serialized body plus the metadata that drives
 /// graph creation and namespace resolution.
 pub struct ImportInput {
@@ -13,6 +31,7 @@ pub struct ImportInput {
     pub created_by: Option<String>,
     pub name: Option<String>,
     pub description: Option<String>,
+    pub overwrite: ImportOverwrite,
 }
 
 /// How a Graph Store write combines with a graph's existing contents.

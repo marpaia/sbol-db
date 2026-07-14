@@ -52,7 +52,7 @@ async fn render_subgraph(
         .get_object_iri_by_id(object_id)
         .await?
         .ok_or_else(|| anyhow!("object id not found"))?;
-    let body = sbol_db_server::export_subject_rdf(service.as_ref(), &iri, format).await?;
+    let body = sbol_db_server::export_subject_rdf(service.as_ref(), &iri, format, false).await?;
     Ok(body)
 }
 

@@ -47,6 +47,7 @@ async fn imports_simple_component_fixture() {
             created_by: Some("test".to_owned()),
             name: Some("simple_component".to_owned()),
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         })
         .await
         .expect("import");
@@ -83,6 +84,7 @@ async fn reimport_is_idempotent_and_bumps_revision() {
         created_by: None,
         name: None,
         description: None,
+        overwrite: sbol_db_storage::ImportOverwrite::Fail,
     };
     let first = svc.import_document(input()).await.expect("first import");
     let second = svc.import_document(input()).await.expect("second import");
@@ -123,6 +125,7 @@ async fn validation_findings_are_persisted() {
             created_by: None,
             name: None,
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         })
         .await
         .expect("import");
@@ -158,6 +161,7 @@ async fn triples_round_trip_through_export() {
             created_by: None,
             name: None,
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         })
         .await
         .expect("import");
@@ -189,6 +193,7 @@ async fn nested_fixture_populates_typed_projections() {
             created_by: None,
             name: None,
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         })
         .await
         .expect("import");

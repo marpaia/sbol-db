@@ -31,6 +31,9 @@ pub enum DomainError {
 
     #[error("io error: {0}")]
     Io(String),
+
+    #[error("unavailable: {0}")]
+    Unavailable(String),
 }
 
 impl From<serde_json::Error> for DomainError {

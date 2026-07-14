@@ -46,6 +46,7 @@ async fn import_fixture(svc: &SbolObjectService, body: &str) {
         created_by: None,
         name: None,
         description: None,
+        overwrite: sbol_db_storage::ImportOverwrite::Fail,
     })
     .await
     .expect("import");
@@ -170,6 +171,7 @@ async fn import_documents_commits_all_when_every_doc_is_valid() {
             created_by: None,
             name: None,
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         },
         ImportInput {
             body: NESTED.to_owned(),
@@ -180,6 +182,7 @@ async fn import_documents_commits_all_when_every_doc_is_valid() {
             created_by: None,
             name: None,
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         },
     ];
     let reports = svc.import_documents(inputs).await.expect("bulk import");
@@ -209,6 +212,7 @@ async fn import_documents_rolls_back_entire_batch_on_failure() {
             created_by: None,
             name: None,
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         },
         ImportInput {
             body: "this is not turtle at all".to_owned(),
@@ -219,6 +223,7 @@ async fn import_documents_rolls_back_entire_batch_on_failure() {
             created_by: None,
             name: None,
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         },
         ImportInput {
             body: NESTED.to_owned(),
@@ -229,6 +234,7 @@ async fn import_documents_rolls_back_entire_batch_on_failure() {
             created_by: None,
             name: None,
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         },
     ];
     let err = svc

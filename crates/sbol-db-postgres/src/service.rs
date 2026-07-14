@@ -1,6 +1,6 @@
 use sbol_db_core::{DomainError, ImportReport, IriString, SerializationFormat, Triple};
-use sbol_db_derive::{build_import_plan, to_rdf_format};
-use sbol_db_rdf::rdf_graph_to_triples;
+use sbol_db_derive::{build_import_plan, compose_merged_input, to_rdf_format};
+use sbol_db_rdf::{rdf_graph_to_triples, GRAPH_IRI_PREFIX};
 
 use crate::repo::{
     AccelRepository, GraphRepository, LabRepository, NeighborhoodRepository, OntologyRepository,
@@ -9,7 +9,7 @@ use crate::repo::{
 };
 use crate::PgPool;
 
-use sbol_db_storage::{GraphWriteMode, ImportInput};
+use sbol_db_storage::{GraphWriteMode, ImportInput, ImportOverwrite};
 
 pub struct SbolObjectService {
     pool: PgPool,
@@ -124,10 +124,43 @@ impl SbolObjectService {
     }
 
     pub async fn import_document(&self, input: ImportInput) -> Result<ImportReport, DomainError> {
+        let input = self.resolve_merge(input).await?;
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         let report = self.import_into_conn(&mut tx, input).await?;
         tx.commit().await.map_err(db_err)?;
         Ok(report)
+    }
+
+    /// For a merge, read the existing graph's triples and fold them into the
+    /// incoming document, returning a `Replace` input that carries the union.
+    /// Other overwrite modes pass through unchanged. Reading the old triples
+    /// outside the transaction is safe: the in-transaction replace re-resolves
+    /// and deletes the same graph by `document_iri`.
+    async fn resolve_merge(&self, input: ImportInput) -> Result<ImportInput, DomainError> {
+        if input.overwrite != ImportOverwrite::Merge {
+            return Ok(input);
+        }
+        let Some(document_iri) = input.document_iri.clone() else {
+            return Ok(input);
+        };
+        match self
+            .graphs
+            .id_by_document_iri(document_iri.as_str())
+            .await?
+        {
+            Some(old_id) => {
+                let old_graph_iri = format!("{GRAPH_IRI_PREFIX}{}", old_id.as_uuid());
+                let old_triples = self
+                    .triples
+                    .triples_for_graph(Some(&old_graph_iri), GRAPH_READ_LIMIT)
+                    .await?;
+                compose_merged_input(&old_triples, &input)
+            }
+            None => Ok(ImportInput {
+                overwrite: ImportOverwrite::Replace,
+                ..input
+            }),
+        }
     }
 
     /// Graph Store HTTP Protocol write: one ingest mode feeding the shared,
@@ -194,6 +227,22 @@ impl SbolObjectService {
         conn: &mut sqlx::PgConnection,
         input: ImportInput,
     ) -> Result<ImportReport, DomainError> {
+        // Replace (and the merge path, which resolves to Replace) drops the
+        // prior graph carrying this document IRI in the same transaction, so
+        // the re-import does not collide with the `document_iri` unique
+        // constraint and no half-replaced state is observable.
+        if input.overwrite == ImportOverwrite::Replace {
+            if let Some(document_iri) = &input.document_iri {
+                if let Some(old_id) = self
+                    .graphs
+                    .id_by_document_iri_in(&mut *conn, document_iri.as_str())
+                    .await?
+                {
+                    self.graphs.delete_in(&mut *conn, old_id).await?;
+                }
+            }
+        }
+
         let plan = build_import_plan(&input)?;
 
         // A document is an `sbol3`-kind graph that owns its triples. Register

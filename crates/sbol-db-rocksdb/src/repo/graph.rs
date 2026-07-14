@@ -86,6 +86,25 @@ impl GraphRepository {
         Ok(out)
     }
 
+    /// Resolve a document graph's id from its document IRI by scanning the
+    /// registry (one row per imported document; no secondary index on the IRI).
+    pub fn id_by_document_iri(&self, document_iri: &str) -> Result<Option<GraphId>, DomainError> {
+        let mut found = None;
+        self.db.for_each("graph_meta", |_, blob| {
+            let record = decode(blob)?;
+            if record
+                .document_iri
+                .as_ref()
+                .is_some_and(|iri| iri.as_str() == document_iri)
+            {
+                found = Some(record.id);
+                return Ok(false);
+            }
+            Ok(true)
+        })?;
+        Ok(found)
+    }
+
     /// Stage deletion of a graph's registry + content-hash entries. Returns the
     /// record (so the caller can cascade its triples and objects), or `None`
     /// if the graph does not exist.

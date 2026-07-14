@@ -51,6 +51,7 @@ async fn fresh_harness() -> Harness {
             created_by: None,
             name: None,
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         })
         .await
         .expect("import");

@@ -8,9 +8,9 @@ use sbol_db_core::{
 };
 use sbol_db_rdf::{
     document_to_projections, document_to_summaries, document_to_triples, hash_bytes,
-    GRAPH_IRI_PREFIX,
+    triples_to_rdf, GRAPH_IRI_PREFIX,
 };
-use sbol_db_storage::ImportInput;
+use sbol_db_storage::{ImportInput, ImportOverwrite};
 
 /// Everything one document import must write, derived from the parsed body
 /// with no database involved. A backend persists these atomically in its own
@@ -96,6 +96,35 @@ pub fn build_import_plan(input: &ImportInput) -> Result<ImportPlan, DomainError>
         validation,
         validation_status,
         validation_issue_count,
+    })
+}
+
+/// Build the combined import body for a merge: the union of an existing graph's
+/// `old_triples` with the incoming document, serialized as N-Triples. The new
+/// body is parsed through [`parse_import_document`] first, so SBOL2/GenBank/FASTA
+/// inputs are normalized to SBOL3 before the union. The returned input replaces
+/// the old graph (`ImportOverwrite::Replace`) with the merged document; N-Triples
+/// is line-oriented, so identical triples in both sides collapse on re-parse.
+pub fn compose_merged_input(
+    old_triples: &[Triple],
+    input: &ImportInput,
+) -> Result<ImportInput, DomainError> {
+    let old_ntriples = triples_to_rdf(old_triples, SerializationFormat::NTriples)?;
+    let new_doc = parse_import_document(input)?;
+    let new_ntriples = new_doc
+        .write(RdfFormat::NTriples)
+        .map_err(|e| DomainError::Serialization(e.to_string()))?;
+    let combined = format!("{old_ntriples}\n{new_ntriples}");
+    Ok(ImportInput {
+        body: combined,
+        format: SerializationFormat::NTriples,
+        namespace: input.namespace.clone(),
+        source_uri: input.source_uri.clone(),
+        document_iri: input.document_iri.clone(),
+        created_by: input.created_by.clone(),
+        name: input.name.clone(),
+        description: input.description.clone(),
+        overwrite: ImportOverwrite::Replace,
     })
 }
 
@@ -294,6 +323,7 @@ aaagaggagaaa
             created_by: None,
             name: None,
             description: None,
+            overwrite: ImportOverwrite::default(),
         }
     }
 

@@ -36,6 +36,44 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --all-targets
 
+  python-client:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: sbol
+          POSTGRES_PASSWORD: sbol
+          POSTGRES_DB: sbol
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://sbol:sbol@localhost:5432/sbol
+      SQLX_OFFLINE: "true"
+      # Exercise the client against both the zero-dependency SQLite backend and
+      # the Postgres service; the e2e fixtures parametrize over these.
+      SBOL_DB_TEST_BACKENDS: sqlite,postgres
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: Lint (isort/black/flake8/mypy)
+        working-directory: clients/python
+        run: make lint
+      - name: End-to-end tests (builds sbol-db, boots it per backend)
+        working-directory: clients/python
+        run: make e2e
+
   helm:
     runs-on: ubuntu-latest
     steps:

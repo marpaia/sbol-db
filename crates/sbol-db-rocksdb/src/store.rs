@@ -14,15 +14,16 @@ use sbol_db_core::{
     DomainError, GraphId, GraphRecord, ImportReport, IriString, NeighborhoodQuery,
     NeighborhoodResult, ObjectId, SbolObjectRecord, SerializationFormat, Triple,
 };
-use sbol_db_derive::{build_import_plan, to_rdf_format};
+use sbol_db_derive::{build_import_plan, compose_merged_input, to_rdf_format};
 use sbol_db_rdf::{rdf_graph_to_triples, GRAPH_IRI_PREFIX};
 use sbol_db_storage::{
     AccelSolutions, AcceleratedQuery, BatchSequenceMatch, ClassCount, CorpusCounts, GraphFilter,
     GraphOverview, GraphStore, GraphTriplesPage, GraphWriteMode, IdGraphFilter, IdQuad,
-    ImportInput, LabStore, ListGraphsFilter, ListObjectsFilter, NeighborhoodStore, ObjectStore,
-    OntologyLoadReport, OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject,
-    PatternSubject, SbolStore, SequenceMatch, SequenceSearchOptions, SequenceSearchStore, TermId,
-    TermKey, TermValue, TripleChange, TripleSource, TripleWriter, UpdateOutcome,
+    ImportInput, ImportOverwrite, LabStore, ListGraphsFilter, ListObjectsFilter, NeighborhoodStore,
+    ObjectStore, OntologyLoadReport, OntologyRecord, OntologyStore, OntologyTermRecord,
+    PatternObject, PatternSubject, SbolStore, SequenceMatch, SequenceSearchOptions,
+    SequenceSearchStore, TermId, TermKey, TermValue, TextSearchQuery, TextSearchStore,
+    TripleChange, TripleSource, TripleWriter, UpdateOutcome,
 };
 
 use crate::codec::Term;
@@ -79,12 +80,65 @@ impl RocksdbStore {
         })
     }
 
+    /// Stage the cascade delete of a document graph (registry, triples, and
+    /// derived objects) into `batch`, mirroring [`GraphStore::delete_graph`].
+    fn stage_delete_graph(&self, batch: &mut WriteBatch, id: GraphId) -> Result<(), DomainError> {
+        if self.graphs.stage_delete(batch, id)?.is_none() {
+            return Ok(());
+        }
+        let iri = format!("{GRAPH_IRI_PREFIX}{}", id.0);
+        let gid = Term::named(&iri).id();
+        self.triples.stage_delete_named_graph(batch, gid)?;
+        self.objects.stage_delete_for_graph(batch, id)?;
+        Ok(())
+    }
+
     fn stage_import(
         &self,
         batch: &mut WriteBatch,
         seen: &mut HashSet<Vec<u8>>,
         input: ImportInput,
     ) -> Result<ImportReport, DomainError> {
+        // A merge folds the existing graph's triples into the incoming document
+        // and becomes a replace of that graph.
+        let input = if input.overwrite == ImportOverwrite::Merge {
+            match &input.document_iri {
+                Some(document_iri) => {
+                    match self.graphs.id_by_document_iri(document_iri.as_str())? {
+                        Some(old_id) => {
+                            let old_graph_iri = format!("{GRAPH_IRI_PREFIX}{}", old_id.0);
+                            let old_triples = self.triples.scan_pattern(
+                                None,
+                                None,
+                                None,
+                                Some(&GraphFilter::Iri(old_graph_iri)),
+                                i64::MAX,
+                            )?;
+                            compose_merged_input(&old_triples, &input)?
+                        }
+                        None => ImportInput {
+                            overwrite: ImportOverwrite::Replace,
+                            ..input
+                        },
+                    }
+                }
+                None => input,
+            }
+        } else {
+            input
+        };
+
+        // A replace drops the prior graph carrying this document IRI in the same
+        // write batch, so the re-import neither collides with it nor leaves a
+        // half-replaced state.
+        if input.overwrite == ImportOverwrite::Replace {
+            if let Some(document_iri) = &input.document_iri {
+                if let Some(old_id) = self.graphs.id_by_document_iri(document_iri.as_str())? {
+                    self.stage_delete_graph(batch, old_id)?;
+                }
+            }
+        }
+
         let plan = build_import_plan(&input)?;
         self.graphs
             .stage_insert(batch, plan.graph_id, &plan.new_graph)?;
@@ -460,6 +514,27 @@ impl GraphStore for RocksdbStore {
         let graphs = self.graphs.clone();
         let hash = hash.to_vec();
         blocking(move || graphs.exists_by_hash(&hash)).await
+    }
+
+    async fn graph_id_by_document_iri(
+        &self,
+        document_iri: &str,
+    ) -> Result<Option<GraphId>, DomainError> {
+        let graphs = self.graphs.clone();
+        let document_iri = document_iri.to_owned();
+        blocking(move || graphs.id_by_document_iri(&document_iri)).await
+    }
+}
+
+#[async_trait]
+impl TextSearchStore for RocksdbStore {
+    async fn search_objects(
+        &self,
+        query: &TextSearchQuery,
+    ) -> Result<(Vec<SbolObjectRecord>, i64), DomainError> {
+        let objects = self.objects.clone();
+        let query = query.clone();
+        blocking(move || objects.search(&query)).await
     }
 }
 

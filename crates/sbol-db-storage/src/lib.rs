@@ -29,7 +29,7 @@ pub use accel::{
 };
 pub use capabilities::{BackendKind, Capabilities, MaintenanceStyle};
 pub use graph::ListGraphsFilter;
-pub use import::{GraphWriteMode, ImportInput};
+pub use import::{GraphWriteMode, ImportInput, ImportOverwrite};
 pub use job::{
     EnqueueOutcome, JobAttempt, JobLogRecord, JobStatus, ListJobsFilter, NewJob, OldestQueuedAge,
     QueueDepthRow, SbolJob, DEFAULT_QUEUE,
@@ -37,7 +37,7 @@ pub use job::{
 pub use lab::{ClassCount, CorpusCounts, GraphOverview, GraphTriplesPage, LabStore};
 pub use lsm::{ColumnFamilyStats, LevelStats, LsmOverview, LsmStats};
 pub use migrate::{MigrationEntry, Migrator};
-pub use object::ListObjectsFilter;
+pub use object::{ListObjectsFilter, TextSearchQuery};
 pub use ontology::{OntologyLoadReport, OntologyRecord, OntologyTermRecord};
 pub use sequence::{BatchSequenceMatch, SequenceMatch, SequenceSearchOptions};
 pub use sql_console::{
@@ -50,7 +50,7 @@ pub use stats::{
 };
 pub use traits::{
     GraphStore, JobQueue, NeighborhoodStore, ObjectStore, OntologyStore, SbolStore,
-    SequenceSearchStore, TripleSource, TripleWriter,
+    SequenceSearchStore, TextSearchStore, TripleSource, TripleWriter,
 };
 pub use triple::{
     GraphFilter, IdGraphFilter, IdQuad, PatternObject, PatternSubject, TermId, TermKey, TermValue,

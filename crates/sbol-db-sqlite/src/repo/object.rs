@@ -2,7 +2,7 @@
 //! `roles`) and the `data` property bag are stored as JSON text.
 
 use sbol_db_core::{DomainError, GraphId, IriString, ObjectId, ObjectSummary, SbolObjectRecord};
-use sbol_db_storage::ListObjectsFilter;
+use sbol_db_storage::{ListObjectsFilter, TextSearchQuery};
 use sqlx::{Row, SqliteConnection, SqlitePool};
 
 use crate::pool::db_err;
@@ -124,6 +124,64 @@ impl SbolObjectRepository {
         .await
         .map_err(db_err)?;
         rows.into_iter().map(row_to_record).collect()
+    }
+
+    /// Offset-paginated substring search over the object view. `LIKE` is
+    /// case-insensitive for ASCII in SQLite. With `property_uri`, the match is
+    /// scoped to that predicate's literal value via `sbol_triples`. Returns the
+    /// page plus the total; a `limit` of 0 runs only the count query.
+    pub async fn search(
+        &self,
+        query: &TextSearchQuery,
+    ) -> Result<(Vec<SbolObjectRecord>, i64), DomainError> {
+        let limit = query.limit.clamp(0, 1000);
+        let offset = query.offset.max(0);
+
+        let where_clause = if query.property_uri.is_some() {
+            "WHERE is_deleted = 0 \
+             AND (?2 IS NULL OR sbol_class = ?2) \
+             AND EXISTS (SELECT 1 FROM sbol_triples t \
+                         WHERE t.subject_iri = sbol_objects.iri \
+                           AND t.predicate_iri = ?3 \
+                           AND t.object_literal LIKE '%' || ?1 || '%')"
+        } else {
+            "WHERE is_deleted = 0 \
+             AND (?2 IS NULL OR sbol_class = ?2) \
+             AND (name LIKE '%' || ?1 || '%' \
+                  OR display_id LIKE '%' || ?1 || '%' \
+                  OR description LIKE '%' || ?1 || '%')"
+        };
+
+        let count_sql = format!("SELECT count(*) AS n FROM sbol_objects {where_clause}");
+        let total: i64 = sqlx::query(&count_sql)
+            .bind(&query.text)
+            .bind(query.sbol_class.as_deref())
+            .bind(query.property_uri.as_deref())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db_err)?
+            .try_get("n")
+            .map_err(db_err)?;
+
+        if limit == 0 {
+            return Ok((Vec::new(), total));
+        }
+
+        let rows_sql = format!("{SELECT_COLS} {where_clause} ORDER BY iri ASC LIMIT ?4 OFFSET ?5");
+        let rows = sqlx::query(&rows_sql)
+            .bind(&query.text)
+            .bind(query.sbol_class.as_deref())
+            .bind(query.property_uri.as_deref())
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db_err)?;
+        let objects = rows
+            .into_iter()
+            .map(row_to_record)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((objects, total))
     }
 }
 

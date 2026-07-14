@@ -244,9 +244,16 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route("/metrics", get(metrics::metrics_handler))
         .route("/docs", get(docs::docs_html))
         .route("/openapi.json", get(docs::openapi_json))
-        .route("/graphs", post(routes::create_graph))
+        .route(
+            "/graphs",
+            post(routes::create_graph).delete(routes::delete_graph_by_document_iri),
+        )
         .route("/graphs/bulk", post(routes::create_graphs_bulk))
-        .route("/graphs/:id", get(routes::get_graph))
+        .route(
+            "/graphs/:id",
+            get(routes::get_graph).delete(routes::delete_graph),
+        )
+        .route("/search", get(routes::text_search))
         .route("/objects", get(routes::get_object_by_iri))
         .route("/objects/list", get(routes::list_objects))
         .route("/objects/lookup", post(routes::lookup_objects))

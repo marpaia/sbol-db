@@ -12,9 +12,10 @@ use sbol_db_core::{
 use sbol_db_rdf::triples_to_rdf;
 use sbol_db_sparql::{ResultFormat, SparqlOptions};
 use sbol_db_storage::{
-    BatchSequenceMatch, EnqueueOutcome, GraphWriteMode, ImportInput, JobAttempt, JobLogRecord,
-    JobStatus, ListJobsFilter, ListObjectsFilter, NewJob, OntologyLoadReport, OntologyRecord,
-    OntologyTermRecord, SbolJob, SequenceMatch, SequenceSearchOptions,
+    BatchSequenceMatch, EnqueueOutcome, GraphWriteMode, ImportInput, ImportOverwrite, JobAttempt,
+    JobLogRecord, JobStatus, ListJobsFilter, ListObjectsFilter, NewJob, OntologyLoadReport,
+    OntologyRecord, OntologyTermRecord, SbolJob, SequenceMatch, SequenceSearchOptions,
+    TextSearchQuery,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -53,6 +54,29 @@ pub struct CreateDocumentParams {
     pub name: Option<String>,
     pub description: Option<String>,
     pub created_by: Option<String>,
+    /// 0 = fail on an existing `document_iri` (default), 1 = replace it,
+    /// 2 = merge into it. Replace and merge require `document_iri`.
+    pub overwrite: Option<u8>,
+}
+
+/// Map the numeric `overwrite` parameter to an [`ImportOverwrite`], enforcing
+/// that replace and merge name the graph to act on via `document_iri`.
+fn resolve_overwrite(
+    overwrite: Option<u8>,
+    document_iri: Option<&IriString>,
+) -> Result<ImportOverwrite, ApiError> {
+    let mode = match overwrite.unwrap_or(0) {
+        0 => ImportOverwrite::Fail,
+        1 => ImportOverwrite::Replace,
+        2 => ImportOverwrite::Merge,
+        other => return Err(ApiError::BadRequest(format!("invalid overwrite: {other}"))),
+    };
+    if mode != ImportOverwrite::Fail && document_iri.is_none() {
+        return Err(ApiError::BadRequest(
+            "overwrite requires document_iri to identify the graph to replace or merge".to_owned(),
+        ));
+    }
+    Ok(mode)
 }
 
 pub async fn create_graph(
@@ -67,6 +91,7 @@ pub async fn create_graph(
         .map(IriString::new)
         .transpose()
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let overwrite = resolve_overwrite(params.overwrite, document_iri.as_ref())?;
     let report = state
         .service
         .import_document(ImportInput {
@@ -78,6 +103,7 @@ pub async fn create_graph(
             created_by: params.created_by,
             name: params.name,
             description: params.description,
+            overwrite,
         })
         .await?;
     Ok(Json(report))
@@ -151,6 +177,7 @@ pub async fn create_graphs_bulk(
             created_by: item.created_by,
             name: item.name,
             description: item.description,
+            overwrite: ImportOverwrite::Fail,
         });
     }
     let reports = state.service.import_documents(inputs).await?;
@@ -170,6 +197,43 @@ pub async fn get_graph(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("document {id}")))?;
     Ok(Json(doc))
+}
+
+/// Delete one document graph by its surrogate id. Deletion is at graph
+/// granularity: a submission is one graph, so this drops the graph's triples,
+/// its derived objects, and its registry row.
+pub async fn delete_graph(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    if state.service.delete_graph(GraphId(id)).await? {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound(format!("document {id}")))
+    }
+}
+
+#[derive(Deserialize)]
+pub struct DeleteGraphByDocParams {
+    pub document_iri: String,
+}
+
+/// Delete one document graph by its document IRI (resolving to the surrogate id
+/// first). Same graph-granular semantics as [`delete_graph`].
+pub async fn delete_graph_by_document_iri(
+    State(state): State<AppState>,
+    Query(params): Query<DeleteGraphByDocParams>,
+) -> Result<StatusCode, ApiError> {
+    let iri = IriString::new(params.document_iri.clone())
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let Some(id) = state.service.graph_id_by_document_iri(iri.as_str()).await? else {
+        return Err(ApiError::NotFound(format!(
+            "document {}",
+            params.document_iri
+        )));
+    };
+    state.service.delete_graph(id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -288,9 +352,80 @@ pub async fn list_objects(
     }))
 }
 
+const SEARCH_DEFAULT_LIMIT: i64 = 50;
+const SEARCH_MAX_LIMIT: i64 = 1000;
+
+fn default_search_limit() -> i64 {
+    SEARCH_DEFAULT_LIMIT
+}
+
+#[derive(Deserialize)]
+pub struct TextSearchParams {
+    pub q: String,
+    #[serde(default)]
+    pub object_type: Option<String>,
+    #[serde(default)]
+    pub property_uri: Option<String>,
+    #[serde(default)]
+    pub offset: i64,
+    #[serde(default = "default_search_limit")]
+    pub limit: i64,
+}
+
+#[derive(serde::Serialize)]
+pub struct TextSearchResponse {
+    pub objects: Vec<SbolObjectRecord>,
+    pub total: i64,
+    pub offset: i64,
+    pub limit: i64,
+}
+
+/// Substring search over the derived object view. `q` matches an object's
+/// name/display_id/description (or, with `property_uri`, one predicate's
+/// literal value); `object_type` restricts by SBOL class. `limit=0` returns
+/// the total match count with no rows, which backs a count-only query.
+pub async fn text_search(
+    State(state): State<AppState>,
+    Query(params): Query<TextSearchParams>,
+) -> Result<Json<TextSearchResponse>, ApiError> {
+    if params.q.trim().is_empty() {
+        return Err(ApiError::BadRequest("q is required".to_owned()));
+    }
+    let limit = params.limit.clamp(0, SEARCH_MAX_LIMIT);
+    let offset = params.offset.max(0);
+    let (objects, total) = state
+        .service
+        .search_objects(&TextSearchQuery {
+            text: params.q,
+            sbol_class: params.object_type,
+            property_uri: params.property_uri,
+            offset,
+            limit,
+        })
+        .await?;
+    Ok(Json(TextSearchResponse {
+        objects,
+        total,
+        offset,
+        limit,
+    }))
+}
+
+/// Parse the `version` query parameter, returning whether the caller asked for
+/// SBOL2 output. Absent or `sbol3` means the native SBOL3 view.
+fn wants_sbol2(version: Option<&str>) -> Result<bool, ApiError> {
+    match version.unwrap_or("sbol3") {
+        "sbol3" | "3" => Ok(false),
+        "sbol2" | "2" => Ok(true),
+        other => Err(ApiError::BadRequest(format!("unknown version: {other}"))),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct ExportObjectParams {
     pub format: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 pub async fn export_object(
@@ -306,7 +441,8 @@ pub async fn export_object(
     let raw_format = params.format.as_deref().unwrap_or("turtle");
     let format = parse_export_format(raw_format)
         .ok_or_else(|| ApiError::BadRequest(format!("unknown format: {raw_format}")))?;
-    let body = export::export_subject_rdf(state.service.as_ref(), &iri, format).await?;
+    let sbol2 = wants_sbol2(params.version.as_deref())?;
+    let body = export::export_subject_rdf(state.service.as_ref(), &iri, format, sbol2).await?;
     let content_type = match format {
         SerializationFormat::Turtle => "text/turtle",
         SerializationFormat::JsonLd => "application/ld+json",
@@ -403,6 +539,8 @@ pub struct NeighborhoodRdfParams {
     pub literals: bool,
     #[serde(default = "default_rdf_format")]
     pub format: String,
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 fn default_rdf_format() -> String {
@@ -419,6 +557,7 @@ pub async fn neighborhood_rdf(
 ) -> Result<impl IntoResponse, ApiError> {
     let format = parse_export_format(&params.format)
         .ok_or_else(|| ApiError::BadRequest(format!("unknown format: {}", params.format)))?;
+    let sbol2 = wants_sbol2(params.version.as_deref())?;
     let query = build_neighborhood_query(NeighborhoodParams {
         iri: params.iri,
         depth: params.depth,
@@ -428,7 +567,12 @@ pub async fn neighborhood_rdf(
         literals: params.literals,
     })?;
     let result = state.service.walk(&query).await?;
-    let body = sbol_db_rdf::neighborhood_to_rdf(&result, format)?;
+    let body = if sbol2 {
+        let ntriples = sbol_db_rdf::neighborhood_to_rdf(&result, SerializationFormat::NTriples)?;
+        export::downgrade_sbol3_ntriples(&ntriples, format)?
+    } else {
+        sbol_db_rdf::neighborhood_to_rdf(&result, format)?
+    };
     let content_type = match format {
         SerializationFormat::Turtle => "text/turtle",
         SerializationFormat::JsonLd => "application/ld+json",

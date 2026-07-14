@@ -79,6 +79,7 @@ impl JobHandler for ImportDocumentHandler {
                 created_by: payload.created_by,
                 name: payload.name,
                 description: payload.description,
+                overwrite: sbol_db_storage::ImportOverwrite::Fail,
             })
             .await?;
         ctx.log(
