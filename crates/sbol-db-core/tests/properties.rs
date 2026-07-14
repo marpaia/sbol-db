@@ -187,7 +187,7 @@ prop_compose! {
                 (b'a'..=b'z')
                     .chain(b'A'..=b'Z')
                     .chain(b'0'..=b'9')
-                    .chain([b'+', b'.', b'-'])
+                    .chain(*b"+.-")
                     .collect::<Vec<u8>>(),
             ),
             0..16,
