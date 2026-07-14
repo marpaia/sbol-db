@@ -1,4 +1,4 @@
-# sbol-db-client
+# sbol-db
 
 A pure-Python client for the [sbol-db](https://github.com/marpaia/sbol-db) HTTP
 API, plus a PartShop-compatible facade for code migrating from SynBioHub's
@@ -12,9 +12,15 @@ conversion happens on the server via the `version` parameter.
 ## Install
 
 ```bash
-pip install sbol-db-client
+pip install sbol-db
 # optional: rdflib, for navigating pulled RDF as a graph
-pip install "sbol-db-client[rdf]"
+pip install "sbol-db[rdf]"
+```
+
+The import name is `sbol_db`:
+
+```python
+from sbol_db import SbolDbClient, PartShop
 ```
 
 ## Broad client
@@ -73,3 +79,27 @@ make e2e SBOL_DB_TEST_BACKENDS=sqlite,postgres
 
 Without a discoverable binary the e2e tests skip, so `uv run pytest` still runs
 the unit suite anywhere.
+
+## Publishing
+
+The package is built and published with uv. Bump `version` in `pyproject.toml`
+and in `src/sbol_db/__init__.py`, then:
+
+```bash
+make build           # sdist + wheel into dist/
+make check           # twine check dist/*
+make publish         # upload to PyPI (needs a token, see below)
+```
+
+`make publish` reads a PyPI API token from the environment:
+
+```bash
+export UV_PUBLISH_TOKEN=pypi-...
+make publish
+```
+
+To dry-run against TestPyPI first:
+
+```bash
+uv publish --publish-url https://test.pypi.org/legacy/ dist/*
+```

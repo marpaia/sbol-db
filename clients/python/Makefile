@@ -13,7 +13,7 @@
 REPO_ROOT := $(abspath ../..)
 SBOL_DB_BIN := $(REPO_ROOT)/target/debug/sbol-db
 
-.PHONY: install test e2e lint
+.PHONY: install test e2e lint build check publish clean
 
 install:
 	uv sync
@@ -30,3 +30,15 @@ lint:
 	uv run black --check --line-length 120 src tests
 	uv run flake8 --max-line-length 120 --extend-ignore E203,W503 src tests
 	uv run mypy src
+
+build: clean
+	uv build
+
+check: build
+	uvx twine check dist/*
+
+publish: check
+	uv publish dist/*
+
+clean:
+	rm -rf dist
