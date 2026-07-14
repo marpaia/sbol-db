@@ -145,6 +145,7 @@ async fn import(
                 created_by: None,
                 name,
                 description: None,
+                overwrite: sbol_db_storage::ImportOverwrite::Fail,
             })
             .await?;
         print_json(&report)
@@ -219,6 +220,7 @@ async fn run_directory_import_atomic(
             created_by: None,
             name: None,
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         });
     }
     if inputs.is_empty() {
@@ -352,6 +354,7 @@ async fn import_one(
             created_by: None,
             name: None,
             description: None,
+            overwrite: sbol_db_storage::ImportOverwrite::Fail,
         })
         .await
     {

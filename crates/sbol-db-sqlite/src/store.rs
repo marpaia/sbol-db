@@ -11,15 +11,15 @@ use sbol_db_core::{
     DomainError, GraphId, GraphRecord, ImportReport, IriString, NeighborhoodQuery,
     NeighborhoodResult, ObjectId, SbolObjectRecord, SerializationFormat, Triple,
 };
-use sbol_db_derive::{build_import_plan, to_rdf_format};
-use sbol_db_rdf::rdf_graph_to_triples;
+use sbol_db_derive::{build_import_plan, compose_merged_input, to_rdf_format};
+use sbol_db_rdf::{rdf_graph_to_triples, GRAPH_IRI_PREFIX};
 use sbol_db_storage::{
     AccelSolutions, AcceleratedQuery, BatchSequenceMatch, ClassCount, CorpusCounts, GraphFilter,
-    GraphOverview, GraphStore, GraphTriplesPage, GraphWriteMode, ImportInput, LabStore,
-    ListGraphsFilter, ListObjectsFilter, NeighborhoodStore, ObjectStore, OntologyLoadReport,
-    OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject, PatternSubject, SbolStore,
-    SequenceMatch, SequenceSearchOptions, SequenceSearchStore, TripleChange, TripleSource,
-    TripleWriter, UpdateOutcome,
+    GraphOverview, GraphStore, GraphTriplesPage, GraphWriteMode, ImportInput, ImportOverwrite,
+    LabStore, ListGraphsFilter, ListObjectsFilter, NeighborhoodStore, ObjectStore,
+    OntologyLoadReport, OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject,
+    PatternSubject, SbolStore, SequenceMatch, SequenceSearchOptions, SequenceSearchStore,
+    TextSearchQuery, TextSearchStore, TripleChange, TripleSource, TripleWriter, UpdateOutcome,
 };
 use tokio::runtime::Handle;
 
@@ -89,10 +89,40 @@ impl SqliteStore {
     }
 
     pub async fn import_document(&self, input: ImportInput) -> Result<ImportReport, DomainError> {
+        let input = self.resolve_merge(input).await?;
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         let report = self.import_into_conn(&mut tx, input).await?;
         tx.commit().await.map_err(db_err)?;
         Ok(report)
+    }
+
+    /// Fold an existing graph's triples into a merge import, yielding a
+    /// `Replace` input carrying the union. Non-merge inputs pass through.
+    async fn resolve_merge(&self, input: ImportInput) -> Result<ImportInput, DomainError> {
+        if input.overwrite != ImportOverwrite::Merge {
+            return Ok(input);
+        }
+        let Some(document_iri) = input.document_iri.clone() else {
+            return Ok(input);
+        };
+        match self
+            .graphs
+            .id_by_document_iri(document_iri.as_str())
+            .await?
+        {
+            Some(old_id) => {
+                let old_graph_iri = format!("{GRAPH_IRI_PREFIX}{}", old_id.as_uuid());
+                let old_triples = self
+                    .triples
+                    .triples_for_graph(Some(&old_graph_iri), GRAPH_READ_LIMIT)
+                    .await?;
+                compose_merged_input(&old_triples, &input)
+            }
+            None => Ok(ImportInput {
+                overwrite: ImportOverwrite::Replace,
+                ..input
+            }),
+        }
     }
 
     pub async fn import_documents(
@@ -116,6 +146,18 @@ impl SqliteStore {
         conn: &mut sqlx::SqliteConnection,
         input: ImportInput,
     ) -> Result<ImportReport, DomainError> {
+        if input.overwrite == ImportOverwrite::Replace {
+            if let Some(document_iri) = &input.document_iri {
+                if let Some(old_id) = self
+                    .graphs
+                    .id_by_document_iri_in(&mut *conn, document_iri.as_str())
+                    .await?
+                {
+                    self.graphs.delete_in(&mut *conn, old_id).await?;
+                }
+            }
+        }
+
         let plan = build_import_plan(&input)?;
 
         self.graphs
@@ -360,6 +402,23 @@ impl GraphStore for SqliteStore {
 
     async fn graph_exists_by_hash(&self, hash: &[u8]) -> Result<bool, DomainError> {
         self.graphs.exists_by_hash(hash).await
+    }
+
+    async fn graph_id_by_document_iri(
+        &self,
+        document_iri: &str,
+    ) -> Result<Option<GraphId>, DomainError> {
+        self.graphs.id_by_document_iri(document_iri).await
+    }
+}
+
+#[async_trait]
+impl TextSearchStore for SqliteStore {
+    async fn search_objects(
+        &self,
+        query: &TextSearchQuery,
+    ) -> Result<(Vec<SbolObjectRecord>, i64), DomainError> {
+        self.objects.search(query).await
     }
 }
 

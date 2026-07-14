@@ -22,7 +22,7 @@ use sbol_db_storage::{
     ListObjectsFilter, NeighborhoodStore, NewJob, ObjectStore, OldestQueuedAge, OntologyLoadReport,
     OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject, PatternSubject,
     QueueDepthRow, SbolJob, SbolStore, SequenceMatch, SequenceSearchOptions, SequenceSearchStore,
-    TripleChange, TripleSource, TripleWriter, UpdateOutcome,
+    TextSearchQuery, TextSearchStore, TripleChange, TripleSource, TripleWriter, UpdateOutcome,
 };
 use serde_json::Value;
 use tokio::runtime::Handle;
@@ -241,6 +241,23 @@ impl GraphStore for SbolObjectService {
 
     async fn graph_exists_by_hash(&self, hash: &[u8]) -> Result<bool, DomainError> {
         self.graphs().exists_by_hash(hash).await
+    }
+
+    async fn graph_id_by_document_iri(
+        &self,
+        document_iri: &str,
+    ) -> Result<Option<GraphId>, DomainError> {
+        self.graphs().id_by_document_iri(document_iri).await
+    }
+}
+
+#[async_trait]
+impl TextSearchStore for SbolObjectService {
+    async fn search_objects(
+        &self,
+        query: &TextSearchQuery,
+    ) -> Result<(Vec<SbolObjectRecord>, i64), DomainError> {
+        self.objects().search(query).await
     }
 }
 

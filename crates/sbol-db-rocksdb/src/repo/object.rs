@@ -7,7 +7,7 @@
 
 use rocksdb::WriteBatch;
 use sbol_db_core::{DomainError, GraphId, ObjectId, ObjectSummary, SbolObjectRecord};
-use sbol_db_storage::ListObjectsFilter;
+use sbol_db_storage::{ListObjectsFilter, TextSearchQuery};
 
 use crate::db::Db;
 
@@ -177,6 +177,53 @@ impl ObjectRepository {
             }
         }
         Ok(out)
+    }
+
+    /// Offset-paginated substring search over the object view, scanning the
+    /// `objects` family (ordered by IRI) and matching case-insensitively on
+    /// `name`/`display_id`/`description`. Returns the page plus the total match
+    /// count; a `limit` of 0 returns the count only. `property_uri` search has
+    /// no supporting index on this backend and is reported as unavailable.
+    pub fn search(
+        &self,
+        query: &TextSearchQuery,
+    ) -> Result<(Vec<SbolObjectRecord>, i64), DomainError> {
+        if query.property_uri.is_some() {
+            return Err(DomainError::Unavailable(
+                "property_uri text search is not supported on the RocksDB backend".into(),
+            ));
+        }
+        let needle = query.text.to_lowercase();
+        let limit = query.limit.clamp(0, 1000) as usize;
+        let offset = query.offset.max(0) as usize;
+
+        let contains = |field: &Option<String>| {
+            field
+                .as_ref()
+                .is_some_and(|v| v.to_lowercase().contains(&needle))
+        };
+
+        let mut total: i64 = 0;
+        let mut page = Vec::new();
+        self.db.for_each("objects", |_, blob| {
+            let record = decode(blob)?;
+            let class_ok = query
+                .sbol_class
+                .as_ref()
+                .is_none_or(|c| &record.sbol_class == c);
+            let text_ok = contains(&record.name)
+                || contains(&record.display_id)
+                || contains(&record.description);
+            if class_ok && text_ok {
+                let idx = total as usize;
+                if limit > 0 && idx >= offset && page.len() < limit {
+                    page.push(record);
+                }
+                total += 1;
+            }
+            Ok(true)
+        })?;
+        Ok((page, total))
     }
 }
 

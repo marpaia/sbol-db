@@ -42,6 +42,9 @@ impl IntoResponse for ApiError {
             }
             ApiError::Domain(DomainError::Parse(_)) => (StatusCode::BAD_REQUEST, "parse_error"),
             ApiError::Domain(DomainError::Iri(_)) => (StatusCode::BAD_REQUEST, "invalid_iri"),
+            ApiError::Domain(DomainError::Unavailable(_)) => {
+                (StatusCode::NOT_IMPLEMENTED, "backend_unsupported")
+            }
             ApiError::Domain(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
@@ -144,6 +147,14 @@ mod tests {
                 StatusCode::INTERNAL_SERVER_ERROR,
             );
         }
+    }
+
+    #[test]
+    fn domain_unavailable_is_501() {
+        assert_eq!(
+            status_of(ApiError::Domain(DomainError::Unavailable("x".into()))),
+            StatusCode::NOT_IMPLEMENTED,
+        );
     }
 
     #[test]

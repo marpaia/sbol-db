@@ -45,6 +45,7 @@ async fn fresh_service_with_fixture() -> SbolObjectService {
         created_by: None,
         name: None,
         description: None,
+        overwrite: sbol_db_storage::ImportOverwrite::Fail,
     })
     .await
     .expect("import");

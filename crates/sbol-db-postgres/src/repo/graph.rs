@@ -116,19 +116,82 @@ impl GraphRepository {
         rows.into_iter().map(row_to_record).collect()
     }
 
-    /// Delete one document by dropping its graph, which cascades to the graph's
-    /// triples. (Derived-view objects have an `ON DELETE SET NULL` FK and survive;
-    /// cleaning them is the derived-view refresh's job.) Returns `true` if a row
-    /// was removed.
-    pub async fn delete(&self, id: GraphId) -> Result<bool, DomainError> {
-        let affected = sqlx::query("DELETE FROM sbol_graphs WHERE id = $1 AND kind = 'sbol3'")
-            .bind(id.0)
-            .execute(&self.pool)
-            .await
-            .map_err(db_err)?
-            .rows_affected();
-        Ok(affected > 0)
+    /// Resolve a document graph's surrogate id from its (unique) document IRI.
+    pub async fn id_by_document_iri(
+        &self,
+        document_iri: &str,
+    ) -> Result<Option<GraphId>, DomainError> {
+        let row =
+            sqlx::query("SELECT id FROM sbol_graphs WHERE document_iri = $1 AND kind = 'sbol3'")
+                .bind(document_iri)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(db_err)?;
+        match row {
+            Some(row) => Ok(Some(GraphId(row.try_get("id").map_err(db_err)?))),
+            None => Ok(None),
+        }
     }
+
+    /// Delete one document by dropping its graph. The graph's triples cascade
+    /// via their FK; the graph's derived objects (whose `graph_id` FK is
+    /// `ON DELETE SET NULL`) are removed explicitly first, so the object view
+    /// no longer returns them and their revisions cascade away. Both deletes
+    /// share one transaction. Returns `true` if a graph row was removed.
+    pub async fn delete(&self, id: GraphId) -> Result<bool, DomainError> {
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let removed = delete_graph_on(&mut tx, id).await?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(removed)
+    }
+
+    /// Connection-scoped [`id_by_document_iri`](Self::id_by_document_iri), so a
+    /// replace can resolve and delete the old graph inside the import's
+    /// transaction.
+    pub async fn id_by_document_iri_in(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        document_iri: &str,
+    ) -> Result<Option<GraphId>, DomainError> {
+        let row =
+            sqlx::query("SELECT id FROM sbol_graphs WHERE document_iri = $1 AND kind = 'sbol3'")
+                .bind(document_iri)
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(db_err)?;
+        match row {
+            Some(row) => Ok(Some(GraphId(row.try_get("id").map_err(db_err)?))),
+            None => Ok(None),
+        }
+    }
+
+    /// Connection-scoped [`delete`](Self::delete), for an in-transaction replace.
+    pub async fn delete_in(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        id: GraphId,
+    ) -> Result<bool, DomainError> {
+        delete_graph_on(conn, id).await
+    }
+}
+
+/// Delete a document graph's derived objects then the graph row itself on one
+/// connection. Objects are removed before the graph so their `ON DELETE SET
+/// NULL` `graph_id` still resolves the set; `sbol_object_revisions` cascade
+/// from the object rows.
+async fn delete_graph_on(conn: &mut sqlx::PgConnection, id: GraphId) -> Result<bool, DomainError> {
+    sqlx::query("DELETE FROM sbol_objects WHERE graph_id = $1")
+        .bind(id.0)
+        .execute(&mut *conn)
+        .await
+        .map_err(db_err)?;
+    let affected = sqlx::query("DELETE FROM sbol_graphs WHERE id = $1 AND kind = 'sbol3'")
+        .bind(id.0)
+        .execute(&mut *conn)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
+    Ok(affected > 0)
 }
 
 fn row_to_record(row: sqlx::postgres::PgRow) -> Result<GraphRecord, DomainError> {

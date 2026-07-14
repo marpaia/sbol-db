@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::repo::db_err;
 use crate::PgPool;
 
-use sbol_db_storage::ListObjectsFilter;
+use sbol_db_storage::{ListObjectsFilter, TextSearchQuery};
 
 #[derive(Clone)]
 pub struct SbolObjectRepository {
@@ -194,6 +194,85 @@ impl SbolObjectRepository {
         .map_err(db_err)?;
 
         rows.into_iter().map(row_to_record).collect()
+    }
+
+    /// Offset-paginated substring search. Without `property_uri`, matches the
+    /// `name`/`display_id`/`description` summary fields (the first two are
+    /// trigram-indexed). With `property_uri`, matches the literal value of that
+    /// predicate on the object via `sbol_triples`. Returns the page plus the
+    /// total match count; when `limit` is 0 the page is empty and only the
+    /// count query runs.
+    pub async fn search(
+        &self,
+        query: &TextSearchQuery,
+    ) -> Result<(Vec<SbolObjectRecord>, i64), DomainError> {
+        let limit = query.limit.clamp(0, 1000);
+        let offset = query.offset.max(0);
+
+        // The two match shapes share their bind order (text, class) so the
+        // count and row queries can reuse the same predicate.
+        let (where_clause, order_by): (&str, &str) = if query.property_uri.is_some() {
+            (
+                "WHERE o.is_deleted = false \
+                 AND ($2::text IS NULL OR o.sbol_class = $2) \
+                 AND EXISTS (SELECT 1 FROM sbol_triples t \
+                             WHERE t.subject_iri = o.iri \
+                               AND t.predicate_iri = $3 \
+                               AND t.object_literal ILIKE '%' || $1 || '%')",
+                "ORDER BY o.iri::text ASC",
+            )
+        } else {
+            (
+                "WHERE o.is_deleted = false \
+                 AND ($2::text IS NULL OR o.sbol_class = $2) \
+                 AND (o.name ILIKE '%' || $1 || '%' \
+                      OR o.display_id ILIKE '%' || $1 || '%' \
+                      OR o.description ILIKE '%' || $1 || '%')",
+                "ORDER BY (o.name ILIKE '%' || $1 || '%') DESC, o.iri::text ASC",
+            )
+        };
+
+        let count_sql = format!("SELECT count(*) AS n FROM sbol_objects o {where_clause}");
+        let total: i64 = sqlx::query(&count_sql)
+            .bind(&query.text)
+            .bind(query.sbol_class.as_deref())
+            .bind(query.property_uri.as_deref())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db_err)?
+            .try_get("n")
+            .map_err(db_err)?;
+
+        if limit == 0 {
+            return Ok((Vec::new(), total));
+        }
+
+        let rows_sql = format!(
+            r#"
+            SELECT o.id, o.iri::text AS iri, o.sbol_class, o.display_id, o.name, o.description,
+                   o.graph_id, o.types::text[] AS types, o.roles::text[] AS roles,
+                   o.data, o.content_hash
+            FROM sbol_objects o
+            {where_clause}
+            {order_by}
+            LIMIT $4 OFFSET $5
+            "#
+        );
+        let rows = sqlx::query(&rows_sql)
+            .bind(&query.text)
+            .bind(query.sbol_class.as_deref())
+            .bind(query.property_uri.as_deref())
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db_err)?;
+
+        let objects = rows
+            .into_iter()
+            .map(row_to_record)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((objects, total))
     }
 }
 

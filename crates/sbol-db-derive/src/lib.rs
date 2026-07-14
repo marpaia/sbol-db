@@ -10,5 +10,7 @@
 mod import;
 mod ontology;
 
-pub use import::{build_import_plan, parse_import_document, to_rdf_format, ImportPlan};
+pub use import::{
+    build_import_plan, compose_merged_input, parse_import_document, to_rdf_format, ImportPlan,
+};
 pub use ontology::{build_ontology_plan, OntologyPlan, OntologyTermRow};
