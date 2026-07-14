@@ -52,13 +52,24 @@ they are out of scope for sbol-db.
 
 ## Development
 
+The environment is managed by [uv](https://docs.astral.sh/uv/); the dev tools
+live in a `dev` dependency group that `uv run` installs automatically.
+
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest                       # unit tests always run
-pre-commit run --all-files
+make test    # unit tests only (uv run pytest -m "not e2e")
+make e2e     # build the sbol-db server, then run the full suite against it
+make lint    # isort + black + flake8 + mypy
 ```
 
-Integration tests boot a real `sbol-db` server on a SQLite backend. They run
-when a binary is discoverable (`cargo build -p sbol-db`, or set `SBOL_DB_BIN`);
-otherwise they skip.
+`make e2e` builds a fresh `sbol-db` binary and points the test fixtures at it,
+so the end-to-end tests never run against a stale build. They boot a real
+server on a throwaway SQLite database (no external services). To also run them
+against Postgres:
+
+```bash
+docker compose up -d postgres          # from the repo root
+make e2e SBOL_DB_TEST_BACKENDS=sqlite,postgres
+```
+
+Without a discoverable binary the e2e tests skip, so `uv run pytest` still runs
+the unit suite anywhere.

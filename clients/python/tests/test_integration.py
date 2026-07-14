@@ -1,36 +1,32 @@
-"""End-to-end tests against a real sbol-db server (see ``live_server``).
+"""Feature-focused end-to-end tests: search, delete, overwrite, version
+negotiation, and the PartShop facade, against a real server (see
+``live_server``). Documents are imported as FASTA so the tests do not
+hand-author SBOL RDF.
 
-Documents are imported as FASTA so the tests do not hand-author SBOL RDF; the
-server's importer projects them into the SBOL3 object view the client reads.
-
-Delete is graph-granular: deleting a graph removes the graph and its triples,
-so ``get_graph`` then 404s. The derived object rows are reclaimed by
-reprojection rather than synchronously, so these tests assert on graph
-deletion, not on the search index emptying.
+Deleting a graph removes the graph, its triples, and its derived objects, so
+after a delete the object is gone from both ``get_graph`` and the search view.
 """
 
 from __future__ import annotations
 
 import pytest
+from conftest import NAMESPACE, fasta
 
 from sbol_db import BadRequestError, ImportReport, NotFoundError, PartShop, SbolDbClient
 
-NAMESPACE = "https://sbol-db.test/it"
-
-
-def _fasta(display_id: str, sequence: str) -> str:
-    return f">{display_id} integration fixture\n{sequence}\n"
+pytestmark = pytest.mark.e2e
 
 
 def _import(
     client: SbolDbClient,
     display_id: str,
-    sequence: str,
     document_iri: str,
+    *,
+    sequence: str = "ttgacggctagctcagtcctaggt",
     overwrite: int = 0,
 ) -> ImportReport:
     return client.create_graph(
-        _fasta(display_id, sequence),
+        fasta(display_id, sequence),
         format="fasta",
         namespace=NAMESPACE,
         document_iri=document_iri,
@@ -38,34 +34,33 @@ def _import(
     )
 
 
-@pytest.fixture()
-def client(live_server: str) -> SbolDbClient:
-    return SbolDbClient(live_server)
+def test_create_search_export_delete_roundtrip(client: SbolDbClient, unique: str) -> None:
+    display_id = f"round_{unique}"
+    doc_iri = f"{NAMESPACE}/{unique}/roundtrip"
+    report = _import(client, display_id, doc_iri)
 
+    hits = client.search(unique)
+    assert any(o.display_id == display_id for o in hits)
+    assert client.search_count(unique) >= 1
 
-def test_create_search_export_delete_roundtrip(client: SbolDbClient) -> None:
-    doc_iri = f"{NAMESPACE}/roundtrip"
-    report = _import(client, "pLacRoundtrip", "ttgacggctagctcagtcctaggt", doc_iri)
-
-    hits = client.search("pLacRoundtrip")
-    assert any(o.display_id == "pLacRoundtrip" for o in hits)
-    assert client.search_count("pLacRoundtrip") >= 1
-
-    target = next(o for o in hits if o.display_id == "pLacRoundtrip")
-    rdf = client.export_rdf(target.iri)
-    assert "pLacRoundtrip" in rdf
+    target = next(o for o in hits if o.display_id == display_id)
+    assert display_id in client.export_rdf(target.iri)
 
     client.delete_graph_by_document_iri(doc_iri)
     with pytest.raises(NotFoundError):
         client.get_graph(report.graph_id)
-    # Deleting the graph also drops its derived objects from the search view.
-    assert client.search_count("pLacRoundtrip") == 0
+    assert client.search_count(unique) == 0
 
 
-def test_export_downgrades_to_sbol2(client: SbolDbClient) -> None:
-    doc_iri = f"{NAMESPACE}/version"
-    _import(client, "pLacVersion", "ttgacggctagctcagt", doc_iri)
-    target = next(o for o in client.search("pLacVersion") if o.display_id == "pLacVersion")
+def test_search_empty_query_is_rejected(client: SbolDbClient) -> None:
+    with pytest.raises(BadRequestError):
+        client.search("   ")
+
+
+def test_export_downgrades_to_sbol2(client: SbolDbClient, unique: str) -> None:
+    doc_iri = f"{NAMESPACE}/{unique}/version"
+    _import(client, f"ver_{unique}", doc_iri)
+    target = next(o for o in client.search(unique))
 
     sbol3 = client.export_rdf(target.iri, format="ntriples", version="sbol3")
     sbol2 = client.export_rdf(target.iri, format="ntriples", version="sbol2")
@@ -75,59 +70,67 @@ def test_export_downgrades_to_sbol2(client: SbolDbClient) -> None:
     client.delete_graph_by_document_iri(doc_iri)
 
 
-def test_search_empty_query_is_rejected(client: SbolDbClient) -> None:
-    with pytest.raises(BadRequestError):
-        client.search("   ")
-
-
-def test_delete_unknown_document_iri_is_404(client: SbolDbClient) -> None:
+def test_delete_unknown_document_iri_is_404(client: SbolDbClient, unique: str) -> None:
     with pytest.raises(NotFoundError):
-        client.delete_graph_by_document_iri(f"{NAMESPACE}/does-not-exist")
+        client.delete_graph_by_document_iri(f"{NAMESPACE}/{unique}/does-not-exist")
 
 
-def test_overwrite_replace_swaps_the_graph(client: SbolDbClient) -> None:
-    doc_iri = f"{NAMESPACE}/replace"
-    first = _import(client, "seqReplaceV1", "aaaacccc", doc_iri)
-    second = _import(client, "seqReplaceV2", "ggggtttt", doc_iri, overwrite=1)
+def test_overwrite_replace_swaps_the_graph(client: SbolDbClient, unique: str) -> None:
+    doc_iri = f"{NAMESPACE}/{unique}/replace"
+    first = _import(client, f"v1_{unique}", doc_iri, sequence="aaaacccc")
+    second = _import(client, f"v2_{unique}", doc_iri, sequence="ggggtttt", overwrite=1)
 
-    # Replace drops the prior graph and installs the new one under the same IRI.
     assert first.graph_id != second.graph_id
     with pytest.raises(NotFoundError):
         client.get_graph(first.graph_id)
     assert client.get_graph(second.graph_id).document_iri == doc_iri
-    assert client.search_count("seqReplaceV2") >= 1
-    assert client.search_count("seqReplaceV1") == 0
+    assert client.search_count(f"v2_{unique}") >= 1
+    assert client.search_count(f"v1_{unique}") == 0
 
     client.delete_graph_by_document_iri(doc_iri)
 
 
-def test_overwrite_merge_unions_documents(client: SbolDbClient) -> None:
-    doc_iri = f"{NAMESPACE}/merge"
-    first = _import(client, "mergeAlpha", "aaaatttt", doc_iri)
-    merged = _import(client, "mergeBeta", "ccccgggg", doc_iri, overwrite=2)
+def test_overwrite_merge_unions_documents(client: SbolDbClient, unique: str) -> None:
+    doc_iri = f"{NAMESPACE}/{unique}/merge"
+    first = _import(client, f"alpha_{unique}", doc_iri, sequence="aaaatttt")
+    merged = _import(client, f"beta_{unique}", doc_iri, sequence="ccccgggg", overwrite=2)
 
-    # The merged graph replaces the original but carries objects from both.
     assert first.graph_id != merged.graph_id
     with pytest.raises(NotFoundError):
         client.get_graph(first.graph_id)
-    assert client.search_count("mergeAlpha") >= 1
-    assert client.search_count("mergeBeta") >= 1
+    assert client.search_count(f"alpha_{unique}") >= 1
+    assert client.search_count(f"beta_{unique}") >= 1
 
     client.delete_graph_by_document_iri(doc_iri)
 
 
-def test_partshop_facade_roundtrip(live_server: str) -> None:
-    shop = PartShop(live_server)
-    shop.login("dba", "dba")
-    doc_iri = f"{NAMESPACE}/partshop"
-    shop.submit(_fasta("shopPart", "acgtacgtacgt"), collection=doc_iri, format="fasta")
+def test_overwrite_zero_requires_document_iri_for_replace(client: SbolDbClient, unique: str) -> None:
+    with pytest.raises(BadRequestError):
+        client.create_graph(fasta(f"noiri_{unique}"), format="fasta", namespace=NAMESPACE, overwrite=1)
 
-    results = shop.search("shopPart")
-    assert any(o.display_id == "shopPart" for o in results)
-    assert shop.searchCount("shopPart") >= 1
 
-    # remove() deletes the graph and its objects; removing it again 404s.
-    shop.remove(doc_iri)
-    assert shop.searchCount("shopPart") == 0
-    with pytest.raises(NotFoundError):
+def test_partshop_facade_roundtrip(live_server: str, unique: str) -> None:
+    display_id = f"shop_{unique}"
+    doc_iri = f"{NAMESPACE}/{unique}/partshop"
+    with PartShop(live_server) as shop:
+        shop.login("dba", "dba")
+        assert shop.getUser() == "dba"
+        assert shop.getKey() == ""
+        shop.submit(fasta(display_id), collection=doc_iri, format="fasta")
+
+        results = shop.search(unique)
+        assert any(o.display_id == display_id for o in results)
+        assert shop.searchCount(unique) >= 1
+
         shop.remove(doc_iri)
+        assert shop.searchCount(unique) == 0
+        with pytest.raises(NotFoundError):
+            shop.remove(doc_iri)
+
+
+def test_partshop_attachments_not_implemented(live_server: str) -> None:
+    with PartShop(live_server) as shop:
+        with pytest.raises(NotImplementedError):
+            shop.attachFile("https://ex.org/x", "/tmp/f")
+        with pytest.raises(NotImplementedError):
+            shop.downloadAttachment("https://ex.org/x")

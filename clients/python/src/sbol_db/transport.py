@@ -49,20 +49,24 @@ class Transport:
         *,
         params: Optional[Mapping[str, Any]] = None,
         json: Any = None,
+        data: Optional[Mapping[str, Any]] = None,
         content: Optional[bytes] = None,
         headers: Optional[Mapping[str, str]] = None,
     ) -> httpx.Response:
         """Issue a request, raising a typed error on any non-2xx response.
 
-        ``params`` entries whose value is ``None`` are dropped, so callers can
-        pass optional query parameters unconditionally.
+        ``params`` (query string) and ``data`` (form body) entries whose value
+        is ``None`` are dropped, so callers can pass optional fields
+        unconditionally.
         """
         clean_params = None if params is None else {k: v for k, v in params.items() if v is not None}
+        clean_data = None if data is None else {k: v for k, v in data.items() if v is not None}
         response = self._client.request(
             method,
             path,
             params=clean_params,
             json=json,
+            data=clean_data,
             content=content,
             headers=headers,
         )

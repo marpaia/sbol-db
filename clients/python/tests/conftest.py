@@ -1,10 +1,20 @@
-"""Shared fixtures, including a real sbol-db server for integration tests.
+"""Shared fixtures for the end-to-end suite.
 
-The ``live_server`` fixture boots ``sbol-db server`` on a SQLite backend with
-auth disabled, so integration tests exercise the actual HTTP surface. It skips
-cleanly when no binary is available, so ``pytest`` still runs the unit suite.
-Point it at a build with ``SBOL_DB_BIN=/path/to/sbol-db`` or let it discover
-``target/{debug,release}/sbol-db`` under the repo root.
+``live_server`` boots a real ``sbol-db server`` and yields its base URL. It is
+parametrized over storage backends: by default just SQLite (a throwaway temp
+database, so every run starts clean and needs no external services), and
+optionally Postgres when ``SBOL_DB_TEST_BACKENDS`` includes it (pointing at
+``DATABASE_URL``, default the repo's compose Postgres). Every e2e test then runs
+once per configured backend.
+
+The suite skips cleanly when no ``sbol-db`` binary is available, so ``pytest``
+still runs the unit tests. Point it at a build with ``SBOL_DB_BIN=/path/to/
+sbol-db`` (the ``run-e2e.sh`` runner does this after a fresh ``cargo build``) or
+let it discover ``target/{debug,release}/sbol-db`` under the repo root.
+
+To avoid cross-run interference on a shared backend (Postgres), tests derive
+their object identifiers from the session-unique ``run_id`` and the per-test
+``unique`` fixture, so search assertions only ever see this run's data.
 """
 
 from __future__ import annotations
@@ -16,10 +26,20 @@ import socket
 import subprocess
 import tempfile
 import time
-from typing import Iterator, Optional
+import uuid
+from typing import Iterator, List, Optional
 
 import httpx
 import pytest
+
+from sbol_db import SbolDbClient
+
+NAMESPACE = "https://sbol-db.test/e2e"
+
+
+def _configured_backends() -> List[str]:
+    raw = os.environ.get("SBOL_DB_TEST_BACKENDS", "sqlite")
+    return [b.strip() for b in raw.split(",") if b.strip()]
 
 
 def _free_port() -> int:
@@ -55,19 +75,26 @@ def _wait_ready(base_url: str, proc: "subprocess.Popen[bytes]", deadline_s: floa
     raise RuntimeError("server did not become ready in time")
 
 
-@pytest.fixture(scope="session")
-def live_server() -> Iterator[str]:
+def _database_url(backend: str, tmpdir: str) -> str:
+    if backend == "sqlite":
+        return f"sqlite://{os.path.join(tmpdir, 'sbol.db')}"
+    if backend == "postgres":
+        return os.environ.get("DATABASE_URL", "postgres://sbol:sbol@localhost:5432/sbol")
+    if backend == "rocksdb":
+        return f"rocksdb://{os.path.join(tmpdir, 'rocks')}"
+    raise ValueError(f"unknown backend: {backend}")
+
+
+@pytest.fixture(scope="session", params=_configured_backends())
+def live_server(request: pytest.FixtureRequest) -> Iterator[str]:
+    backend = request.param
     binary = _find_binary()
     if binary is None:
-        pytest.skip("sbol-db binary not found; build it (cargo build -p sbol-db) or set SBOL_DB_BIN")
+        pytest.skip("sbol-db binary not found; run clients/python/run-e2e.sh or set SBOL_DB_BIN")
 
-    tmpdir = tempfile.mkdtemp(prefix="sbol-db-it-")
-    db_url = f"sqlite://{os.path.join(tmpdir, 'sbol.db')}"
-    env = {
-        **os.environ,
-        "DATABASE_URL": db_url,
-        "SBOL_DB_SPARQL_AUTH_DISABLED": "true",
-    }
+    tmpdir = tempfile.mkdtemp(prefix=f"sbol-db-e2e-{backend}-")
+    db_url = _database_url(backend, tmpdir)
+    env = {**os.environ, "DATABASE_URL": db_url, "SBOL_DB_SPARQL_AUTH_DISABLED": "true"}
     subprocess.run([binary, "db", "migrate"], env=env, check=True, capture_output=True)
 
     port = _free_port()
@@ -88,3 +115,28 @@ def live_server() -> Iterator[str]:
         except subprocess.TimeoutExpired:
             proc.kill()
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.fixture(scope="session")
+def run_id() -> str:
+    """A short token unique to this test session, mixed into identifiers so
+    concurrent or repeated runs on a shared backend do not collide."""
+    return uuid.uuid4().hex[:8]
+
+
+@pytest.fixture()
+def unique(run_id: str) -> str:
+    """A per-test alphanumeric token (valid as an SBOL displayId component)."""
+    return f"e2e{run_id}{uuid.uuid4().hex[:6]}"
+
+
+@pytest.fixture()
+def client(live_server: str) -> Iterator[SbolDbClient]:
+    with SbolDbClient(live_server) as c:
+        yield c
+
+
+def fasta(display_id: str, sequence: str = "ttgacggctagctcagtcctaggtacagtgctagc") -> str:
+    """A one-record FASTA body; the importer projects it to an SBOL3 Component
+    plus a Sequence, with `display_id` as the component's displayId."""
+    return f">{display_id} e2e fixture\n{sequence}\n"

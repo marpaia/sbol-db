@@ -21,13 +21,24 @@ Repository = "https://github.com/marpaia/sbol-db"
 # graph. This is plain RDF tooling, not an SBOL object model or an sbol-rs
 # dependency; the core client never requires it.
 rdf = ["rdflib>=7"]
+
+# Development tooling. A uv dependency group (not a user-facing extra): `uv run`
+# installs it automatically, so `uv run pytest` works with no extra flags.
+[dependency-groups]
 dev = ["pytest>=8", "black>=24", "isort>=5", "flake8>=7", "mypy>=1.10"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sbol_db"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "e2e: end-to-end test requiring a live sbol-db server (auto-skips without one)",
+]
+
 [tool.black]
 line-length = 120
+target-version = ["py39"]
 
 [tool.isort]
 profile = "black"

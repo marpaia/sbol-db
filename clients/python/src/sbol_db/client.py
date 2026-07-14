@@ -298,20 +298,20 @@ class SbolDbClient:
         default_graph: Optional[str] = None,
         format: Optional[str] = None,
     ) -> SparqlResult:
-        """Run a SPARQL 1.1 read query (SELECT/ASK/CONSTRUCT/DESCRIBE)."""
-        params: Dict[str, Any] = {"query": query}
+        """Run a SPARQL 1.1 read query (SELECT/ASK/CONSTRUCT/DESCRIBE).
+
+        The query goes in a form-encoded body (the server reads POST bodies, not
+        the URL query string), alongside the optional `default-graph-uri` scope.
+        With no `format`, the server picks each query form's natural result type
+        (JSON for SELECT/ASK, RDF for CONSTRUCT/DESCRIBE); pass `format` to
+        override.
+        """
+        data: Dict[str, Any] = {"query": query}
         if default_graph is not None:
-            params["default-graph-uri"] = default_graph
+            data["default-graph-uri"] = default_graph
         if format is not None:
-            params["format"] = format
-        return SparqlResult(
-            self._t.request(
-                "POST",
-                "/sparql",
-                params=params,
-                headers={"accept": "application/sparql-results+json"},
-            )
-        )
+            data["format"] = format
+        return SparqlResult(self._t.request("POST", "/sparql", data=data))
 
     # -- ontology ---------------------------------------------------------
 
