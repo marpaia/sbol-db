@@ -10,7 +10,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use sbol_db_core::{
     DomainError, GraphId, GraphRecord, ImportReport, JobId, NeighborhoodQuery, NeighborhoodResult,
-    ObjectId, SbolObjectRecord, SerializationFormat, Triple,
+    ObjectId, ObjectTerm, SbolObjectRecord, SerializationFormat, Triple,
 };
 use serde_json::Value;
 
@@ -201,6 +201,57 @@ pub trait TextSearchStore: Send + Sync {
         &self,
         query: &TextSearchQuery,
     ) -> Result<(Vec<SbolObjectRecord>, i64), DomainError>;
+}
+
+/// The SynBioHub terms namespace, whose `ownedBy`/`canView` predicates carry
+/// the ownership and sharing facts an [`AclStore`] reads.
+pub const SBH_OWNED_BY: &str = "http://wiki.synbiohub.org/wiki/Terms/synbiohub#ownedBy";
+/// The SynBioHub `canView` predicate: `<owner> sbh:canView <object>`.
+pub const SBH_CAN_VIEW: &str = "http://wiki.synbiohub.org/wiki/Terms/synbiohub#canView";
+
+/// Ownership and sharing reads backing ACL-scoped queries.
+///
+/// SynBioHub records visibility as triples: a graph's contents carry
+/// `<subject> sbh:ownedBy <owner>` for each owner, and a shared object is
+/// reachable through `<owner> sbh:canView <object>`. These reads let the app's
+/// ACL layer turn a caller identity into the graphs and objects it may read;
+/// the store itself stays authorization-free.
+#[async_trait]
+pub trait AclStore: Send + Sync {
+    /// Named graphs whose contents carry `<subject> sbh:ownedBy <owner_iri>`,
+    /// i.e. the graphs `owner_iri` owns and may read. Distinct, order
+    /// unspecified.
+    async fn owned_graphs(&self, owner_iri: &str) -> Result<Vec<String>, DomainError>;
+
+    /// Objects shared with `owner_iri` through `<owner_iri> sbh:canView
+    /// <object>`. Distinct, order unspecified.
+    async fn viewable_objects(&self, owner_iri: &str) -> Result<Vec<String>, DomainError>;
+}
+
+/// Distinct named-graph IRIs among `triples`, dropping any in the default
+/// partition. Backs [`AclStore::owned_graphs`] once a backend has scanned the
+/// `sbh:ownedBy` triples.
+pub fn distinct_graph_iris(triples: Vec<Triple>) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    for t in triples {
+        if let Some(g) = t.graph_iri {
+            seen.insert(g.into_inner());
+        }
+    }
+    seen.into_iter().collect()
+}
+
+/// Distinct object-position IRIs among `triples`. Backs
+/// [`AclStore::viewable_objects`] once a backend has scanned the `sbh:canView`
+/// triples.
+pub fn distinct_object_iris(triples: Vec<Triple>) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    for t in triples {
+        if let ObjectTerm::Iri(o) = t.object {
+            seen.insert(o.into_inner());
+        }
+    }
+    seen.into_iter().collect()
 }
 
 /// The full SBOL-aware store: ingest plus every derived-view read surface.

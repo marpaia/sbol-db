@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use sbol_db_core::{IriString, NeighborhoodQuery};
-use sbol_db_sparql::{parse_query, ResultFormat, SparqlEngine, SparqlOptions};
+use sbol_db_sparql::{parse_query, GraphScope, ResultFormat, SparqlEngine, SparqlOptions};
 use sbol_db_storage::{SbolStore, SequenceSearchOptions, TripleSource};
 
 use crate::cli::QueryAction;
@@ -97,10 +97,10 @@ async fn sparql(
         timeout: Duration::from_secs(timeout_secs),
         max_rows,
         max_query_size,
-        default_graph: None,
+        authorized_graphs: GraphScope::Union,
     };
     let outcome = engine
-        .execute(&query, format, &options)
+        .execute(&query, format, None, &options)
         .await
         .map_err(|e| anyhow!("{e}"))?;
     std::io::stdout().write_all(&outcome.payload.body)?;

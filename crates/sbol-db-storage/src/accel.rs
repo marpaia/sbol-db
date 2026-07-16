@@ -332,6 +332,18 @@ pub enum AcceleratedQuery {
     },
 }
 
+impl AcceleratedQuery {
+    /// The single named graph this plan reads from.
+    pub fn graph(&self) -> &str {
+        match self {
+            AcceleratedQuery::ObjectList { graph, .. }
+            | AcceleratedQuery::Count { graph, .. }
+            | AcceleratedQuery::Facet { graph, .. }
+            | AcceleratedQuery::ObjectMetadata { graph, .. } => graph,
+        }
+    }
+}
+
 /// A backend's answer to an [`AcceleratedQuery`]: a SPARQL solution sequence.
 /// `vars` are the projected variable names (without `?`); each row has one cell
 /// per variable, `None` for an unbound (optional) value.

@@ -31,4 +31,6 @@ reqwest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
 sbol-db-rdf.workspace = true
 sbol-db-conformance.workspace = true
+sbol-db-app.workspace = true
+sbol-db-sparql.workspace = true
 sbol.workspace = true

@@ -2767,6 +2767,7 @@ dependencies = [
  "chrono",
  "clap",
  "sbol",
+ "sbol-db-app",
  "sbol-db-backend",
  "sbol-db-core",
  "sbol-db-jobs",
@@ -2787,6 +2788,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sbol-db-app"
+version = "0.1.1"
+dependencies = [
+ "sbol-db-backend",
+ "sbol-db-core",
+ "sbol-db-sparql",
+ "sbol-db-storage",
+]
+
+[[package]]
 name = "sbol-db-backend"
 version = "0.1.1"
 dependencies = [
@@ -2802,7 +2813,9 @@ dependencies = [
 name = "sbol-db-conformance"
 version = "0.1.1"
 dependencies = [
+ "sbol-db-app",
  "sbol-db-core",
+ "sbol-db-sparql",
  "sbol-db-storage",
  "serde_json",
 ]
@@ -2866,10 +2879,12 @@ dependencies = [
  "pg_query",
  "reqwest",
  "sbol",
+ "sbol-db-app",
  "sbol-db-conformance",
  "sbol-db-core",
  "sbol-db-derive",
  "sbol-db-rdf",
+ "sbol-db-sparql",
  "sbol-db-storage",
  "sbol-rdf",
  "serde",
@@ -2903,10 +2918,12 @@ dependencies = [
  "chrono",
  "reqwest",
  "rocksdb",
+ "sbol-db-app",
  "sbol-db-conformance",
  "sbol-db-core",
  "sbol-db-derive",
  "sbol-db-rdf",
+ "sbol-db-sparql",
  "sbol-db-storage",
  "sbol-rdf",
  "serde",
@@ -2928,6 +2945,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "sbol",
+ "sbol-db-app",
  "sbol-db-core",
  "sbol-db-jobs",
  "sbol-db-postgres",
@@ -2985,10 +3003,12 @@ dependencies = [
  "chrono",
  "hex",
  "reqwest",
+ "sbol-db-app",
  "sbol-db-conformance",
  "sbol-db-core",
  "sbol-db-derive",
  "sbol-db-rdf",
+ "sbol-db-sparql",
  "sbol-db-storage",
  "sbol-rdf",
  "serde_json",

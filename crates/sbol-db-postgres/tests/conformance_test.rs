@@ -4,10 +4,12 @@
 
 use std::sync::Arc;
 
+use sbol_db_app::AppServices;
 use sbol_db_postgres::{connect, run_migrations, JobRepository, SbolObjectService};
-use sbol_db_storage::{JobQueue, SbolStore};
+use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
+use sbol_db_storage::{AclStore, JobQueue, SbolStore};
 
-async fn fresh_handles() -> (Arc<dyn SbolStore>, Arc<dyn JobQueue>) {
+async fn fresh_app() -> AppServices {
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://sbol:sbol@localhost:5432/sbol".to_owned());
     let pool = connect(&database_url).await.expect("connect");
@@ -25,13 +27,20 @@ async fn fresh_handles() -> (Arc<dyn SbolStore>, Arc<dyn JobQueue>) {
     .await
     .expect("truncate");
 
-    let store: Arc<dyn SbolStore> = Arc::new(SbolObjectService::new(pool.clone()));
+    let service = Arc::new(SbolObjectService::new(pool.clone()));
+    let sparql = Arc::new(SparqlEngine::new(service.triple_source()));
+    let sparql_update = Arc::new(SparqlUpdateEngine::new(
+        service.triple_source(),
+        service.triple_writer(),
+    ));
     let jobs: Arc<dyn JobQueue> = Arc::new(JobRepository::new(pool));
-    (store, jobs)
+    let store: Arc<dyn SbolStore> = service.clone();
+    let acl: Arc<dyn AclStore> = service;
+    AppServices::new(store, sparql, sparql_update, jobs, acl)
 }
 
 #[tokio::test]
 async fn postgres_passes_storage_conformance_suite() {
-    let (store, jobs) = fresh_handles().await;
-    sbol_db_conformance::run_all(store.as_ref(), jobs.as_ref()).await;
+    let app = fresh_app().await;
+    sbol_db_conformance::run_all(&app).await;
 }

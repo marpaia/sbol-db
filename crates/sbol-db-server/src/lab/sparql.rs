@@ -81,7 +81,10 @@ pub async fn execute(
     let options = SparqlOptions::default();
 
     let started = Instant::now();
-    let outcome = state.sparql.execute(&req.query, format, &options).await?;
+    let outcome = state
+        .sparql
+        .execute(&req.query, format, None, &options)
+        .await?;
     let elapsed_ms = started.elapsed().as_millis() as u64;
 
     let content_type = outcome.payload.content_type.to_string();

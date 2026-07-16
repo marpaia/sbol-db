@@ -3,9 +3,10 @@
 //! Each scenario drives a storage backend purely through the trait surface and
 //! asserts the observable contract every implementation must honor: import and
 //! derived-view reads, the graph set-semantics rule, ontology load and closure
-//! queries, and the job-queue lifecycle. A backend crate wires these into its
-//! own test harness by providing a fresh, empty store and calling [`run_all`]
-//! (or an individual scenario).
+//! queries, the job-queue lifecycle, and ACL-scoped reads hiding another user's
+//! private graph. A backend crate wires these into its own test harness by
+//! assembling a fresh, empty [`AppServices`] over the backend and calling
+//! [`run_all`] (or an individual store-level scenario against a bare store).
 //!
 //! Scenarios assume they start against an empty store; they scope their reads
 //! to the graphs and keys they create so [`run_all`] can run them in sequence
@@ -13,10 +14,12 @@
 
 use std::time::Duration;
 
+use sbol_db_app::{AppServices, PUBLIC_GRAPH};
 use sbol_db_core::{Direction, IriString, NeighborhoodQuery, SerializationFormat};
+use sbol_db_sparql::{GraphScope, SparqlOptions};
 use sbol_db_storage::{
     EnqueueOutcome, GraphWriteMode, ImportInput, JobQueue, JobStatus, ListJobsFilter,
-    ListObjectsFilter, NewJob, SbolStore, SequenceSearchOptions, DEFAULT_QUEUE,
+    ListObjectsFilter, NewJob, SbolStore, SequenceSearchOptions, DEFAULT_QUEUE, SBH_OWNED_BY,
 };
 
 /// A self-contained SBOL3 document: one Component referencing one Sequence.
@@ -73,15 +76,23 @@ is_a: SO:0001055 ! transcriptional_cis_regulatory_region
 const SO_REGION_IRI: &str = "http://purl.obolibrary.org/obo/SO_0000001";
 const SO_PROMOTER_IRI: &str = "http://purl.obolibrary.org/obo/SO_0000167";
 
-/// Run every scenario in sequence against one store + job queue. The store and
-/// queue must start empty.
-pub async fn run_all(store: &dyn SbolStore, jobs: &dyn JobQueue) {
+/// Run every scenario in sequence against one facade. The store and job queue
+/// the facade bundles must start empty.
+///
+/// The facade carries the store and job queue the store-level scenarios drive
+/// plus the [`AclService`](sbol_db_app::AclService) and SPARQL engine the
+/// ACL-scope gate needs, so a backend wires up one [`AppServices`] and passes
+/// it here.
+pub async fn run_all(app: &AppServices) {
+    let store = app.store.as_ref();
+    let jobs = app.jobs.as_ref();
     import_and_read_back(store).await;
     graph_set_semantics(store).await;
     neighborhood_walk(store).await;
     sequence_search(store).await;
     ontology_roundtrip(store).await;
     job_queue_lifecycle(jobs).await;
+    acl_scope_hides_private_graph(app).await;
 }
 
 /// Importing a document creates a graph that owns its triples, projects the
@@ -505,6 +516,170 @@ pub async fn job_queue_lifecycle(jobs: &dyn JobQueue) {
         Some(JobStatus::Cancelled),
         "the job is cancelled"
     );
+}
+
+/// ACL-scoped reads hide another user's private graph.
+///
+/// Two users each own a private graph carrying a private object, alongside a
+/// public graph readable by everyone. The [`GraphScope`] the facade's
+/// `AclService` computes for a user authorizes that user's own graph and the
+/// public graph and nothing else; a SPARQL read run under it returns the
+/// user's own and the public object but never the other user's private object.
+///
+/// This is the security-critical contract of the read path: visibility is the
+/// server-computed scope, never a graph the client names.
+pub async fn acl_scope_hides_private_graph(app: &AppServices) {
+    const USER_A: &str = "http://synbiohub.org/user/alice";
+    const USER_B: &str = "http://synbiohub.org/user/bob";
+    const GRAPH_A: &str = "http://synbiohub.org/user/alice/private_A";
+    const GRAPH_B: &str = "http://synbiohub.org/user/bob/private_B";
+    const OBJ_A: &str = "http://synbiohub.org/user/alice/private_A/objA";
+    const OBJ_B: &str = "http://synbiohub.org/user/bob/private_B/objB";
+    const OBJ_PUBLIC: &str = "http://synbiohub.org/public/objPub";
+    const DISPLAY_ID: &str = "http://sbols.org/v3#displayId";
+
+    // Each private graph carries a real object plus the `sbh:ownedBy` fact the
+    // AclService reads; the public graph carries a public object.
+    let graph_a =
+        format!("<{OBJ_A}> <{DISPLAY_ID}> \"objA\" .\n<{OBJ_A}> <{SBH_OWNED_BY}> <{USER_A}> .\n");
+    let graph_b =
+        format!("<{OBJ_B}> <{DISPLAY_ID}> \"objB\" .\n<{OBJ_B}> <{SBH_OWNED_BY}> <{USER_B}> .\n");
+    let graph_public = format!("<{OBJ_PUBLIC}> <{DISPLAY_ID}> \"objPub\" .\n");
+
+    for (graph, body) in [
+        (GRAPH_A, &graph_a),
+        (GRAPH_B, &graph_b),
+        (PUBLIC_GRAPH, &graph_public),
+    ] {
+        app.store
+            .graph_store_write(
+                graph,
+                body,
+                SerializationFormat::NTriples,
+                GraphWriteMode::Merge,
+            )
+            .await
+            .expect("seed graph");
+    }
+
+    let scope_a = app
+        .acl_service
+        .compute_scope(Some(USER_A))
+        .await
+        .expect("compute scope for A");
+    let scope_b = app
+        .acl_service
+        .compute_scope(Some(USER_B))
+        .await
+        .expect("compute scope for B");
+
+    // Each computed scope names the public graph and the user's own graph, and
+    // excludes the other user's private graph.
+    assert!(
+        scope_names(&scope_a, PUBLIC_GRAPH),
+        "A's scope includes the public graph"
+    );
+    assert!(
+        scope_names(&scope_a, GRAPH_A),
+        "A's scope includes A's own graph"
+    );
+    assert!(
+        !scope_names(&scope_a, GRAPH_B),
+        "A's scope excludes B's private graph"
+    );
+    assert!(
+        scope_names(&scope_b, PUBLIC_GRAPH),
+        "B's scope includes the public graph"
+    );
+    assert!(
+        scope_names(&scope_b, GRAPH_B),
+        "B's scope includes B's own graph"
+    );
+    assert!(
+        !scope_names(&scope_b, GRAPH_A),
+        "B's scope excludes A's private graph"
+    );
+
+    // A read under each scope returns exactly the authorized objects.
+    let seen_by_a = subjects_under_scope(app, &scope_a).await;
+    let seen_by_b = subjects_under_scope(app, &scope_b).await;
+
+    // The public object is visible to both users.
+    assert!(
+        seen_by_a.contains(OBJ_PUBLIC),
+        "A reads the public object under its scope"
+    );
+    assert!(
+        seen_by_b.contains(OBJ_PUBLIC),
+        "B reads the public object under its scope"
+    );
+
+    // Each user reads their own private object.
+    assert!(
+        seen_by_a.contains(OBJ_A),
+        "A reads A's own private object under its scope"
+    );
+    assert!(
+        seen_by_b.contains(OBJ_B),
+        "B reads B's own private object under its scope"
+    );
+
+    // The security-critical assertion: a non-owner cannot read another user's
+    // private object.
+    assert!(
+        !seen_by_a.contains(OBJ_B),
+        "A cannot read B's private object under its scope"
+    );
+    assert!(
+        !seen_by_b.contains(OBJ_A),
+        "B cannot read A's private object under its scope"
+    );
+
+    // Leave the store as we found it for any scenario that follows.
+    for graph in [GRAPH_A, GRAPH_B, PUBLIC_GRAPH] {
+        app.store
+            .graph_store_clear(graph)
+            .await
+            .expect("clear seed graph");
+    }
+}
+
+/// Whether `scope` authorizes reads of the named `graph`.
+fn scope_names(scope: &GraphScope, graph: &str) -> bool {
+    match scope {
+        GraphScope::Union => true,
+        GraphScope::Only(graphs) => graphs.iter().any(|g| g == graph),
+    }
+}
+
+/// The subject IRIs carrying an `sbol:displayId`, read under `scope`, as the
+/// serialized SPARQL result text. Membership is tested with the quoted IRI so a
+/// hit is an exact result binding, not an incidental substring.
+async fn subjects_under_scope(app: &AppServices, scope: &GraphScope) -> ScopedSubjects {
+    let options = SparqlOptions {
+        authorized_graphs: scope.clone(),
+        ..SparqlOptions::default()
+    };
+    let outcome = app
+        .sparql
+        .execute(
+            "SELECT ?s WHERE { ?s <http://sbols.org/v3#displayId> ?id }",
+            None,
+            None,
+            &options,
+        )
+        .await
+        .expect("scoped SPARQL read");
+    ScopedSubjects(String::from_utf8(outcome.payload.body).expect("utf8 SPARQL results"))
+}
+
+/// Serialized SPARQL SELECT results, queried for whether a given IRI is bound.
+struct ScopedSubjects(String);
+
+impl ScopedSubjects {
+    fn contains(&self, iri: &str) -> bool {
+        self.0.contains(&format!("\"{iri}\""))
+    }
 }
 
 fn new_job(kind: &str, idempotency_key: Option<String>) -> NewJob {

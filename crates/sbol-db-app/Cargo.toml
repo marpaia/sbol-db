@@ -1,15 +1,14 @@
 [package]
-name = "sbol-db-conformance"
+name = "sbol-db-app"
 version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Backend-neutral conformance scenarios every sbol-db-storage implementation must pass."
+description = "Backend-neutral application facade for sbol-db: composes the storage trait objects and owns the identity-aware subsystems (ACL scoping) shared by every HTTP adapter."
 
 [dependencies]
 sbol-db-core.workspace = true
 sbol-db-storage.workspace = true
 sbol-db-sparql.workspace = true
-sbol-db-app.workspace = true
-serde_json.workspace = true
+sbol-db-backend.workspace = true

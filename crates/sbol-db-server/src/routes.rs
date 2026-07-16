@@ -656,11 +656,13 @@ async fn run_sparql(
     format: Option<ResultFormat>,
     default_graph: Option<String>,
 ) -> Result<axum::response::Response, ApiError> {
-    let options = SparqlOptions {
-        default_graph,
-        ..SparqlOptions::default()
-    };
-    let outcome = state.sparql.execute(query, format, &options).await?;
+    // The public `/sparql` endpoint imposes no authorization ceiling; the
+    // client's `default-graph-uri` is honored under the union default graph.
+    let options = SparqlOptions::default();
+    let outcome = state
+        .sparql
+        .execute(query, format, default_graph.as_deref(), &options)
+        .await?;
     let mut response =
         axum::response::Response::builder().header(CONTENT_TYPE, outcome.payload.content_type);
     if outcome.payload.truncated {

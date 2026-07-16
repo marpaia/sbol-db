@@ -25,6 +25,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use sbol_db_app::AppServices;
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 #[cfg(feature = "lab")]
 use sbol_db_storage::{DbStats, LabStore, LsmStats, SqlConsole};
@@ -38,6 +39,10 @@ pub struct AppState {
     pub service: Arc<dyn SbolStore>,
     pub sparql: Arc<SparqlEngine>,
     pub sparql_update: Arc<SparqlUpdateEngine>,
+    /// The backend-neutral application facade the identity-aware adapters share
+    /// (ACL scoping, and the net-new subsystems added in later phases). Wired
+    /// in alongside the existing raw handles; the current routes are unchanged.
+    pub app: Arc<AppServices>,
     pub metrics: Arc<Metrics>,
     pub jobs: Arc<dyn JobQueue>,
     /// Backend-neutral dashboard / graph-browser reads for the lab UI.

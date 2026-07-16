@@ -24,7 +24,7 @@ use sbol_db_sqlite::{
     SqliteJobRepository, SqliteMigrator, SqlitePool, SqliteSqlConsole, SqliteStats, SqliteStore,
 };
 use sbol_db_storage::{
-    BackendKind, DbStats, JobQueue, LabStore, LsmStats, Migrator, SbolStore, SqlConsole,
+    AclStore, BackendKind, DbStats, JobQueue, LabStore, LsmStats, Migrator, SbolStore, SqlConsole,
     TripleSource, TripleWriter,
 };
 
@@ -35,6 +35,8 @@ pub struct Backend {
     pub kind: BackendKind,
     /// The SBOL-aware store: ingest plus every derived-view read surface.
     pub store: Arc<dyn SbolStore>,
+    /// Ownership and sharing reads backing ACL-scoped queries.
+    pub acl: Arc<dyn AclStore>,
     /// The async job queue.
     pub jobs: Arc<dyn JobQueue>,
     /// Synchronous triple-pattern reads for the SPARQL evaluator.
@@ -116,6 +118,7 @@ impl Backend {
 
     fn from_sqlite(pool: SqlitePool) -> Self {
         let store = Arc::new(SqliteStore::new(pool.clone()));
+        let acl: Arc<dyn AclStore> = store.clone();
         let triple_source = store.triple_source();
         let triple_writer = store.triple_writer();
         let jobs: Arc<dyn JobQueue> = Arc::new(SqliteJobRepository::new(pool.clone()));
@@ -126,6 +129,7 @@ impl Backend {
         Self {
             kind: BackendKind::Sqlite,
             store,
+            acl,
             jobs,
             triple_source,
             triple_writer,
@@ -140,6 +144,7 @@ impl Backend {
 
     fn from_rocksdb(db: sbol_db_rocksdb::Db) -> Self {
         let store = Arc::new(RocksdbStore::new(db.clone()));
+        let acl: Arc<dyn AclStore> = store.clone();
         let triple_source = store.triple_source();
         let triple_writer = store.triple_writer();
         let jobs: Arc<dyn JobQueue> = Arc::new(RocksdbJobs::new(db.clone()));
@@ -149,6 +154,7 @@ impl Backend {
         Self {
             kind: BackendKind::Rocksdb,
             store,
+            acl,
             jobs,
             triple_source,
             triple_writer,
@@ -172,9 +178,11 @@ impl Backend {
         let sql_console: Arc<dyn SqlConsole> = Arc::new(PgSqlConsole::new(pool.clone()));
         let lab: Arc<dyn LabStore> = service.clone();
         let store: Arc<dyn SbolStore> = service.clone();
+        let acl: Arc<dyn AclStore> = service.clone();
         Self {
             kind: BackendKind::Postgres,
             store,
+            acl,
             jobs,
             triple_source,
             triple_writer,

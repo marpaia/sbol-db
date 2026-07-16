@@ -1,7 +1,12 @@
 //! Runs the `sbol-db-conformance` scenarios against the SQLite backend, the
 //! same contract the Postgres and RocksDB backends pass.
 
+use std::sync::Arc;
+
+use sbol_db_app::AppServices;
+use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_sqlite::{connect_and_migrate, SqliteJobRepository, SqlitePool, SqliteStore};
+use sbol_db_storage::{AclStore, JobQueue, SbolStore};
 use tempfile::TempDir;
 
 async fn fresh_pool() -> (SqlitePool, TempDir) {
@@ -51,9 +56,15 @@ async fn sqlite_passes_job_queue_lifecycle() {
 #[tokio::test]
 async fn sqlite_passes_full_conformance_suite() {
     let (pool, _dir) = fresh_pool().await;
-    sbol_db_conformance::run_all(
-        &SqliteStore::new(pool.clone()),
-        &SqliteJobRepository::new(pool),
-    )
-    .await;
+    let store = Arc::new(SqliteStore::new(pool.clone()));
+    let sparql = Arc::new(SparqlEngine::new(store.triple_source()));
+    let sparql_update = Arc::new(SparqlUpdateEngine::new(
+        store.triple_source(),
+        store.triple_writer(),
+    ));
+    let jobs: Arc<dyn JobQueue> = Arc::new(SqliteJobRepository::new(pool));
+    let store_dyn: Arc<dyn SbolStore> = store.clone();
+    let acl: Arc<dyn AclStore> = store;
+    let app = AppServices::new(store_dyn, sparql, sparql_update, jobs, acl);
+    sbol_db_conformance::run_all(&app).await;
 }

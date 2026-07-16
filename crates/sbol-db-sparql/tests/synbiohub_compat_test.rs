@@ -23,7 +23,7 @@ use std::time::Duration;
 use sbol_db_core::IriString;
 use sbol_db_postgres::{connect, run_migrations, SbolObjectService};
 use sbol_db_rdf::rdf_graph_to_triples;
-use sbol_db_sparql::{ResultFormat, SparqlEngine, SparqlOptions};
+use sbol_db_sparql::{GraphScope, ResultFormat, SparqlEngine, SparqlOptions};
 use tokio::sync::{Mutex, MutexGuard};
 
 const SBOL2: &str = include_str!("synbiohub_sbol2.ttl");
@@ -98,13 +98,13 @@ fn long_options() -> SparqlOptions {
         timeout: Duration::from_secs(30),
         max_rows: 100_000,
         max_query_size: 64 * 1024,
-        default_graph: None,
+        authorized_graphs: GraphScope::Union,
     }
 }
 
 async fn run(engine: &SparqlEngine, query: &str, format: ResultFormat) -> String {
     let outcome = engine
-        .execute(query, Some(format), &long_options())
+        .execute(query, Some(format), None, &long_options())
         .await
         .unwrap_or_else(|e| panic!("execute failed for query:\n{query}\nerror: {e:?}"));
     String::from_utf8(outcome.payload.body).expect("utf8")
@@ -317,15 +317,15 @@ async fn default_graph_uri_scopes_reads() {
 
     let query = "PREFIX sbol2: <http://sbols.org/v2#>\n\
                  SELECT ?c WHERE { ?c a sbol2:Collection }";
-    let scoped = |graph: &str| SparqlOptions {
-        default_graph: Some(graph.to_owned()),
-        ..long_options()
-    };
-
     // Scoped to the public graph: the iGEM collection, not Alice's.
     let body = String::from_utf8(
         engine
-            .execute(query, Some(ResultFormat::Json), &scoped(PUBLIC_GRAPH))
+            .execute(
+                query,
+                Some(ResultFormat::Json),
+                Some(PUBLIC_GRAPH),
+                &long_options(),
+            )
             .await
             .expect("public")
             .payload
@@ -341,7 +341,12 @@ async fn default_graph_uri_scopes_reads() {
     // Scoped to Alice's graph: only her collection.
     let body = String::from_utf8(
         engine
-            .execute(query, Some(ResultFormat::Json), &scoped(USER_GRAPH))
+            .execute(
+                query,
+                Some(ResultFormat::Json),
+                Some(USER_GRAPH),
+                &long_options(),
+            )
             .await
             .expect("user")
             .payload

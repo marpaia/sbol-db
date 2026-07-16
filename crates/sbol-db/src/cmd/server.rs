@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use sbol_db_app::AppServices;
 use sbol_db_backend::Backend;
 use sbol_db_jobs::{default_registry, Worker, WorkerConfig};
 use sbol_db_server::{router, AppState, Metrics};
@@ -59,10 +60,12 @@ pub async fn run(
         backend.triple_source.clone(),
         backend.triple_writer.clone(),
     ));
+    let app_services = Arc::new(AppServices::from_backend(&backend));
     let state = AppState {
         service: backend.store.clone(),
         sparql: engine,
         sparql_update,
+        app: app_services,
         metrics,
         jobs: backend.jobs.clone(),
         config: config.clone(),

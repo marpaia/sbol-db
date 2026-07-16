@@ -26,4 +26,6 @@ hex.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 sbol-db-conformance.workspace = true
+sbol-db-app.workspace = true
+sbol-db-sparql.workspace = true
 tempfile = "3"
