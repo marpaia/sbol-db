@@ -352,7 +352,7 @@ pub async fn list_objects(
     }))
 }
 
-const SEARCH_DEFAULT_LIMIT: i64 = 50;
+pub(crate) const SEARCH_DEFAULT_LIMIT: i64 = 50;
 const SEARCH_MAX_LIMIT: i64 = 1000;
 
 fn default_search_limit() -> i64 {

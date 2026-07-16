@@ -274,7 +274,6 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
             "/graphs/:id",
             get(routes::get_graph).delete(routes::delete_graph),
         )
-        .route("/search", get(routes::text_search))
         .route("/objects", get(routes::get_object_by_iri))
         .route("/objects/list", get(routes::list_objects))
         .route("/objects/lookup", post(routes::lookup_objects))

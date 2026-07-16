@@ -107,20 +107,20 @@ pub struct AccelIndex {
 pub fn build_accel_index(triples: &[Triple]) -> AccelIndex {
     let mut metas: HashMap<String, MetaRecord> = HashMap::new();
     let mut members_of: HashMap<String, Vec<String>> = HashMap::new();
-    let mut out_edges: HashMap<String, Vec<String>> = HashMap::new();
+    // The blank-node-spanning reference adjacency, shared with the PageRank link
+    // graph so the traversal has a single implementation.
+    let out_edges = sbol_db_search::pagerank::reference_adjacency(triples);
 
     for t in triples {
-        if let Some(object) = obj_node(&t.object) {
-            let subject_node = subj_node(&t.subject);
-            if t.predicate.as_str() == MEMBER {
-                if let (SubjectTerm::Iri(_), ObjectTerm::Iri(_)) = (&t.subject, &t.object) {
+        if t.predicate.as_str() == MEMBER {
+            if let (SubjectTerm::Iri(_), ObjectTerm::Iri(_)) = (&t.subject, &t.object) {
+                if let Some(object) = obj_node(&t.object) {
                     members_of
-                        .entry(subject_node.clone())
+                        .entry(subj_node(&t.subject))
                         .or_default()
-                        .push(object.clone());
+                        .push(object);
                 }
             }
-            out_edges.entry(subject_node).or_default().push(object);
         }
         let subject = match &t.subject {
             SubjectTerm::Iri(iri) => iri.as_str(),

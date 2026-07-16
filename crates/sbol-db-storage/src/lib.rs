@@ -15,6 +15,7 @@ mod lsm;
 mod migrate;
 mod object;
 mod ontology;
+mod pagerank;
 mod sequence;
 mod sql_console;
 mod stats;
@@ -39,6 +40,7 @@ pub use lsm::{ColumnFamilyStats, LevelStats, LsmOverview, LsmStats};
 pub use migrate::{MigrationEntry, Migrator};
 pub use object::{ListObjectsFilter, TextSearchQuery};
 pub use ontology::{OntologyLoadReport, OntologyRecord, OntologyTermRecord};
+pub use pagerank::RankRow;
 pub use sequence::{BatchSequenceMatch, SequenceMatch, SequenceSearchOptions};
 pub use sql_console::{
     SqlConsole, SqlConsoleColumn, SqlExecuteRequest, SqlExecuteResult, SqlValidateError,
@@ -50,8 +52,8 @@ pub use stats::{
 };
 pub use traits::{
     distinct_graph_iris, distinct_object_iris, AclStore, GraphStore, JobQueue, NeighborhoodStore,
-    ObjectStore, OntologyStore, SbolStore, SequenceSearchStore, TextSearchStore, TokenStore,
-    TripleSource, TripleWriter, UserStore, SBH_CAN_VIEW, SBH_OWNED_BY,
+    ObjectStore, OntologyStore, PageRankStore, SbolStore, SequenceSearchStore, TextSearchStore,
+    TokenStore, TripleSource, TripleWriter, UserStore, SBH_CAN_VIEW, SBH_OWNED_BY,
 };
 pub use triple::{
     GraphFilter, IdGraphFilter, IdQuad, PatternObject, PatternSubject, TermId, TermKey, TermValue,

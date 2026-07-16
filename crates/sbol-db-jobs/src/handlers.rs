@@ -8,9 +8,11 @@
 pub mod import_document;
 pub mod import_remote_document;
 pub mod import_synbiohub_collection;
+pub mod rebuild_search_index;
 
 pub use import_document::{ImportDocumentHandler, ImportDocumentPayload};
 pub use import_remote_document::{ImportRemoteDocumentHandler, ImportRemoteDocumentPayload};
 pub use import_synbiohub_collection::{
     ImportSynBioHubCollectionHandler, ImportSynBioHubCollectionPayload,
 };
+pub use rebuild_search_index::RebuildSearchIndexHandler;

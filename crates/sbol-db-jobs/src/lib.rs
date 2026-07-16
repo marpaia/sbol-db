@@ -14,7 +14,7 @@ pub mod handlers;
 mod registry;
 mod worker;
 
-pub use context::JobContext;
+pub use context::{JobContext, SearchIndexHandles};
 pub use handler::{ErasedHandler, HandlerError, JobHandler, JobOutcome};
 pub use registry::JobRegistry;
 pub use worker::{Worker, WorkerConfig};
@@ -28,4 +28,5 @@ pub fn default_registry() -> JobRegistry {
         .register(handlers::ImportDocumentHandler)
         .register(handlers::ImportRemoteDocumentHandler)
         .register(handlers::ImportSynBioHubCollectionHandler)
+        .register(handlers::RebuildSearchIndexHandler)
 }

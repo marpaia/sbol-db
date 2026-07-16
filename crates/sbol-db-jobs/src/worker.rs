@@ -11,7 +11,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use crate::context::JobContext;
+use crate::context::{JobContext, SearchIndexHandles};
 use crate::handler::HandlerError;
 use crate::registry::JobRegistry;
 
@@ -103,6 +103,7 @@ pub struct Worker {
     service: Arc<dyn SbolStore>,
     registry: Arc<JobRegistry>,
     config: WorkerConfig,
+    search: Option<SearchIndexHandles>,
 }
 
 impl Worker {
@@ -119,7 +120,16 @@ impl Worker {
             service,
             registry,
             config,
+            search: None,
         }
+    }
+
+    /// Give this worker the shared search-index handles so it can run the
+    /// `rebuild_search_index` job. Without them that job fails fast with a
+    /// clear error while every other job kind runs unaffected.
+    pub fn with_search_index(mut self, search: SearchIndexHandles) -> Self {
+        self.search = Some(search);
+        self
     }
 
     /// Run until `cancel` fires, then drain in-flight handlers up to the
@@ -270,6 +280,7 @@ impl Worker {
                 service: self.service.clone(),
                 jobs: self.repo.clone(),
                 cancel: cancel.clone(),
+                search: self.search.clone(),
             };
             let repo = self.repo.clone();
             let cfg = self.config.clone();

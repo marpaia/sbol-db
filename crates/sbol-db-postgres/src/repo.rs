@@ -5,6 +5,7 @@ pub mod lab;
 pub mod neighborhood;
 pub mod object;
 pub mod ontology;
+pub mod pagerank;
 pub mod pg_stats;
 pub mod projection;
 pub mod projections;
@@ -22,6 +23,7 @@ pub use lab::LabRepository;
 pub use neighborhood::NeighborhoodRepository;
 pub use object::SbolObjectRepository;
 pub use ontology::OntologyRepository;
+pub use pagerank::PgPageRankStore;
 pub use pg_stats::{
     Activity, BlockingLock, DatabaseSize, IncomingForeignKey, IndexStats, OutgoingForeignKey,
     PgStatsRepository, SlowQuery, TableColumn, TableSchema, TableStats,

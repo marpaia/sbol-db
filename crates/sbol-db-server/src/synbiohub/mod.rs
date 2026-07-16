@@ -7,7 +7,11 @@
 //! reach into a concrete backend. Containing the quirks here lets the idiomatic
 //! V2 surface evolve without inheriting them.
 
+mod admin;
 mod auth;
+mod queries;
+mod routes;
+mod search;
 
 use axum::extract::{Request, State};
 use axum::middleware::Next;
@@ -39,6 +43,66 @@ pub fn router(state: AppState) -> Router<AppState> {
         )
         .route("/resetPassword", post(auth::reset_password))
         .route("/setNewPassword", post(auth::set_new_password))
+        .route("/admin/reindex", post(admin::reindex))
+        // Read/query surface. Free-text relevance runs over the ranked index;
+        // facets, counts, members, uses, twins, and metadata are SPARQL over
+        // the shared engine, all under the caller's authorized graph scope.
+        .route("/search", get(routes::search_root))
+        .route("/search/*query", get(routes::search))
+        .route("/searchCount", get(routes::search_count_root))
+        .route("/searchCount/*query", get(routes::search_count))
+        .route("/:type/count", get(routes::type_count))
+        .route("/rootCollections", get(routes::root_collections))
+        .route("/manage", get(routes::manage))
+        .route("/shared", get(routes::shared))
+        .route(
+            "/public/:collectionId/:displayId/:version/uses",
+            get(routes::public_uses),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/usesCount",
+            get(routes::public_uses_count),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/twins",
+            get(routes::public_twins),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/twinsCount",
+            get(routes::public_twins_count),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/subCollections",
+            get(routes::public_sub_collections),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/metadata",
+            get(routes::public_metadata),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/uses",
+            get(routes::user_uses),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/usesCount",
+            get(routes::user_uses_count),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/twins",
+            get(routes::user_twins),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/twinsCount",
+            get(routes::user_twins_count),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/subCollections",
+            get(routes::user_sub_collections),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/metadata",
+            get(routes::user_metadata),
+        )
         .route_layer(axum::middleware::from_fn_with_state(
             state,
             attach_current_user,
@@ -204,5 +268,56 @@ mod tests {
         let (status, body) = whoami_with(&app, Some("not-a-real-token")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, "anonymous");
+    }
+
+    /// Build the full V1 router and drive a read route and an auth-gated route,
+    /// which also exercises route registration (a conflict would panic here).
+    async fn v1_router() -> (Router, TempDir) {
+        let (state, _token, _username, dir) = state_with_user().await;
+        (router(state.clone()).with_state(state), dir)
+    }
+
+    async fn send_get(app: &Router, uri: &str, token: Option<&str>) -> (StatusCode, String) {
+        let mut builder = Request::builder().method("GET").uri(uri);
+        if let Some(token) = token {
+            builder = builder.header("x-authorization", token);
+        }
+        let res = app
+            .clone()
+            .oneshot(builder.body(Body::empty()).unwrap())
+            .await
+            .expect("request");
+        let status = res.status();
+        let bytes = to_bytes(res.into_body(), 256 * 1024).await.expect("body");
+        (status, String::from_utf8(bytes.to_vec()).expect("utf8"))
+    }
+
+    #[tokio::test]
+    async fn read_routes_register_and_respond() {
+        let (app, _dir) = v1_router().await;
+
+        // An empty store still answers the SPARQL-backed count as a
+        // well-formed SPARQL-results JSON document with a `count` binding.
+        let (status, body) = send_get(&app, "/ComponentDefinition/count", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("\"count\""), "count response: {body}");
+
+        // The ranked free-text path returns the six-column search projection.
+        let (status, body) = send_get(&app, "/search/plasmid", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("displayId"), "search response: {body}");
+
+        // Root collections is SPARQL over the accelerator.
+        let (status, _body) = send_get(&app, "/rootCollections", None).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn manage_and_shared_require_identity() {
+        let (app, _dir) = v1_router().await;
+        let (status, _body) = send_get(&app, "/manage", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, _body) = send_get(&app, "/shared", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 }

@@ -1,9 +1,30 @@
 use std::sync::Arc;
 
 use sbol_db_core::JobId;
-use sbol_db_storage::{JobQueue, SbolStore};
+use sbol_db_search::ranked_text::RankedTextIndex;
+use sbol_db_storage::{JobQueue, PageRankStore, SbolStore, TripleSource};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
+
+/// The handles the `rebuild_search_index` job needs that live outside the
+/// [`SbolStore`] surface: the PageRank persistence, the shared ranked text
+/// index, and a synchronous triple source to compute the link graph over.
+///
+/// Bundling them here keeps `tantivy` and the ranked-text types out of the
+/// storage traits: the storage core stays free of the text index, and only a
+/// worker that owns the shared index carries this handle. A worker built
+/// without it runs every other job kind unchanged; only `rebuild_search_index`
+/// requires it.
+#[derive(Clone)]
+pub struct SearchIndexHandles {
+    /// Object PageRank persistence, replaced wholesale on each rebuild.
+    pub pagerank: Arc<dyn PageRankStore>,
+    /// The shared ranked text index the rebuild writes and the search adapters
+    /// read.
+    pub text_index: Arc<RankedTextIndex>,
+    /// Synchronous triple reads, the source of the top-level link graph.
+    pub triples: Arc<dyn TripleSource>,
+}
 
 /// Context handed to every [`crate::JobHandler::run`] invocation. Carries
 /// the typed service for domain operations, the job's id (for logging /
@@ -22,6 +43,10 @@ pub struct JobContext {
     pub service: Arc<dyn SbolStore>,
     pub jobs: Arc<dyn JobQueue>,
     pub cancel: CancellationToken,
+    /// Present only on a worker configured with the shared search index. The
+    /// `rebuild_search_index` handler requires it; every other handler ignores
+    /// it.
+    pub search: Option<SearchIndexHandles>,
 }
 
 impl JobContext {

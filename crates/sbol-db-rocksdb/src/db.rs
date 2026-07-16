@@ -78,6 +78,8 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     "acc_facet",      // graph + SEP + kind + SEP + value -> ()
     "acc_count",      // graph + SEP + scope -> u64 LE (precomputed counts)
     "acc_dirty",      // graph -> () (presence = indexes stale, rebuild on next read)
+    // Object PageRank scores backing the native ranked search: iri -> f64 LE.
+    "object_pagerank",
     // Counters and schema version.
     "meta",
 ];

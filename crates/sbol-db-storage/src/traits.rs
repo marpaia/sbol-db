@@ -5,6 +5,7 @@
 //! the SPARQL evaluator's synchronous `QueryableDataset`, and a backend that
 //! needs async runs it to completion internally.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -19,8 +20,8 @@ use crate::{
     GraphWriteMode, IdGraphFilter, IdQuad, ImportInput, JobAttempt, JobLogRecord, JobStatus,
     ListGraphsFilter, ListJobsFilter, ListObjectsFilter, NewJob, OldestQueuedAge,
     OntologyLoadReport, OntologyRecord, OntologyTermRecord, PatternObject, PatternSubject,
-    QueueDepthRow, SbolJob, SequenceMatch, SequenceSearchOptions, TermId, TermKey, TermValue,
-    TextSearchQuery, TripleChange, UpdateOutcome,
+    QueueDepthRow, RankRow, SbolJob, SequenceMatch, SequenceSearchOptions, TermId, TermKey,
+    TermValue, TextSearchQuery, TripleChange, UpdateOutcome,
 };
 
 /// Synchronous triple-pattern reads, as required by the SPARQL evaluator.
@@ -201,6 +202,33 @@ pub trait TextSearchStore: Send + Sync {
         &self,
         query: &TextSearchQuery,
     ) -> Result<(Vec<SbolObjectRecord>, i64), DomainError>;
+}
+
+/// Persistence for object PageRank scores backing the native ranked search.
+///
+/// The search-index rebuild recomputes every score and calls
+/// [`replace_all_ranks`](Self::replace_all_ranks) to swap the whole table
+/// atomically; readers point-look-up a score or scan them all to feed the text
+/// index. The store itself is ranking-free: it persists what the rebuild
+/// computes and returns it unchanged.
+#[async_trait]
+pub trait PageRankStore: Send + Sync {
+    /// The stored PageRank score for one object IRI, or `None` when the IRI
+    /// carries no score. The combine step reads a missing score as `1.0`,
+    /// SBOLExplorer's unknown-part convention.
+    async fn rank_of(&self, iri: &str) -> Result<Option<f64>, DomainError>;
+
+    /// The stored scores for a set of IRIs, keyed by IRI. IRIs with no stored
+    /// score are absent from the map rather than defaulted, so the caller can
+    /// tell "unranked" from a real score.
+    async fn ranks_for(&self, iris: &[String]) -> Result<HashMap<String, f64>, DomainError>;
+
+    /// Every stored `(iri, score)` pair, feeding a full text-index rebuild.
+    async fn all_ranks(&self) -> Result<Vec<RankRow>, DomainError>;
+
+    /// Replace the entire rank table with `ranks` in one transaction: after it
+    /// returns the table reflects exactly this write and nothing prior.
+    async fn replace_all_ranks(&self, ranks: Vec<RankRow>) -> Result<(), DomainError>;
 }
 
 /// The SynBioHub terms namespace, whose `ownedBy`/`canView` predicates carry

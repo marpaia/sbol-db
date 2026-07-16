@@ -13,7 +13,7 @@ mod stats;
 mod store;
 
 pub use pool::{connect, connect_and_migrate, run_migrations, SqliteMigrator, SqlitePool};
-pub use repo::{SqliteJobRepository, SqliteTokenStore, SqliteUserStore};
+pub use repo::{SqliteJobRepository, SqlitePageRankStore, SqliteTokenStore, SqliteUserStore};
 pub use sql_console::SqliteSqlConsole;
 pub use stats::SqliteStats;
 pub use store::SqliteStore;

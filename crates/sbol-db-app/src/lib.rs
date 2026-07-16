@@ -14,13 +14,17 @@
 mod acl;
 mod auth;
 pub mod memory;
+mod search;
 
 pub use acl::{AclService, PUBLIC_GRAPH};
 pub use auth::{AuthService, PasswordReset, Registration};
+pub use sbol_db_search::ranked_text::Hit;
+pub use search::{DateField, FacetedSearch};
 
 use std::sync::Arc;
 
 use sbol_db_backend::Backend;
+use sbol_db_search::ranked_text::RankedTextIndex;
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{AclStore, JobQueue, SbolStore, TokenStore, UserStore};
 
@@ -46,6 +50,11 @@ pub struct AppServices {
     pub tokens: Arc<dyn TokenStore>,
     /// Password and API-token authentication over the identity stores.
     pub auth: AuthService,
+    /// The shared ranked text index backing native free-text search. The
+    /// rebuild job writes it and the search adapters read it; a caller that
+    /// needs a persistent, filesystem-backed index swaps one in with
+    /// [`with_text_search`](Self::with_text_search).
+    pub text_search: Arc<RankedTextIndex>,
 }
 
 impl AppServices {
@@ -106,6 +115,15 @@ impl AppServices {
         self
     }
 
+    /// Replace the in-RAM default ranked text index with a caller-provided one,
+    /// typically the shared filesystem-backed index at a configured path. The
+    /// index is shared with the rebuild job so both read and write the same
+    /// corpus.
+    pub fn with_text_search(mut self, text_search: Arc<RankedTextIndex>) -> Self {
+        self.text_search = text_search;
+        self
+    }
+
     /// Derive the identity-aware subsystems from the neutral handles and bundle
     /// everything together.
     fn assemble(
@@ -119,6 +137,9 @@ impl AppServices {
     ) -> Self {
         let acl_service = AclService::new(store.clone(), acl.clone());
         let auth = AuthService::new(users.clone(), tokens.clone());
+        let text_search = Arc::new(
+            RankedTextIndex::in_ram().expect("in-RAM ranked text index construction cannot fail"),
+        );
         Self {
             store,
             sparql,
@@ -129,6 +150,7 @@ impl AppServices {
             users,
             tokens,
             auth,
+            text_search,
         }
     }
 }

@@ -3,8 +3,10 @@
 //! Each scenario drives a storage backend purely through the trait surface and
 //! asserts the observable contract every implementation must honor: import and
 //! derived-view reads, the graph set-semantics rule, ontology load and closure
-//! queries, the job-queue lifecycle, and ACL-scoped reads hiding another user's
-//! private graph. A backend crate wires these into its own test harness by
+//! queries, the job-queue lifecycle, ACL-scoped reads hiding another user's
+//! private graph, and the native ranked text search (its SBOLExplorer ranking
+//! rules and its scope enforcement). A backend crate wires these into its own
+//! test harness by
 //! assembling a fresh, empty [`AppServices`] over the backend and calling
 //! [`run_all`] (or an individual store-level scenario against a bare store).
 //!
@@ -14,8 +16,10 @@
 
 use std::time::Duration;
 
-use sbol_db_app::{AppServices, AuthService, PUBLIC_GRAPH};
+use sbol_db_app::{AppServices, AuthService, FacetedSearch, PUBLIC_GRAPH};
 use sbol_db_core::{Direction, IriString, NeighborhoodQuery, NewUser, SerializationFormat};
+use sbol_db_search::pagerank::pagerank;
+use sbol_db_search::ranked_text::IndexedPart;
 use sbol_db_sparql::{GraphScope, SparqlOptions};
 use sbol_db_storage::{
     EnqueueOutcome, GraphWriteMode, ImportInput, JobQueue, JobStatus, ListJobsFilter,
@@ -94,6 +98,8 @@ pub async fn run_all(app: &AppServices) {
     ontology_roundtrip(store).await;
     job_queue_lifecycle(jobs).await;
     acl_scope_hides_private_graph(app).await;
+    ranked_text_search(app).await;
+    acl_scoped_search(app).await;
     user_crud(app).await;
     token_issue_resolve_revoke(app).await;
     legacy_sha1_rehash_on_login(app).await;
@@ -826,6 +832,259 @@ pub async fn acl_scope_hides_private_graph(app: &AppServices) {
             .await
             .expect("clear seed graph");
     }
+}
+
+/// The SBOL2 rdf:type IRIs a ranked object carries: a plain part versus the
+/// Sequence type the ranker divides by 10.
+const COMPONENT_TYPE: &str = "http://sbols.org/v2#ComponentDefinition";
+const SEQUENCE_TYPE: &str = "http://sbols.org/v2#Sequence";
+
+/// Native ranked text search reproduces SBOLExplorer's three ranking rules over
+/// the facade's shared index: a displayId-exact hit outranks a description-only
+/// one, a Sequence-typed hit is demoted, and PageRank (derived from the
+/// reference graph) breaks a text-score tie.
+///
+/// Each rule is exercised on its own freshly rebuilt corpus, then queried
+/// through [`AppServices::ranked_search`], the same facade verb the `/search`
+/// adapter calls, under an unrestricted scope so only ranking is under test.
+pub async fn ranked_text_search(app: &AppServices) {
+    // A displayId-exact match ranks above an object that merely mentions the
+    // term in its description.
+    app.text_search
+        .rebuild(vec![
+            indexed_part(
+                "rank_exact",
+                "promoter",
+                "a generic widget part",
+                COMPONENT_TYPE,
+                1.0,
+            ),
+            indexed_part(
+                "rank_desc",
+                "widget",
+                "a strong promoter element",
+                COMPONENT_TYPE,
+                1.0,
+            ),
+        ])
+        .expect("rebuild index for the displayId-exact rule");
+    let hits = ranked(app, "promoter").await;
+    assert_eq!(
+        hits.first().map(|h| h.subject.as_str()),
+        Some(conformance_iri("rank_exact").as_str()),
+        "a displayId-exact hit outranks a description-only hit"
+    );
+
+    // A Sequence-typed hit is divided by 10, so an equally matching
+    // ComponentDefinition ranks above it.
+    app.text_search
+        .rebuild(vec![
+            indexed_part("rank_seq", "promoter", "same text", SEQUENCE_TYPE, 1.0),
+            indexed_part("rank_cd", "promoter", "same text", COMPONENT_TYPE, 1.0),
+        ])
+        .expect("rebuild index for the Sequence-penalty rule");
+    let hits = ranked(app, "promoter").await;
+    assert_eq!(
+        hits.first().map(|h| h.subject.as_str()),
+        Some(conformance_iri("rank_cd").as_str()),
+        "a Sequence-typed hit is demoted below an equally matching non-Sequence hit"
+    );
+
+    // With identical text, the object the reference graph endorses (higher
+    // PageRank) wins the tie. Two leaves reference the hub, so the hub outranks
+    // the leaf exactly as SBOLExplorer's link graph would score them.
+    let hub = conformance_iri("rank_hub");
+    let leaf = conformance_iri("rank_leaf");
+    let feeder = conformance_iri("rank_feeder");
+    let uris = vec![hub.clone(), leaf.clone(), feeder.clone()];
+    let edges = vec![(leaf.clone(), hub.clone()), (feeder.clone(), hub.clone())];
+    let ranks = pagerank(&edges, &uris);
+    assert!(
+        ranks[&hub] > ranks[&leaf],
+        "the reference graph must give the hub a higher PageRank"
+    );
+    app.text_search
+        .rebuild(vec![
+            indexed_part_ranked(&hub, "widget", "same text", COMPONENT_TYPE, ranks[&hub]),
+            indexed_part_ranked(&leaf, "widget", "same text", COMPONENT_TYPE, ranks[&leaf]),
+        ])
+        .expect("rebuild index for the PageRank tie-break rule");
+    let hits = ranked(app, "widget").await;
+    assert_eq!(
+        hits.first().map(|h| h.subject.as_str()),
+        Some(hub.as_str()),
+        "on a text tie the higher-PageRank object wins"
+    );
+}
+
+/// ACL-scoped ranked search hides another user's private object while surfacing
+/// the owner's own and the public one, enforcing the caller's scope inside the
+/// index exactly as the SPARQL read path enforces it.
+///
+/// The owner's private graph carries an `sbh:ownedBy` fact so the facade's
+/// `AclService` admits it to the owner's scope; the index holds the owner's
+/// private object, a public object, and a non-owner's private object. Searching
+/// under each computed scope proves visibility follows the server-computed
+/// scope, never the index's full corpus.
+pub async fn acl_scoped_search(app: &AppServices) {
+    const OWNER: &str = "http://synbiohub.org/user/search_owner";
+    const OWNER_GRAPH: &str = "http://synbiohub.org/user/search_owner/private";
+    const OTHER: &str = "http://synbiohub.org/user/search_other";
+    const OWNER_OBJ: &str = "http://synbiohub.org/user/search_owner/private/ownerWidget";
+    const PUBLIC_OBJ: &str = "http://synbiohub.org/public/publicWidget";
+    const OTHER_OBJ: &str = "http://synbiohub.org/user/search_other/private/otherWidget";
+
+    // The owner's private graph records the ownership fact the AclService reads.
+    let owned = format!("<{OWNER_OBJ}> <{SBH_OWNED_BY}> <{OWNER}> .\n");
+    app.store
+        .graph_store_write(
+            OWNER_GRAPH,
+            &owned,
+            SerializationFormat::NTriples,
+            GraphWriteMode::Merge,
+        )
+        .await
+        .expect("seed the owner's private graph");
+
+    // All three objects share a distinctive term so a single query matches each;
+    // graph placement, not text, decides visibility.
+    app.text_search
+        .rebuild(vec![
+            indexed_part_in(OWNER_OBJ, OWNER_GRAPH, "scopedwidget", COMPONENT_TYPE),
+            indexed_part_in(PUBLIC_OBJ, PUBLIC_GRAPH, "scopedwidget", COMPONENT_TYPE),
+            indexed_part_in(
+                OTHER_OBJ,
+                "http://synbiohub.org/user/search_other/private",
+                "scopedwidget",
+                COMPONENT_TYPE,
+            ),
+        ])
+        .expect("rebuild index for the ACL-scoped search");
+
+    let owner_scope = app
+        .acl_service
+        .compute_scope(Some(OWNER))
+        .await
+        .expect("compute the owner's scope");
+    let other_scope = app
+        .acl_service
+        .compute_scope(Some(OTHER))
+        .await
+        .expect("compute the non-owner's scope");
+
+    let seen_by_owner = ranked_subjects(app, "scopedwidget", owner_scope).await;
+    let seen_by_other = ranked_subjects(app, "scopedwidget", other_scope).await;
+
+    assert!(
+        seen_by_owner.contains(&OWNER_OBJ.to_owned()),
+        "the owner sees their own private object"
+    );
+    assert!(
+        seen_by_owner.contains(&PUBLIC_OBJ.to_owned()),
+        "the owner sees the public object"
+    );
+    assert!(
+        seen_by_other.contains(&PUBLIC_OBJ.to_owned()),
+        "a non-owner sees the public object"
+    );
+    // The security-critical assertion: the non-owner's scope hides the owner's
+    // private object.
+    assert!(
+        !seen_by_other.contains(&OWNER_OBJ.to_owned()),
+        "a non-owner never surfaces another user's private object"
+    );
+
+    app.store
+        .graph_store_clear(OWNER_GRAPH)
+        .await
+        .expect("clear the owner's private graph");
+}
+
+/// The full conformance IRI for a locally-named object.
+fn conformance_iri(local: &str) -> String {
+    format!("https://example.org/sbol-db/conformance/{local}")
+}
+
+/// An [`IndexedPart`] in the public graph, named by its local id, with a unit
+/// PageRank.
+fn indexed_part(
+    local: &str,
+    display_id: &str,
+    description: &str,
+    type_iri: &str,
+    pagerank: f64,
+) -> IndexedPart {
+    indexed_part_ranked(
+        &conformance_iri(local),
+        display_id,
+        description,
+        type_iri,
+        pagerank,
+    )
+}
+
+/// An [`IndexedPart`] in the public graph addressed by its full IRI, carrying
+/// an explicit PageRank.
+fn indexed_part_ranked(
+    subject: &str,
+    display_id: &str,
+    description: &str,
+    type_iri: &str,
+    pagerank: f64,
+) -> IndexedPart {
+    IndexedPart {
+        subject: subject.to_owned(),
+        graph: PUBLIC_GRAPH.to_owned(),
+        display_id: Some(display_id.to_owned()),
+        name: None,
+        description: Some(description.to_owned()),
+        version: Some("1".to_owned()),
+        type_iris: vec![type_iri.to_owned()],
+        keywords: display_id.to_owned(),
+        pagerank,
+    }
+}
+
+/// An [`IndexedPart`] placed in a named graph, for scope-enforcement scenarios.
+fn indexed_part_in(subject: &str, graph: &str, display_id: &str, type_iri: &str) -> IndexedPart {
+    IndexedPart {
+        subject: subject.to_owned(),
+        graph: graph.to_owned(),
+        display_id: Some(display_id.to_owned()),
+        name: None,
+        description: None,
+        version: Some("1".to_owned()),
+        type_iris: vec![type_iri.to_owned()],
+        keywords: display_id.to_owned(),
+        pagerank: 1.0,
+    }
+}
+
+/// The hits for a free-text query under an unrestricted scope, in ranked order.
+async fn ranked(app: &AppServices, term: &str) -> Vec<sbol_db_app::Hit> {
+    let query = FacetedSearch {
+        free_text: Some(term.to_owned()),
+        ..FacetedSearch::default()
+    };
+    app.ranked_search(&query, GraphScope::Union)
+        .await
+        .expect("ranked search")
+        .0
+}
+
+/// The subject IRIs a free-text query surfaces under `scope`.
+async fn ranked_subjects(app: &AppServices, term: &str, scope: GraphScope) -> Vec<String> {
+    let query = FacetedSearch {
+        free_text: Some(term.to_owned()),
+        ..FacetedSearch::default()
+    };
+    app.ranked_search(&query, scope)
+        .await
+        .expect("scoped ranked search")
+        .0
+        .into_iter()
+        .map(|hit| hit.subject)
+        .collect()
 }
 
 /// Whether `scope` authorizes reads of the named `graph`.

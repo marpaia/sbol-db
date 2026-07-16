@@ -17,19 +17,20 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use sbol_db_postgres::{
-    JobRepository, PgMigrator, PgPool, PgSqlConsole, PgStatsRepository, PgTokenStore, PgUserStore,
-    SbolObjectService,
+    JobRepository, PgMigrator, PgPageRankStore, PgPool, PgSqlConsole, PgStatsRepository,
+    PgTokenStore, PgUserStore, SbolObjectService,
 };
 use sbol_db_rocksdb::{
-    RocksdbJobs, RocksdbMigrator, RocksdbStats, RocksdbStore, RocksdbTokenStore, RocksdbUserStore,
+    RocksdbJobs, RocksdbMigrator, RocksdbPageRankStore, RocksdbStats, RocksdbStore,
+    RocksdbTokenStore, RocksdbUserStore,
 };
 use sbol_db_sqlite::{
-    SqliteJobRepository, SqliteMigrator, SqlitePool, SqliteSqlConsole, SqliteStats, SqliteStore,
-    SqliteTokenStore, SqliteUserStore,
+    SqliteJobRepository, SqliteMigrator, SqlitePageRankStore, SqlitePool, SqliteSqlConsole,
+    SqliteStats, SqliteStore, SqliteTokenStore, SqliteUserStore,
 };
 use sbol_db_storage::{
-    AclStore, BackendKind, DbStats, JobQueue, LabStore, LsmStats, Migrator, SbolStore, SqlConsole,
-    TokenStore, TripleSource, TripleWriter, UserStore,
+    AclStore, BackendKind, DbStats, JobQueue, LabStore, LsmStats, Migrator, PageRankStore,
+    SbolStore, SqlConsole, TokenStore, TripleSource, TripleWriter, UserStore,
 };
 
 /// A ready-to-use storage backend: the neutral trait objects every consumer
@@ -41,6 +42,8 @@ pub struct Backend {
     pub store: Arc<dyn SbolStore>,
     /// Ownership and sharing reads backing ACL-scoped queries.
     pub acl: Arc<dyn AclStore>,
+    /// Object PageRank scores backing the native ranked search.
+    pub pagerank: Arc<dyn PageRankStore>,
     /// The async job queue.
     pub jobs: Arc<dyn JobQueue>,
     /// Account persistence for the identity layer.
@@ -127,6 +130,7 @@ impl Backend {
     fn from_sqlite(pool: SqlitePool) -> Self {
         let store = Arc::new(SqliteStore::new(pool.clone()));
         let acl: Arc<dyn AclStore> = store.clone();
+        let pagerank: Arc<dyn PageRankStore> = Arc::new(SqlitePageRankStore::new(pool.clone()));
         let triple_source = store.triple_source();
         let triple_writer = store.triple_writer();
         let jobs: Arc<dyn JobQueue> = Arc::new(SqliteJobRepository::new(pool.clone()));
@@ -140,6 +144,7 @@ impl Backend {
             kind: BackendKind::Sqlite,
             store,
             acl,
+            pagerank,
             jobs,
             users,
             tokens,
@@ -157,6 +162,7 @@ impl Backend {
     fn from_rocksdb(db: sbol_db_rocksdb::Db) -> Self {
         let store = Arc::new(RocksdbStore::new(db.clone()));
         let acl: Arc<dyn AclStore> = store.clone();
+        let pagerank: Arc<dyn PageRankStore> = Arc::new(RocksdbPageRankStore::new(db.clone()));
         let triple_source = store.triple_source();
         let triple_writer = store.triple_writer();
         let jobs: Arc<dyn JobQueue> = Arc::new(RocksdbJobs::new(db.clone()));
@@ -169,6 +175,7 @@ impl Backend {
             kind: BackendKind::Rocksdb,
             store,
             acl,
+            pagerank,
             jobs,
             users,
             tokens,
@@ -186,6 +193,7 @@ impl Backend {
 
     fn from_postgres(pool: PgPool) -> Self {
         let service = Arc::new(SbolObjectService::new(pool.clone()));
+        let pagerank: Arc<dyn PageRankStore> = Arc::new(PgPageRankStore::new(pool.clone()));
         let triple_source = service.triple_source();
         let triple_writer = service.triple_writer();
         let jobs: Arc<dyn JobQueue> = Arc::new(JobRepository::new(pool.clone()));
@@ -201,6 +209,7 @@ impl Backend {
             kind: BackendKind::Postgres,
             store,
             acl,
+            pagerank,
             jobs,
             users,
             tokens,

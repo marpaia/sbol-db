@@ -1,0 +1,20 @@
+[package]
+name = "sbol-db-search"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure ranked-search algorithms for sbol-db: PageRank and the top-level link graph."
+
+[dependencies]
+sbol-db-core.workspace = true
+serde = { workspace = true }
+tantivy = { workspace = true, optional = true }
+
+[features]
+default = []
+# The tantivy-backed ranked text index. Kept off by default so the storage core,
+# which depends on this crate only for the pure link-graph adjacency, never pulls
+# tantivy into its build; the sbol-db-app facade enables it to own the index.
+text-index = ["dep:tantivy"]
