@@ -13,15 +13,25 @@
 
 mod acl;
 mod auth;
+mod collection;
 mod download;
+mod edit;
 pub mod memory;
+mod mutation;
+mod permission;
 mod search;
+mod submission;
 
 pub use acl::{AclService, PUBLIC_GRAPH};
 pub use auth::{AuthService, PasswordReset, Registration};
+pub use collection::{CollectionService, MintScope, MintedSubmission, Submission};
 pub use download::{Downloader, DEFAULT_DATABASE_PREFIX};
+pub use edit::{EditService, FieldValue};
+pub use mutation::{MakePublicOutcome, MakePublicRequest, MutationError, MutationService};
+pub use permission::PermissionService;
 pub use sbol_db_search::ranked_text::Hit;
 pub use search::{DateField, FacetedSearch};
+pub use submission::{SubmissionService, SubmitOutcome, SubmitRequest};
 
 use std::sync::Arc;
 

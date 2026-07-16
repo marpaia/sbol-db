@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use sbol_db_app::MutationError;
 use sbol_db_core::DomainError;
 use sbol_db_sparql::SparqlError;
 use serde_json::json;
@@ -11,6 +12,8 @@ pub enum ApiError {
     Domain(#[from] DomainError),
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("forbidden: {0}")]
+    Forbidden(String),
     #[error("not found: {0}")]
     NotFound(String),
     #[error("{0}")]
@@ -33,6 +36,17 @@ impl From<SparqlError> for ApiError {
     }
 }
 
+impl From<MutationError> for ApiError {
+    fn from(err: MutationError) -> Self {
+        match err {
+            MutationError::NotAuthorized(msg) => ApiError::Forbidden(msg),
+            MutationError::NotFound(msg) => ApiError::NotFound(msg),
+            MutationError::Domain(d) => ApiError::Domain(d),
+            MutationError::Sparql(s) => ApiError::from(s),
+        }
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, kind) = match &self {
@@ -47,6 +61,7 @@ impl IntoResponse for ApiError {
             }
             ApiError::Domain(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
+            ApiError::Forbidden(_) => (StatusCode::FORBIDDEN, "forbidden"),
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
             ApiError::Sparql(SparqlError::Parse(_)) => {
                 (StatusCode::BAD_REQUEST, "sparql_parse_error")
@@ -166,6 +181,14 @@ mod tests {
     }
 
     #[test]
+    fn top_level_forbidden_is_403() {
+        assert_eq!(
+            status_of(ApiError::Forbidden("x".into())),
+            StatusCode::FORBIDDEN,
+        );
+    }
+
+    #[test]
     fn top_level_not_found_is_404() {
         assert_eq!(
             status_of(ApiError::NotFound("x".into())),
@@ -246,5 +269,19 @@ mod tests {
     fn sparql_domain_iri_is_hoisted_to_400() {
         let api: ApiError = SparqlError::Domain(DomainError::Iri(IriValidationError::Empty)).into();
         assert_eq!(status_of(api), StatusCode::BAD_REQUEST);
+    }
+
+    /// A write-authorization failure from the facade must surface as `403`, not
+    /// the catch-all `500`: an unauthorized mutation is a client error.
+    #[test]
+    fn mutation_not_authorized_is_403() {
+        let api: ApiError = MutationError::NotAuthorized("x".into()).into();
+        assert_eq!(status_of(api), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn mutation_not_found_is_404() {
+        let api: ApiError = MutationError::NotFound("x".into()).into();
+        assert_eq!(status_of(api), StatusCode::NOT_FOUND);
     }
 }

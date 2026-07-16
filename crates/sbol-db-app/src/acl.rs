@@ -9,13 +9,17 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use sbol_db_core::DomainError;
+use sbol_db_core::{DomainError, ObjectTerm};
 use sbol_db_sparql::GraphScope;
 use sbol_db_storage::{AclStore, SbolStore};
 
 /// The public graph. Its contents are readable by everyone, authenticated or
 /// not, so it is always present in a computed scope.
 pub const PUBLIC_GRAPH: &str = "http://synbiohub.org/public";
+
+/// `sbh:ownedBy`: the ownership stamp a write-authorization check reads to
+/// decide whether a caller's user graph owns a top-level object.
+const SBH_OWNED_BY: &str = "http://wiki.synbiohub.org/wiki/Terms/synbiohub#ownedBy";
 
 /// Turns a caller identity into the [`GraphScope`] its reads are authorized
 /// for.
@@ -69,6 +73,88 @@ impl AclService {
         Ok(GraphScope::Only(graphs.into_iter().collect()))
     }
 
+    /// Whether `user_graph_iri` owns `object_iri`: the object carries an
+    /// `<object_iri> sbh:ownedBy <user_graph_iri>` stamp. This is the
+    /// write-authorization primitive the mutation verbs gate on; a caller may
+    /// only mutate an object its own user graph owns. The store stays
+    /// authorization-free, so ownership is read here from the object's own
+    /// triples rather than enforced in storage.
+    pub async fn owns_object(
+        &self,
+        user_graph_iri: &str,
+        object_iri: &str,
+    ) -> Result<bool, DomainError> {
+        let triples = self.store.triples_for_subject(object_iri).await?;
+        Ok(triples.iter().any(|t| {
+            t.predicate.as_str() == SBH_OWNED_BY
+                && matches!(&t.object, ObjectTerm::Iri(o) if o.as_str() == user_graph_iri)
+        }))
+    }
+
+    /// The named graph holding `object_iri`, taken from the object's own
+    /// triples. `None` when the subject appears in no named graph (an invalid or
+    /// absent object). This is the write path's graph resolver: a mutation
+    /// targets the graph that already holds the subject, never the caller's
+    /// graph, so the ownership fact travels with the object.
+    pub async fn graph_of_subject(&self, object_iri: &str) -> Result<Option<String>, DomainError> {
+        let triples = self.store.triples_for_subject(object_iri).await?;
+        Ok(triples
+            .into_iter()
+            .find_map(|t| t.graph_iri.map(|g| g.into_inner())))
+    }
+
+    /// The write-authorization decision for a mutation targeting `object_iri`
+    /// held in `graph`. An administrator may mutate anything; a subject in the
+    /// public graph requires an administrator (mirroring classic SynBioHub's
+    /// `edit` gate); otherwise the caller's user graph must own the object
+    /// (`sbh:ownedBy`). An anonymous caller has no owning graph and so is never
+    /// admitted. The store stays authorization-free: this reads the object's own
+    /// triples through [`owns_object`](Self::owns_object).
+    pub async fn can_write(
+        &self,
+        user_graph_iri: &str,
+        is_admin: bool,
+        object_iri: &str,
+        graph: &str,
+    ) -> Result<bool, DomainError> {
+        if is_admin {
+            return Ok(true);
+        }
+        if graph == PUBLIC_GRAPH {
+            return Ok(false);
+        }
+        self.owns_object(user_graph_iri, object_iri).await
+    }
+
+    /// The connected closure of `root` within its submission namespace, mirroring
+    /// classic SynBioHub's `retrieveUris` BFS: start at `root`, follow every IRI
+    /// object of each reached subject, and keep those under the same submission
+    /// namespace (`<prefix>user/<owner>/` or `<prefix>public/`). This bounds the
+    /// walk to the object's own submission, excluding shared vocabulary IRIs, so
+    /// an ownership stamp lands on the object and everything it owns and nothing
+    /// else. `root` is always included.
+    pub async fn related_uris(&self, root: &str) -> Result<Vec<String>, DomainError> {
+        let namespace = submission_namespace(root);
+        let mut resolved = vec![root.to_owned()];
+        let mut seen: BTreeSet<String> = BTreeSet::from([root.to_owned()]);
+        let mut frontier = vec![root.to_owned()];
+        while let Some(subject) = frontier.pop() {
+            for triple in self.store.triples_for_subject(&subject).await? {
+                if let ObjectTerm::Iri(object) = &triple.object {
+                    let object = object.as_str();
+                    if object != subject
+                        && object.starts_with(&namespace)
+                        && seen.insert(object.to_owned())
+                    {
+                        resolved.push(object.to_owned());
+                        frontier.push(object.to_owned());
+                    }
+                }
+            }
+        }
+        Ok(resolved)
+    }
+
     /// The named graph holding `object_iri`, or `None` when the object is
     /// unknown or its graph carries no document IRI.
     async fn graph_of_object(&self, object_iri: &str) -> Result<Option<String>, DomainError> {
@@ -83,4 +169,21 @@ impl AclService {
         };
         Ok(graph.document_iri.map(|iri| iri.into_inner()))
     }
+}
+
+/// The submission namespace an object's closure is bounded to: everything
+/// through the owner segment for a user object (`<prefix>user/<owner>/`), or
+/// through the `public/` segment for a public object. Falls back to the whole
+/// URI when neither pattern matches, which reduces the closure to `root` alone.
+fn submission_namespace(uri: &str) -> String {
+    if let Some(pos) = uri.find("/user/") {
+        let after = pos + "/user/".len();
+        if let Some(slash) = uri[after..].find('/') {
+            return uri[..after + slash + 1].to_owned();
+        }
+    }
+    if let Some(pos) = uri.find("/public/") {
+        return uri[..pos + "/public/".len()].to_owned();
+    }
+    uri.to_owned()
 }

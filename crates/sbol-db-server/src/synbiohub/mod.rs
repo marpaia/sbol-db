@@ -10,9 +10,13 @@
 mod admin;
 mod auth;
 mod download;
+mod edit;
+mod mutate;
+mod permission;
 mod queries;
 mod routes;
 mod search;
+mod submit;
 
 use axum::extract::{Request, State};
 use axum::middleware::Next;
@@ -45,6 +49,117 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/resetPassword", post(auth::reset_password))
         .route("/setNewPassword", post(auth::set_new_password))
         .route("/admin/reindex", post(admin::reindex))
+        // Submission: mint an SBOL document into the caller's own user graph.
+        // Identity-gated; anonymous callers are rejected.
+        .route("/submit", post(submit::submit))
+        // Destructive object verbs. Classic triggers these with GET on the
+        // object path (a browser-form quirk); the facade holds the real verbs
+        // and gates every one on caller ownership.
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/makePublic",
+            post(mutate::user_make_public),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/remove",
+            get(mutate::user_remove).post(mutate::user_remove),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/replace",
+            get(mutate::user_replace).post(mutate::user_replace),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/removeCollection",
+            get(mutate::user_remove_collection).post(mutate::user_remove_collection),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/icon",
+            post(mutate::user_icon),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/remove",
+            get(mutate::public_remove).post(mutate::public_remove),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/replace",
+            get(mutate::public_replace).post(mutate::public_replace),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/removeCollection",
+            get(mutate::public_remove_collection).post(mutate::public_remove_collection),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/icon",
+            post(mutate::public_icon),
+        )
+        // Field-edit surface. The mutable text fields and citations take the
+        // target uri in the body; the generic edit/add/remove of a field and the
+        // membership verbs take it in the path. Every one is owner-gated and
+        // refreshes dcterms:modified.
+        .route(
+            "/updateMutableDescription",
+            post(edit::update_mutable_description),
+        )
+        .route("/updateMutableNotes", post(edit::update_mutable_notes))
+        .route("/updateMutableSource", post(edit::update_mutable_source))
+        .route("/updateCitations", post(edit::update_citations))
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/edit/:field",
+            post(edit::user_edit_field),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/add/:field",
+            post(edit::user_add_field),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/remove/:field",
+            post(edit::user_remove_field),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/addToCollection",
+            post(edit::user_add_to_collection),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/removeMembership",
+            post(edit::user_remove_membership),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/edit/:field",
+            post(edit::public_edit_field),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/add/:field",
+            post(edit::public_add_field),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/remove/:field",
+            post(edit::public_remove_field),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/addToCollection",
+            post(edit::public_add_to_collection),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/removeMembership",
+            post(edit::public_remove_membership),
+        )
+        // Object-sharing (permission) surface: grant and revoke another user's
+        // view access. Owner-gated through the facade.
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/addOwner",
+            post(permission::user_add_owner),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/removeOwner/:username",
+            get(permission::user_remove_owner).post(permission::user_remove_owner),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/addOwner",
+            post(permission::public_add_owner),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/removeOwner/:username",
+            get(permission::public_remove_owner).post(permission::public_remove_owner),
+        )
         // Read/query surface. Free-text relevance runs over the ranked index;
         // facets, counts, members, uses, twins, and metadata are SPARQL over
         // the shared engine, all under the caller's authorized graph scope.

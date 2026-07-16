@@ -20,18 +20,22 @@ use std::time::Duration;
 
 use std::io::Read;
 
-use sbol_db_app::{AppServices, AuthService, Downloader, FacetedSearch, PUBLIC_GRAPH};
+use sbol_db_app::{
+    AppServices, AuthService, Downloader, EditService, FacetedSearch, MutationError,
+    MutationService, PermissionService, SubmissionService, SubmitRequest, PUBLIC_GRAPH,
+};
 use sbol_db_core::{
-    Direction, IriString, NeighborhoodQuery, NewUser, ObjectTerm, SerializationFormat, SubjectTerm,
-    Triple,
+    Direction, DomainError, IriString, NeighborhoodQuery, NewUser, ObjectTerm, SerializationFormat,
+    SubjectTerm, Triple,
 };
 use sbol_db_search::pagerank::pagerank;
 use sbol_db_search::ranked_text::IndexedPart;
 use sbol_db_server::{serialize_closure, serialize_gff3, serialize_omex};
 use sbol_db_sparql::{GraphScope, SparqlOptions};
 use sbol_db_storage::{
-    EnqueueOutcome, GraphWriteMode, ImportInput, JobQueue, JobStatus, ListJobsFilter,
-    ListObjectsFilter, NewJob, SbolStore, SequenceSearchOptions, DEFAULT_QUEUE, SBH_OWNED_BY,
+    EnqueueOutcome, GraphWriteMode, ImportInput, ImportOverwrite, JobQueue, JobStatus,
+    ListJobsFilter, ListObjectsFilter, NewJob, SbolStore, SequenceSearchOptions, DEFAULT_QUEUE,
+    SBH_OWNED_BY,
 };
 use sha1::{Digest, Sha1};
 
@@ -110,6 +114,9 @@ pub async fn run_all(app: &AppServices) {
     acl_scoped_search(app).await;
     download_closure_recursion(app).await;
     download_formats_roundtrip(app).await;
+    collection_mint_roundtrip(app).await;
+    overwrite_merge_modes(app).await;
+    write_authz_matrix(app).await;
     user_crud(app).await;
     token_issue_resolve_revoke(app).await;
     legacy_sha1_rehash_on_login(app).await;
@@ -1301,6 +1308,447 @@ pub async fn download_formats_roundtrip(app: &AppServices) {
         .graph_store_clear(GRAPH)
         .await
         .expect("clear the download-formats fixture");
+}
+
+/// A compliant SBOL2 submission (Turtle): a ComponentDefinition with a nested
+/// SequenceAnnotation child, plus a standalone Sequence, all versioned `1`. The
+/// child's URI is a path-suffix of the ComponentDefinition's persistent identity,
+/// exercising the by-prefix re-home of children through the mint.
+const SUBMISSION_FIXTURE: &str = r#"
+@prefix sbol: <http://sbols.org/v2#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+
+<http://example.org/cd/1>
+    a sbol:ComponentDefinition ;
+    sbol:displayId "cd" ;
+    sbol:persistentIdentity <http://example.org/cd> ;
+    sbol:version "1" ;
+    dcterms:title "My Component" ;
+    sbol:sequenceAnnotation <http://example.org/cd/anno/1> .
+
+<http://example.org/cd/anno/1>
+    a sbol:SequenceAnnotation ;
+    sbol:displayId "anno" ;
+    sbol:persistentIdentity <http://example.org/cd/anno> ;
+    sbol:version "1" .
+
+<http://example.org/seq/1>
+    a sbol:Sequence ;
+    sbol:displayId "seq" ;
+    sbol:persistentIdentity <http://example.org/seq> ;
+    sbol:version "1" ;
+    sbol:elements "atgc" .
+"#;
+
+/// A single-top-level SBOL2 Sequence submission whose minted member carries the
+/// `seqa` displayId, for the overwrite/merge scenario.
+const OVERWRITE_FIXTURE_A: &str = r#"
+@prefix sbol: <http://sbols.org/v2#> .
+
+<http://example.org/seqa/1>
+    a sbol:Sequence ;
+    sbol:displayId "seqa" ;
+    sbol:persistentIdentity <http://example.org/seqa> ;
+    sbol:version "1" ;
+    sbol:elements "atgc" .
+"#;
+
+/// The counterpart to [`OVERWRITE_FIXTURE_A`] whose minted member carries the
+/// `seqb` displayId, so a merge is observable as two distinct members and a
+/// replace as the loss of the original.
+const OVERWRITE_FIXTURE_B: &str = r#"
+@prefix sbol: <http://sbols.org/v2#> .
+
+<http://example.org/seqb/1>
+    a sbol:Sequence ;
+    sbol:displayId "seqb" ;
+    sbol:persistentIdentity <http://example.org/seqb> ;
+    sbol:version "1" ;
+    sbol:elements "gcta" .
+"#;
+
+/// `sbh:topLevel`: the self-link every minted top-level subject carries.
+const SBH_TOP_LEVEL: &str = "http://wiki.synbiohub.org/wiki/Terms/synbiohub#topLevel";
+/// `sbol:member`: the collection-to-object membership edge.
+const SBOL2_MEMBER: &str = "http://sbols.org/v2#member";
+/// `sbh:mutableDescription`: a mutable text field an owner may edit in place.
+const SBH_MUTABLE_DESCRIPTION: &str =
+    "http://wiki.synbiohub.org/wiki/Terms/synbiohub#mutableDescription";
+
+/// A submission mints SynBioHub-compliant URIs and denormalization triples that
+/// read back correctly. The root Collection lands at its expected URI, every
+/// top-level object is a `sbol:member` minted under the submission namespace, and
+/// the collection and each member carry their `sbh:topLevel` self-link and an
+/// `sbh:ownedBy` stamp naming the submitter's user graph. The submission goes
+/// through the facade's [`SubmissionService`] and is read back through the store,
+/// certifying the mint plus the verbatim graph write end to end on each backend.
+pub async fn collection_mint_roundtrip(app: &AppServices) {
+    let submissions = SubmissionService::new(app.store.clone());
+    let outcome = submissions
+        .submit(SubmitRequest {
+            owner: "conformance_submitter".to_owned(),
+            id: "mintsub".to_owned(),
+            version: "1".to_owned(),
+            name: Some("Mint Roundtrip".to_owned()),
+            description: Some("A minted submission".to_owned()),
+            creator_name: Some("Conformance Submitter".to_owned()),
+            citations: vec!["12345678".to_owned()],
+            body: SUBMISSION_FIXTURE.to_owned(),
+            format: SerializationFormat::Turtle,
+            overwrite: ImportOverwrite::Fail,
+        })
+        .await
+        .expect("submit mints the collection");
+
+    const COLLECTION: &str =
+        "http://synbiohub.org/user/conformance_submitter/mintsub/mintsub_collection/1";
+    const COMPONENT: &str = "http://synbiohub.org/user/conformance_submitter/mintsub/cd/1";
+    const SEQUENCE: &str = "http://synbiohub.org/user/conformance_submitter/mintsub/seq/1";
+    const USER_GRAPH: &str = "http://synbiohub.org/user/conformance_submitter";
+
+    // The minted identity in the outcome follows the SynBioHub scheme.
+    assert_eq!(
+        outcome.collection_uri.as_str(),
+        COLLECTION,
+        "root collection minted at the expected URI"
+    );
+    let members: Vec<&str> = outcome.members.iter().map(|m| m.as_str()).collect();
+    assert!(
+        members.contains(&COMPONENT),
+        "the component is a minted member: {members:?}"
+    );
+    assert!(
+        members.contains(&SEQUENCE),
+        "the sequence is a minted member: {members:?}"
+    );
+    assert_eq!(
+        members.len(),
+        2,
+        "exactly the two top levels are members: {members:?}"
+    );
+
+    // The collection reads back with its membership, self-link, and ownership.
+    let collection_triples = app
+        .store
+        .triples_for_subject(COLLECTION)
+        .await
+        .expect("collection triples");
+    assert!(
+        triple_has_iri(&collection_triples, COLLECTION, SBOL2_MEMBER, COMPONENT),
+        "collection members the component on read-back"
+    );
+    assert!(
+        triple_has_iri(&collection_triples, COLLECTION, SBOL2_MEMBER, SEQUENCE),
+        "collection members the sequence on read-back"
+    );
+    assert!(
+        triple_has_iri(&collection_triples, COLLECTION, SBH_TOP_LEVEL, COLLECTION),
+        "collection carries its topLevel self-link on read-back"
+    );
+    assert!(
+        triple_has_iri(&collection_triples, COLLECTION, SBH_OWNED_BY, USER_GRAPH),
+        "collection is owned by the submitter's user graph on read-back"
+    );
+
+    // Each member reads back with its own self-link and ownership stamp.
+    for member in [COMPONENT, SEQUENCE] {
+        let member_triples = app
+            .store
+            .triples_for_subject(member)
+            .await
+            .expect("member triples");
+        assert!(
+            triple_has_iri(&member_triples, member, SBH_TOP_LEVEL, member),
+            "{member} carries its topLevel self-link"
+        );
+        assert!(
+            triple_has_iri(&member_triples, member, SBH_OWNED_BY, USER_GRAPH),
+            "{member} is owned by the submitter's user graph"
+        );
+    }
+
+    app.store
+        .graph_store_clear(&outcome.graph_iri)
+        .await
+        .expect("clear the minted submission graph");
+}
+
+/// The three `overwrite_merge` policies behave as SynBioHub specifies. Code 0
+/// (Fail) rejects a submission whose id/version is already taken; code 2 (Merge)
+/// unions the new members into the existing collection; code 1 (Replace) clears
+/// the collection first, so only the replacing submission's members remain.
+/// Driven through the facade's [`SubmissionService`] and observed by the
+/// collection's `sbol:member` edges on each backend.
+pub async fn overwrite_merge_modes(app: &AppServices) {
+    const COLLECTION: &str =
+        "http://synbiohub.org/user/conformance_overwrite_owner/overwritesub/overwritesub_collection/1";
+    const MEMBER_A: &str =
+        "http://synbiohub.org/user/conformance_overwrite_owner/overwritesub/seqa/1";
+    const MEMBER_B: &str =
+        "http://synbiohub.org/user/conformance_overwrite_owner/overwritesub/seqb/1";
+
+    let submissions = SubmissionService::new(app.store.clone());
+    let request = |body: &str, overwrite: ImportOverwrite| SubmitRequest {
+        owner: "conformance_overwrite_owner".to_owned(),
+        id: "overwritesub".to_owned(),
+        version: "1".to_owned(),
+        name: Some("Overwrite Modes".to_owned()),
+        description: None,
+        creator_name: None,
+        citations: Vec::new(),
+        body: body.to_owned(),
+        format: SerializationFormat::Turtle,
+        overwrite,
+    };
+
+    // Code 0 (Fail): the first submission into a free id/version succeeds.
+    submissions
+        .submit(request(OVERWRITE_FIXTURE_A, ImportOverwrite::Fail))
+        .await
+        .expect("first submit into a free id succeeds");
+    assert!(
+        collection_members(app, COLLECTION)
+            .await
+            .contains(&MEMBER_A.to_owned()),
+        "the first submission's member is present"
+    );
+
+    // Code 0 again: the id/version is now taken, so a Fail submission is rejected.
+    let err = submissions
+        .submit(request(OVERWRITE_FIXTURE_A, ImportOverwrite::Fail))
+        .await
+        .expect_err("a colliding Fail submission is rejected");
+    assert!(
+        matches!(err, DomainError::InvalidInput(_)),
+        "the collision is an invalid-input error: {err:?}"
+    );
+
+    // Code 2 (Merge): the new member is unioned in alongside the existing one.
+    submissions
+        .submit(request(OVERWRITE_FIXTURE_B, ImportOverwrite::Merge))
+        .await
+        .expect("merge submit succeeds");
+    let merged = collection_members(app, COLLECTION).await;
+    assert!(
+        merged.contains(&MEMBER_A.to_owned()),
+        "merge keeps the original member: {merged:?}"
+    );
+    assert!(
+        merged.contains(&MEMBER_B.to_owned()),
+        "merge adds the new member: {merged:?}"
+    );
+
+    // Code 1 (Replace): the collection is cleared first, so only the replacing
+    // submission's member remains.
+    submissions
+        .submit(request(OVERWRITE_FIXTURE_B, ImportOverwrite::Replace))
+        .await
+        .expect("replace submit succeeds");
+    let replaced = collection_members(app, COLLECTION).await;
+    assert!(
+        replaced.contains(&MEMBER_B.to_owned()),
+        "replace keeps the replacing member: {replaced:?}"
+    );
+    assert!(
+        !replaced.contains(&MEMBER_A.to_owned()),
+        "replace drops the original member: {replaced:?}"
+    );
+
+    app.store
+        .graph_store_clear(COLLECTION)
+        .await
+        .expect("clear the overwrite submission graph");
+}
+
+/// The write-authorization matrix holds across the mutation surface. An owner may
+/// edit and remove an object its user graph owns; a non-owner and an anonymous
+/// caller are denied every mutation with [`MutationError::NotAuthorized`]; and
+/// granting a second user ownership (addOwner) widens that user's read scope to
+/// the object's graph. The gate reads the `sbh:ownedBy` stamp through the facade's
+/// `AclService`, so the storage core stays authorization-free; this certifies the
+/// gate on each backend.
+pub async fn write_authz_matrix(app: &AppServices) {
+    const COLLECTION: &str =
+        "http://synbiohub.org/user/conformance_authz_owner/authzsub/authzsub_collection/1";
+    const OWNER_GRAPH: &str = "http://synbiohub.org/user/conformance_authz_owner";
+    const INTRUDER_GRAPH: &str = "http://synbiohub.org/user/conformance_authz_intruder";
+    const GRANTEE_GRAPH: &str = "http://synbiohub.org/user/conformance_authz_grantee";
+    // An anonymous caller carries no owning user graph.
+    const ANON_GRAPH: &str = "";
+
+    let submissions = SubmissionService::new(app.store.clone());
+    let edits = EditService::new(
+        app.store.clone(),
+        app.sparql_update.clone(),
+        app.acl_service.clone(),
+    );
+    let mutations = MutationService::new(
+        app.store.clone(),
+        app.sparql_update.clone(),
+        app.acl_service.clone(),
+    );
+    let permissions = PermissionService::new(app.sparql_update.clone(), app.acl_service.clone());
+
+    let outcome = submissions
+        .submit(SubmitRequest {
+            owner: "conformance_authz_owner".to_owned(),
+            id: "authzsub".to_owned(),
+            version: "1".to_owned(),
+            name: Some("Authz Matrix".to_owned()),
+            description: None,
+            creator_name: None,
+            citations: Vec::new(),
+            body: SUBMISSION_FIXTURE.to_owned(),
+            format: SerializationFormat::Turtle,
+            overwrite: ImportOverwrite::Fail,
+        })
+        .await
+        .expect("owner submits the object");
+    let graph = outcome.graph_iri.clone();
+
+    // The owner may edit its own object, and the edit is durable.
+    edits
+        .update_mutable_description(OWNER_GRAPH, false, COLLECTION, "conformance description")
+        .await
+        .expect("owner edits its own object");
+    let edited = app
+        .store
+        .triples_for_subject(COLLECTION)
+        .await
+        .expect("collection triples after edit");
+    assert!(
+        triple_has_literal(
+            &edited,
+            COLLECTION,
+            SBH_MUTABLE_DESCRIPTION,
+            "conformance description"
+        ),
+        "the owner's edit is durable"
+    );
+
+    // A non-owner and an anonymous caller are denied edits.
+    let denied = edits
+        .update_mutable_description(INTRUDER_GRAPH, false, COLLECTION, "intruder edit")
+        .await
+        .expect_err("a non-owner may not edit");
+    assert!(
+        matches!(denied, MutationError::NotAuthorized(_)),
+        "a non-owner edit is not authorized: {denied:?}"
+    );
+    let denied = edits
+        .update_mutable_description(ANON_GRAPH, false, COLLECTION, "anon edit")
+        .await
+        .expect_err("an anonymous caller may not edit");
+    assert!(
+        matches!(denied, MutationError::NotAuthorized(_)),
+        "an anonymous edit is not authorized: {denied:?}"
+    );
+
+    // A non-owner and an anonymous caller are denied removes.
+    let denied = mutations
+        .remove(INTRUDER_GRAPH, false, COLLECTION)
+        .await
+        .expect_err("a non-owner may not remove");
+    assert!(
+        matches!(denied, MutationError::NotAuthorized(_)),
+        "a non-owner remove is not authorized: {denied:?}"
+    );
+    let denied = mutations
+        .remove(ANON_GRAPH, false, COLLECTION)
+        .await
+        .expect_err("an anonymous caller may not remove");
+    assert!(
+        matches!(denied, MutationError::NotAuthorized(_)),
+        "an anonymous remove is not authorized: {denied:?}"
+    );
+
+    // The object survives every rejected mutation.
+    assert!(
+        !app.store
+            .triples_for_subject(COLLECTION)
+            .await
+            .expect("collection triples after denials")
+            .is_empty(),
+        "the object is intact after the rejected mutations"
+    );
+
+    // addOwner widens the grantee's read scope to the object's graph: excluded
+    // before the grant, admitted after.
+    let before = app
+        .acl_service
+        .compute_scope(Some(GRANTEE_GRAPH))
+        .await
+        .expect("grantee scope before grant");
+    assert!(
+        !scope_names(&before, &graph),
+        "the grantee cannot see the object's graph before the grant"
+    );
+    permissions
+        .add_owner(OWNER_GRAPH, false, COLLECTION, GRANTEE_GRAPH)
+        .await
+        .expect("owner grants the grantee ownership");
+    let after = app
+        .acl_service
+        .compute_scope(Some(GRANTEE_GRAPH))
+        .await
+        .expect("grantee scope after grant");
+    assert!(
+        scope_names(&after, &graph),
+        "addOwner widens the grantee's scope to the object's graph"
+    );
+
+    // The owner may remove its own object; the object's triples are then gone.
+    mutations
+        .remove(OWNER_GRAPH, false, COLLECTION)
+        .await
+        .expect("owner removes its own object");
+    assert!(
+        app.store
+            .triples_for_subject(COLLECTION)
+            .await
+            .expect("collection triples after remove")
+            .is_empty(),
+        "the owner's remove clears the object"
+    );
+
+    app.store
+        .graph_store_clear(&graph)
+        .await
+        .expect("clear the authz submission graph");
+}
+
+/// The `sbol:member` object URIs a collection currently holds, read from the
+/// store.
+async fn collection_members(app: &AppServices, collection: &str) -> Vec<String> {
+    app.store
+        .triples_for_subject(collection)
+        .await
+        .expect("collection triples")
+        .into_iter()
+        .filter(|t| t.predicate.as_str() == SBOL2_MEMBER)
+        .filter_map(|t| match t.object {
+            ObjectTerm::Iri(iri) => Some(iri.as_str().to_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether `triples` holds `(subject, predicate, object)` with an IRI object.
+fn triple_has_iri(triples: &[Triple], subject: &str, predicate: &str, object: &str) -> bool {
+    triples.iter().any(|t| {
+        matches!(&t.subject, SubjectTerm::Iri(s) if s.as_str() == subject)
+            && t.predicate.as_str() == predicate
+            && matches!(&t.object, ObjectTerm::Iri(o) if o.as_str() == object)
+    })
+}
+
+/// Whether `triples` holds `(subject, predicate, value)` with a literal object.
+fn triple_has_literal(triples: &[Triple], subject: &str, predicate: &str, value: &str) -> bool {
+    triples.iter().any(|t| {
+        matches!(&t.subject, SubjectTerm::Iri(s) if s.as_str() == subject)
+            && t.predicate.as_str() == predicate
+            && matches!(&t.object, ObjectTerm::Literal { value: v, .. } if v == value)
+    })
 }
 
 /// Whether the closure holds a triple with the given IRI subject, predicate,

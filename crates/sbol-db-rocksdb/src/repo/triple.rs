@@ -186,6 +186,49 @@ impl TripleRepository {
         Ok(quads.len())
     }
 
+    /// Stage a full replacement of one named graph's contents with `triples` in a
+    /// single batch: delete every existing triple the new set does not carry, then
+    /// insert the new set. A triple present in both the old and new contents is
+    /// left in place rather than deleted and re-inserted, because a staged delete
+    /// is invisible to [`stage_insert`]'s already-present guard within the same
+    /// uncommitted batch, so deleting and re-inserting one triple in one batch
+    /// would drop it. Returns the number of triples newly inserted.
+    pub fn stage_replace_graph(
+        &self,
+        batch: &mut WriteBatch,
+        seen: &mut HashSet<Vec<u8>>,
+        graph: &str,
+        triples: &[Triple],
+    ) -> Result<usize, DomainError> {
+        let gid = Term::named(graph).id();
+
+        // The primary (SPOG) keys the new contents carry: the triples to keep.
+        let keep: HashSet<Vec<u8>> = triples
+            .iter()
+            .map(|t| {
+                let (_, quad, _) = Self::decompose(t);
+                quad.key(SPOG)
+            })
+            .collect();
+
+        // Delete every existing graph quad the new contents do not carry.
+        let mut existing = Vec::new();
+        self.db.for_each_prefix(GSPO.cf, &gid, |key, _| {
+            existing.push(keys::decode_key(GSPO, key));
+            Ok(true)
+        })?;
+        for quad in &existing {
+            if keep.contains(&quad.key(SPOG)) {
+                continue;
+            }
+            for index in keys::NAMED_INDEXES {
+                batch.delete_cf(&self.db.cf(index.cf), quad.key(index));
+            }
+        }
+
+        self.stage_insert(batch, seen, triples)
+    }
+
     pub async fn triples_for_subject(&self, subject_iri: &str) -> Result<Vec<Triple>, DomainError> {
         let db = self.clone();
         let subject = PatternSubject::Iri(subject_iri.to_owned());

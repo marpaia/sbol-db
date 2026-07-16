@@ -228,10 +228,16 @@ impl RocksdbStore {
 
             let mut batch = WriteBatch::default();
             let mut seen = HashSet::new();
-            if mode == GraphWriteMode::Replace {
-                this.triples.stage_clear_graph(&mut batch, Some(&graph))?;
-            }
-            let inserted = this.triples.stage_insert(&mut batch, &mut seen, &triples)?;
+            let inserted = if mode == GraphWriteMode::Replace {
+                // Replace overwrites the graph atomically: delete only the triples
+                // the new contents drop and insert the rest. A blanket clear plus
+                // insert would lose any triple common to both, whose staged delete
+                // the insert's already-present guard cannot see within one batch.
+                this.triples
+                    .stage_replace_graph(&mut batch, &mut seen, &graph, &triples)?
+            } else {
+                this.triples.stage_insert(&mut batch, &mut seen, &triples)?
+            };
             // The graph's post-write triples: just the posted ones for Replace, or
             // the existing committed triples plus the posted ones for Merge.
             let post = if mode == GraphWriteMode::Replace {
