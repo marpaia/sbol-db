@@ -47,3 +47,5 @@ metrics-exporter-prometheus.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
+sbol-db-backend.workspace = true
+tempfile = "3"

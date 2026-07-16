@@ -10,7 +10,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use sbol_db_core::{
     DomainError, GraphId, GraphRecord, ImportReport, JobId, NeighborhoodQuery, NeighborhoodResult,
-    ObjectId, ObjectTerm, SbolObjectRecord, SerializationFormat, Triple,
+    NewUser, ObjectId, ObjectTerm, SbolObjectRecord, SerializationFormat, Triple, User, UserId,
 };
 use serde_json::Value;
 
@@ -252,6 +252,66 @@ pub fn distinct_object_iris(triples: Vec<Triple>) -> Vec<String> {
         }
     }
     seen.into_iter().collect()
+}
+
+/// Account persistence for the identity layer.
+///
+/// A separate trait object from [`SbolStore`]: the SBOL store stays
+/// authorization-free while the application facade holds this alongside it.
+/// Implementations map rows to [`User`] and enforce the unique `username` and
+/// `email` constraints. Password hashing lives in the application layer; these
+/// methods store and read the already-computed `password_hash`.
+#[async_trait]
+pub trait UserStore: Send + Sync {
+    /// Create an account, assigning a fresh [`UserId`], and return it.
+    async fn create_user(&self, new_user: NewUser) -> Result<User, DomainError>;
+
+    /// Resolve an account by an identifier matching either its `email` or its
+    /// `username`, mirroring SynBioHub's login lookup. `None` when neither
+    /// matches.
+    async fn find_by_email_or_username(
+        &self,
+        identifier: &str,
+    ) -> Result<Option<User>, DomainError>;
+
+    /// Fetch an account by id. `None` when no such account exists.
+    async fn get_by_id(&self, id: UserId) -> Result<Option<User>, DomainError>;
+
+    /// Persist the mutable profile fields (`name`, `affiliation`, and the
+    /// membership flags) of `user`, returning the stored account.
+    async fn update_user(&self, user: &User) -> Result<User, DomainError>;
+
+    /// Replace an account's stored password hash, e.g. transparent rehashing of
+    /// a legacy digest to argon2 on a successful login.
+    async fn set_password_hash(&self, id: UserId, password_hash: &str) -> Result<(), DomainError>;
+
+    /// Set (`Some`) or clear (`None`) an account's outstanding reset link.
+    async fn set_reset_link(&self, id: UserId, link: Option<&str>) -> Result<(), DomainError>;
+
+    /// Atomically claim the account whose outstanding reset link equals `link`,
+    /// clearing the link so it cannot be reused. Returns the claimed account, or
+    /// `None` when no account carries that link.
+    async fn consume_reset_link(&self, link: &str) -> Result<Option<User>, DomainError>;
+}
+
+/// API-token persistence for the identity layer.
+///
+/// Tokens are stored only as their hash; the application layer computes the
+/// hash (sha3 of the plaintext token) so a persisted row cannot be replayed.
+/// A separate trait object from [`SbolStore`], held by the application facade.
+#[async_trait]
+pub trait TokenStore: Send + Sync {
+    /// Persist a token hash for `user_id`, associating the token with the
+    /// account it authenticates.
+    async fn issue(&self, token_hash: &str, user_id: UserId) -> Result<(), DomainError>;
+
+    /// Resolve a token hash to the account it authenticates, or `None` when no
+    /// live token carries that hash.
+    async fn resolve(&self, token_hash: &str) -> Result<Option<UserId>, DomainError>;
+
+    /// Revoke the token with the given hash, returning whether a token was
+    /// removed.
+    async fn revoke(&self, token_hash: &str) -> Result<bool, DomainError>;
 }
 
 /// The full SBOL-aware store: ingest plus every derived-view read surface.

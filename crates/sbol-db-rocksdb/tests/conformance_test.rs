@@ -4,9 +4,11 @@
 use std::sync::Arc;
 
 use sbol_db_app::AppServices;
-use sbol_db_rocksdb::{connect, Db, RocksdbJobs, RocksdbStore};
+use sbol_db_rocksdb::{
+    connect, Db, RocksdbJobs, RocksdbStore, RocksdbTokenStore, RocksdbUserStore,
+};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
-use sbol_db_storage::{AclStore, JobQueue, SbolStore};
+use sbol_db_storage::{AclStore, JobQueue, SbolStore, TokenStore, UserStore};
 use tempfile::TempDir;
 
 fn fresh_db() -> (Db, TempDir) {
@@ -62,9 +64,12 @@ async fn rocksdb_passes_full_conformance_suite() {
         store.triple_source(),
         store.triple_writer(),
     ));
-    let jobs: Arc<dyn JobQueue> = Arc::new(RocksdbJobs::new(db));
+    let jobs: Arc<dyn JobQueue> = Arc::new(RocksdbJobs::new(db.clone()));
     let store_dyn: Arc<dyn SbolStore> = store.clone();
     let acl: Arc<dyn AclStore> = store;
-    let app = AppServices::new(store_dyn, sparql, sparql_update, jobs, acl);
+    let users: Arc<dyn UserStore> = Arc::new(RocksdbUserStore::new(db.clone()));
+    let tokens: Arc<dyn TokenStore> = Arc::new(RocksdbTokenStore::new(db));
+    let app =
+        AppServices::new(store_dyn, sparql, sparql_update, jobs, acl).with_identity(users, tokens);
     sbol_db_conformance::run_all(&app).await;
 }

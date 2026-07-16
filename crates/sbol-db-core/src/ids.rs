@@ -49,3 +49,4 @@ id_newtype!(GraphId);
 id_newtype!(ObjectId);
 id_newtype!(ValidationRunId);
 id_newtype!(JobId);
+id_newtype!(UserId);

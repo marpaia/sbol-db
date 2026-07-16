@@ -63,6 +63,11 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     "job_attempt",
     "job_log",
     "job_ready",
+    // Identity: accounts, their username/email lookup indexes, and API tokens.
+    "users",             // user id -> User JSON
+    "users_by_username", // username -> user id
+    "users_by_email",    // email -> user id
+    "api_tokens",        // token hash -> user id
     // SynBioHub query accelerator: derived per-graph indexes (rebuilt lazily
     // when a graph is marked dirty). See `repo::accel`.
     "acc_meta",       // graph + SEP + iri -> MetaRecord JSON

@@ -8,6 +8,7 @@ mod export;
 mod lab;
 pub mod metrics;
 mod routes;
+mod synbiohub;
 
 pub use error::ApiError;
 pub use export::export_subject_rdf;
@@ -103,6 +104,14 @@ pub struct ServerConfig {
     pub sparql_auth_user: String,
     pub sparql_auth_password: String,
     pub sparql_auth_disabled: bool,
+    /// Salt the legacy SynBioHub password digest `sha1(salt + sha1(pw))` was
+    /// computed with, used to verify migrated credentials on the V1 auth
+    /// routes. Defaults to classic's `synbiohub_change_me`; a migrated instance
+    /// sets `SBOL_DB_PASSWORD_SALT` to its original `passwordSalt`.
+    pub password_salt: String,
+    /// Whether `POST /register` accepts self-service account creation. When
+    /// false the route returns `403`, matching classic's `allowPublicSignup`.
+    pub allow_public_signup: bool,
 }
 
 impl Default for ServerConfig {
@@ -118,6 +127,8 @@ impl Default for ServerConfig {
             sparql_auth_user: "dba".to_owned(),
             sparql_auth_password: "dba".to_owned(),
             sparql_auth_disabled: false,
+            password_salt: "synbiohub_change_me".to_owned(),
+            allow_public_signup: true,
         }
     }
 }
@@ -155,6 +166,11 @@ impl ServerConfig {
                 .ok()
                 .map(|v| parse_bool(&v))
                 .unwrap_or(defaults.sparql_auth_disabled),
+            password_salt: std::env::var("SBOL_DB_PASSWORD_SALT").unwrap_or(defaults.password_salt),
+            allow_public_signup: std::env::var("SBOL_DB_ALLOW_PUBLIC_SIGNUP")
+                .ok()
+                .map(|v| parse_bool(&v))
+                .unwrap_or(defaults.allow_public_signup),
         }
     }
 }
@@ -303,7 +319,12 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
             auth::require_auth,
         ));
 
-    let app = mount_lab(api.merge(authed), &config)
+    // The SynBioHub V1 auth surface (`/login`, `/register`, `/profile`, …),
+    // behind the `X-authorization` middleware. It is independent of the
+    // Basic-auth `/sparql-auth*` write path above.
+    let synbiohub_routes = synbiohub::router(state.clone());
+
+    let app = mount_lab(api.merge(authed).merge(synbiohub_routes), &config)
         .fallback(not_found_handler)
         .with_state(state);
 

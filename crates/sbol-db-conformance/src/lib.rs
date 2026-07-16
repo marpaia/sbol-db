@@ -14,13 +14,14 @@
 
 use std::time::Duration;
 
-use sbol_db_app::{AppServices, PUBLIC_GRAPH};
-use sbol_db_core::{Direction, IriString, NeighborhoodQuery, SerializationFormat};
+use sbol_db_app::{AppServices, AuthService, PUBLIC_GRAPH};
+use sbol_db_core::{Direction, IriString, NeighborhoodQuery, NewUser, SerializationFormat};
 use sbol_db_sparql::{GraphScope, SparqlOptions};
 use sbol_db_storage::{
     EnqueueOutcome, GraphWriteMode, ImportInput, JobQueue, JobStatus, ListJobsFilter,
     ListObjectsFilter, NewJob, SbolStore, SequenceSearchOptions, DEFAULT_QUEUE, SBH_OWNED_BY,
 };
+use sha1::{Digest, Sha1};
 
 /// A self-contained SBOL3 document: one Component referencing one Sequence.
 const SIMPLE_COMPONENT_TTL: &str = r#"
@@ -93,6 +94,189 @@ pub async fn run_all(app: &AppServices) {
     ontology_roundtrip(store).await;
     job_queue_lifecycle(jobs).await;
     acl_scope_hides_private_graph(app).await;
+    user_crud(app).await;
+    token_issue_resolve_revoke(app).await;
+    legacy_sha1_rehash_on_login(app).await;
+}
+
+/// The password salt the legacy-rehash scenario seeds its digest with and
+/// authenticates under, standing in for a migrated instance's
+/// `SBOL_DB_PASSWORD_SALT`.
+const CONFORMANCE_SALT: &str = "conformance-password-salt";
+
+/// Account persistence round-trips: an account is created, resolves by both its
+/// email and its username to the same id, fetches by id, and a profile update
+/// is durable.
+pub async fn user_crud(app: &AppServices) {
+    let users = app.users.as_ref();
+    let created = users
+        .create_user(NewUser {
+            username: "crud_user".into(),
+            name: "Crud User".into(),
+            email: "crud_user@example.org".into(),
+            affiliation: Some("Lab".into()),
+            password_hash: "$argon2id$placeholder".into(),
+            graph_uri: AuthService::graph_uri("crud_user"),
+            is_admin: false,
+            is_curator: false,
+            is_member: true,
+        })
+        .await
+        .expect("create_user");
+
+    // The login lookup resolves by either identifier to the same account.
+    let by_email = users
+        .find_by_email_or_username("crud_user@example.org")
+        .await
+        .expect("find by email")
+        .expect("account matches by email");
+    assert_eq!(by_email.id, created.id, "email resolves to the created id");
+    let by_username = users
+        .find_by_email_or_username("crud_user")
+        .await
+        .expect("find by username")
+        .expect("account matches by username");
+    assert_eq!(
+        by_username.id, created.id,
+        "username resolves to the created id"
+    );
+
+    // Fetch by id round-trips the stored fields.
+    let by_id = users
+        .get_by_id(created.id)
+        .await
+        .expect("get_by_id")
+        .expect("account fetches by id");
+    assert_eq!(by_id.email, "crud_user@example.org");
+    assert!(!by_id.is_admin, "created without the admin flag");
+
+    // A profile update is durable across a re-read.
+    let mut updated = by_id;
+    updated.name = "Renamed User".into();
+    updated.is_admin = true;
+    users.update_user(&updated).await.expect("update_user");
+    let reread = users
+        .get_by_id(created.id)
+        .await
+        .expect("get_by_id after update")
+        .expect("account still present");
+    assert_eq!(reread.name, "Renamed User", "name update is durable");
+    assert!(reread.is_admin, "membership-flag update is durable");
+}
+
+/// The API-token lifecycle end to end: a minted token resolves to the account
+/// it authenticates, an unknown token resolves to nothing, and a revoked token
+/// stops resolving.
+pub async fn token_issue_resolve_revoke(app: &AppServices) {
+    let owner = app
+        .users
+        .create_user(NewUser {
+            username: "token_user".into(),
+            name: "Token User".into(),
+            email: "token_user@example.org".into(),
+            affiliation: None,
+            password_hash: "$argon2id$placeholder".into(),
+            graph_uri: AuthService::graph_uri("token_user"),
+            is_admin: false,
+            is_curator: false,
+            is_member: true,
+        })
+        .await
+        .expect("create_user");
+
+    let token = app.auth.issue_token(owner.id).await.expect("issue_token");
+
+    // The plaintext token resolves to its owner's id, and that id fetches the
+    // owning account.
+    let resolved = app
+        .auth
+        .resolve_token(&token)
+        .await
+        .expect("resolve_token")
+        .expect("a live token resolves");
+    assert_eq!(resolved, owner.id, "the token resolves to its owner");
+    let resolved_user = app
+        .users
+        .get_by_id(resolved)
+        .await
+        .expect("get_by_id")
+        .expect("the resolved id fetches the account");
+    assert_eq!(resolved_user.username, "token_user");
+
+    // An unknown token resolves to nothing.
+    assert!(
+        app.auth
+            .resolve_token("not-a-real-token")
+            .await
+            .expect("resolve bogus token")
+            .is_none(),
+        "an unknown token authenticates no one"
+    );
+
+    // Revocation is durable: the token stops resolving.
+    assert!(
+        app.auth.revoke_token(&token).await.expect("revoke_token"),
+        "revoking a live token reports success"
+    );
+    assert!(
+        app.auth
+            .resolve_token(&token)
+            .await
+            .expect("resolve after revoke")
+            .is_none(),
+        "a revoked token no longer resolves"
+    );
+}
+
+/// A login against a classic SynBioHub `sha1(salt + sha1(password))` digest
+/// succeeds and transparently upgrades the stored hash to argon2, so a migrated
+/// instance's credentials keep working while silently strengthening.
+pub async fn legacy_sha1_rehash_on_login(app: &AppServices) {
+    let created = app
+        .users
+        .create_user(NewUser {
+            username: "legacy_user".into(),
+            name: "Legacy User".into(),
+            email: "legacy_user@example.org".into(),
+            affiliation: None,
+            password_hash: classic_digest(CONFORMANCE_SALT, "hunter2"),
+            graph_uri: AuthService::graph_uri("legacy_user"),
+            is_admin: false,
+            is_curator: false,
+            is_member: true,
+        })
+        .await
+        .expect("create_user");
+    assert!(
+        !created.password_hash.starts_with("$argon2"),
+        "the account is seeded with a legacy digest"
+    );
+
+    let authed = app
+        .auth
+        .authenticate("legacy_user", "hunter2", CONFORMANCE_SALT)
+        .await
+        .expect("legacy login succeeds");
+    assert_eq!(authed.id, created.id);
+
+    let stored = app
+        .users
+        .get_by_id(created.id)
+        .await
+        .expect("get_by_id")
+        .expect("account present after login");
+    assert!(
+        stored.password_hash.starts_with("$argon2"),
+        "a successful legacy login rehashes the stored credential to argon2"
+    );
+}
+
+/// The classic SynBioHub password digest `sha1(salt + sha1(password))`, each
+/// `sha1` rendered as lowercase hex (`lib/db.js`), for seeding a migrated
+/// credential.
+fn classic_digest(salt: &str, password: &str) -> String {
+    let inner = hex::encode(Sha1::digest(password.as_bytes()));
+    hex::encode(Sha1::digest(format!("{salt}{inner}").as_bytes()))
 }
 
 /// Importing a document creates a graph that owns its triples, projects the

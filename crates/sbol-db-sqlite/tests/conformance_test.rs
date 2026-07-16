@@ -5,8 +5,11 @@ use std::sync::Arc;
 
 use sbol_db_app::AppServices;
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
-use sbol_db_sqlite::{connect_and_migrate, SqliteJobRepository, SqlitePool, SqliteStore};
-use sbol_db_storage::{AclStore, JobQueue, SbolStore};
+use sbol_db_sqlite::{
+    connect_and_migrate, SqliteJobRepository, SqlitePool, SqliteStore, SqliteTokenStore,
+    SqliteUserStore,
+};
+use sbol_db_storage::{AclStore, JobQueue, SbolStore, TokenStore, UserStore};
 use tempfile::TempDir;
 
 async fn fresh_pool() -> (SqlitePool, TempDir) {
@@ -62,9 +65,12 @@ async fn sqlite_passes_full_conformance_suite() {
         store.triple_source(),
         store.triple_writer(),
     ));
-    let jobs: Arc<dyn JobQueue> = Arc::new(SqliteJobRepository::new(pool));
+    let jobs: Arc<dyn JobQueue> = Arc::new(SqliteJobRepository::new(pool.clone()));
     let store_dyn: Arc<dyn SbolStore> = store.clone();
     let acl: Arc<dyn AclStore> = store;
-    let app = AppServices::new(store_dyn, sparql, sparql_update, jobs, acl);
+    let users: Arc<dyn UserStore> = Arc::new(SqliteUserStore::new(pool.clone()));
+    let tokens: Arc<dyn TokenStore> = Arc::new(SqliteTokenStore::new(pool));
+    let app =
+        AppServices::new(store_dyn, sparql, sparql_update, jobs, acl).with_identity(users, tokens);
     sbol_db_conformance::run_all(&app).await;
 }

@@ -5,9 +5,11 @@
 use std::sync::Arc;
 
 use sbol_db_app::AppServices;
-use sbol_db_postgres::{connect, run_migrations, JobRepository, SbolObjectService};
+use sbol_db_postgres::{
+    connect, run_migrations, JobRepository, PgTokenStore, PgUserStore, SbolObjectService,
+};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
-use sbol_db_storage::{AclStore, JobQueue, SbolStore};
+use sbol_db_storage::{AclStore, JobQueue, SbolStore, TokenStore, UserStore};
 
 async fn fresh_app() -> AppServices {
     let database_url = std::env::var("DATABASE_URL")
@@ -20,7 +22,7 @@ async fn fresh_app() -> AppServices {
          sbol_sequences, sbol_features, sbol_locations, sbol_constraints, \
          sbol_interactions, sbol_participations, sbol_sequence_kmers, sbol_ontologies, \
          sbol_ontology_terms, sbol_ontology_term_aliases, sbol_ontology_closure, \
-         sbol_jobs, sbol_job_attempts, sbol_job_logs \
+         sbol_jobs, sbol_job_attempts, sbol_job_logs, sbh_user, sbh_api_token \
          RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
@@ -33,10 +35,12 @@ async fn fresh_app() -> AppServices {
         service.triple_source(),
         service.triple_writer(),
     ));
-    let jobs: Arc<dyn JobQueue> = Arc::new(JobRepository::new(pool));
+    let jobs: Arc<dyn JobQueue> = Arc::new(JobRepository::new(pool.clone()));
     let store: Arc<dyn SbolStore> = service.clone();
     let acl: Arc<dyn AclStore> = service;
-    AppServices::new(store, sparql, sparql_update, jobs, acl)
+    let users: Arc<dyn UserStore> = Arc::new(PgUserStore::new(pool.clone()));
+    let tokens: Arc<dyn TokenStore> = Arc::new(PgTokenStore::new(pool));
+    AppServices::new(store, sparql, sparql_update, jobs, acl).with_identity(users, tokens)
 }
 
 #[tokio::test]

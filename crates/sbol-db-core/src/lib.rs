@@ -2,6 +2,7 @@
 //! here.
 
 mod error;
+mod identity;
 mod ids;
 mod iri;
 pub mod kmer;
@@ -13,7 +14,8 @@ pub mod triple;
 mod validation;
 
 pub use error::DomainError;
-pub use ids::{GraphId, JobId, ObjectId, ValidationRunId};
+pub use identity::{ApiToken, NewUser, User};
+pub use ids::{GraphId, JobId, ObjectId, UserId, ValidationRunId};
 pub use iri::{IriString, IriValidationError};
 pub use neighborhood::{
     group_by_depth, Direction, EdgeInfo, EdgeObject, NeighborhoodQuery, NeighborhoodResult,

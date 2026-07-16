@@ -13,3 +13,5 @@ sbol-db-storage.workspace = true
 sbol-db-sparql.workspace = true
 sbol-db-app.workspace = true
 serde_json.workspace = true
+sha1.workspace = true
+hex.workspace = true
