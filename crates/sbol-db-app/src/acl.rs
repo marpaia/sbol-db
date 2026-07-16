@@ -38,17 +38,17 @@ impl AclService {
     /// user owns (`sbh:ownedBy`), and the graphs holding the objects shared
     /// with the user (`sbh:canView`).
     ///
-    /// For an anonymous caller (`None`) the scope is [`GraphScope::Union`],
-    /// preserving the unauthenticated behavior the public endpoints have today.
-    /// True anonymous restriction (scoping anon to the public graph alone) is a
-    /// later phase; introducing it here would regress the existing public
-    /// `/sparql` surface, so anon reads stay unrestricted for now.
+    /// For an anonymous caller (`None`) the scope is [`GraphScope::Only`] the
+    /// public graph: unauthenticated reads see public data alone, matching the
+    /// visibility classic SynBioHub grants an anonymous client. The
+    /// Virtuoso-compatible `/sparql` endpoint keeps its own unscoped default and
+    /// does not resolve identity through this service.
     pub async fn compute_scope(
         &self,
         user_graph_iri: Option<&str>,
     ) -> Result<GraphScope, DomainError> {
         let Some(user) = user_graph_iri else {
-            return Ok(GraphScope::Union);
+            return Ok(GraphScope::Only(vec![PUBLIC_GRAPH.to_owned()]));
         };
 
         let mut graphs: BTreeSet<String> = BTreeSet::new();

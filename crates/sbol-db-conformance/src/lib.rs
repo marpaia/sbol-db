@@ -835,6 +835,31 @@ pub async fn acl_scope_hides_private_graph(app: &AppServices) {
         "B cannot read A's private object under its scope"
     );
 
+    // An anonymous caller is scoped to the public graph alone: it reads the
+    // public object but neither user's private object.
+    let scope_anon = app
+        .acl_service
+        .compute_scope(None)
+        .await
+        .expect("compute scope for anonymous");
+    assert!(
+        scope_names(&scope_anon, PUBLIC_GRAPH),
+        "anonymous scope includes the public graph"
+    );
+    assert!(
+        !scope_names(&scope_anon, GRAPH_A) && !scope_names(&scope_anon, GRAPH_B),
+        "anonymous scope excludes every private graph"
+    );
+    let seen_by_anon = subjects_under_scope(app, &scope_anon).await;
+    assert!(
+        seen_by_anon.contains(OBJ_PUBLIC),
+        "anonymous reads the public object"
+    );
+    assert!(
+        !seen_by_anon.contains(OBJ_A) && !seen_by_anon.contains(OBJ_B),
+        "anonymous cannot read any private object"
+    );
+
     // Leave the store as we found it for any scenario that follows.
     for graph in [GRAPH_A, GRAPH_B, PUBLIC_GRAPH] {
         app.store
