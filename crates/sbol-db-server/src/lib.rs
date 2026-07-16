@@ -8,6 +8,7 @@ mod export;
 mod lab;
 pub mod metrics;
 mod routes;
+mod serialize;
 mod synbiohub;
 
 pub use error::ApiError;
@@ -17,6 +18,10 @@ pub use lab::SchemaCache;
 pub use metrics::Metrics;
 #[cfg(feature = "lab")]
 pub use sbol_db_storage::{BackendKind, Capabilities, MaintenanceStyle};
+pub use serialize::{
+    serialize_closure, serialize_gff3, serialize_omex, OmexAttachment, OmexAttachmentSource,
+    Serialized,
+};
 
 use std::sync::Arc;
 use std::time::Duration;

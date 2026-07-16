@@ -4,9 +4,11 @@
 //! asserts the observable contract every implementation must honor: import and
 //! derived-view reads, the graph set-semantics rule, ontology load and closure
 //! queries, the job-queue lifecycle, ACL-scoped reads hiding another user's
-//! private graph, and the native ranked text search (its SBOLExplorer ranking
-//! rules and its scope enforcement). A backend crate wires these into its own
-//! test harness by
+//! private graph, the native ranked text search (its SBOLExplorer ranking
+//! rules and its scope enforcement), and the download path (the recursive and
+//! non-recursive object closure, and the byte-stream serializers that render a
+//! closure to GenBank, FASTA, GFF3, and an OMEX archive). A backend crate wires
+//! these into its own test harness by
 //! assembling a fresh, empty [`AppServices`] over the backend and calling
 //! [`run_all`] (or an individual store-level scenario against a bare store).
 //!
@@ -16,10 +18,16 @@
 
 use std::time::Duration;
 
-use sbol_db_app::{AppServices, AuthService, FacetedSearch, PUBLIC_GRAPH};
-use sbol_db_core::{Direction, IriString, NeighborhoodQuery, NewUser, SerializationFormat};
+use std::io::Read;
+
+use sbol_db_app::{AppServices, AuthService, Downloader, FacetedSearch, PUBLIC_GRAPH};
+use sbol_db_core::{
+    Direction, IriString, NeighborhoodQuery, NewUser, ObjectTerm, SerializationFormat, SubjectTerm,
+    Triple,
+};
 use sbol_db_search::pagerank::pagerank;
 use sbol_db_search::ranked_text::IndexedPart;
+use sbol_db_server::{serialize_closure, serialize_gff3, serialize_omex};
 use sbol_db_sparql::{GraphScope, SparqlOptions};
 use sbol_db_storage::{
     EnqueueOutcome, GraphWriteMode, ImportInput, JobQueue, JobStatus, ListJobsFilter,
@@ -100,6 +108,8 @@ pub async fn run_all(app: &AppServices) {
     acl_scope_hides_private_graph(app).await;
     ranked_text_search(app).await;
     acl_scoped_search(app).await;
+    download_closure_recursion(app).await;
+    download_formats_roundtrip(app).await;
     user_crud(app).await;
     token_issue_resolve_revoke(app).await;
     legacy_sha1_rehash_on_login(app).await;
@@ -998,6 +1008,284 @@ pub async fn acl_scoped_search(app: &AppServices) {
         .graph_store_clear(OWNER_GRAPH)
         .await
         .expect("clear the owner's private graph");
+}
+
+/// The recursive object closure follows transitive references to a fixpoint,
+/// while the non-recursive closure narrows to the object's own URI prefix and
+/// drops `sbol2:member` edges.
+///
+/// A ComponentDefinition `root` references an annotation that references a
+/// transitively-reachable `subcomp`, and also `member`s a `sibling` reachable
+/// only through that membership edge. The recursive crawl reaches both the deep
+/// child and the sibling; the non-recursive crawl reaches the deep child (under
+/// the object's prefix) but never the member-only sibling. The crawl runs over
+/// the backend's SPARQL engine, so this certifies the download closure loop end
+/// to end on each backend.
+pub async fn download_closure_recursion(app: &AppServices) {
+    const GRAPH: &str = "urn:sbol-db:conformance:download-closure";
+    const PREFIX: &str = "http://example.org/dl/";
+    const ROOT: &str = "http://example.org/dl/root";
+    const SUBCOMP: &str = "http://example.org/dl/subcomp";
+    const SIBLING: &str = "http://example.org/dl/sibling";
+    const TITLE: &str = "http://purl.org/dc/terms/title";
+    const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    const SBOL2_MEMBER: &str = "http://sbols.org/v2#member";
+
+    let body = format!(
+        "<{ROOT}> <{RDF_TYPE}> <http://sbols.org/v2#ComponentDefinition> .\n\
+         <{ROOT}> <http://sbols.org/v2#sequenceAnnotation> <http://example.org/dl/root/anno> .\n\
+         <{ROOT}> <{SBOL2_MEMBER}> <{SIBLING}> .\n\
+         <http://example.org/dl/root/anno> <{RDF_TYPE}> <http://sbols.org/v2#SequenceAnnotation> .\n\
+         <http://example.org/dl/root/anno> <http://sbols.org/v2#component> <{SUBCOMP}> .\n\
+         <{SUBCOMP}> <{RDF_TYPE}> <http://sbols.org/v2#Component> .\n\
+         <{SUBCOMP}> <{TITLE}> \"deep child\" .\n\
+         <{SIBLING}> <{RDF_TYPE}> <http://sbols.org/v2#ComponentDefinition> .\n\
+         <{SIBLING}> <{TITLE}> \"sibling only via member\" .\n"
+    );
+    app.store
+        .graph_store_write(
+            GRAPH,
+            &body,
+            SerializationFormat::NTriples,
+            GraphWriteMode::Merge,
+        )
+        .await
+        .expect("seed the download-closure fixture");
+
+    let downloader = Downloader::new(app.sparql.clone()).with_database_prefix(PREFIX);
+
+    // The recursive closure follows the two-hop reference to the deep child and
+    // the membership edge to the sibling.
+    let recursive = downloader
+        .fetch_recursive(ROOT, GraphScope::Union)
+        .await
+        .expect("recursive closure");
+    assert!(
+        closure_has_literal(&recursive, SUBCOMP, TITLE, "deep child"),
+        "recursive closure includes the transitively-referenced child"
+    );
+    assert!(
+        closure_has_literal(&recursive, SIBLING, TITLE, "sibling only via member"),
+        "recursive closure follows the member edge to the sibling"
+    );
+
+    // The non-recursive closure drops the member edge, so the member-only
+    // sibling is never reached, while the deep child under the object's own
+    // prefix is still included.
+    let non_recursive = downloader
+        .fetch_non_recursive(ROOT, GraphScope::Union)
+        .await
+        .expect("non-recursive closure");
+    assert!(
+        closure_has_literal(&non_recursive, SUBCOMP, TITLE, "deep child"),
+        "non-recursive closure still includes children under the object's prefix"
+    );
+    assert!(
+        !closure_has_literal(&non_recursive, SIBLING, TITLE, "sibling only via member"),
+        "non-recursive closure excludes a sibling reachable only via member"
+    );
+    assert!(
+        !non_recursive
+            .iter()
+            .any(|t| t.predicate.as_str() == SBOL2_MEMBER),
+        "non-recursive closure carries no member edges"
+    );
+
+    app.store
+        .graph_store_clear(GRAPH)
+        .await
+        .expect("clear the download-closure fixture");
+}
+
+/// A seeded object crawled to its closure serializes to every download format,
+/// and each format carries the object's content back: GenBank and FASTA
+/// re-import to the same residues, GFF3 projects the feature at its range, and
+/// the OMEX archive holds `manifest.xml` plus an `sbol.rdf` that re-parses as an
+/// SBOL document.
+///
+/// The fixture is one `Component` carrying a resolvable `Sequence` and a
+/// promoter `SequenceFeature` at 10..40. It is written to the store as
+/// N-Triples, crawled through the backend's SPARQL engine, then serialized, so
+/// this certifies the whole download path (closure crawl plus every serializer)
+/// on each backend.
+pub async fn download_formats_roundtrip(app: &AppServices) {
+    use sbol::constants::{EDAM_IUPAC_DNA, ORIENTATION_INLINE, SBO_DNA, SO_PROMOTER};
+    use sbol::{Component, Document, Range, SbolObject, Sequence, SequenceFeature};
+
+    const NS: &str = "https://example.org/sbol-db/conformance/download";
+    const GRAPH: &str = "urn:sbol-db:conformance:download-formats";
+    /// 60 bases, long enough to carry the promoter range's 10..40 bounds.
+    const ELEMENTS: &str = "atgcatgcatgcatgcatgcatgcatgcatgcatgcatgcatgcatgcatgcatgcatgc";
+
+    let sequence = Sequence::builder(NS, "cassette_sequence")
+        .expect("sequence builder")
+        .elements(ELEMENTS)
+        .encoding(EDAM_IUPAC_DNA)
+        .build()
+        .expect("build sequence");
+
+    // The range and feature are minted under the component's identity.
+    let parent = Component::builder(NS, "cassette")
+        .expect("component seed")
+        .types([SBO_DNA])
+        .build()
+        .expect("build seed")
+        .identity
+        .clone();
+    let prom_range = Range::builder(&parent, "prom_range")
+        .expect("range builder")
+        .start(10)
+        .end(40)
+        .orientation(ORIENTATION_INLINE)
+        .sequence(sequence.identity.clone())
+        .build()
+        .expect("build promoter range");
+    let promoter = SequenceFeature::builder(&parent, "prom")
+        .expect("feature builder")
+        .roles([SO_PROMOTER])
+        .name("Promoter")
+        .add_location(prom_range.identity.clone())
+        .build()
+        .expect("build promoter");
+    let component = Component::builder(NS, "cassette")
+        .expect("component builder")
+        .types([SBO_DNA])
+        .name("Test cassette")
+        .add_sequence(sequence.identity.clone())
+        .add_feature(promoter.identity.clone())
+        .build()
+        .expect("build component");
+
+    let root_iri = component
+        .identity
+        .as_iri()
+        .expect("the component has an IRI identity")
+        .as_str()
+        .to_owned();
+    let document = Document::from_objects(vec![
+        SbolObject::Component(component),
+        SbolObject::Sequence(sequence),
+        SbolObject::SequenceFeature(promoter),
+        SbolObject::Range(prom_range),
+    ])
+    .expect("assemble the fixture document");
+    let ntriples = document
+        .write(sbol::RdfFormat::NTriples)
+        .expect("write the fixture as N-Triples");
+
+    app.store
+        .graph_store_write(
+            GRAPH,
+            &ntriples,
+            SerializationFormat::NTriples,
+            GraphWriteMode::Merge,
+        )
+        .await
+        .expect("seed the download-formats fixture");
+
+    let downloader = Downloader::new(app.sparql.clone()).with_database_prefix(NS);
+    let closure = downloader
+        .fetch_recursive(&root_iri, GraphScope::Union)
+        .await
+        .expect("crawl the object closure");
+    assert!(!closure.is_empty(), "the crawl reaches the seeded object");
+
+    // FASTA re-imports to the same residues.
+    let fasta = serialize_closure(&closure, SerializationFormat::Fasta, false).expect("fasta");
+    let fasta_text = String::from_utf8(fasta.bytes).expect("utf8 fasta");
+    let (fasta_doc, _) = sbol_fasta::FastaImporter::new(NS)
+        .expect("fasta importer")
+        .read_str(&fasta_text)
+        .expect("re-import the fasta");
+    assert_eq!(
+        fasta_doc
+            .sequences()
+            .next()
+            .and_then(|s| s.elements.as_deref())
+            .map(str::to_ascii_lowercase),
+        Some(ELEMENTS.to_ascii_lowercase()),
+        "fasta round-trips the residues"
+    );
+
+    // GenBank re-imports to the same residues.
+    let genbank =
+        serialize_closure(&closure, SerializationFormat::GenBank, false).expect("genbank");
+    let genbank_text = String::from_utf8(genbank.bytes).expect("utf8 genbank");
+    let (genbank_doc, _) = sbol_genbank::GenbankImporter::new(NS)
+        .expect("genbank importer")
+        .read_str(&genbank_text)
+        .expect("re-import the genbank");
+    assert_eq!(
+        genbank_doc
+            .sequences()
+            .next()
+            .and_then(|s| s.elements.as_deref())
+            .map(str::to_ascii_lowercase),
+        Some(ELEMENTS.to_ascii_lowercase()),
+        "genbank round-trips the residues"
+    );
+
+    // GFF3 opens with the version pragma and projects the promoter at its range.
+    let gff3 = serialize_gff3(&closure).expect("gff3");
+    let gff3_text = String::from_utf8(gff3.bytes).expect("utf8 gff3");
+    assert!(
+        gff3_text.starts_with("##gff-version 3\n"),
+        "gff3 opens with the version pragma: {gff3_text}"
+    );
+    assert!(
+        gff3_text.contains("cassette\t.\tpromoter\t10\t40\t.\t+\t0\tID=prom;Name=Promoter"),
+        "gff3 projects the promoter feature at its range: {gff3_text}"
+    );
+
+    // OMEX is a zip carrying manifest.xml and an sbol.rdf that re-parses.
+    let omex = serialize_omex(&closure, false, None).expect("omex");
+    assert_eq!(omex.content_type, "application/zip");
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(omex.bytes)).expect("open the omex archive");
+    let mut entries = Vec::new();
+    for i in 0..archive.len() {
+        entries.push(
+            archive
+                .by_index(i)
+                .expect("archive entry")
+                .name()
+                .to_owned(),
+        );
+    }
+    assert!(
+        entries.iter().any(|n| n == "manifest.xml"),
+        "the omex archive carries manifest.xml: {entries:?}"
+    );
+    assert!(
+        entries.iter().any(|n| n == "sbol.rdf"),
+        "the omex archive carries sbol.rdf: {entries:?}"
+    );
+    let mut sbol_rdf = String::new();
+    archive
+        .by_name("sbol.rdf")
+        .expect("sbol.rdf entry")
+        .read_to_string(&mut sbol_rdf)
+        .expect("read sbol.rdf");
+    let archived = Document::read(&sbol_rdf, sbol::RdfFormat::RdfXml).expect("parse sbol.rdf");
+    assert!(
+        archived.sequences().next().is_some(),
+        "the archived sbol.rdf round-trips the sequence"
+    );
+
+    app.store
+        .graph_store_clear(GRAPH)
+        .await
+        .expect("clear the download-formats fixture");
+}
+
+/// Whether the closure holds a triple with the given IRI subject, predicate,
+/// and literal object value.
+fn closure_has_literal(triples: &[Triple], subject: &str, predicate: &str, value: &str) -> bool {
+    triples.iter().any(|t| {
+        matches!(&t.subject, SubjectTerm::Iri(iri) if iri.as_str() == subject)
+            && t.predicate.as_str() == predicate
+            && matches!(&t.object, ObjectTerm::Literal { value: v, .. } if v == value)
+    })
 }
 
 /// The full conformance IRI for a locally-named object.

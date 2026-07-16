@@ -9,6 +9,7 @@
 
 mod admin;
 mod auth;
+mod download;
 mod queries;
 mod routes;
 mod search;
@@ -79,6 +80,36 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/public/:collectionId/:displayId/:version/metadata",
             get(routes::public_metadata),
         )
+        // Download surface: the object's closure rendered in each exchange
+        // format, ACL-scoped through the shared downloader and P3 serializers.
+        .route(
+            "/public/:collectionId/:displayId/:version/sbol",
+            get(download::public_sbol),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/sbolnr",
+            get(download::public_sbolnr),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/gb",
+            get(download::public_genbank),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/fasta",
+            get(download::public_fasta),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/gff",
+            get(download::public_gff),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/omex",
+            get(download::public_omex),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/summary",
+            get(download::public_summary),
+        )
         .route(
             "/user/:userId/:collectionId/:displayId/:version/uses",
             get(routes::user_uses),
@@ -102,6 +133,34 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/user/:userId/:collectionId/:displayId/:version/metadata",
             get(routes::user_metadata),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/sbol",
+            get(download::user_sbol),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/sbolnr",
+            get(download::user_sbolnr),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/gb",
+            get(download::user_genbank),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/fasta",
+            get(download::user_fasta),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/gff",
+            get(download::user_gff),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/omex",
+            get(download::user_omex),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/summary",
+            get(download::user_summary),
         )
         .route_layer(axum::middleware::from_fn_with_state(
             state,

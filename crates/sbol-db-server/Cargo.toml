@@ -27,6 +27,8 @@ sbol-db-ui = { workspace = true, optional = true }
 spargebra = { workspace = true }
 sbol.workspace = true
 sbol-rdf.workspace = true
+gb-io = "0.9"
+zip.workspace = true
 sqlx.workspace = true
 axum.workspace = true
 tokio.workspace = true
@@ -48,4 +50,6 @@ metrics-exporter-prometheus.workspace = true
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 sbol-db-backend.workspace = true
+sbol-genbank.workspace = true
+sbol-fasta.workspace = true
 tempfile = "3"

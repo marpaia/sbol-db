@@ -34,8 +34,11 @@ pub struct Paging {
     pub limit: Option<usize>,
 }
 
-/// A public object path, `/public/<collectionId>/<displayId>/<version>/…`.
+/// A public object path, `/public/<collectionId>/<displayId>/<version>/…`. The
+/// fields are renamed to the camelCase route placeholders (`:collectionId`,
+/// `:displayId`) axum keys path captures by, so the struct deserializes.
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PublicObject {
     pub collection_id: String,
     pub display_id: String,
@@ -43,7 +46,10 @@ pub struct PublicObject {
 }
 
 /// A user object path, `/user/<userId>/<collectionId>/<displayId>/<version>/…`.
+/// Renamed to the camelCase route placeholders for the same reason as
+/// [`PublicObject`].
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UserObject {
     pub user_id: String,
     pub collection_id: String,
@@ -51,14 +57,14 @@ pub struct UserObject {
     pub version: String,
 }
 
-fn public_uri(object: &PublicObject) -> String {
+pub(super) fn public_uri(object: &PublicObject) -> String {
     format!(
         "{BASE}public/{}/{}/{}",
         object.collection_id, object.display_id, object.version
     )
 }
 
-fn user_uri(object: &UserObject) -> String {
+pub(super) fn user_uri(object: &UserObject) -> String {
     format!(
         "{BASE}user/{}/{}/{}/{}",
         object.user_id, object.collection_id, object.display_id, object.version
@@ -370,7 +376,10 @@ pub async fn shared(
 // --- shared helpers ----------------------------------------------------------
 
 /// The caller's authorized graph scope, from the `X-authorization` identity.
-async fn scope_for(state: &AppState, user: &Option<User>) -> Result<GraphScope, ApiError> {
+pub(super) async fn scope_for(
+    state: &AppState,
+    user: &Option<User>,
+) -> Result<GraphScope, ApiError> {
     let user_graph = user.as_ref().map(|u| u.graph_uri.clone());
     let scope = state
         .app

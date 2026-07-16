@@ -13,11 +13,13 @@
 
 mod acl;
 mod auth;
+mod download;
 pub mod memory;
 mod search;
 
 pub use acl::{AclService, PUBLIC_GRAPH};
 pub use auth::{AuthService, PasswordReset, Registration};
+pub use download::{Downloader, DEFAULT_DATABASE_PREFIX};
 pub use sbol_db_search::ranked_text::Hit;
 pub use search::{DateField, FacetedSearch};
 

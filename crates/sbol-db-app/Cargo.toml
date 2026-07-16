@@ -12,7 +12,9 @@ sbol-db-core.workspace = true
 sbol-db-storage.workspace = true
 sbol-db-sparql.workspace = true
 sbol-db-backend.workspace = true
+sbol-db-rdf.workspace = true
 sbol-db-search = { workspace = true, features = ["text-index"] }
+sbol-rdf.workspace = true
 async-trait.workspace = true
 argon2.workspace = true
 sha1.workspace = true
@@ -22,3 +24,4 @@ uuid.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
+tempfile = "3"

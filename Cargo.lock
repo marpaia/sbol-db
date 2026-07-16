@@ -95,6 +95,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+dependencies = [
+ "derive_arbitrary",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -271,7 +280,7 @@ dependencies = [
  "bitflags",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.12.1",
  "lazy_static",
  "lazycell",
  "proc-macro2",
@@ -747,6 +756,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "derive_arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -3022,11 +3042,14 @@ dependencies = [
  "hex",
  "sbol-db-backend",
  "sbol-db-core",
+ "sbol-db-rdf",
  "sbol-db-search",
  "sbol-db-sparql",
  "sbol-db-storage",
+ "sbol-rdf",
  "sha1",
  "sha3",
+ "tempfile",
  "tokio",
  "uuid",
 ]
@@ -3048,13 +3071,18 @@ name = "sbol-db-conformance"
 version = "0.1.1"
 dependencies = [
  "hex",
+ "sbol",
  "sbol-db-app",
  "sbol-db-core",
  "sbol-db-search",
+ "sbol-db-server",
  "sbol-db-sparql",
  "sbol-db-storage",
+ "sbol-fasta",
+ "sbol-genbank",
  "serde_json",
  "sha1",
+ "zip",
 ]
 
 [[package]]
@@ -3190,6 +3218,7 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "gb-io",
  "hex",
  "metrics",
  "metrics-exporter-prometheus",
@@ -3203,6 +3232,8 @@ dependencies = [
  "sbol-db-sparql",
  "sbol-db-storage",
  "sbol-db-ui",
+ "sbol-fasta",
+ "sbol-genbank",
  "sbol-rdf",
  "serde",
  "serde_json",
@@ -3217,6 +3248,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "zip",
 ]
 
 [[package]]
@@ -5227,6 +5259,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "zip"
+version = "4.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "indexmap",
+ "memchr",
 ]
 
 [[package]]
