@@ -51,9 +51,9 @@ pub use stats::{
     TableColumn, TableSchema, TableStats,
 };
 pub use traits::{
-    distinct_graph_iris, distinct_object_iris, AclStore, GraphStore, JobQueue, NeighborhoodStore,
-    ObjectStore, OntologyStore, PageRankStore, SbolStore, SequenceSearchStore, TextSearchStore,
-    TokenStore, TripleSource, TripleWriter, UserStore, SBH_CAN_VIEW, SBH_OWNED_BY,
+    distinct_graph_iris, distinct_object_iris, AclStore, BlobStore, GraphStore, JobQueue,
+    NeighborhoodStore, ObjectStore, OntologyStore, PageRankStore, SbolStore, SequenceSearchStore,
+    TextSearchStore, TokenStore, TripleSource, TripleWriter, UserStore, SBH_CAN_VIEW, SBH_OWNED_BY,
 };
 pub use triple::{
     GraphFilter, IdGraphFilter, IdQuad, PatternObject, PatternSubject, TermId, TermKey, TermValue,

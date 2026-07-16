@@ -21,8 +21,9 @@ use std::time::Duration;
 use std::io::Read;
 
 use sbol_db_app::{
-    AppServices, AuthService, Downloader, EditService, FacetedSearch, MutationError,
-    MutationService, PermissionService, SubmissionService, SubmitRequest, PUBLIC_GRAPH,
+    AppServices, AttachmentService, AuthService, Downloader, EditService, FacetedSearch,
+    FsBlobStore, MutationError, MutationService, PermissionService, SubmissionService,
+    SubmitRequest, PUBLIC_GRAPH,
 };
 use sbol_db_core::{
     Direction, DomainError, IriString, NeighborhoodQuery, NewUser, ObjectTerm, SerializationFormat,
@@ -33,7 +34,7 @@ use sbol_db_search::ranked_text::IndexedPart;
 use sbol_db_server::{serialize_closure, serialize_gff3, serialize_omex};
 use sbol_db_sparql::{GraphScope, SparqlOptions};
 use sbol_db_storage::{
-    EnqueueOutcome, GraphWriteMode, ImportInput, ImportOverwrite, JobQueue, JobStatus,
+    BlobStore, EnqueueOutcome, GraphWriteMode, ImportInput, ImportOverwrite, JobQueue, JobStatus,
     ListJobsFilter, ListObjectsFilter, NewJob, SbolStore, SequenceSearchOptions, DEFAULT_QUEUE,
     SBH_OWNED_BY,
 };
@@ -114,6 +115,8 @@ pub async fn run_all(app: &AppServices) {
     acl_scoped_search(app).await;
     download_closure_recursion(app).await;
     download_formats_roundtrip(app).await;
+    blob_roundtrip().await;
+    attachment_read_both_vocabs(app).await;
     collection_mint_roundtrip(app).await;
     overwrite_merge_modes(app).await;
     write_authz_matrix(app).await;
@@ -1308,6 +1311,144 @@ pub async fn download_formats_roundtrip(app: &AppServices) {
         .graph_store_clear(GRAPH)
         .await
         .expect("clear the download-formats fixture");
+}
+
+/// The content-addressed blob store round-trips bytes byte-for-byte and
+/// de-duplicates identical content onto a single file.
+///
+/// Two `put`s of the same payload return an identical [`BlobRef`] and leave
+/// exactly one `.gz` file in the content shard, so the classic SynBioHub
+/// uploads layout stays content-addressed and a re-upload never doubles the
+/// store. Exercised directly against the filesystem [`FsBlobStore`] because the
+/// dedup claim is a filesystem property, not a trait-surface one.
+pub async fn blob_roundtrip() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = FsBlobStore::new(dir.path());
+
+    let payload = b"conformance blob payload";
+    let blob = store.put(payload).await.expect("put");
+    assert_eq!(
+        blob.size,
+        payload.len() as u64,
+        "the ref records the uncompressed byte count"
+    );
+    assert_eq!(
+        blob.sha1.len(),
+        40,
+        "the content address is a sha1 hex digest"
+    );
+
+    // The stored bytes read back verbatim through the trait surface.
+    let got = store
+        .get(&blob.sha1)
+        .await
+        .expect("get")
+        .expect("the blob is present");
+    assert_eq!(got, payload, "get returns the original bytes verbatim");
+
+    // The blob lands at the classic uploads layout, sharded by the first two
+    // hex characters of its content address.
+    let shard = dir.path().join("uploads").join(&blob.sha1[0..2]);
+    assert!(
+        shard.join(format!("{}.gz", &blob.sha1[2..])).exists(),
+        "the blob is stored at uploads/<sha1[0:2]>/<sha1[2:]>.gz"
+    );
+
+    // Re-putting identical content is idempotent: the same ref, one file.
+    let again = store.put(payload).await.expect("second put");
+    assert_eq!(again, blob, "identical content yields an identical ref");
+    let file_count = std::fs::read_dir(&shard)
+        .expect("read the content shard")
+        .count();
+    assert_eq!(
+        file_count, 1,
+        "identical content de-duplicates onto a single file"
+    );
+}
+
+/// The attachment reader unions the legacy and current vocabularies: a parent
+/// carrying both a canonical `sbol:attachment` edge and a legacy
+/// `sbh:attachment` edge surfaces both attachments, each resolved from whichever
+/// vocabulary annotates it.
+///
+/// A migrated SBOL2 corpus records attachments under the legacy `sbh:attachment*`
+/// terms, while new attachments this app mints use the canonical `sbol:*` terms;
+/// `get_attachments` must read the union so an object touched by both eras shows
+/// every attachment. The fixture is seeded verbatim into the store and read back
+/// through [`AttachmentService`], so this certifies the dual-vocabulary read over
+/// each backend's own triples.
+pub async fn attachment_read_both_vocabs(app: &AppServices) {
+    const GRAPH: &str = "urn:sbol-db:conformance:attachments";
+    const PARENT: &str = "http://example.org/att/parent/1";
+    const CANON_ATT: &str = "http://example.org/att/canon/1";
+    const LEGACY_ATT: &str = "http://example.org/att/legacy/1";
+
+    // The parent references one attachment under each vocabulary; the canonical
+    // attachment carries `sbol:*` terms and the legacy one the `sbh:attachment*`
+    // annotations a migrated corpus keeps.
+    let body = format!(
+        "<{PARENT}> <http://sbols.org/v2#attachment> <{CANON_ATT}> .\n\
+         <{PARENT}> <http://wiki.synbiohub.org/wiki/Terms/synbiohub#attachment> <{LEGACY_ATT}> .\n\
+         <{CANON_ATT}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://sbols.org/v2#Attachment> .\n\
+         <{CANON_ATT}> <http://sbols.org/v2#hash> \"canonhash\" .\n\
+         <{CANON_ATT}> <http://sbols.org/v2#size> \"11\" .\n\
+         <{CANON_ATT}> <http://sbols.org/v2#format> <http://purl.org/NET/mediatypes/text/plain> .\n\
+         <{CANON_ATT}> <http://sbols.org/v2#source> <{CANON_ATT}/download> .\n\
+         <{LEGACY_ATT}> <http://wiki.synbiohub.org/wiki/Terms/synbiohub#attachmentHash> \"legacyhash\" .\n\
+         <{LEGACY_ATT}> <http://wiki.synbiohub.org/wiki/Terms/synbiohub#attachmentSize> \"22\" .\n\
+         <{LEGACY_ATT}> <http://wiki.synbiohub.org/wiki/Terms/synbiohub#attachmentType> <http://wiki.synbiohub.org/wiki/Terms/synbiohub#imageAttachment> .\n"
+    );
+    app.store
+        .graph_store_write(
+            GRAPH,
+            &body,
+            SerializationFormat::NTriples,
+            GraphWriteMode::Merge,
+        )
+        .await
+        .expect("seed the attachment fixture");
+
+    let attachments = AttachmentService::new(
+        app.store.clone(),
+        app.sparql_update.clone(),
+        app.acl_service.clone(),
+        app.blobs.clone(),
+    );
+    let found = attachments
+        .get_attachments(PARENT)
+        .await
+        .expect("read the parent's attachments");
+
+    assert_eq!(
+        found.len(),
+        2,
+        "both the canonical and legacy attachments are read: {found:?}"
+    );
+    let canonical = found
+        .iter()
+        .find(|a| a.uri == CANON_ATT)
+        .expect("the canonical attachment is surfaced");
+    assert_eq!(
+        canonical.hash.as_deref(),
+        Some("canonhash"),
+        "the canonical hash is read from the sbol:hash term"
+    );
+    assert_eq!(canonical.size, Some(11), "the canonical size is read");
+    let legacy = found
+        .iter()
+        .find(|a| a.uri == LEGACY_ATT)
+        .expect("the legacy attachment is surfaced");
+    assert_eq!(
+        legacy.hash.as_deref(),
+        Some("legacyhash"),
+        "the legacy hash is read from the sbh:attachmentHash annotation"
+    );
+    assert_eq!(legacy.size, Some(22), "the legacy size is read");
+
+    app.store
+        .graph_store_clear(GRAPH)
+        .await
+        .expect("clear the attachment fixture");
 }
 
 /// A compliant SBOL2 submission (Turtle): a ComponentDefinition with a nested

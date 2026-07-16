@@ -27,7 +27,10 @@ use serde::Deserialize;
 
 use super::routes::{public_uri, scope_for, user_uri, PublicObject, UserObject};
 use super::CurrentUser;
-use crate::serialize::{serialize_closure, serialize_gff3, serialize_omex, Serialized};
+use crate::serialize::{
+    serialize_closure, serialize_gff3, serialize_omex, OmexAttachment, OmexAttachmentSource,
+    Serialized,
+};
 use crate::{ApiError, AppState};
 
 /// The download format a route serves, selecting the closure kind (recursive vs
@@ -147,8 +150,64 @@ async fn download(
     if triples.is_empty() {
         return Err(ApiError::NotFound(uri));
     }
-    let serialized = render(&triples, format, sbol2)?;
+    // OMEX bundles the closure's attachment blobs as archive members, so its
+    // members are prefetched (async) from the blob store before the synchronous
+    // serialization; every other format ignores attachments.
+    let attachments = match format {
+        Format::Omex => Some(PrefetchedAttachments(omex_members(&state, &triples).await?)),
+        _ => None,
+    };
+    let serialized = render(
+        &triples,
+        format,
+        sbol2,
+        attachments.as_ref().map(|a| a as &dyn OmexAttachmentSource),
+    )?;
     attachment(serialized, &display_id, format.extension())
+}
+
+/// A closure's attachment blobs, resolved from the blob store, wrapped as a
+/// synchronous [`OmexAttachmentSource`] for [`serialize_omex`].
+struct PrefetchedAttachments(Vec<OmexAttachment>);
+
+impl OmexAttachmentSource for PrefetchedAttachments {
+    fn attachments_for(&self, _triples: &[Triple]) -> Result<Vec<OmexAttachment>, DomainError> {
+        Ok(self.0.clone())
+    }
+}
+
+/// Resolve every attachment referenced in `triples` against the blob store,
+/// returning one COMBINE member per stored blob. A URL attachment (no local
+/// blob) or a missing blob is skipped rather than failing the archive.
+async fn omex_members(
+    state: &AppState,
+    triples: &[Triple],
+) -> Result<Vec<OmexAttachment>, ApiError> {
+    let mut members = Vec::new();
+    for uri in sbol_db_app::attachment_uris(triples) {
+        let Some(attachment) = sbol_db_app::read_attachment(triples, &uri) else {
+            continue;
+        };
+        let Some(hash) = attachment.hash else {
+            continue;
+        };
+        let Some(bytes) = state.app.blobs.get(&hash).await? else {
+            continue;
+        };
+        let filename = attachment
+            .name
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| uri.rsplit('/').next().unwrap_or("attachment").to_owned());
+        let format = attachment
+            .format
+            .unwrap_or_else(|| "application/octet-stream".to_owned());
+        members.push(OmexAttachment {
+            filename,
+            format,
+            bytes,
+        });
+    }
+    Ok(members)
 }
 
 /// Fetch the object's closure: `/sbolnr` narrows to the non-recursive closure,
@@ -169,8 +228,14 @@ async fn fetch_closure(
 
 /// Render a closure to the bytes and content type for `format`. GenBank, FASTA,
 /// and GFF3 are version-agnostic, so the SBOL2 flag applies only to the
-/// RDF-bearing formats.
-fn render(triples: &[Triple], format: Format, sbol2: bool) -> Result<Serialized, ApiError> {
+/// RDF-bearing formats. `attachments` supplies the OMEX archive's blob members
+/// and is ignored by every other format.
+fn render(
+    triples: &[Triple],
+    format: Format,
+    sbol2: bool,
+    attachments: Option<&dyn OmexAttachmentSource>,
+) -> Result<Serialized, ApiError> {
     let serialized = match format {
         Format::Sbol | Format::SbolNonRecursive => {
             serialize_closure(triples, SerializationFormat::RdfXml, sbol2)?
@@ -178,7 +243,7 @@ fn render(triples: &[Triple], format: Format, sbol2: bool) -> Result<Serialized,
         Format::GenBank => serialize_closure(triples, SerializationFormat::GenBank, false)?,
         Format::Fasta => serialize_closure(triples, SerializationFormat::Fasta, false)?,
         Format::Gff3 => serialize_gff3(triples)?,
-        Format::Omex => serialize_omex(triples, sbol2, None)?,
+        Format::Omex => serialize_omex(triples, sbol2, attachments)?,
         Format::Summary => serialize_closure(triples, SerializationFormat::JsonLd, sbol2)?,
     };
     Ok(serialized)

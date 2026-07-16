@@ -70,6 +70,8 @@ sha3 = "0.10"
 sha1 = "0.10"
 argon2 = "0.5"
 hex = "0.4"
+flate2 = "1"
+infer = "0.16"
 base64 = "0.22"
 url = "2"
 

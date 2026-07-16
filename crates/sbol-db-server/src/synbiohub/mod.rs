@@ -8,6 +8,7 @@
 //! V2 surface evolve without inheriting them.
 
 mod admin;
+mod attachments;
 mod auth;
 mod download;
 mod edit;
@@ -225,6 +226,21 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/public/:collectionId/:displayId/:version/summary",
             get(download::public_summary),
         )
+        // Attachment surface: store an uploaded file or an external URL as a
+        // first-class attachment, and stream a stored blob back. The attach
+        // verbs are owner-gated; the download read is ACL-scoped.
+        .route(
+            "/public/:collectionId/:displayId/:version/attach",
+            post(attachments::public_attach),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/attachURL",
+            post(attachments::public_attach_url),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/download",
+            get(attachments::public_download),
+        )
         .route(
             "/user/:userId/:collectionId/:displayId/:version/uses",
             get(routes::user_uses),
@@ -276,6 +292,18 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/user/:userId/:collectionId/:displayId/:version/summary",
             get(download::user_summary),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/attach",
+            post(attachments::user_attach),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/attachURL",
+            post(attachments::user_attach_url),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/download",
+            get(attachments::user_download),
         )
         .route_layer(axum::middleware::from_fn_with_state(
             state,

@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use sbol_db_core::{
-    DomainError, GraphId, GraphRecord, ImportReport, JobId, NeighborhoodQuery, NeighborhoodResult,
-    NewUser, ObjectId, ObjectTerm, SbolObjectRecord, SerializationFormat, Triple, User, UserId,
+    BlobRef, DomainError, GraphId, GraphRecord, ImportReport, JobId, NeighborhoodQuery,
+    NeighborhoodResult, NewUser, ObjectId, ObjectTerm, SbolObjectRecord, SerializationFormat,
+    Triple, User, UserId,
 };
 use serde_json::Value;
 
@@ -438,4 +439,36 @@ pub trait JobQueue: Send + Sync {
         }
         Ok(total)
     }
+}
+
+/// Content-addressed blob storage for attachment payloads, orthogonal to the
+/// triplestore and held separately in the application facade rather than
+/// reached through [`SbolStore`]. The contract is content-addressing by the
+/// SHA-1 of the *uncompressed* bytes with gzip at rest: a blob's identity is
+/// that hash, so writing identical bytes twice yields the same [`BlobRef`] and
+/// one stored object.
+#[async_trait]
+pub trait BlobStore: Send + Sync {
+    /// Store `bytes`, returning the content address, uncompressed size, and
+    /// sniffed media type. Idempotent: storing bytes already present is a no-op
+    /// that returns the same [`BlobRef`].
+    async fn put(&self, bytes: &[u8]) -> Result<BlobRef, DomainError>;
+
+    /// Fetch the decompressed bytes for content address `sha1`, or `None` when
+    /// no blob with that hash is stored.
+    async fn get(&self, sha1: &str) -> Result<Option<Vec<u8>>, DomainError>;
+
+    /// Fetch the raw gzip bytes for `sha1` so a download can stream them under
+    /// `Content-Encoding: gzip` without recompressing, or `None` when absent.
+    async fn get_gz(&self, sha1: &str) -> Result<Option<Vec<u8>>, DomainError>;
+
+    /// Whether a blob with content address `sha1` is stored.
+    async fn exists(&self, sha1: &str) -> Result<bool, DomainError>;
+}
+
+#[cfg(test)]
+mod blob_store_object_safety {
+    /// Proves [`BlobStore`](super::BlobStore) is object-safe, so the facade can
+    /// hold it as `Arc<dyn BlobStore>`.
+    fn _assert_obj_safe(_: &dyn super::BlobStore) {}
 }

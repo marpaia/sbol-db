@@ -1,6 +1,7 @@
 //! Domain types shared across the sbol-db crates. No I/O dependencies live
 //! here.
 
+mod blob;
 mod error;
 mod identity;
 mod ids;
@@ -13,6 +14,7 @@ mod record;
 pub mod triple;
 mod validation;
 
+pub use blob::BlobRef;
 pub use error::DomainError;
 pub use identity::{ApiToken, NewUser, User};
 pub use ids::{GraphId, JobId, ObjectId, UserId, ValidationRunId};

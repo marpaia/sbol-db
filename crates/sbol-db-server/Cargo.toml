@@ -52,4 +52,5 @@ tower = { workspace = true, features = ["util"] }
 sbol-db-backend.workspace = true
 sbol-genbank.workspace = true
 sbol-fasta.workspace = true
+flate2.workspace = true
 tempfile = "3"

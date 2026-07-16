@@ -24,6 +24,8 @@ sha1.workspace = true
 sha3.workspace = true
 hex.workspace = true
 uuid.workspace = true
+flate2.workspace = true
+infer.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

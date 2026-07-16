@@ -12,7 +12,9 @@
 //! authentication over the identity stores.
 
 mod acl;
+mod attachment;
 mod auth;
+mod blob;
 mod collection;
 mod download;
 mod edit;
@@ -23,7 +25,11 @@ mod search;
 mod submission;
 
 pub use acl::{AclService, PUBLIC_GRAPH};
+pub use attachment::{
+    attachment_uris, read_attachment, AttachmentRef, AttachmentService, UNKNOWN_ATTACHMENT_TYPE,
+};
 pub use auth::{AuthService, PasswordReset, Registration};
+pub use blob::FsBlobStore;
 pub use collection::{CollectionService, MintScope, MintedSubmission, Submission};
 pub use download::{Downloader, DEFAULT_DATABASE_PREFIX};
 pub use edit::{EditService, FieldValue};
@@ -38,7 +44,7 @@ use std::sync::Arc;
 use sbol_db_backend::Backend;
 use sbol_db_search::ranked_text::RankedTextIndex;
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
-use sbol_db_storage::{AclStore, JobQueue, SbolStore, TokenStore, UserStore};
+use sbol_db_storage::{AclStore, BlobStore, JobQueue, SbolStore, TokenStore, UserStore};
 
 /// The application facade: the neutral trait objects plus the identity-aware
 /// subsystems every HTTP adapter shares.
@@ -52,6 +58,11 @@ pub struct AppServices {
     pub sparql_update: Arc<SparqlUpdateEngine>,
     /// The async job queue.
     pub jobs: Arc<dyn JobQueue>,
+    /// Content-addressed blob storage for attachment payloads, orthogonal to
+    /// the triplestore. Defaults to a filesystem store under a temp directory;
+    /// a deployment points it at a durable path with
+    /// [`with_blobs`](Self::with_blobs).
+    pub blobs: Arc<dyn BlobStore>,
     /// Ownership and sharing reads backing ACL-scoped queries.
     pub acl: Arc<dyn AclStore>,
     /// Turns a caller identity into the graph scope a read is authorized for.
@@ -136,6 +147,13 @@ impl AppServices {
         self
     }
 
+    /// Replace the default temp-directory blob store with a caller-provided one,
+    /// typically a filesystem store rooted at a configured durable path.
+    pub fn with_blobs(mut self, blobs: Arc<dyn BlobStore>) -> Self {
+        self.blobs = blobs;
+        self
+    }
+
     /// Derive the identity-aware subsystems from the neutral handles and bundle
     /// everything together.
     fn assemble(
@@ -152,12 +170,16 @@ impl AppServices {
         let text_search = Arc::new(
             RankedTextIndex::in_ram().expect("in-RAM ranked text index construction cannot fail"),
         );
+        let blobs: Arc<dyn BlobStore> = Arc::new(blob::FsBlobStore::new(
+            std::env::temp_dir().join("sbol-db-blobs"),
+        ));
         Self {
             store,
             sparql,
             sparql_update,
             jobs,
             acl,
+            blobs,
             acl_service,
             users,
             tokens,

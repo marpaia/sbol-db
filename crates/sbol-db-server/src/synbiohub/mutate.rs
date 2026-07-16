@@ -9,7 +9,7 @@
 //! caller can never mutate an object it does not own.
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Multipart, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
@@ -202,30 +202,36 @@ pub async fn public_remove_collection(
 
 // --- icon --------------------------------------------------------------------
 
-/// `POST <uri>/icon`: attach an icon to an object. The upload lands in the
-/// attachment blob store, which the storage layer does not yet provide, so this
-/// route is gated on ownership and then reports the feature as unavailable
-/// rather than silently dropping the upload.
+/// `POST <uri>/icon`: upload an icon for an object. The uploaded image lands in
+/// the content-addressed blob store; the route is gated on ownership. Recording
+/// which stored blob an object displays as its icon is config-driven and lands
+/// with the admin config store.
 pub async fn user_icon(
     State(state): State<AppState>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(object): Path<UserObject>,
+    multipart: Multipart,
 ) -> Result<Response, ApiError> {
-    icon_unavailable(&state, user, user_uri(&object)).await
+    store_icon(&state, user, user_uri(&object), multipart).await
 }
 
 pub async fn public_icon(
     State(state): State<AppState>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(object): Path<PublicObject>,
+    multipart: Multipart,
 ) -> Result<Response, ApiError> {
-    icon_unavailable(&state, user, public_uri(&object)).await
+    store_icon(&state, user, public_uri(&object), multipart).await
 }
 
-async fn icon_unavailable(
+/// Owner-gate the request, then store the first uploaded file part in the blob
+/// store. Mirrors classic `updateCollectionIcon`, which writes the icon to disk;
+/// here the icon is content-addressed alongside every other attachment blob.
+async fn store_icon(
     state: &AppState,
     user: Option<sbol_db_core::User>,
     uri: String,
+    mut multipart: Multipart,
 ) -> Result<Response, ApiError> {
     let user = require_user(user)?;
     if !user.is_admin
@@ -239,8 +245,24 @@ async fn icon_unavailable(
             "not authorized to mutate {uri}"
         )));
     }
-    Err(ApiError::Unavailable(
-        "icon upload requires the attachment store".to_owned(),
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("malformed multipart body: {e}")))?
+    {
+        if field.file_name().is_some() {
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|e| ApiError::BadRequest(format!("invalid icon file part: {e}")))?;
+            state.app.blobs.put(&bytes).await?;
+            return Ok(success());
+        }
+        let _ = field.bytes().await;
+    }
+    Err(ApiError::BadRequest(
+        "no icon file part in the upload".to_owned(),
     ))
 }
 

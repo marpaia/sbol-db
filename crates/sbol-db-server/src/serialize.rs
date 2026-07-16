@@ -565,8 +565,9 @@ fn gff3_strand(orientation: Option<&str>) -> &'static str {
 // ----- OMEX (COMBINE archive) ----------------------------------------------
 
 /// One non-SBOL member of a COMBINE archive, i.e. an attachment blob. The bytes
-/// originate in the P5 blob store; [`OmexAttachmentSource`] is the seam through
-/// which [`serialize_omex`] pulls them once that store exists.
+/// originate in the blob store; [`OmexAttachmentSource`] is the seam through
+/// which [`serialize_omex`] pulls them.
+#[derive(Clone)]
 pub struct OmexAttachment {
     /// Archive-relative name for the entry.
     pub filename: String,
@@ -576,9 +577,10 @@ pub struct OmexAttachment {
     pub bytes: Vec<u8>,
 }
 
-/// Supplies a closure's attachment blobs as COMBINE members. The P5 blob store
-/// implements this; until it lands [`serialize_omex`] is called with `None` and
-/// the archive holds only the manifest and the SBOL RDF.
+/// Supplies a closure's attachment blobs as COMBINE members. The download route
+/// resolves each attachment in the closure against the blob store and implements
+/// this so `/omex` includes the attachment payloads; calling [`serialize_omex`]
+/// with `None` yields an archive of just the manifest and the SBOL RDF.
 pub trait OmexAttachmentSource {
     /// The attachment members belonging to the objects in `triples`.
     fn attachments_for(&self, triples: &[Triple]) -> Result<Vec<OmexAttachment>, DomainError>;
