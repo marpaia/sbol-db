@@ -207,20 +207,24 @@ impl CollectionService {
         // the `hasNamespace` requirement a PROV Activity would trip) that classic
         // never enforces on an SBOL2 submission. The stored triples are the
         // verbatim submission, rewritten below.
-        let has_errors = match sbol::detect_version(&submission.body, rdf_format) {
-            Some(sbol::SbolVersion::V2) => sbol::v2::Document::read(&submission.body, rdf_format)
-                .map_err(|e| DomainError::Parse(e.to_string()))?
-                .validate()
-                .has_errors(),
-            _ => sbol::v3::Document::read(&submission.body, rdf_format)
-                .map_err(|e| DomainError::Parse(e.to_string()))?
-                .validate()
-                .has_errors(),
+        // Surface the actual validation issues (rule + message) the way classic
+        // returns libSBOLj's report to the client, rather than a generic string.
+        let validation_error = match sbol::detect_version(&submission.body, rdf_format) {
+            Some(sbol::SbolVersion::V2) => {
+                let report = sbol::v2::Document::read(&submission.body, rdf_format)
+                    .map_err(|e| DomainError::Parse(e.to_string()))?
+                    .validate();
+                report.has_errors().then(|| report.to_string())
+            }
+            _ => {
+                let report = sbol::v3::Document::read(&submission.body, rdf_format)
+                    .map_err(|e| DomainError::Parse(e.to_string()))?
+                    .validate();
+                report.has_errors().then(|| report.to_string())
+            }
         };
-        if has_errors {
-            return Err(DomainError::Validation(
-                "submitted document failed SBOL validation".into(),
-            ));
+        if let Some(detail) = validation_error {
+            return Err(DomainError::Validation(detail));
         }
 
         // Rewrite the document verbatim at the triple level, not through the

@@ -2339,20 +2339,33 @@ const SUBMISSION_FIXTURE: &str = r#"
     sbol:persistentIdentity <http://example.org/cd> ;
     sbol:version "1" ;
     dcterms:title "My Component" ;
+    sbol:type <http://www.biopax.org/release/biopax-level3.owl#DnaRegion> ;
+    sbol:sequence <http://example.org/seq/1> ;
     sbol:sequenceAnnotation <http://example.org/cd/anno/1> .
 
 <http://example.org/cd/anno/1>
     a sbol:SequenceAnnotation ;
     sbol:displayId "anno" ;
     sbol:persistentIdentity <http://example.org/cd/anno> ;
-    sbol:version "1" .
+    sbol:version "1" ;
+    sbol:location <http://example.org/cd/anno/range/1> .
+
+<http://example.org/cd/anno/range/1>
+    a sbol:Range ;
+    sbol:displayId "range" ;
+    sbol:persistentIdentity <http://example.org/cd/anno/range> ;
+    sbol:version "1" ;
+    sbol:start 1 ;
+    sbol:end 4 ;
+    sbol:orientation <http://sbols.org/v2#inline> .
 
 <http://example.org/seq/1>
     a sbol:Sequence ;
     sbol:displayId "seq" ;
     sbol:persistentIdentity <http://example.org/seq> ;
     sbol:version "1" ;
-    sbol:elements "atgc" .
+    sbol:elements "atgc" ;
+    sbol:encoding <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .
 "#;
 
 /// A single-top-level SBOL2 Sequence submission whose minted member carries the
@@ -2365,7 +2378,8 @@ const OVERWRITE_FIXTURE_A: &str = r#"
     sbol:displayId "seqa" ;
     sbol:persistentIdentity <http://example.org/seqa> ;
     sbol:version "1" ;
-    sbol:elements "atgc" .
+    sbol:elements "atgc" ;
+    sbol:encoding <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .
 "#;
 
 /// The counterpart to [`OVERWRITE_FIXTURE_A`] whose minted member carries the
@@ -2379,7 +2393,8 @@ const OVERWRITE_FIXTURE_B: &str = r#"
     sbol:displayId "seqb" ;
     sbol:persistentIdentity <http://example.org/seqb> ;
     sbol:version "1" ;
-    sbol:elements "gcta" .
+    sbol:elements "gcta" ;
+    sbol:encoding <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .
 "#;
 
 /// `sbh:topLevel`: the self-link every minted top-level subject carries.
