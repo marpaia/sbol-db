@@ -189,28 +189,16 @@ async fn authenticated_submit_reads_back_minted_collection_and_members() {
         StatusCode::OK,
         "authenticated submit succeeds"
     );
-    let outcome: serde_json::Value =
-        serde_json::from_str(&body_string(res).await).expect("submit json");
+    // Classic SynBioHub answers a V1 submit with a bare text/plain ack.
+    assert_eq!(
+        body_string(res).await.trim(),
+        "Successfully uploaded",
+        "the submit ack matches classic SynBioHub verbatim"
+    );
 
     let collection = "http://synbiohub.org/user/alice/mysubmission/mysubmission_collection/1";
     let component = "http://synbiohub.org/user/alice/mysubmission/cd/1";
     let sequence = "http://synbiohub.org/user/alice/mysubmission/seq/1";
-
-    assert_eq!(
-        outcome["collectionUri"], collection,
-        "the response reports the minted collection URI"
-    );
-    let members: Vec<&str> = outcome["members"]
-        .as_array()
-        .expect("members array")
-        .iter()
-        .map(|m| m.as_str().expect("member string"))
-        .collect();
-    assert!(
-        members.contains(&component),
-        "members include the component"
-    );
-    assert!(members.contains(&sequence), "members include the sequence");
 
     // Read the submission back through /manage: the owned-object listing the
     // caller sees under its own scope. The collection and both members appear,

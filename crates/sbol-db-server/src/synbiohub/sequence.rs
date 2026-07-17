@@ -9,16 +9,15 @@
 //! alone. Every read is scoped to the caller's authorized graphs.
 
 use axum::extract::{Path, State};
-use axum::http::header::CONTENT_TYPE;
-use axum::response::{IntoResponse, Response};
-use axum::{Extension, Json};
+use axum::response::Response;
+use axum::Extension;
 use sbol_db_app::{AlignOptions, SequenceAlignment, SimilarHit};
 use sbol_db_core::{SbolObjectRecord, User};
 use serde_json::{json, Map, Value};
 
 use super::routes::{public_uri, scope_for, user_uri, PublicObject, UserObject};
 use super::search::SequenceQuery;
-use super::CurrentUser;
+use super::{render, CurrentUser};
 use crate::{ApiError, AppState};
 
 /// The ordered `head.vars` classic SynBioHub emits for the sequence-search and
@@ -61,7 +60,7 @@ pub(super) async fn run_sequence_search(
         .iter()
         .map(|hit| alignment_binding(hit, by_iri.get(hit.sequence_iri.as_str()).copied()))
         .collect();
-    Ok(json_response(solutions(bindings)))
+    Ok(render::search_response(&solutions(bindings)))
 }
 
 /// `GET /public/:collectionId/:displayId/:version/similar`.
@@ -116,7 +115,7 @@ async fn similar_impl(
         .iter()
         .map(|hit| similar_binding(&hit.iri, by_iri.get(hit.iri.as_str()).copied()))
         .collect();
-    Ok(json_response(solutions(bindings)))
+    Ok(render::search_response(&solutions(bindings)))
 }
 
 async fn similar_count_impl(
@@ -126,7 +125,7 @@ async fn similar_count_impl(
 ) -> Result<Response, ApiError> {
     let scope = scope_for(&state, &user).await?;
     let count = state.app.sequence().similar_count(&uri, &scope).await?;
-    Ok(json_response(count_solutions(count)))
+    Ok(render::count_response(&count_solutions(count)))
 }
 
 /// Map object records by their IRI for per-hit metadata lookup.
@@ -198,14 +197,6 @@ fn count_solutions(count: usize) -> Value {
             }],
         },
     })
-}
-
-fn json_response(value: Value) -> Response {
-    (
-        [(CONTENT_TYPE, "application/sparql-results+json")],
-        Json(value),
-    )
-        .into_response()
 }
 
 fn uri_node(value: &str) -> Value {

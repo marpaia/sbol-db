@@ -288,6 +288,111 @@ def compare_json_setequal(reference: Any, subject: Any) -> Diff:
     return Diff(False, "json not set-equal\n" + detail)
 
 
+# --------------------------------------------------------------------------- #
+# Plain text / status
+# --------------------------------------------------------------------------- #
+
+
+def compare_plaintext(reference: str, subject: str) -> Diff:
+    """Compare two `text/plain` bodies after trimming surrounding whitespace.
+
+    Classic SynBioHub serves the count family (`/:type/count`, `/searchCount`,
+    `/usesCount`, `/twinsCount`, `/similarCount`) as a bare integer in a
+    `text/plain` body, so this is the comparator those cases select."""
+    if reference.strip() == subject.strip():
+        return Diff(True, "plaintext equal")
+    return Diff(False, f"plaintext differs: reference={reference.strip()!r} subject={subject.strip()!r}")
+
+
+def compare_status(reference: str, subject: str) -> Diff:
+    """A body-agnostic comparator: the driver has already required the status
+    codes to match, so this passes unconditionally. It is the category for
+    endpoints whose body legitimately differs per side (a login mints a distinct
+    token on each target; an admin dashboard is HTML on classic and JSON here),
+    where matching status is the only cross-implementation invariant."""
+    return Diff(True, "status codes match; body compared by contract elsewhere")
+
+
+# --------------------------------------------------------------------------- #
+# FASTA / GenBank (sequence, semantic)
+# --------------------------------------------------------------------------- #
+
+
+def _fasta_records(text: str) -> set:
+    """Parse FASTA into a set of `(header, sequence)` pairs. The sequence is
+    concatenated across wrapped lines and upper-cased so line wrapping and case
+    never cause a spurious diff; the header keeps its identifier only (the text
+    up to the first space), dropping the free-text description classic and
+    sbol-db format differently."""
+    records = set()
+    header: Optional[str] = None
+    seq: List[str] = []
+
+    def flush() -> None:
+        if header is not None:
+            records.add((header, "".join(seq).upper()))
+
+    for line in text.splitlines():
+        if line.startswith(">"):
+            flush()
+            header = line[1:].strip().split()[0] if line[1:].strip() else ""
+            seq = []
+        elif header is not None:
+            seq.append(line.strip())
+    flush()
+    return records
+
+
+def compare_fasta(reference: str, subject: str) -> Diff:
+    """Compare two FASTA documents as a set of `(identifier, sequence)` records."""
+    ref = _fasta_records(reference)
+    sub = _fasta_records(subject)
+    if ref == sub:
+        return Diff(True, f"fasta record sets equal ({len(ref)} records)")
+    only_ref = sorted(str(r) for r in ref - sub)
+    only_sub = sorted(str(r) for r in sub - ref)
+    lines = [f"- {r}" for r in only_ref] + [f"+ {r}" for r in only_sub]
+    return Diff(False, "fasta record sets differ\n" + "\n".join(lines))
+
+
+def _genbank_sequences(text: str) -> set:
+    """The ORIGIN nucleotide sequences of a GenBank flat file as a set. Each
+    record's sequence is the ORIGIN block with its position numbers and
+    whitespace stripped and upper-cased. Header metadata (the LOCUS date, the
+    ACCESSION line) is volatile between implementations, so the sequence content
+    is the stable invariant to compare."""
+    sequences = set()
+    in_origin = False
+    seq: List[str] = []
+    for line in text.splitlines():
+        token = line.strip().split(" ", 1)[0]
+        if token == "ORIGIN":
+            in_origin = True
+            seq = []
+            continue
+        if token == "//":
+            if in_origin:
+                sequences.add("".join(seq).upper())
+            in_origin = False
+            continue
+        if in_origin:
+            seq.append("".join(ch for ch in line if ch.isalpha()))
+    return sequences
+
+
+def compare_genbank(reference: str, subject: str) -> Diff:
+    """Compare two GenBank flat files by their ORIGIN sequence content, ignoring
+    volatile header and formatting differences between the two serializers."""
+    ref = _genbank_sequences(reference)
+    sub = _genbank_sequences(subject)
+    if ref == sub:
+        return Diff(True, f"genbank sequence sets equal ({len(ref)} records)")
+    only_ref = sorted(ref - sub)
+    only_sub = sorted(sub - ref)
+    lines = [f"- {r}" for r in only_ref] + [f"+ {r}" for r in only_sub]
+    return Diff(False, "genbank sequence sets differ\n" + "\n".join(lines))
+
+
 def _binding_key(binding: Dict[str, Any]) -> tuple:
     return tuple(sorted((var, json.dumps(val, sort_keys=True)) for var, val in binding.items()))
 

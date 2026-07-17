@@ -192,11 +192,11 @@ async fn v1_submit(app: &axum::Router, token: &str, id: &str) -> String {
         .await
         .expect("v1 submit");
     assert_eq!(res.status(), StatusCode::OK, "V1 submit succeeds");
-    let outcome: Value = serde_json::from_str(&body_string(res).await).expect("submit json");
-    outcome["collectionUri"]
-        .as_str()
-        .expect("collectionUri")
-        .to_owned()
+    // Classic SynBioHub's V1 submit answers with a bare text/plain ack, not the
+    // minted URI, so the caller derives the deterministic collection URI from
+    // the submission id under alice's namespace.
+    assert_eq!(body_string(res).await.trim(), "Successfully uploaded");
+    format!("http://synbiohub.org/user/alice/{id}/{id}_collection/1")
 }
 
 /// Create through the V2 `POST /api/v2/collections` route (JSON body) and return
@@ -362,14 +362,14 @@ async fn object_created_via_v2_reads_back_through_v1() {
     );
 }
 
-/// The `?subject` IRIs bound in a V1 SPARQL-results JSON body.
+/// The object URIs in classic's V1 `/search` JSON array (each row's `uri`).
 fn v1_subjects(body: &str) -> BTreeSet<String> {
-    let value: Value = serde_json::from_str(body).expect("SPARQL-results JSON");
-    value["results"]["bindings"]
+    let value: Value = serde_json::from_str(body).expect("V1 search JSON array");
+    value
         .as_array()
-        .expect("bindings array")
+        .expect("search results array")
         .iter()
-        .filter_map(|b| b["subject"]["value"].as_str().map(str::to_owned))
+        .filter_map(|row| row["uri"].as_str().map(str::to_owned))
         .collect()
 }
 

@@ -131,14 +131,20 @@ fn subjects(results_json: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// The single `?count` literal in a SPARQL-results JSON body.
-fn count(results_json: &str) -> u64 {
-    let value: Value = serde_json::from_str(results_json).expect("parse SPARQL-results JSON");
-    value["results"]["bindings"][0]["count"]["value"]
-        .as_str()
-        .expect("count binding")
-        .parse()
-        .expect("count is an integer")
+/// The object URIs in classic's `/search` JSON array (each row's `uri` field).
+fn search_uris(search_json: &str) -> BTreeSet<String> {
+    let value: Value = serde_json::from_str(search_json).expect("parse search JSON array");
+    value
+        .as_array()
+        .expect("search results array")
+        .iter()
+        .filter_map(|row| row["uri"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The bare integer classic's `/searchCount` serves in a `text/plain` body.
+fn count(count_body: &str) -> u64 {
+    count_body.trim().parse().expect("count is an integer")
 }
 
 #[tokio::test]
@@ -151,7 +157,7 @@ async fn faceted_search_member_set_matches_sparql() {
     // classic grammar, so this goes through the SPARQL path rather than the
     // ranked index.
     let response = get_ok(&app, "/search/objectType=ComponentDefinition&").await;
-    let via_search = subjects(&response);
+    let via_search = search_uris(&response);
 
     // An independent SPARQL query over the same corpus yields the expected set:
     // top-level objects of that class.

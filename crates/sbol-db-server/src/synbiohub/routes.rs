@@ -8,12 +8,10 @@
 //! SPARQL over the shared engine and its accelerator. The scope is the ceiling,
 //! so a caller never reads a graph they are not entitled to.
 
-use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::header::CONTENT_TYPE;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::{Extension, Json};
+use axum::Extension;
 use sbol_db_app::Hit;
 use sbol_db_core::{DomainError, User};
 use sbol_db_sparql::{GraphScope, ResultFormat, SparqlOptions};
@@ -21,7 +19,7 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use super::search::{extract_sequence, parse_search_path};
-use super::{queries, sequence, CurrentUser};
+use super::{queries, render, sequence, CurrentUser};
 use crate::{ApiError, AppState};
 
 /// The instance base IRI classic SynBioHub mints objects under.
@@ -163,9 +161,10 @@ async fn run_search(
     // match the engine exactly.
     if faceted.free_text.is_some() {
         let (hits, _total) = state.app.ranked_search(&faceted, scope).await?;
-        Ok(json_response(hits_to_solutions(&hits)))
+        Ok(render::search_response(&hits_to_solutions(&hits)))
     } else {
-        run_scoped(&state, &queries::faceted(&faceted, false), scope).await
+        let results = run_scoped_value(&state, &queries::faceted(&faceted, false), scope).await?;
+        Ok(render::search_response(&results))
     }
 }
 
@@ -178,9 +177,10 @@ async fn run_search_count(
     let scope = scope_for(&state, &user).await?;
     if faceted.free_text.is_some() {
         let count = state.app.ranked_search_count(&faceted, scope).await?;
-        Ok(json_response(count_to_solutions(count)))
+        Ok(render::count_response(&count_to_solutions(count)))
     } else {
-        run_scoped(&state, &queries::faceted(&faceted, true), scope).await
+        let results = run_scoped_value(&state, &queries::faceted(&faceted, true), scope).await?;
+        Ok(render::count_response(&results))
     }
 }
 
@@ -193,7 +193,8 @@ pub async fn type_count(
     Path(type_name): Path<String>,
 ) -> Result<Response, ApiError> {
     let scope = scope_for(&state, &user).await?;
-    run_scoped(&state, &queries::count(&type_name), scope).await
+    let results = run_scoped_value(&state, &queries::count(&type_name), scope).await?;
+    Ok(render::count_response(&results))
 }
 
 // --- /rootCollections --------------------------------------------------------
@@ -204,7 +205,8 @@ pub async fn root_collections(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
 ) -> Result<Response, ApiError> {
     let scope = scope_for(&state, &user).await?;
-    run_scoped(&state, &queries::root_collections(), scope).await
+    let results = run_scoped_value(&state, &queries::root_collections(), scope).await?;
+    Ok(render::collections_response(&results))
 }
 
 // --- object-scoped: /uses /twins /subCollections /metadata -------------------
@@ -312,7 +314,8 @@ async fn uses_impl(
     count_only: bool,
 ) -> Result<Response, ApiError> {
     let scope = scope_for(&state, &user).await?;
-    run_scoped(&state, &queries::uses(&uri, count_only), scope).await
+    let results = run_scoped_value(&state, &queries::uses(&uri, count_only), scope).await?;
+    Ok(relation_response(&results, count_only))
 }
 
 async fn twins_impl(
@@ -322,7 +325,18 @@ async fn twins_impl(
     count_only: bool,
 ) -> Result<Response, ApiError> {
     let scope = scope_for(&state, &user).await?;
-    run_scoped(&state, &queries::twins(&uri, count_only), scope).await
+    let results = run_scoped_value(&state, &queries::twins(&uri, count_only), scope).await?;
+    Ok(relation_response(&results, count_only))
+}
+
+/// Render a `/uses` or `/twins` result: the count variant is a plain integer,
+/// the listing variant is the classic search-result array.
+fn relation_response(results: &Value, count_only: bool) -> Response {
+    if count_only {
+        render::count_response(results)
+    } else {
+        render::search_response(results)
+    }
 }
 
 async fn sub_collections_impl(
@@ -331,7 +345,8 @@ async fn sub_collections_impl(
     uri: String,
 ) -> Result<Response, ApiError> {
     let scope = scope_for(&state, &user).await?;
-    run_scoped(&state, &queries::sub_collections(&uri), scope).await
+    let results = run_scoped_value(&state, &queries::sub_collections(&uri), scope).await?;
+    Ok(render::collections_response(&results))
 }
 
 async fn metadata_impl(
@@ -340,7 +355,8 @@ async fn metadata_impl(
     uri: String,
 ) -> Result<Response, ApiError> {
     let scope = scope_for(&state, &user).await?;
-    run_scoped(&state, &queries::metadata(&uri), scope).await
+    let results = run_scoped_value(&state, &queries::metadata(&uri), scope).await?;
+    Ok(render::metadata_response(&results))
 }
 
 // --- /manage and /shared (identity-required) ---------------------------------
@@ -359,7 +375,8 @@ pub async fn manage(
         .acl_service
         .compute_scope(Some(&user.graph_uri))
         .await?;
-    run_scoped(&state, &queries::owned_by(&user.graph_uri), scope).await
+    let results = run_scoped_value(&state, &queries::owned_by(&user.graph_uri), scope).await?;
+    Ok(render::search_response(&results))
 }
 
 /// `GET /shared`: the objects shared with the caller (`sbh:canView`).
@@ -376,7 +393,8 @@ pub async fn shared(
         .compute_scope(Some(&user.graph_uri))
         .await?;
     let objects = state.app.acl.viewable_objects(&user.graph_uri).await?;
-    run_scoped(&state, &queries::metadata_of(&objects), scope).await
+    let results = run_scoped_value(&state, &queries::metadata_of(&objects), scope).await?;
+    Ok(render::metadata_response(&results))
 }
 
 // --- shared helpers ----------------------------------------------------------
@@ -395,13 +413,13 @@ pub(super) async fn scope_for(
     Ok(scope)
 }
 
-/// Run a SPARQL query under the caller's scope and return the engine's
-/// SPARQL-results JSON verbatim.
-async fn run_scoped(
+/// Run a SPARQL query under the caller's scope and parse the engine's
+/// SPARQL-results JSON into a value the classic-shape renderers project from.
+async fn run_scoped_value(
     state: &AppState,
     query: &str,
     scope: GraphScope,
-) -> Result<Response, ApiError> {
+) -> Result<Value, ApiError> {
     let options = SparqlOptions {
         authorized_graphs: scope,
         ..SparqlOptions::default()
@@ -411,25 +429,13 @@ async fn run_scoped(
         .sparql
         .execute(query, Some(ResultFormat::Json), None, &options)
         .await?;
-    Response::builder()
-        .header(CONTENT_TYPE, outcome.payload.content_type)
-        .body(Body::from(outcome.payload.body))
+    serde_json::from_slice(&outcome.payload.body)
         .map_err(|e| ApiError::Domain(DomainError::Serialization(e.to_string())))
 }
 
 /// A `401` for an endpoint that requires an authenticated caller.
 fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "authentication required").into_response()
-}
-
-/// Wrap a SPARQL-results JSON value in a `application/sparql-results+json`
-/// response, matching the engine's content type.
-fn json_response(value: Value) -> Response {
-    (
-        [(CONTENT_TYPE, "application/sparql-results+json")],
-        Json(value),
-    )
-        .into_response()
 }
 
 /// Project ranked hits into the SPARQL-results JSON shape `/search` emits, with

@@ -16,6 +16,7 @@ mod mutate;
 mod permission;
 mod plugins;
 mod queries;
+mod render;
 mod routes;
 mod search;
 mod sequence;
@@ -533,16 +534,16 @@ mod tests {
     async fn read_routes_register_and_respond() {
         let (app, _dir) = v1_router().await;
 
-        // An empty store still answers the SPARQL-backed count as a
-        // well-formed SPARQL-results JSON document with a `count` binding.
+        // Classic serves the count as a bare integer in a text/plain body; an
+        // empty store counts zero.
         let (status, body) = send_get(&app, "/ComponentDefinition/count", None).await;
         assert_eq!(status, StatusCode::OK);
-        assert!(body.contains("\"count\""), "count response: {body}");
+        assert_eq!(body.trim(), "0", "count response: {body}");
 
-        // The ranked free-text path returns the six-column search projection.
+        // The ranked free-text path returns classic's JSON array; empty here.
         let (status, body) = send_get(&app, "/search/plasmid", None).await;
         assert_eq!(status, StatusCode::OK);
-        assert!(body.contains("displayId"), "search response: {body}");
+        assert_eq!(body.trim(), "[]", "search response: {body}");
 
         // Root collections is SPARQL over the accelerator.
         let (status, _body) = send_get(&app, "/rootCollections", None).await;

@@ -117,24 +117,102 @@ The runner leaves the stack up and prints the teardown command; pass
 docker compose -p sbhconformance -f tests/synbiohub-conformance/docker-compose.yaml down -v
 ```
 
-## Environment caveats
+## Running the live tier locally
 
-The classic reference images are amd64. On Apple Silicon they run under
-emulation, which bounds what a live run can cover:
+The live tier runs on an arm64 developer host against the
+`synbiohub/synbiohub:snapshot-standalone` image, which bundles the Node app
+and its Virtuoso and boots healthy under emulation. Use `snapshot-standalone`,
+not `1.6.1-standalone`: the `1.6.1` build crashes during `/setup`.
 
-- **Virtuoso** (amd64) runs emulated. It boots and is directly usable: the
-  corpus loads and SPARQL returns it.
-- **Elasticsearch 6.3.2** is prone to OOM under emulation. The classic app
-  serves objects only through its submission pipeline (libSBOLj conversion +
-  Elasticsearch indexing), so with Elasticsearch down the app's read surface
-  cannot serve a raw-seeded corpus.
-- The classic Node app gates every route behind its first-boot `/setup`
-  onboarding, which the 1.6.1 standalone build does not complete reliably
-  under scripted setup.
+Bring-up and seed recipe (proven on this host):
 
-On an arm64 developer host the reference stack (Virtuoso +
-SynBioHub) boots healthy and Virtuoso is usable, but a valid
-classic-vs-sbol-db comparison of even the Elasticsearch-independent subset
-could not be driven, so `test_differential_subset.py` stays best-effort and
-is intended for an amd64 CI runner. The self-consistency smoke proves the
-subject side regardless of whether the classic reference is reachable.
+1. Start the reference (classic SynBioHub at `:17777`) and a native sbol-db
+   subject. The subject runs from the current build, on SQLite, with public
+   signup enabled so it can register the shared account:
+
+   ```sh
+   DATABASE_URL="sqlite:///tmp/sbol-db-subject.sqlite?mode=rwc" \
+       SBOL_DB_SKIP_UI_BUILD=1 sbol-db db migrate
+   DATABASE_URL="sqlite:///tmp/sbol-db-subject.sqlite?mode=rwc" \
+       SBOL_DB_ALLOW_PUBLIC_SIGNUP=true SBOL_DB_SKIP_UI_BUILD=1 \
+       sbol-db server --bind 127.0.0.1:18903 --no-worker
+   ```
+
+2. First boot runs `/setup`, which creates admin `test@user.synbiohub` / `test`
+   and sets `uriPrefix=http://synbiohub.org/` so the reference mints the SAME
+   top-level URIs sbol-db does. Both sides then mint identical URIs and
+   responses compare directly with no base-URI canonicalization.
+
+3. Load `fixtures/smoke-corpus.nt` into each side's public graph over the
+   graph-store protocol, then seed a curated SBOL2 corpus into both through
+   `/submit`:
+
+   ```sh
+   python3 tests/synbiohub-conformance/seed_both.py \
+       --reference http://localhost:17777 \
+       --subject  http://127.0.0.1:18903 \
+       --corpus   /path/to/sbol2-xml-dir
+   ```
+
+The account (`testuser`) is shared, so one `/login` form authenticates both
+targets. Because the reference enforces `requireLogin`, unauthenticated public
+reads answer `401`; the driver mints a token on both sides for every case so
+body shapes are compared rather than masked by a `401`/`200` status split.
+
+## Known divergences and their resolution
+
+The differential surfaced a family of V1 wire-shape bugs in the sbol-db adapter
+(`crates/sbol-db-server/src/synbiohub/`). Classic SynBioHub never returns raw
+SPARQL-results JSON to a V1 client: `sparql.queryJson` folds each result into a
+plain array of row objects, and the count endpoints answer a bare integer in a
+`text/plain` body. The adapter now reproduces those projections through
+`synbiohub/render.rs`, so the following are **fixed** and compare equal:
+
+- `POST /submit` returns the `text/plain` ack `Successfully uploaded` (was JSON).
+- `<uri>/metadata` returns a JSON array of metadata row objects (was
+  SPARQL-results JSON).
+- `/search`, `/search/<grammar>`, `<uri>/uses`, `<uri>/twins` return classic's
+  11-key search-result array (`type`, `uri`, `name`, `description`, `displayId`,
+  `version`, `sbolType`, `role`, `percentMatch`, `strandAlignment`, `CIGAR`).
+- `/rootCollections` and `<uri>/subCollections` return the collection array
+  (`uri`, `name`, `description`, `displayId`, `version`).
+- `/:type/count`, `/searchCount`, `<uri>/usesCount`, `<uri>/twinsCount` return a
+  bare integer in a `text/plain` body.
+
+Some divergences are **justified** and are not forced to a false match:
+
+- `GET /profile`: the reference reports `isAdmin`/`isCurator` `true` because
+  `testuser` is the `/setup` administrator, while the self-registered subject
+  account reports `false`; the reference also carries per-instance volatile
+  fields (`id`, `createdAt`, `updatedAt`, `user_external_profiles`) that can
+  never match across two independently seeded instances. The subject also omits
+  `password`/`resetPasswordLink`, which is the safer contract.
+- `/sparql` typed literals: the reference (Virtuoso) emits the legacy
+  `{"type":"typed-literal"}` token, while the subject emits the SPARQL 1.1
+  spec-correct `{"type":"literal"}` with the same datatype. ASK results match.
+- `<uri>/similar` and `<uri>/similarCount`: the reference ranks cluster mates
+  through SBOLExplorer; the subject computes similarity natively, so the ranked
+  membership legitimately differs.
+- `/manage` and `/shared`: both sides now return a JSON array
+  (`application/json`), but the reference decorates each row with derived
+  presentation fields (`typeName`, `url`, `triplestore`, `prefix`) that are
+  view-layer concerns rather than object state.
+
+Remaining divergences that need deeper work (tracked, not yet fixed):
+
+- **Numeric parity of counts / `/rootCollections` / empty `/search`.** These are
+  entangled with two conditions and cannot be attributed to a shape bug: the
+  reference carries residual public state from prior conformance runs
+  (`public/scratch`, `green_collection`), and two curated corpus files fail to
+  ingest on the subject (`act_example.xml` trips an SBOL3 `hasNamespace`
+  validation rule on an SBOL2 submit; `memberAnnotations.xml` hits an RDF parse
+  error) where libSBOLj accepts both. A clean numeric pass needs the reference
+  reset and both ingest bugs fixed.
+- **Serializer parity.** `<uri>/fasta` uses the Sequence displayId in the record
+  header where classic uses the owning ComponentDefinition displayId;
+  `<uri>/omex` labels the SBOL member with the SBOL3 format URI and omits the
+  `metadata.rdf` member; `<uri>/summary` emits JSON-LD where classic emits
+  libSBOLj's `serializeJSON` object. These are P3-serializer changes.
+
+The self-consistency smoke (`test_subject_smoke.py`) proves the subject side
+end to end regardless of whether the classic reference is reachable.

@@ -73,7 +73,7 @@ services:
     restart: always
 
   synbiohub:
-    image: synbiohub/synbiohub:1.6.1-standalone
+    image: synbiohub/synbiohub:snapshot-standalone
     depends_on:
       - virtuoso
     volumes:

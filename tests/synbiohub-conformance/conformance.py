@@ -35,6 +35,12 @@ COMPARATORS: Dict[str, tuple] = {
     "sbol": (lambda a, b: compare.compare_rdf(a, b, fmt="xml"), _TEXT),
     "gff": (lambda a, b: compare.compare_gff(a, b), _TEXT),
     "omex": (lambda a, b: compare.compare_omex(a, b), _BYTES),
+    "fasta": (lambda a, b: compare.compare_fasta(a, b), _TEXT),
+    "genbank": (lambda a, b: compare.compare_genbank(a, b), _TEXT),
+    "plaintext": (lambda a, b: compare.compare_plaintext(a, b), _TEXT),
+    # Body legitimately differs per side (tokens, HTML-vs-JSON); matching status
+    # is the only cross-implementation invariant.
+    "status": (lambda a, b: compare.compare_status(a, b), _TEXT),
 }
 
 
@@ -122,15 +128,41 @@ class Case:
     data: Optional[Dict[str, Any]] = None
     headers: Optional[Dict[str, str]] = None
     auth: bool = False
+    # A `multipart/form-data` upload, in requests' `files=` shape
+    # (`{field: (filename, bytes, content_type)}`). Classic's `/submit`,
+    # `/attach`, and `/icon` take multipart bodies; `data` fields ride alongside
+    # the file parts, matching classic's form.
+    files: Optional[Dict[str, Any]] = None
     # For mutation cases: after issuing the request, read this GET path back and
     # compare the post-state instead of the mutation response.
     readback: Optional[str] = None
+    # The category to use for the readback comparison, when it differs from the
+    # mutation's own category (the mutation body is often a plain-text ack while
+    # the read-back state is SBOL or JSON).
+    readback_category: Optional[str] = None
+    # Whether this case mutates server state. The driver does not read this, but
+    # a caller can partition a case list into read-only and mutating subsets.
+    mutating: bool = False
 
     def issue(self, target: Target) -> requests.Response:
-        response = target.request(self.method, self.path, params=self.params, data=self.data, headers=self.headers)
+        response = target.request(
+            self.method,
+            self.path,
+            params=self.params,
+            data=self.data,
+            headers=self.headers,
+            files=self.files,
+        )
         if self.readback is not None:
             return target.request("GET", self.readback)
         return response
+
+    def compare_category(self) -> str:
+        """The category the driver compares under: the readback's category when a
+        readback overrides it, otherwise the case's own category."""
+        if self.readback is not None and self.readback_category is not None:
+            return self.readback_category
+        return self.category
 
 
 @dataclass
@@ -190,9 +222,10 @@ def run_case(case: Case, reference: Target, subjects: List[Target]) -> CaseResul
     """Fan a single case out to the reference and every subject and compare."""
     reference_response = case.issue(reference)
     results: List[TargetResult] = []
+    category = case.compare_category()
     for subject in subjects:
         subject_response = case.issue(subject)
-        diff = compare_responses(case.category, reference_response, subject_response)
+        diff = compare_responses(category, reference_response, subject_response)
         results.append(
             TargetResult(
                 target=subject.name,

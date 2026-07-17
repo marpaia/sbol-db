@@ -12,11 +12,10 @@
 
 use axum::extract::{Multipart, State};
 use axum::response::{IntoResponse, Response};
-use axum::{Extension, Json};
+use axum::Extension;
 use sbol_db_app::{SubmissionService, SubmitRequest};
 use sbol_db_core::SerializationFormat;
 use sbol_db_storage::ImportOverwrite;
-use serde_json::json;
 
 use super::CurrentUser;
 use crate::{ApiError, AppState};
@@ -69,19 +68,19 @@ pub async fn submit(
         overwrite,
     };
 
-    let outcome = SubmissionService::new(state.app.store.clone())
+    SubmissionService::new(state.app.store.clone())
         .submit(request)
         .await?;
 
-    let members: Vec<&str> = outcome.members.iter().map(|m| m.as_str()).collect();
-    let payload = json!({
-        "collectionUri": outcome.collection_uri.as_str(),
-        "persistentIdentity": outcome.collection_persistent_identity.as_str(),
-        "members": members,
-        "graph": outcome.graph_iri,
-        "tripleCount": outcome.triple_count,
-    });
-    Ok((axum::http::StatusCode::OK, Json(payload)).into_response())
+    // Classic SynBioHub answers a successful V1 submission with a bare
+    // `text/plain` acknowledgement; the pySBOL2 PartShop client asserts on this
+    // exact string, so the adapter returns it verbatim rather than JSON.
+    Ok((
+        axum::http::StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/plain")],
+        "Successfully uploaded",
+    )
+        .into_response())
 }
 
 /// Drain the multipart body into a [`SubmitForm`]. Unknown fields are ignored,
