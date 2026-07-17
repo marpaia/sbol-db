@@ -22,11 +22,6 @@ const DOCS_HTML: &str = r#"<!doctype html>
     </style>
   </head>
   <body>
-    <a href="/docs"
-       style="position:fixed;top:10px;right:12px;z-index:2147483647;
-              font:600 13px system-ui,sans-serif;padding:6px 12px;
-              background:#7b5cff;color:#fff;border-radius:6px;
-              text-decoration:none;">&larr; V1 / SynBioHub API</a>
     <script id="api-reference" data-url="/api/v2/openapi.json"></script>
     <script>
       var configuration = {

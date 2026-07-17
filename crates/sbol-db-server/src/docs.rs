@@ -4,11 +4,14 @@
 //! generator, no compile-time annotations spread across crates).
 //!
 //! The UI is rendered by [Scalar](https://github.com/scalar/scalar), pinned to
-//! a fixed CDN version and pointed at `/openapi.json` (the V1 SynBioHub-compat
-//! surface plus the native/lab endpoints). The idiomatic V2 surface has its own
-//! reference at `/api/v2/docs`; each page carries a link to the other. The
-//! look-and-feel is closest to FastAPI's auto-generated `/docs` of the modern
-//! OpenAPI UIs.
+//! a fixed CDN version. `Scalar.createApiReference` mounts a single reference
+//! carrying two same-origin documents — `/openapi.json` (the V1
+//! SynBioHub-compat surface plus the native/lab endpoints) and
+//! `/api/v2/openapi.json` (the idiomatic V2 surface) — and renders a document
+//! switcher so both are visible on one page. The multi-document `sources`
+//! configuration is driven through the explicit `createApiReference` call; the
+//! attribute-based auto-mount does not honor it. The look-and-feel is closest
+//! to FastAPI's auto-generated `/docs` of the modern OpenAPI UIs.
 
 use axum::http::header::CONTENT_TYPE;
 use axum::response::IntoResponse;
@@ -27,22 +30,28 @@ const DOCS_HTML: &str = r#"<!doctype html>
     </style>
   </head>
   <body>
-    <a href="/api/v2/docs"
-       style="position:fixed;top:10px;right:12px;z-index:2147483647;
-              font:600 13px system-ui,sans-serif;padding:6px 12px;
-              background:#7b5cff;color:#fff;border-radius:6px;
-              text-decoration:none;">V2 API &rarr;</a>
-    <script id="api-reference" data-url="/openapi.json"></script>
+    <div id="app"></div>
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.62.9"></script>
     <script>
-      var configuration = {
+      Scalar.createApiReference(document.getElementById("app"), {
         theme: "purple",
         layout: "modern",
-        hideClientButton: false
-      };
-      document.getElementById("api-reference").dataset.configuration =
-        JSON.stringify(configuration);
+        hideClientButton: false,
+        sources: [
+          {
+            title: "SBOL DB (V1 SynBioHub-compat + native/lab)",
+            slug: "v1",
+            url: "/openapi.json",
+            default: true
+          },
+          {
+            title: "SBOL DB V2 (idiomatic)",
+            slug: "v2",
+            url: "/api/v2/openapi.json"
+          }
+        ]
+      });
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.62.9"></script>
   </body>
 </html>
 "#;

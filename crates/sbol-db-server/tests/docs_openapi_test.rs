@@ -73,28 +73,28 @@ async fn get(app: &axum::Router, uri: &str) -> (StatusCode, String) {
 }
 
 #[tokio::test]
-async fn docs_page_renders_v1_and_links_to_v2() {
+async fn docs_page_renders_both_surfaces_in_one_reference() {
     let (app, _dir) = app().await;
     let (status, body) = get(&app, "/docs").await;
     assert_eq!(status, StatusCode::OK, "the docs page is served");
     assert!(
-        body.contains("data-url=\"/openapi.json\""),
-        "the docs page renders the V1 spec via the single-source data-url mount"
+        body.contains("Scalar.createApiReference"),
+        "the docs page mounts via the explicit createApiReference call that drives multi-source"
     );
     assert!(
-        body.contains("/api/v2/docs"),
-        "the docs page links to the V2 reference"
+        body.contains("/openapi.json"),
+        "the docs page includes the V1 source"
     );
-    // The V2 reference page renders its own spec and links back to V1.
+    assert!(
+        body.contains("/api/v2/openapi.json"),
+        "the docs page includes the V2 source in the same reference"
+    );
+    // The V2 surface also stays directly reachable at its own page.
     let (v2_status, v2_body) = get(&app, "/api/v2/docs").await;
     assert_eq!(v2_status, StatusCode::OK, "the V2 docs page is served");
     assert!(
         v2_body.contains("data-url=\"/api/v2/openapi.json\""),
         "the V2 docs page renders the V2 spec"
-    );
-    assert!(
-        v2_body.contains("href=\"/docs\""),
-        "the V2 docs page links back to V1"
     );
 }
 
