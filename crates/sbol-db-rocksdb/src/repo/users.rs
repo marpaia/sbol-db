@@ -9,6 +9,7 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use chrono::Utc;
 use rocksdb::WriteBatch;
 use sbol_db_core::{DomainError, NewUser, User, UserId};
 use sbol_db_storage::UserStore;
@@ -54,6 +55,7 @@ impl UserStore for RocksdbUserStore {
                     new_user.email
                 )));
             }
+            let now = Utc::now();
             let user = User {
                 id: UserId::new(),
                 username: new_user.username,
@@ -66,6 +68,8 @@ impl UserStore for RocksdbUserStore {
                 is_curator: new_user.is_curator,
                 is_member: new_user.is_member,
                 reset_password_link: None,
+                created_at: now,
+                updated_at: now,
             };
             put_user(&db, &user)?;
             Ok(user)
@@ -118,6 +122,7 @@ impl UserStore for RocksdbUserStore {
             stored.is_admin = is_admin;
             stored.is_curator = is_curator;
             stored.is_member = is_member;
+            stored.updated_at = Utc::now();
             put_user(&db, &stored)?;
             Ok(stored)
         })
@@ -133,6 +138,7 @@ impl UserStore for RocksdbUserStore {
             let mut stored =
                 get_user(&db, id)?.ok_or_else(|| DomainError::NotFound(format!("user {id}")))?;
             stored.password_hash = password_hash;
+            stored.updated_at = Utc::now();
             put_user(&db, &stored)
         })
         .await

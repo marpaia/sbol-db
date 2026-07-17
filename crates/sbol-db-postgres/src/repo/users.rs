@@ -5,6 +5,7 @@
 //! these methods store and read an already-computed `password_hash`.
 
 use async_trait::async_trait;
+use chrono::Utc;
 use sbol_db_core::{DomainError, NewUser, User, UserId};
 use sbol_db_storage::UserStore;
 use sqlx::Row;
@@ -14,7 +15,7 @@ use crate::repo::db_err;
 use crate::PgPool;
 
 const USER_COLS: &str = "id, username, name, email, affiliation, password_hash, \
-    graph_uri, is_admin, is_curator, is_member, reset_password_link";
+    graph_uri, is_admin, is_curator, is_member, reset_password_link, created_at, updated_at";
 
 #[derive(Clone)]
 pub struct PgUserStore {
@@ -31,11 +32,12 @@ impl PgUserStore {
 impl UserStore for PgUserStore {
     async fn create_user(&self, new_user: NewUser) -> Result<User, DomainError> {
         let id = UserId::new();
+        let now = Utc::now();
         let row = sqlx::query(&format!(
             "INSERT INTO sbh_user \
              (id, username, name, email, affiliation, password_hash, \
-              graph_uri, is_admin, is_curator, is_member) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+              graph_uri, is_admin, is_curator, is_member, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              RETURNING {USER_COLS}"
         ))
         .bind(id.as_uuid())
@@ -48,6 +50,8 @@ impl UserStore for PgUserStore {
         .bind(new_user.is_admin)
         .bind(new_user.is_curator)
         .bind(new_user.is_member)
+        .bind(now)
+        .bind(now)
         .fetch_one(&self.pool)
         .await
         .map_err(db_err)?;
@@ -81,7 +85,7 @@ impl UserStore for PgUserStore {
         let row = sqlx::query(&format!(
             "UPDATE sbh_user \
                 SET name = $2, affiliation = $3, \
-                    is_admin = $4, is_curator = $5, is_member = $6 \
+                    is_admin = $4, is_curator = $5, is_member = $6, updated_at = $7 \
               WHERE id = $1 \
              RETURNING {USER_COLS}"
         ))
@@ -91,6 +95,7 @@ impl UserStore for PgUserStore {
         .bind(user.is_admin)
         .bind(user.is_curator)
         .bind(user.is_member)
+        .bind(Utc::now())
         .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?
@@ -99,9 +104,10 @@ impl UserStore for PgUserStore {
     }
 
     async fn set_password_hash(&self, id: UserId, password_hash: &str) -> Result<(), DomainError> {
-        sqlx::query("UPDATE sbh_user SET password_hash = $2 WHERE id = $1")
+        sqlx::query("UPDATE sbh_user SET password_hash = $2, updated_at = $3 WHERE id = $1")
             .bind(id.as_uuid())
             .bind(password_hash)
+            .bind(Utc::now())
             .execute(&self.pool)
             .await
             .map_err(db_err)?;
@@ -155,5 +161,7 @@ fn row_to_user(row: sqlx::postgres::PgRow) -> Result<User, DomainError> {
         is_curator: row.try_get("is_curator").map_err(db_err)?,
         is_member: row.try_get("is_member").map_err(db_err)?,
         reset_password_link: row.try_get("reset_password_link").map_err(db_err)?,
+        created_at: row.try_get("created_at").map_err(db_err)?,
+        updated_at: row.try_get("updated_at").map_err(db_err)?,
     })
 }

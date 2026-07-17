@@ -46,6 +46,7 @@ impl UserStore for InMemoryUserStore {
                 "username or email already registered".into(),
             ));
         }
+        let now = Utc::now();
         let user = User {
             id: UserId::new(),
             username: new_user.username,
@@ -58,6 +59,8 @@ impl UserStore for InMemoryUserStore {
             is_curator: new_user.is_curator,
             is_member: new_user.is_member,
             reset_password_link: None,
+            created_at: now,
+            updated_at: now,
         };
         users.insert(user.id, user.clone());
         Ok(user)
@@ -88,6 +91,7 @@ impl UserStore for InMemoryUserStore {
         existing.is_admin = user.is_admin;
         existing.is_curator = user.is_curator;
         existing.is_member = user.is_member;
+        existing.updated_at = Utc::now();
         Ok(existing.clone())
     }
 
@@ -97,6 +101,7 @@ impl UserStore for InMemoryUserStore {
             return Err(DomainError::NotFound(format!("user {id}")));
         };
         user.password_hash = password_hash.to_owned();
+        user.updated_at = Utc::now();
         Ok(())
     }
 

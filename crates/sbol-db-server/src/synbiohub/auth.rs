@@ -14,6 +14,7 @@ use axum::http::header::{ACCEPT, CONTENT_TYPE, LOCATION, SET_COOKIE};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use chrono::{DateTime, SecondsFormat, Utc};
 use sbol_db_app::{PasswordReset, Registration};
 use sbol_db_core::{DomainError, User};
 use sbol_db_storage::NewJob;
@@ -337,8 +338,13 @@ async fn enqueue_reset_email(state: &AppState, reset: &PasswordReset) -> Result<
 }
 
 /// The profile JSON classic returns to an API client, keyed with classic's
-/// camelCase field names. `password` and `resetPasswordLink` are never
-/// included.
+/// camelCase field names. `password` and `resetPasswordLink` are always blank,
+/// matching classic: the account's credentials never travel in the profile
+/// response even when a reset is outstanding. `createdAt`/`updatedAt` are the
+/// account's real timestamps in classic's Sequelize wire format (RFC3339 with
+/// millisecond precision and a `Z` suffix). `user_external_profiles` is the set
+/// of linked external-identity profiles, empty because this instance has no
+/// external-auth providers, exactly as classic returns for an unlinked account.
 fn profile_json(user: &User) -> serde_json::Value {
     json!({
         "id": user.id,
@@ -351,11 +357,17 @@ fn profile_json(user: &User) -> serde_json::Value {
         "isAdmin": user.is_admin,
         "isCurator": user.is_curator,
         "isMember": user.is_member,
-        "resetPasswordLink": user.reset_password_link.clone().unwrap_or_default(),
-        "createdAt": "",
-        "updatedAt": "",
+        "resetPasswordLink": "",
+        "createdAt": iso8601_millis(&user.created_at),
+        "updatedAt": iso8601_millis(&user.updated_at),
         "user_external_profiles": [],
     })
+}
+
+/// A UTC timestamp in classic's Sequelize wire format: RFC3339 with millisecond
+/// precision and a `Z` zone suffix (`2026-07-17T21:12:27.022Z`).
+fn iso8601_millis(at: &DateTime<Utc>) -> String {
+    at.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 /// Whether the client prefers HTML (a browser), selecting the cookie+redirect

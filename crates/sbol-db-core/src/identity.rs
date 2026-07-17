@@ -30,6 +30,13 @@ pub struct User {
     /// A single-use password-reset token, set while a reset is outstanding and
     /// cleared once consumed.
     pub reset_password_link: Option<String>,
+    /// When the account was created, in UTC. The store sets it once on create.
+    #[serde(default = "Utc::now")]
+    pub created_at: DateTime<Utc>,
+    /// When the account was last modified, in UTC. The store sets it on create
+    /// and bumps it on a profile or password change.
+    #[serde(default = "Utc::now")]
+    pub updated_at: DateTime<Utc>,
 }
 
 /// The fields needed to create a [`User`]. The store assigns the [`UserId`].

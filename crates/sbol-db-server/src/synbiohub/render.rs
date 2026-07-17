@@ -258,12 +258,41 @@ fn manage_row(row: &Map<String, Value>) -> Value {
         "version": string_or_empty(row, "version"),
         "type": type_iri,
         "typeName": type_name,
-        "prefix": "",
+        "prefix": namespace_prefix(uri_str),
         "url": url,
         "role": string_or_null(row, "role"),
         "sbolType": string_or_null(row, "sbolType"),
         "triplestore": triplestore,
     })
+}
+
+/// The configured RDF namespace prefixes, in classic's declaration order.
+/// Classic's `prefixify` scans this list and returns the name of the first
+/// namespace the URI falls under; this is the exact set from its
+/// `config.namespaces`.
+const NAMESPACE_PREFIXES: &[(&str, &str)] = &[
+    ("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"),
+    ("dcterms", "http://purl.org/dc/terms/"),
+    ("dc", "http://purl.org/dc/elements/1.1/"),
+    ("sbh", "http://wiki.synbiohub.org/wiki/Terms/synbiohub#"),
+    ("prov", "http://www.w3.org/ns/prov#"),
+    ("sbol", "http://sbols.org/v2#"),
+    ("xsd", "http://www.w3.org/2001/XMLSchema#"),
+    ("rdfs", "http://www.w3.org/2000/01/rdf-schema#"),
+    ("purl", "http://purl.obolibrary.org/obo/"),
+];
+
+/// Classic's `prefixify`: the name of the first configured RDF namespace the
+/// URI falls under, or the empty string when it matches none. A SynBioHub
+/// object URI lives under the instance `databasePrefix`, which is not a
+/// vocabulary namespace, so it resolves to the empty string; a URI naming an
+/// RDF vocabulary term resolves to that vocabulary's prefix.
+fn namespace_prefix(uri: &str) -> String {
+    NAMESPACE_PREFIXES
+        .iter()
+        .find(|(_, ns)| uri.starts_with(ns))
+        .map(|(name, _)| (*name).to_owned())
+        .unwrap_or_default()
 }
 
 /// The count family (`/:type/count`, `/searchCount`, `/usesCount`,
@@ -345,5 +374,21 @@ mod tests {
     fn count_value_defaults_to_zero() {
         let doc = sparql(&["count"], json!([]));
         assert_eq!(count_value(&doc), 0);
+    }
+
+    #[test]
+    fn namespace_prefix_matches_classic_prefixify() {
+        // An object URI under the instance databasePrefix is not a vocabulary
+        // namespace, so it resolves to the empty string, as classic returns.
+        assert_eq!(
+            namespace_prefix("http://synbiohub.org/public/igem/BBa_B0012/1"),
+            ""
+        );
+        // A URI naming an RDF vocabulary term resolves to that prefix.
+        assert_eq!(namespace_prefix("http://sbols.org/v2#Collection"), "sbol");
+        assert_eq!(
+            namespace_prefix("http://purl.org/dc/terms/description"),
+            "dcterms"
+        );
     }
 }
