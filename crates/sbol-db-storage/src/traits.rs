@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use sbol_db_core::{
-    BlobRef, DomainError, GraphId, GraphRecord, ImportReport, JobId, NeighborhoodQuery,
-    NeighborhoodResult, NewUser, ObjectId, ObjectTerm, SbolObjectRecord, SerializationFormat,
-    Triple, User, UserId,
+    BlobRef, ConfigEntry, DomainError, GraphId, GraphRecord, ImportReport, JobId,
+    NeighborhoodQuery, NeighborhoodResult, NewUser, ObjectId, ObjectTerm, SbolObjectRecord,
+    SerializationFormat, Triple, User, UserId,
 };
 use sbol_db_search::ClusterId;
 use serde_json::Value;
@@ -362,6 +362,10 @@ pub trait UserStore: Send + Sync {
     /// clearing the link so it cannot be reused. Returns the claimed account, or
     /// `None` when no account carries that link.
     async fn consume_reset_link(&self, link: &str) -> Result<Option<User>, DomainError>;
+
+    /// Delete the account with `id`, returning whether a row was removed
+    /// (`false` when no such account exists).
+    async fn delete_user(&self, id: UserId) -> Result<bool, DomainError>;
 }
 
 /// API-token persistence for the identity layer.
@@ -507,9 +511,38 @@ pub trait BlobStore: Send + Sync {
     async fn exists(&self, sha1: &str) -> Result<bool, DomainError>;
 }
 
+/// Durable instance configuration, a flat key to JSON-value store.
+///
+/// This is the persistent equivalent of classic SynBioHub's mutable
+/// `config.local.json`: each section (registries, remotes, plugins, mail,
+/// theme, and the like) lives under one stable key with an arbitrary JSON
+/// value. Held separately in the application facade rather than reached through
+/// [`SbolStore`], mirroring [`PageRankStore`] and [`ClusterStore`], so the SBOL
+/// store stays free of application configuration. The application's
+/// `ConfigService` layers typed accessors and admin-gated mutation on top.
+#[async_trait]
+pub trait ConfigStore: Send + Sync {
+    /// The value stored under `key`, or `None` when the key has never been set.
+    async fn get(&self, key: &str) -> Result<Option<Value>, DomainError>;
+
+    /// Write `value` under `key`, upserting: a later write to the same key
+    /// overwrites the earlier value and refreshes its `updated_at`.
+    async fn set(&self, key: &str, value: &Value) -> Result<(), DomainError>;
+
+    /// Every stored entry. Order is unspecified.
+    async fn get_all(&self) -> Result<Vec<ConfigEntry>, DomainError>;
+
+    /// Remove the entry under `key`. Deleting an absent key is a no-op.
+    async fn delete(&self, key: &str) -> Result<(), DomainError>;
+}
+
 #[cfg(test)]
 mod blob_store_object_safety {
     /// Proves [`BlobStore`](super::BlobStore) is object-safe, so the facade can
     /// hold it as `Arc<dyn BlobStore>`.
     fn _assert_obj_safe(_: &dyn super::BlobStore) {}
+
+    /// Proves [`ConfigStore`](super::ConfigStore) is object-safe, so the facade
+    /// can hold it as `Arc<dyn ConfigStore>`.
+    fn _assert_config_obj_safe(_: &dyn super::ConfigStore) {}
 }

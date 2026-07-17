@@ -21,7 +21,8 @@
 use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
-use sbol_db_core::{DomainError, IriString, ObjectTerm, Triple};
+use async_trait::async_trait;
+use sbol_db_core::{DomainError, IriString, ObjectTerm, SubjectTerm, Triple};
 use sbol_db_sparql::{GraphScope, ResultFormat, SparqlEngine, SparqlOptions};
 
 /// The RDF `type` predicate, spelled in full so query strings need no prefix
@@ -52,6 +53,27 @@ const DEFAULT_RESOLVE_BATCH: usize = 200;
 /// query materializes an unbounded graph. Classic's `staggeredQueryLimit`.
 const DEFAULT_STAGGER_LIMIT: usize = 10_000;
 
+/// The maximum number of distinct remote (cross-instance) objects a single
+/// closure fetches, bounding federation fan-out so one download cannot trigger
+/// an unbounded chain of outbound requests.
+const DEFAULT_REMOTE_FANOUT: usize = 64;
+
+/// Resolves a top-level URI hosted on another Web of Registries instance into
+/// its SBOL triples, so the closure crawl can splice in cross-instance
+/// references. Implemented by
+/// [`FederationService`](crate::FederationService); a non-federated instance
+/// simply supplies no resolver.
+#[async_trait]
+pub trait RemoteObjectResolver: Send + Sync {
+    /// The registered `uriPrefix -> instanceUrl` pairs. An empty list disables
+    /// remote resolution, letting the crawl skip the outbound path entirely.
+    async fn instances(&self) -> Result<Vec<(String, String)>, DomainError>;
+
+    /// Fetch the SBOL triples for a remote object URI from its hosting
+    /// instance.
+    async fn fetch_remote(&self, uri: &str) -> Result<Vec<Triple>, DomainError>;
+}
+
 /// Crawls the triplestore to the transitive closure of an SBOL object over the
 /// shared, ACL-scoped SPARQL engine.
 #[derive(Clone)]
@@ -60,6 +82,8 @@ pub struct Downloader {
     database_prefix: String,
     resolve_batch: usize,
     stagger_limit: usize,
+    remote: Option<Arc<dyn RemoteObjectResolver>>,
+    remote_fanout: usize,
 }
 
 impl Downloader {
@@ -71,6 +95,8 @@ impl Downloader {
             database_prefix: DEFAULT_DATABASE_PREFIX.to_owned(),
             resolve_batch: DEFAULT_RESOLVE_BATCH,
             stagger_limit: DEFAULT_STAGGER_LIMIT,
+            remote: None,
+            remote_fanout: DEFAULT_REMOTE_FANOUT,
         }
     }
 
@@ -78,6 +104,15 @@ impl Downloader {
     /// IRI is deployment-specific; a caller wires its configured prefix here.
     pub fn with_database_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.database_prefix = prefix.into();
+        self
+    }
+
+    /// Resolve cross-instance references through `resolver`: after the local
+    /// closure is built, any referenced URI hosted on a known Web of Registries
+    /// instance is fetched remotely and its triples spliced in. A closure
+    /// without a resolver stays purely local.
+    pub fn with_remote_resolver(mut self, resolver: Arc<dyn RemoteObjectResolver>) -> Self {
+        self.remote = Some(resolver);
         self
     }
 
@@ -93,11 +128,62 @@ impl Downloader {
         object_iri: &str,
         scope: GraphScope,
     ) -> Result<Vec<Triple>, DomainError> {
-        if self.is_collection(object_iri, &scope).await? {
+        let mut closure = if self.is_collection(object_iri, &scope).await? {
             let where_body = collection_where(object_iri);
-            return self.construct_paged(&where_body, &scope).await;
+            self.construct_paged(&where_body, &scope).await?
+        } else {
+            self.crawl(object_iri, &scope, None, false).await?
+        };
+        self.resolve_remotes(&mut closure).await?;
+        Ok(closure)
+    }
+
+    /// Splice cross-instance references into a local closure. References into
+    /// another registry (a URI whose prefix maps to a known instance and that
+    /// the local closure does not itself define) are fetched from the hosting
+    /// instance, up to the fan-out cap. A no-op when no resolver is configured
+    /// or no registered prefix matches, so a non-federated instance is
+    /// unaffected.
+    async fn resolve_remotes(&self, closure: &mut Vec<Triple>) -> Result<(), DomainError> {
+        let Some(resolver) = &self.remote else {
+            return Ok(());
+        };
+        let instances = resolver.instances().await?;
+        if instances.is_empty() {
+            return Ok(());
         }
-        self.crawl(object_iri, &scope, None, false).await
+        // Subjects already defined locally are never re-fetched.
+        let defined: HashSet<&str> = closure
+            .iter()
+            .filter_map(|t| match &t.subject {
+                SubjectTerm::Iri(iri) => Some(iri.as_str()),
+                _ => None,
+            })
+            .collect();
+        let mut remote_targets: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for triple in closure.iter() {
+            if let ObjectTerm::Iri(iri) = &triple.object {
+                let uri = iri.as_str();
+                if uri.starts_with(&self.database_prefix) || defined.contains(uri) {
+                    continue;
+                }
+                if !instances
+                    .iter()
+                    .any(|(prefix, _)| uri.starts_with(prefix.as_str()))
+                {
+                    continue;
+                }
+                if seen.insert(uri.to_owned()) {
+                    remote_targets.push(uri.to_owned());
+                }
+            }
+        }
+        for uri in remote_targets.into_iter().take(self.remote_fanout) {
+            let fetched = resolver.fetch_remote(&uri).await?;
+            closure.extend(fetched);
+        }
+        Ok(())
     }
 
     /// The non-recursive closure of `object_iri`: the crawl is narrowed to the
@@ -359,6 +445,91 @@ INSERT DATA {
         assert!(
             has_literal(&closure, SIBLING, TITLE, "sibling only via member"),
             "recursive closure should follow the member edge to the sibling"
+        );
+    }
+
+    /// A stub resolver advertising one remote instance and serving a single
+    /// triple for the remote object, so cross-instance resolution is exercised
+    /// with no network.
+    struct StubResolver {
+        instance_prefix: String,
+        instance_url: String,
+        remote_object: String,
+    }
+
+    #[async_trait]
+    impl RemoteObjectResolver for StubResolver {
+        async fn instances(&self) -> Result<Vec<(String, String)>, DomainError> {
+            Ok(vec![(
+                self.instance_prefix.clone(),
+                self.instance_url.clone(),
+            )])
+        }
+
+        async fn fetch_remote(&self, uri: &str) -> Result<Vec<Triple>, DomainError> {
+            assert_eq!(
+                uri, self.remote_object,
+                "only the referenced remote URI is fetched"
+            );
+            Ok(vec![Triple {
+                subject: SubjectTerm::Iri(IriString::unchecked(uri)),
+                predicate: IriString::unchecked(TITLE),
+                object: ObjectTerm::Literal {
+                    value: "remote object".to_owned(),
+                    datatype: IriString::unchecked("http://www.w3.org/2001/XMLSchema#string"),
+                    language: None,
+                },
+                graph_iri: None,
+            }])
+        }
+    }
+
+    /// A local object referencing a URI hosted on another registry instance is
+    /// resolved remotely and its triples spliced into the closure.
+    #[tokio::test]
+    async fn closure_resolves_remote_uri() {
+        const REMOTE: &str = "https://remote.org/public/part/1";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("remote.db");
+        let url = format!("sqlite://{}", path.display());
+        let backend = Backend::open(&url).await.expect("open sqlite backend");
+        backend
+            .migrator
+            .as_ref()
+            .expect("sqlite backend has a migrator")
+            .run_migrations()
+            .await
+            .expect("run migrations");
+
+        let fixture = format!(
+            "INSERT DATA {{ \
+             <{ROOT}> <{RDF_TYPE}> <http://sbols.org/v2#ComponentDefinition> . \
+             <{ROOT}> <http://sbols.org/v2#component> <{REMOTE}> . }}"
+        );
+        let update =
+            SparqlUpdateEngine::new(backend.triple_source.clone(), backend.triple_writer.clone());
+        update
+            .execute(&fixture, Some(GRAPH), &SparqlOptions::default())
+            .await
+            .expect("seed fixture");
+
+        let engine = Arc::new(SparqlEngine::new(backend.triple_source.clone()));
+        let resolver = Arc::new(StubResolver {
+            instance_prefix: "https://remote.org/".to_owned(),
+            instance_url: "https://remote.org".to_owned(),
+            remote_object: REMOTE.to_owned(),
+        });
+        let downloader = Downloader::new(engine)
+            .with_database_prefix(PREFIX)
+            .with_remote_resolver(resolver);
+
+        let closure = downloader
+            .fetch_recursive(ROOT, GraphScope::Union)
+            .await
+            .expect("recursive closure");
+        assert!(
+            has_literal(&closure, REMOTE, TITLE, "remote object"),
+            "closure should include the remotely-resolved object's triples: {closure:?}"
         );
     }
 

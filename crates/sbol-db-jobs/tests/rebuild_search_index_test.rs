@@ -121,6 +121,7 @@ async fn rebuild_populates_ranks_and_index() {
             text_index: text_index.clone(),
             triples,
         }),
+        config: None,
     };
 
     RebuildSearchIndexHandler
@@ -225,6 +226,7 @@ async fn rebuild_without_search_handle_fails_clearly() {
         jobs,
         cancel: CancellationToken::new(),
         search: None,
+        config: None,
     };
 
     let err = RebuildSearchIndexHandler

@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use sbol_db_app::AppServices;
 use sbol_db_rocksdb::{
-    connect, Db, RocksdbClusterStore, RocksdbJobs, RocksdbPageRankStore, RocksdbStore,
-    RocksdbTokenStore, RocksdbUserStore,
+    connect, Db, RocksdbClusterStore, RocksdbConfigStore, RocksdbJobs, RocksdbPageRankStore,
+    RocksdbStore, RocksdbTokenStore, RocksdbUserStore,
 };
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
-    AclStore, ClusterStore, JobQueue, PageRankStore, SbolStore, TokenStore, UserStore,
+    AclStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore, TokenStore, UserStore,
 };
 use tempfile::TempDir;
 
@@ -73,9 +73,11 @@ async fn rocksdb_passes_full_conformance_suite() {
     let users: Arc<dyn UserStore> = Arc::new(RocksdbUserStore::new(db.clone()));
     let tokens: Arc<dyn TokenStore> = Arc::new(RocksdbTokenStore::new(db.clone()));
     let pagerank: Arc<dyn PageRankStore> = Arc::new(RocksdbPageRankStore::new(db.clone()));
-    let cluster: Arc<dyn ClusterStore> = Arc::new(RocksdbClusterStore::new(db));
+    let cluster: Arc<dyn ClusterStore> = Arc::new(RocksdbClusterStore::new(db.clone()));
+    let config: Arc<dyn ConfigStore> = Arc::new(RocksdbConfigStore::new(db));
     let app = AppServices::new(store_dyn, sparql, sparql_update, jobs, acl)
         .with_identity(users, tokens)
-        .with_sequence_stores(pagerank, cluster);
+        .with_sequence_stores(pagerank, cluster)
+        .with_config(config);
     sbol_db_conformance::run_all(&app).await;
 }

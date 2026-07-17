@@ -3450,6 +3450,7 @@ dependencies = [
  "flate2",
  "hex",
  "infer",
+ "reqwest",
  "sbol",
  "sbol-db-backend",
  "sbol-db-core",
@@ -3458,6 +3459,8 @@ dependencies = [
  "sbol-db-sparql",
  "sbol-db-storage",
  "sbol-rdf",
+ "serde",
+ "serde_json",
  "sha1",
  "sha3",
  "tempfile",
@@ -3482,6 +3485,7 @@ dependencies = [
 name = "sbol-db-conformance"
 version = "0.1.1"
 dependencies = [
+ "async-trait",
  "hex",
  "sbol",
  "sbol-db-app",
@@ -3629,6 +3633,7 @@ dependencies = [
 name = "sbol-db-server"
 version = "0.1.1"
 dependencies = [
+ "async-trait",
  "axum",
  "base64",
  "chrono",

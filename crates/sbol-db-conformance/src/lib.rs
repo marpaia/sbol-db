@@ -16,14 +16,17 @@
 //! to the graphs and keys they create so [`run_all`] can run them in sequence
 //! against one store without cross-contamination.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use std::io::Read;
 
+use async_trait::async_trait;
 use sbol_db_app::{
     AppServices, AttachmentService, AuthService, Downloader, EditService, FacetedSearch,
-    FsBlobStore, MutationError, MutationService, PermissionService, SubmissionService,
-    SubmitRequest, PUBLIC_GRAPH,
+    FederationError, FederationService, FsBlobStore, JoinPayload, JoinResponse, MutationError,
+    MutationService, PermissionService, Registration, SubmissionService, SubmitRequest,
+    WebOfRegistriesClient, WorInstance, PUBLIC_GRAPH,
 };
 use sbol_db_core::{
     Direction, DomainError, GraphId, IriString, NeighborhoodQuery, NewUser, ObjectTerm,
@@ -128,6 +131,246 @@ pub async fn run_all(app: &AppServices) {
     user_crud(app).await;
     token_issue_resolve_revoke(app).await;
     legacy_sha1_rehash_on_login(app).await;
+    config_store_roundtrip(app).await;
+    config_roundtrip(app).await;
+    admin_user_crud(app).await;
+    wor_map_persisted(app).await;
+}
+
+/// The durable configuration store's contract: an unset key reads back absent,
+/// a write reads back verbatim, a later write to the same key overwrites the
+/// earlier value (upsert), every entry is enumerable, and a delete removes it.
+///
+/// This is the backend-neutral parity for the `ConfigStore` each backend
+/// implements, driven through the facade's `config` handle so Postgres, SQLite,
+/// and RocksDB prove identical set/get/get_all/delete/upsert behavior.
+pub async fn config_store_roundtrip(app: &AppServices) {
+    let config = app.config.as_ref();
+    const KEY: &str = "conformance:config:mail";
+    const OTHER: &str = "conformance:config:theme";
+
+    // An unset key reads back absent.
+    assert!(
+        config.get(KEY).await.expect("get unset").is_none(),
+        "an unset key reads back as absent"
+    );
+
+    // A write reads back verbatim.
+    let mail = serde_json::json!({ "fromAddress": "admin@example.org", "sendgridApiKey": "sg-1" });
+    config.set(KEY, &mail).await.expect("set");
+    assert_eq!(
+        config.get(KEY).await.expect("get"),
+        Some(mail),
+        "a written value reads back verbatim"
+    );
+
+    // A second write to the same key overwrites the value (upsert).
+    let mail2 = serde_json::json!({ "fromAddress": "ops@example.org" });
+    config.set(KEY, &mail2).await.expect("overwrite");
+    assert_eq!(
+        config.get(KEY).await.expect("get after overwrite"),
+        Some(mail2.clone()),
+        "a later write to the same key overwrites the earlier value"
+    );
+
+    // A second key coexists, and get_all enumerates both.
+    let theme = serde_json::json!({ "name": "dark" });
+    config.set(OTHER, &theme).await.expect("set other");
+    let all: std::collections::HashMap<String, serde_json::Value> = config
+        .get_all()
+        .await
+        .expect("get_all")
+        .into_iter()
+        .map(|e| (e.key, e.value))
+        .collect();
+    assert_eq!(all.get(KEY), Some(&mail2), "get_all carries the first key");
+    assert_eq!(
+        all.get(OTHER),
+        Some(&theme),
+        "get_all carries the second key"
+    );
+
+    // Delete removes a key; the other survives.
+    config.delete(KEY).await.expect("delete");
+    assert!(
+        config.get(KEY).await.expect("get after delete").is_none(),
+        "a deleted key reads back as absent"
+    );
+    assert_eq!(
+        config.get(OTHER).await.expect("get survivor"),
+        Some(theme),
+        "an unrelated key survives a delete"
+    );
+
+    // Leave the store as we found it for any scenario that follows.
+    config.delete(OTHER).await.expect("cleanup other");
+}
+
+/// The admin-gated [`ConfigService`](sbol_db_app::ConfigService) over each
+/// backend's durable store: an unset section reads back absent, a non-admin
+/// write or delete is refused and persists nothing, an admin write reads back
+/// verbatim and a later admin write overwrites it, and an admin delete removes
+/// it.
+///
+/// This is the parity for the service layer the `/admin` config routes call,
+/// where `config_store_roundtrip` covers the raw store trait. Both run so each
+/// backend proves the durable store honors the gate the same way.
+pub async fn config_roundtrip(app: &AppServices) {
+    let config = app.config_service();
+    const KEY: &str = "conformance:svc:mail";
+
+    // An unset section defaults to absent.
+    assert!(
+        config.get(KEY).await.expect("get unset").is_none(),
+        "an unset config section reads back as absent"
+    );
+
+    // A non-admin write is refused and leaves the section absent.
+    let value = serde_json::json!({ "fromAddress": "ops@example.org" });
+    assert!(
+        config.set(false, KEY, &value).await.is_err(),
+        "a non-admin write is refused"
+    );
+    assert!(
+        config
+            .get(KEY)
+            .await
+            .expect("get after refused write")
+            .is_none(),
+        "a refused write persists nothing"
+    );
+
+    // An admin write persists and reads back verbatim.
+    config.set(true, KEY, &value).await.expect("admin set");
+    assert_eq!(
+        config.get(KEY).await.expect("get after set"),
+        Some(value),
+        "an admin write reads back verbatim"
+    );
+
+    // A later admin write to the same section overwrites the value.
+    let updated = serde_json::json!({ "fromAddress": "admin@example.org" });
+    config
+        .set(true, KEY, &updated)
+        .await
+        .expect("admin overwrite");
+    assert_eq!(
+        config.get(KEY).await.expect("get after overwrite"),
+        Some(updated),
+        "a later admin write overwrites the earlier value"
+    );
+
+    // A non-admin delete is refused; an admin delete removes the section.
+    assert!(
+        config.delete(false, KEY).await.is_err(),
+        "a non-admin delete is refused"
+    );
+    config.delete(true, KEY).await.expect("admin delete");
+    assert!(
+        config.get(KEY).await.expect("get after delete").is_none(),
+        "an admin delete removes the section"
+    );
+}
+
+/// A stubbed Web of Registries sync persists its `uriPrefix -> instanceUrl` map
+/// in the backend's durable [`ConfigStore`](sbol_db_storage::ConfigStore).
+///
+/// A [`FederationService`] over `app`'s durable config store, paired with a stub
+/// client that returns a canned instance list (so no network is touched), joins
+/// then syncs; a second, independently constructed service over the same store
+/// reads the map back, proving the federation state lives in the store and not
+/// in the service instance. This certifies federation persistence on each
+/// backend.
+pub async fn wor_map_persisted(app: &AppServices) {
+    let instances = vec![
+        WorInstance {
+            uri_prefix: "https://reg-a.conformance.example.org/".to_owned(),
+            instance_url: "https://reg-a.conformance.example.org/".to_owned(),
+        },
+        WorInstance {
+            uri_prefix: "https://reg-b.conformance.example.org/".to_owned(),
+            // A trailing slash the sync must strip.
+            instance_url: "https://reg-b.conformance.example.org".to_owned(),
+        },
+    ];
+    let client: Arc<dyn WebOfRegistriesClient> = Arc::new(StubWorClient {
+        instances: instances.clone(),
+    });
+    let federation = FederationService::new(app.config.clone(), client);
+
+    // Join, then pull the instance list into the durable map.
+    federation
+        .federate(
+            true,
+            "admin@conformance.example.org",
+            "https://wor.conformance.example.org/",
+        )
+        .await
+        .expect("federate");
+    let applied = federation.retrieve().await.expect("retrieve");
+    assert_eq!(applied, 2, "the sync applies both advertised instances");
+
+    // A fresh service over the same store reads the persisted map, so the state
+    // is in the store, not the service.
+    let reader = FederationService::new(app.config.clone(), Arc::new(StubWorClient::default()));
+    let map: std::collections::HashMap<String, String> = reader
+        .registries()
+        .await
+        .expect("registries")
+        .into_iter()
+        .collect();
+    assert_eq!(
+        map.get("https://reg-a.conformance.example.org/"),
+        Some(&"https://reg-a.conformance.example.org".to_owned()),
+        "the first instance is persisted with its trailing slash stripped"
+    );
+    assert_eq!(
+        map.get("https://reg-b.conformance.example.org/"),
+        Some(&"https://reg-b.conformance.example.org".to_owned()),
+        "the second instance is persisted"
+    );
+
+    // Leave the store as we found it: the keys the federate/sync path writes
+    // (mirrors the constants in sbol-db-app's federation module).
+    let config = app.config.as_ref();
+    for key in [
+        "webOfRegistries",
+        "webOfRegistriesUrl",
+        "webOfRegistriesId",
+        "webOfRegistriesSecret",
+        "administratorEmail",
+    ] {
+        config.delete(key).await.expect("cleanup federation key");
+    }
+}
+
+/// A stub [`WebOfRegistriesClient`] that returns a canned instance list and a
+/// fixed join response, so the federation scenario runs with no network.
+#[derive(Default)]
+struct StubWorClient {
+    instances: Vec<WorInstance>,
+}
+
+#[async_trait]
+impl WebOfRegistriesClient for StubWorClient {
+    async fn join(
+        &self,
+        _wor_url: &str,
+        _payload: &JoinPayload,
+    ) -> Result<JoinResponse, FederationError> {
+        Ok(JoinResponse {
+            id: "conformance-instance".to_owned(),
+            update_secret: "conformance-secret".to_owned(),
+        })
+    }
+
+    async fn fetch_instances(&self, _wor_url: &str) -> Result<Vec<WorInstance>, FederationError> {
+        Ok(self.instances.clone())
+    }
+
+    async fn fetch_sbol(&self, _object_url: &str) -> Result<String, FederationError> {
+        Ok(String::new())
+    }
 }
 
 /// The password salt the legacy-rehash scenario seeds its digest with and
@@ -193,6 +436,84 @@ pub async fn user_crud(app: &AppServices) {
         .expect("account still present");
     assert_eq!(reread.name, "Renamed User", "name update is durable");
     assert!(reread.is_admin, "membership-flag update is durable");
+}
+
+/// The admin user-management path end to end: the `AuthService.register` verb
+/// the `/admin/createUser` route calls mints an account, a membership-flag
+/// update is durable, and `delete_user` removes it so a second delete reports
+/// the account already gone.
+///
+/// Where `user_crud` drives the raw `UserStore.create_user`, this drives the
+/// register-then-delete flow the admin routes use, certifying `delete_user`
+/// (which no read path exercises) on each backend.
+pub async fn admin_user_crud(app: &AppServices) {
+    let created = app
+        .auth
+        .register(Registration {
+            username: "admin_crud_user".to_owned(),
+            name: "Admin Crud User".to_owned(),
+            email: "admin_crud_user@example.org".to_owned(),
+            affiliation: None,
+            password: "s3cret".to_owned(),
+            is_admin: false,
+            is_curator: false,
+            is_member: true,
+        })
+        .await
+        .expect("register mints the account");
+    assert!(
+        created.password_hash.starts_with("$argon2"),
+        "register argon2-hashes the plaintext password"
+    );
+
+    // The account resolves by username and starts without the curator flag.
+    let fetched = app
+        .users
+        .find_by_email_or_username("admin_crud_user")
+        .await
+        .expect("find")
+        .expect("the registered account resolves by username");
+    assert_eq!(fetched.id, created.id);
+    assert!(!fetched.is_curator, "created without the curator flag");
+
+    // A membership-flag update is durable.
+    let mut updated = fetched;
+    updated.is_curator = true;
+    app.users
+        .update_user(&updated)
+        .await
+        .expect("update the membership flag");
+    let reread = app
+        .users
+        .get_by_id(created.id)
+        .await
+        .expect("get_by_id after update")
+        .expect("account still present");
+    assert!(reread.is_curator, "the curator-flag update is durable");
+
+    // Delete removes the account; a second delete reports it already gone.
+    assert!(
+        app.users
+            .delete_user(created.id)
+            .await
+            .expect("delete_user"),
+        "deleting a present account reports success"
+    );
+    assert!(
+        app.users
+            .get_by_id(created.id)
+            .await
+            .expect("get_by_id after delete")
+            .is_none(),
+        "a deleted account no longer fetches by id"
+    );
+    assert!(
+        !app.users
+            .delete_user(created.id)
+            .await
+            .expect("second delete_user"),
+        "a second delete reports the account already gone"
+    );
 }
 
 /// The API-token lifecycle end to end: a minted token resolves to the account

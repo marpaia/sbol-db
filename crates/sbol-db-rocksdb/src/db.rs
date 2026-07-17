@@ -85,6 +85,8 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     // cluster_id(BE) + SEP + iri -> () so cluster-mate lookup is a prefix scan.
     "sequence_cluster",
     "sequence_cluster_by_id",
+    // Durable instance configuration: key -> ConfigEntry JSON.
+    "app_config",
     // Counters and schema version.
     "meta",
 ];

@@ -178,6 +178,24 @@ impl UserStore for RocksdbUserStore {
         })
         .await
     }
+
+    async fn delete_user(&self, id: UserId) -> Result<bool, DomainError> {
+        let db = self.db.clone();
+        let writes = self.writes.clone();
+        blocking(move || {
+            let _guard = writes.lock().unwrap();
+            let Some(user) = get_user(&db, id)? else {
+                return Ok(false);
+            };
+            let mut batch = WriteBatch::default();
+            batch.delete_cf(&db.cf(CF_USERS), id.as_uuid().as_bytes());
+            batch.delete_cf(&db.cf(CF_BY_USERNAME), user.username.as_bytes());
+            batch.delete_cf(&db.cf(CF_BY_EMAIL), user.email.as_bytes());
+            db.write(batch)?;
+            Ok(true)
+        })
+        .await
+    }
 }
 
 /// Write an account plus its username/email lookup entries in one batch.

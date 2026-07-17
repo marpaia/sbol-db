@@ -16,11 +16,14 @@ mod attachment;
 mod auth;
 mod blob;
 mod collection;
+mod config;
 mod download;
 mod edit;
+mod federation;
 pub mod memory;
 mod mutation;
 mod permission;
+mod plugin;
 mod search;
 mod sequence;
 mod submission;
@@ -32,10 +35,19 @@ pub use attachment::{
 pub use auth::{AuthService, PasswordReset, Registration};
 pub use blob::FsBlobStore;
 pub use collection::{CollectionService, MintScope, MintedSubmission, Submission};
-pub use download::{Downloader, DEFAULT_DATABASE_PREFIX};
+pub use config::{ConfigError, ConfigService};
+pub use download::{Downloader, RemoteObjectResolver, DEFAULT_DATABASE_PREFIX};
 pub use edit::{EditService, FieldValue};
+pub use federation::{
+    FederationError, FederationService, HttpWebOfRegistriesClient, JoinPayload, JoinResponse,
+    WebOfRegistriesClient, WorInstance,
+};
 pub use mutation::{MakePublicOutcome, MakePublicRequest, MutationError, MutationService};
 pub use permission::PermissionService;
+pub use plugin::{
+    CallPluginRequest, ExposeRegistry, HttpPluginClient, PluginClient, PluginError, PluginResponse,
+    PluginService, StreamOutcome, StreamRegistry, StreamServe, PLUGIN_CATEGORIES,
+};
 pub use sbol_db_search::ranked_text::Hit;
 pub use sbol_db_search::{AlignMode, AlignOptions};
 pub use sbol_db_storage::SequenceAlignment;
@@ -49,7 +61,8 @@ use sbol_db_backend::Backend;
 use sbol_db_search::ranked_text::RankedTextIndex;
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
-    AclStore, BlobStore, ClusterStore, JobQueue, PageRankStore, SbolStore, TokenStore, UserStore,
+    AclStore, BlobStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore, TokenStore,
+    UserStore,
 };
 
 /// The application facade: the neutral trait objects plus the identity-aware
@@ -80,6 +93,12 @@ pub struct AppServices {
     /// it; the sequence facade reads it. Defaults to a non-persistent in-RAM
     /// store; a backend-built facade swaps in the durable one.
     pub cluster: Arc<dyn ClusterStore>,
+    /// Durable instance configuration (registries, remotes, plugins, mail,
+    /// theme), the replacement for classic SynBioHub's `config.local.json`.
+    /// Defaults to a non-persistent in-RAM store; a backend-built facade swaps
+    /// in the durable one. The [`ConfigService`](Self::config_service) layers
+    /// admin-gated mutation on top.
+    pub config: Arc<dyn ConfigStore>,
     /// Turns a caller identity into the graph scope a read is authorized for.
     pub acl_service: AclService,
     /// Account persistence for the identity layer.
@@ -93,6 +112,20 @@ pub struct AppServices {
     /// needs a persistent, filesystem-backed index swaps one in with
     /// [`with_text_search`](Self::with_text_search).
     pub text_search: Arc<RankedTextIndex>,
+    /// The Web of Registries HTTP client backing federation. Defaults to the
+    /// SSRF-guarded [`HttpWebOfRegistriesClient`]; a test swaps in a stub with
+    /// [`with_federation_client`](Self::with_federation_client). The
+    /// [`FederationService`](Self::federation) pairs it with the config store.
+    pub federation_client: Arc<dyn WebOfRegistriesClient>,
+    /// The plugin HTTP client backing the `/callPlugin` proxy. Defaults to the
+    /// SSRF-guarded [`HttpPluginClient`]; a test swaps in a stub with
+    /// [`with_plugin_client`](Self::with_plugin_client). The
+    /// [`PluginService`](Self::plugins) pairs it with the config store.
+    pub plugin_client: Arc<dyn PluginClient>,
+    /// The registry of time-limited exposed artifacts backing `/expose/:id`.
+    pub expose: Arc<ExposeRegistry>,
+    /// The async long-run handoff registry backing `/stream/:id`.
+    pub stream: Arc<StreamRegistry>,
 }
 
 impl AppServices {
@@ -139,6 +172,7 @@ impl AppServices {
             backend.tokens.clone(),
         )
         .with_sequence_stores(backend.pagerank.clone(), backend.cluster.clone())
+        .with_config(backend.config.clone())
     }
 
     /// Replace the default in-RAM PageRank and cluster stores with durable
@@ -152,6 +186,46 @@ impl AppServices {
     ) -> Self {
         self.pagerank = pagerank;
         self.cluster = cluster;
+        self
+    }
+
+    /// Replace the default in-RAM config store with a caller-provided one,
+    /// typically the backend's durable store, so instance configuration
+    /// survives a restart. [`from_backend`](Self::from_backend) applies this.
+    pub fn with_config(mut self, config: Arc<dyn ConfigStore>) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// The admin-gated configuration facade over the durable config store.
+    pub fn config_service(&self) -> ConfigService {
+        ConfigService::new(self.config.clone())
+    }
+
+    /// The Web of Registries federation facade over the durable config store and
+    /// the shared federation HTTP client. Also serves as the
+    /// [`RemoteObjectResolver`] for cross-instance closure resolution.
+    pub fn federation(&self) -> FederationService {
+        FederationService::new(self.config.clone(), self.federation_client.clone())
+    }
+
+    /// Replace the default SSRF-guarded federation HTTP client with a
+    /// caller-provided one, typically a stub in a test.
+    pub fn with_federation_client(mut self, client: Arc<dyn WebOfRegistriesClient>) -> Self {
+        self.federation_client = client;
+        self
+    }
+
+    /// The plugin configuration and proxy facade over the durable config store
+    /// and the shared plugin HTTP client.
+    pub fn plugins(&self) -> PluginService {
+        PluginService::new(self.config.clone(), self.plugin_client.clone())
+    }
+
+    /// Replace the default SSRF-guarded plugin HTTP client with a
+    /// caller-provided one, typically a stub in a test.
+    pub fn with_plugin_client(mut self, client: Arc<dyn PluginClient>) -> Self {
+        self.plugin_client = client;
         self
     }
 
@@ -215,6 +289,12 @@ impl AppServices {
         ));
         let pagerank: Arc<dyn PageRankStore> = Arc::new(memory::InMemoryPageRankStore::new());
         let cluster: Arc<dyn ClusterStore> = Arc::new(memory::InMemoryClusterStore::new());
+        let config: Arc<dyn ConfigStore> = Arc::new(memory::InMemoryConfigStore::new());
+        let federation_client: Arc<dyn WebOfRegistriesClient> =
+            Arc::new(federation::HttpWebOfRegistriesClient::new());
+        let plugin_client: Arc<dyn PluginClient> = Arc::new(plugin::HttpPluginClient::new());
+        let expose = Arc::new(plugin::ExposeRegistry::new());
+        let stream = Arc::new(plugin::StreamRegistry::new());
         Self {
             store,
             sparql,
@@ -223,12 +303,17 @@ impl AppServices {
             acl,
             pagerank,
             cluster,
+            config,
             blobs,
             acl_service,
             users,
             tokens,
             auth,
             text_search,
+            federation_client,
+            plugin_client,
+            expose,
+            stream,
         }
     }
 }

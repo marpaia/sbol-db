@@ -2,6 +2,7 @@
 //! here.
 
 mod blob;
+mod config;
 mod error;
 mod identity;
 mod ids;
@@ -15,6 +16,7 @@ pub mod triple;
 mod validation;
 
 pub use blob::BlobRef;
+pub use config::ConfigEntry;
 pub use error::DomainError;
 pub use identity::{ApiToken, NewUser, User};
 pub use ids::{GraphId, JobId, ObjectId, UserId, ValidationRunId};

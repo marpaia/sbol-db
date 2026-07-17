@@ -2,6 +2,7 @@
 
 pub mod accel;
 pub mod cluster;
+pub mod config;
 pub mod graph;
 pub mod job;
 pub mod lab;
@@ -15,6 +16,7 @@ pub mod triple;
 pub mod users;
 
 pub use cluster::RocksdbClusterStore;
+pub use config::RocksdbConfigStore;
 pub use graph::GraphRepository;
 pub use job::JobRepository;
 pub use lab::LabRepository;

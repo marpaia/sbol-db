@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use sbol_db_core::JobId;
 use sbol_db_search::ranked_text::RankedTextIndex;
-use sbol_db_storage::{ClusterStore, JobQueue, PageRankStore, SbolStore, TripleSource};
+use sbol_db_storage::{
+    ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore, TripleSource,
+};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -52,6 +54,11 @@ pub struct JobContext {
     /// `rebuild_search_index` handler requires it; every other handler ignores
     /// it.
     pub search: Option<SearchIndexHandles>,
+    /// The durable instance-configuration store. Present only on a worker
+    /// configured with it; the `wor_sync` handler requires it to read the joined
+    /// Web of Registries URL and persist the pulled prefix map, and every other
+    /// handler ignores it.
+    pub config: Option<Arc<dyn ConfigStore>>,
 }
 
 impl JobContext {

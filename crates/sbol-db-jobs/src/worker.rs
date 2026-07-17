@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use sbol_db_core::{DomainError, JobId};
-use sbol_db_storage::{JobQueue, JobStatus, SbolJob, SbolStore, DEFAULT_QUEUE};
+use sbol_db_storage::{ConfigStore, JobQueue, JobStatus, SbolJob, SbolStore, DEFAULT_QUEUE};
 use sqlx::postgres::PgListener;
 use sqlx::PgPool;
 use tokio::sync::Semaphore;
@@ -104,6 +104,7 @@ pub struct Worker {
     registry: Arc<JobRegistry>,
     config: WorkerConfig,
     search: Option<SearchIndexHandles>,
+    config_store: Option<Arc<dyn ConfigStore>>,
 }
 
 impl Worker {
@@ -121,6 +122,7 @@ impl Worker {
             registry,
             config,
             search: None,
+            config_store: None,
         }
     }
 
@@ -129,6 +131,14 @@ impl Worker {
     /// clear error while every other job kind runs unaffected.
     pub fn with_search_index(mut self, search: SearchIndexHandles) -> Self {
         self.search = Some(search);
+        self
+    }
+
+    /// Give this worker the durable config store so it can run the `wor_sync`
+    /// job. Without it that job fails fast with a clear error while every other
+    /// job kind runs unaffected.
+    pub fn with_config_store(mut self, config: Arc<dyn ConfigStore>) -> Self {
+        self.config_store = Some(config);
         self
     }
 
@@ -281,6 +291,7 @@ impl Worker {
                 jobs: self.repo.clone(),
                 cancel: cancel.clone(),
                 search: self.search.clone(),
+                config: self.config_store.clone(),
             };
             let repo = self.repo.clone();
             let cfg = self.config.clone();

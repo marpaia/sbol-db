@@ -49,6 +49,7 @@ metrics-exporter-prometheus.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
+async-trait.workspace = true
 sbol-db-backend.workspace = true
 sbol-genbank.workspace = true
 sbol-fasta.workspace = true

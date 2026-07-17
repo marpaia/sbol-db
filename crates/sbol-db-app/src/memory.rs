@@ -13,8 +13,12 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use sbol_db_core::{DomainError, NewUser, User, UserId};
-use sbol_db_storage::{ClusterId, ClusterStore, PageRankStore, RankRow, TokenStore, UserStore};
+use chrono::Utc;
+use sbol_db_core::{ConfigEntry, DomainError, NewUser, User, UserId};
+use sbol_db_storage::{
+    ClusterId, ClusterStore, ConfigStore, PageRankStore, RankRow, TokenStore, UserStore,
+};
+use serde_json::Value;
 
 /// A process-local [`UserStore`] keyed by [`UserId`], enforcing the same unique
 /// `username` and `email` constraints as the persistent backends.
@@ -118,6 +122,10 @@ impl UserStore for InMemoryUserStore {
         user.reset_password_link = None;
         Ok(Some(user.clone()))
     }
+
+    async fn delete_user(&self, id: UserId) -> Result<bool, DomainError> {
+        Ok(self.users.lock().unwrap().remove(&id).is_some())
+    }
 }
 
 /// A process-local [`TokenStore`] mapping a token hash to the account it
@@ -216,6 +224,55 @@ impl InMemoryClusterStore {
     /// An empty store.
     pub fn new() -> Self {
         Self::default()
+    }
+}
+
+/// A process-local [`ConfigStore`], the non-persistent default the
+/// [`AppServices::new`](crate::AppServices::new) constructor wires so the config
+/// service has somewhere to read and write; a backend-built facade replaces it
+/// with the durable store. Empty until a caller writes a key.
+#[derive(Default)]
+pub struct InMemoryConfigStore {
+    entries: Mutex<HashMap<String, ConfigEntry>>,
+}
+
+impl InMemoryConfigStore {
+    /// An empty store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl ConfigStore for InMemoryConfigStore {
+    async fn get(&self, key: &str) -> Result<Option<Value>, DomainError> {
+        Ok(self
+            .entries
+            .lock()
+            .unwrap()
+            .get(key)
+            .map(|e| e.value.clone()))
+    }
+
+    async fn set(&self, key: &str, value: &Value) -> Result<(), DomainError> {
+        self.entries.lock().unwrap().insert(
+            key.to_owned(),
+            ConfigEntry {
+                key: key.to_owned(),
+                value: value.clone(),
+                updated_at: Utc::now(),
+            },
+        );
+        Ok(())
+    }
+
+    async fn get_all(&self) -> Result<Vec<ConfigEntry>, DomainError> {
+        Ok(self.entries.lock().unwrap().values().cloned().collect())
+    }
+
+    async fn delete(&self, key: &str) -> Result<(), DomainError> {
+        self.entries.lock().unwrap().remove(key);
+        Ok(())
     }
 }
 

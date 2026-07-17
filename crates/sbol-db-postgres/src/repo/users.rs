@@ -130,6 +130,15 @@ impl UserStore for PgUserStore {
         .map_err(db_err)?;
         row.map(row_to_user).transpose()
     }
+
+    async fn delete_user(&self, id: UserId) -> Result<bool, DomainError> {
+        let result = sqlx::query("DELETE FROM sbh_user WHERE id = $1")
+            .bind(id.as_uuid())
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 fn row_to_user(row: sqlx::postgres::PgRow) -> Result<User, DomainError> {

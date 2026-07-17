@@ -1,5 +1,6 @@
 pub mod accel;
 pub mod cluster;
+pub mod config;
 pub mod graph;
 pub mod job;
 pub mod lab;
@@ -19,6 +20,7 @@ pub mod validation;
 
 pub use accel::AccelRepository;
 pub use cluster::PgClusterStore;
+pub use config::PgConfigStore;
 pub use graph::GraphRepository;
 pub use job::JobRepository;
 pub use lab::LabRepository;

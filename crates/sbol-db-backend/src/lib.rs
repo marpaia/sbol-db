@@ -17,20 +17,22 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use sbol_db_postgres::{
-    JobRepository, PgClusterStore, PgMigrator, PgPageRankStore, PgPool, PgSqlConsole,
-    PgStatsRepository, PgTokenStore, PgUserStore, SbolObjectService,
+    JobRepository, PgClusterStore, PgConfigStore, PgMigrator, PgPageRankStore, PgPool,
+    PgSqlConsole, PgStatsRepository, PgTokenStore, PgUserStore, SbolObjectService,
 };
 use sbol_db_rocksdb::{
-    RocksdbClusterStore, RocksdbJobs, RocksdbMigrator, RocksdbPageRankStore, RocksdbStats,
-    RocksdbStore, RocksdbTokenStore, RocksdbUserStore,
+    RocksdbClusterStore, RocksdbConfigStore, RocksdbJobs, RocksdbMigrator, RocksdbPageRankStore,
+    RocksdbStats, RocksdbStore, RocksdbTokenStore, RocksdbUserStore,
 };
 use sbol_db_sqlite::{
-    SqliteClusterStore, SqliteJobRepository, SqliteMigrator, SqlitePageRankStore, SqlitePool,
-    SqliteSqlConsole, SqliteStats, SqliteStore, SqliteTokenStore, SqliteUserStore,
+    SqliteClusterStore, SqliteConfigStore, SqliteJobRepository, SqliteMigrator,
+    SqlitePageRankStore, SqlitePool, SqliteSqlConsole, SqliteStats, SqliteStore, SqliteTokenStore,
+    SqliteUserStore,
 };
 use sbol_db_storage::{
-    AclStore, BackendKind, ClusterStore, DbStats, JobQueue, LabStore, LsmStats, Migrator,
-    PageRankStore, SbolStore, SqlConsole, TokenStore, TripleSource, TripleWriter, UserStore,
+    AclStore, BackendKind, ClusterStore, ConfigStore, DbStats, JobQueue, LabStore, LsmStats,
+    Migrator, PageRankStore, SbolStore, SqlConsole, TokenStore, TripleSource, TripleWriter,
+    UserStore,
 };
 
 /// A ready-to-use storage backend: the neutral trait objects every consumer
@@ -46,6 +48,9 @@ pub struct Backend {
     pub pagerank: Arc<dyn PageRankStore>,
     /// Sequence cluster assignments backing `/similar`.
     pub cluster: Arc<dyn ClusterStore>,
+    /// Durable instance configuration (registries, remotes, plugins, mail,
+    /// theme).
+    pub config: Arc<dyn ConfigStore>,
     /// The async job queue.
     pub jobs: Arc<dyn JobQueue>,
     /// Account persistence for the identity layer.
@@ -134,6 +139,7 @@ impl Backend {
         let acl: Arc<dyn AclStore> = store.clone();
         let pagerank: Arc<dyn PageRankStore> = Arc::new(SqlitePageRankStore::new(pool.clone()));
         let cluster: Arc<dyn ClusterStore> = Arc::new(SqliteClusterStore::new(pool.clone()));
+        let config: Arc<dyn ConfigStore> = Arc::new(SqliteConfigStore::new(pool.clone()));
         let triple_source = store.triple_source();
         let triple_writer = store.triple_writer();
         let jobs: Arc<dyn JobQueue> = Arc::new(SqliteJobRepository::new(pool.clone()));
@@ -149,6 +155,7 @@ impl Backend {
             acl,
             pagerank,
             cluster,
+            config,
             jobs,
             users,
             tokens,
@@ -168,6 +175,7 @@ impl Backend {
         let acl: Arc<dyn AclStore> = store.clone();
         let pagerank: Arc<dyn PageRankStore> = Arc::new(RocksdbPageRankStore::new(db.clone()));
         let cluster: Arc<dyn ClusterStore> = Arc::new(RocksdbClusterStore::new(db.clone()));
+        let config: Arc<dyn ConfigStore> = Arc::new(RocksdbConfigStore::new(db.clone()));
         let triple_source = store.triple_source();
         let triple_writer = store.triple_writer();
         let jobs: Arc<dyn JobQueue> = Arc::new(RocksdbJobs::new(db.clone()));
@@ -182,6 +190,7 @@ impl Backend {
             acl,
             pagerank,
             cluster,
+            config,
             jobs,
             users,
             tokens,
@@ -201,6 +210,7 @@ impl Backend {
         let service = Arc::new(SbolObjectService::new(pool.clone()));
         let pagerank: Arc<dyn PageRankStore> = Arc::new(PgPageRankStore::new(pool.clone()));
         let cluster: Arc<dyn ClusterStore> = Arc::new(PgClusterStore::new(pool.clone()));
+        let config: Arc<dyn ConfigStore> = Arc::new(PgConfigStore::new(pool.clone()));
         let triple_source = service.triple_source();
         let triple_writer = service.triple_writer();
         let jobs: Arc<dyn JobQueue> = Arc::new(JobRepository::new(pool.clone()));
@@ -218,6 +228,7 @@ impl Backend {
             acl,
             pagerank,
             cluster,
+            config,
             jobs,
             users,
             tokens,

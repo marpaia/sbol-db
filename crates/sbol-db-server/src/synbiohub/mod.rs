@@ -14,6 +14,7 @@ mod download;
 mod edit;
 mod mutate;
 mod permission;
+mod plugins;
 mod queries;
 mod routes;
 mod search;
@@ -40,7 +41,7 @@ pub struct CurrentUser(pub Option<User>);
 /// Basic-auth `/sparql-auth*` path is unrelated and stays in [`crate::auth`]
 /// for Virtuoso-protocol clients.
 pub fn router(state: AppState) -> Router<AppState> {
-    Router::new()
+    let public = Router::new()
         .route("/login", post(auth::login))
         .route("/logout", post(auth::logout))
         .route("/register", post(auth::register))
@@ -50,7 +51,21 @@ pub fn router(state: AppState) -> Router<AppState> {
         )
         .route("/resetPassword", post(auth::reset_password))
         .route("/setNewPassword", post(auth::set_new_password))
-        .route("/admin/reindex", post(admin::reindex))
+        // The public Web of Registries update callback. Not admin-gated; it is
+        // authenticated by the shared update secret, matching classic.
+        .route(
+            "/updateWebOfRegistries",
+            post(admin::update_web_of_registries),
+        )
+        // Plugin proxying and the temp-file / async-stream handoffs. Public
+        // (authenticated, not admin-gated), matching classic's
+        // `requirePublicLogin` mount.
+        .route("/callPlugin", post(plugins::call_plugin))
+        .route("/expose/:id", get(plugins::serve_expose))
+        .route(
+            "/stream/:id",
+            get(plugins::serve_stream).delete(plugins::clear_stream),
+        )
         // Submission: mint an SBOL document into the caller's own user graph.
         // Identity-gated; anonymous callers are rejected.
         .route("/submit", post(submit::submit))
@@ -323,9 +338,12 @@ pub fn router(state: AppState) -> Router<AppState> {
             get(attachments::user_download),
         )
         .route_layer(axum::middleware::from_fn_with_state(
-            state,
+            state.clone(),
             attach_current_user,
-        ))
+        ));
+    // The admin surface carries its own identity + admin gate, so it is merged
+    // in after the public routes rather than sharing their route layer.
+    public.merge(admin::router(state))
 }
 
 /// Resolve the `X-authorization` token to the caller's account and attach it to

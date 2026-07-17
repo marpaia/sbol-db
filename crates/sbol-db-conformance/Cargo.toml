@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Backend-neutral conformance scenarios every sbol-db-storage implementation must pass."
 
 [dependencies]
+async-trait.workspace = true
 sbol-db-core.workspace = true
 sbol-db-storage.workspace = true
 sbol-db-sparql.workspace = true

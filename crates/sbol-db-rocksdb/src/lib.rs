@@ -24,7 +24,10 @@ use sbol_db_core::DomainError;
 pub use db::Db;
 pub use jobs::RocksdbJobs;
 pub use migrate::RocksdbMigrator;
-pub use repo::{RocksdbClusterStore, RocksdbPageRankStore, RocksdbTokenStore, RocksdbUserStore};
+pub use repo::{
+    RocksdbClusterStore, RocksdbConfigStore, RocksdbPageRankStore, RocksdbTokenStore,
+    RocksdbUserStore,
+};
 pub use stats::RocksdbStats;
 pub use store::RocksdbStore;
 
