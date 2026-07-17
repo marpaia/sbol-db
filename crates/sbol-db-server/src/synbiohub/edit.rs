@@ -395,11 +395,20 @@ pub struct PublicObjectPath {
     pub version: String,
 }
 
-/// A `{member}` body naming the object to add to or remove from a Collection.
+/// A `{member}` body naming the object to remove from a Collection.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct MemberForm {
     pub member: Option<String>,
+}
+
+/// The `{collections}` body of an `addToCollection`: the Collections to add the
+/// path object to. Classic keys this on `collections` (the object is the URL
+/// path), so a request that omits it adds no membership.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct AddToCollectionForm {
+    pub collections: Option<String>,
 }
 
 pub async fn user_add_to_collection(
@@ -409,11 +418,11 @@ pub async fn user_add_to_collection(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let collection = format!(
+    let object = format!(
         "{BASE}user/{}/{}/{}/{}",
         p.user_id, p.collection_id, p.display_id, p.version
     );
-    membership(state, user, collection, true, &headers, &body).await
+    add_to_collections(state, user, object, &headers, &body).await
 }
 
 pub async fn user_remove_membership(
@@ -437,11 +446,11 @@ pub async fn public_add_to_collection(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let collection = format!(
+    let object = format!(
         "{BASE}public/{}/{}/{}",
         p.collection_id, p.display_id, p.version
     );
-    membership(state, user, collection, true, &headers, &body).await
+    add_to_collections(state, user, object, &headers, &body).await
 }
 
 pub async fn public_remove_membership(
@@ -458,6 +467,9 @@ pub async fn public_remove_membership(
     membership(state, user, collection, false, &headers, &body).await
 }
 
+/// `removeMembership`: drop `member` (a body field) from `collection` (the URL
+/// path object). Mirrors classic `removeMembership`, which keys the member on
+/// the `member` body field.
 async fn membership(
     state: AppState,
     user: Option<sbol_db_core::User>,
@@ -466,16 +478,40 @@ async fn membership(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<Response, ApiError> {
+    debug_assert!(!add, "addToCollection is served by add_to_collections");
     let user = require_user(user)?;
     let form = parse_body::<MemberForm>(headers, body)?;
     let member = normalize_member(required(form.member, "member")?);
+    service(&state)
+        .remove_membership(&user.graph_uri, user.is_admin, &collection, &member)
+        .await?;
+    Ok(success())
+}
+
+/// `addToCollection`: add `object` (the URL path) as a `sbol:member` of every
+/// Collection named in the `collections` body field, mirroring classic
+/// `addToCollection` (the object is the path, the target Collections are the
+/// body). A request that omits `collections` adds no membership.
+async fn add_to_collections(
+    state: AppState,
+    user: Option<sbol_db_core::User>,
+    object: String,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<Response, ApiError> {
+    let user = require_user(user)?;
+    let form = parse_body::<AddToCollectionForm>(headers, body)?;
     let svc = service(&state);
-    if add {
-        svc.add_to_collection(&user.graph_uri, user.is_admin, &collection, &member)
-            .await?;
-    } else {
-        svc.remove_membership(&user.graph_uri, user.is_admin, &collection, &member)
-            .await?;
+    if let Some(collections) = form.collections.filter(|s| !s.is_empty()) {
+        for target in collections
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let target = normalize_member(target.to_owned());
+            svc.add_to_collection(&user.graph_uri, user.is_admin, &target, &object)
+                .await?;
+        }
     }
     Ok(success())
 }

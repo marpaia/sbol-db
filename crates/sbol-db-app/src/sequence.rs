@@ -219,21 +219,20 @@ impl SequenceService {
         Ok(out)
     }
 
-    /// Whether `iri`'s object lies in one of the `allowed` graphs. An object
-    /// that resolves to no named graph is treated as out of scope, so an
-    /// unresolvable hit never leaks past a scoped read.
+    /// Whether `iri`'s object lies in one of the `allowed` graphs. The graph is
+    /// read straight from the object's triples (the named graph they carry),
+    /// mirroring [`AclService::graph_of_subject`](crate::AclService), so it
+    /// resolves for every write path: a submission's private graph and the
+    /// shared public graph a `makePublic` writes verbatim alike. An object that
+    /// appears in no named graph is treated as out of scope, so an unresolvable
+    /// hit never leaks past a scoped read.
     async fn graph_allowed(&self, iri: &str, allowed: &HashSet<&str>) -> Result<bool, DomainError> {
-        let Some(record) = self.store.get_object_by_iri(iri).await? else {
-            return Ok(false);
-        };
-        let Some(graph_id) = record.graph_id else {
-            return Ok(false);
-        };
-        let Some(graph) = self.store.get_graph(graph_id).await? else {
-            return Ok(false);
-        };
-        Ok(graph
-            .document_iri
+        Ok(self
+            .store
+            .triples_for_subject(iri)
+            .await?
+            .into_iter()
+            .find_map(|t| t.graph_iri)
             .map(|g| allowed.contains(g.as_str()))
             .unwrap_or(false))
     }

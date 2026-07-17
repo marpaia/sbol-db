@@ -110,16 +110,19 @@ SELECT DISTINCT ?subject ?displayId ?version ?name ?description ?type WHERE {{
     )
 }
 
-/// `findOwnedBy.sparql`: the top-level objects owned by a user, backing
-/// `/manage`. `user_uri` is the caller's user graph IRI.
+/// Classic's `/manage` criteria: the root Collections a user owns. A submission
+/// is a root Collection (`a sbol2:Collection` that is not a `sbol2:member` of
+/// another Collection) stamped `sbh:ownedBy` the caller's user graph. `user_uri`
+/// is the caller's user graph IRI.
 pub fn owned_by(user_uri: &str) -> String {
     let owner = iri(user_uri);
     format!(
         "{PREFIXES}
 SELECT DISTINCT ?subject ?displayId ?version ?name ?description ?type WHERE {{
-    ?subject sbh:ownedBy {owner} .
-    ?subject sbh:topLevel ?subject .
+    ?subject a sbol2:Collection .
     ?subject a ?type .
+    ?subject sbh:ownedBy {owner} .
+    FILTER NOT EXISTS {{ ?otherCollection sbol2:member ?subject }}
     OPTIONAL {{ ?subject sbol2:displayId ?displayId . }}
     OPTIONAL {{ ?subject sbol2:version ?version . }}
     OPTIONAL {{ ?subject dcterms:title ?name . }}

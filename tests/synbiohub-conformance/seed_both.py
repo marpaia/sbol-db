@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import sqlite3
 import sys
 import urllib.error
 import urllib.parse
@@ -47,8 +48,11 @@ SETUP = {
     "frontPageText": "text",
     "virtuosoINI": "/etc/virtuoso-opensource-7/virtuoso.ini",
     "virtuosoDB": "/var/lib/virtuoso-opensource-7/db",
+    # The setup form's booleans are HTML checkboxes: a field is "on" whenever it
+    # is present, regardless of value. Send `allowPublicSignup` to enable signup;
+    # omit `requireLogin` entirely so anonymous public reads return 200 (matching
+    # the subject) rather than 401.
     "allowPublicSignup": "true",
-    "requireLogin": "false",
 }
 
 
@@ -68,6 +72,35 @@ def _post_form(base: str, path: str, fields: dict, token: str | None = None) -> 
 def _login(base: str) -> str:
     _, body = _post_form(base, "/login", {"email": ADMIN_EMAIL, "password": ADMIN_PW})
     return body.strip()
+
+
+def _is_token(value: str) -> bool:
+    """A real login mints a short opaque token; an unconfigured instance serves
+    the HTML setup/login page instead, so reject anything with markup."""
+    return bool(value) and "<" not in value and len(value) < 256
+
+
+def _make_public(base: str, token: str, coll_id: str) -> tuple[int, str]:
+    """Publish a freshly submitted user collection into the public store so the
+    read-only cases can address it under ``/public/<id>/<id>_collection/1``."""
+    path = f"/user/{USERNAME}/{coll_id}/{coll_id}_collection/1/makePublic"
+    return _post_form(base, path, {"id": coll_id, "version": "1", "tabState": "new"}, token)
+
+
+def _promote_subject_admin(db_path: str) -> None:
+    """Grant the subject's ``testuser`` the admin/curator flags the reference's
+    setup admin carries, so ``/profile`` reports the same privileges on both
+    sides. The subject registers via public signup (always non-admin), so the
+    flags are set directly in its identity store."""
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "UPDATE sbh_user SET is_admin = 1, is_curator = 1, is_member = 1 WHERE username = ?",
+            (USERNAME,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def _submit(base: str, token: str, coll_id: str, path: Path) -> tuple[int, str]:
@@ -107,13 +140,10 @@ def _submit(base: str, token: str, coll_id: str, path: Path) -> tuple[int, str]:
 
 
 def _ensure_reference_setup(base: str) -> None:
-    # /setup is idempotent-enough: once done, the instance stops redirecting.
-    try:
-        with urllib.request.urlopen(base + "/setup", timeout=10) as r:
-            if r.status == 200 and _login(base):
-                return
-    except Exception:
-        pass
+    # Once /setup has run, /login mints a real token; before then it serves the
+    # setup page. Only re-run setup when a real login is not yet possible.
+    if _is_token(_login(base)):
+        return
     status, _ = _post_form(base, "/setup", SETUP)
     print(f"reference /setup -> {status}")
 
@@ -125,7 +155,7 @@ def _ensure_subject_user(base: str) -> None:
         {
             "username": USERNAME,
             "name": "Test User",
-            "affiliation": "x",
+            "affiliation": "",
             "email": ADMIN_EMAIL,
             "password1": ADMIN_PW,
             "password2": ADMIN_PW,
@@ -138,6 +168,11 @@ def main() -> int:
     ap.add_argument("--reference", default="http://localhost:17777")
     ap.add_argument("--subject", default="http://127.0.0.1:18903")
     ap.add_argument("--corpus", required=True, help="directory of SBOL2 .xml files")
+    ap.add_argument(
+        "--subject-db",
+        default="/tmp/sbol-db-subject.sqlite",
+        help="path to the subject's SQLite store, promoted so testuser is admin",
+    )
     args = ap.parse_args()
 
     files = sorted(Path(args.corpus).glob("*.xml"))
@@ -148,16 +183,19 @@ def main() -> int:
     _ensure_reference_setup(args.reference)
     ref_tok = _login(args.reference)
     _ensure_subject_user(args.subject)
+    _promote_subject_admin(args.subject_db)
     subj_tok = _login(args.subject)
-    if not ref_tok or not subj_tok:
+    if not _is_token(ref_tok) or not _is_token(subj_tok):
         print("could not obtain both tokens", file=sys.stderr)
         return 1
 
     for path in files:
         coll_id = path.stem.lower().replace("-", "_").replace(".", "_")
-        rs, rb = _submit(args.reference, ref_tok, coll_id, path)
-        ss, sb = _submit(args.subject, subj_tok, coll_id, path)
-        print(f"{path.name}: reference={rs} subject={ss}")
+        rs, _ = _submit(args.reference, ref_tok, coll_id, path)
+        ss, _ = _submit(args.subject, subj_tok, coll_id, path)
+        rp, _ = _make_public(args.reference, ref_tok, coll_id)
+        sp, _ = _make_public(args.subject, subj_tok, coll_id)
+        print(f"{path.name}: submit reference={rs} subject={ss}; makePublic reference={rp} subject={sp}")
     return 0
 
 

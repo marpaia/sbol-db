@@ -282,12 +282,23 @@ def _compare_omex_member(name: str, reference: bytes, subject: bytes) -> Diff:
 # --------------------------------------------------------------------------- #
 
 
+# JSON object keys whose values are inherently per-instance volatile: a numeric
+# primary key the reference autoincrements versus the UUID the subject mints, and
+# the wall-clock account timestamps. They are dropped before structural
+# comparison so two accounts that differ only by these compare equal; every
+# substantive field (username, email, isAdmin, ...) still participates.
+_VOLATILE_JSON_KEYS = {"id", "createdAt", "updatedAt"}
+
+
 def _canonical(value: Any) -> Any:
     """Fold a JSON value into an order-insensitive canonical form: dicts become
     sorted key/value tuples, lists become tuples sorted by canonical repr, so two
-    structures that differ only in ordering canonicalize identically."""
+    structures that differ only in ordering canonicalize identically. Keys in
+    `_VOLATILE_JSON_KEYS` are dropped as unavoidable per-instance volatility."""
     if isinstance(value, dict):
-        return tuple(sorted((k, _canonical(v)) for k, v in value.items()))
+        return tuple(
+            sorted((k, _canonical(v)) for k, v in value.items() if k not in _VOLATILE_JSON_KEYS)
+        )
     if isinstance(value, list):
         return tuple(sorted((_canonical(v) for v in value), key=repr))
     return value

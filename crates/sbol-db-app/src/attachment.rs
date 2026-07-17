@@ -56,7 +56,6 @@ const SBH_ATTACHMENT_SIZE: &str = "http://wiki.synbiohub.org/wiki/Terms/synbiohu
 const SBH_ATTACHMENT_TYPE: &str = "http://wiki.synbiohub.org/wiki/Terms/synbiohub#attachmentType";
 
 const DCTERMS_TITLE: &str = "http://purl.org/dc/terms/title";
-const DCTERMS_DESCRIPTION: &str = "http://purl.org/dc/terms/description";
 
 /// The format IRI classic records for an attachment of unknown type, the
 /// `getTypeFromExtension` fallback and the default a `/attachURL` with no
@@ -337,7 +336,6 @@ fn attach_update(
         "<{att}> <{DCTERMS_TITLE}> \"{}\" .\n",
         escape_literal(name)
     ));
-    body.push_str(&format!("<{att}> <{DCTERMS_DESCRIPTION}> \"\" .\n"));
     body.push_str(&format!(
         "<{att}> <{SBOL2_DISPLAY_ID}> \"{}\" .\n",
         escape_literal(&mint.display_id)

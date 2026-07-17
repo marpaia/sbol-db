@@ -14,7 +14,7 @@ sbol-db-sparql.workspace = true
 sbol-db-backend.workspace = true
 sbol-db-rdf.workspace = true
 sbol-db-search = { workspace = true, features = ["text-index", "align"] }
-sbol.workspace = true
+sbol = { workspace = true, features = ["v2"] }
 sbol-rdf.workspace = true
 chrono.workspace = true
 serde.workspace = true

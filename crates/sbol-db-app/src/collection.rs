@@ -200,15 +200,27 @@ impl CollectionService {
     ) -> Result<MintedSubmission, DomainError> {
         let rdf_format = rdf_format(submission.format)?;
 
-        // Validate the document as SBOL. `Document::read` parses (and upgrades a
-        // SBOL2 body to the SBOL3 model), rejecting anything that is not a
-        // well-formed SBOL document; `validate` rejects a structurally invalid
-        // one.
-        let document = sbol::v3::Document::read(&submission.body, rdf_format)
-            .map_err(|e| DomainError::Parse(e.to_string()))?;
-        let report = document.validate();
-        if report.has_errors() {
-            return Err(DomainError::Validation(report.to_string()));
+        // Validate the document as SBOL, rejecting anything malformed. Classic
+        // (libSBOLj) validates against the submitted version's rules, so an SBOL2
+        // body is validated as SBOL2 and an SBOL3 body as SBOL3. Reading an SBOL2
+        // body through the SBOL3 model instead would apply SBOL3-only rules (e.g.
+        // the `hasNamespace` requirement a PROV Activity would trip) that classic
+        // never enforces on an SBOL2 submission. The stored triples are the
+        // verbatim submission, rewritten below.
+        let has_errors = match sbol::detect_version(&submission.body, rdf_format) {
+            Some(sbol::SbolVersion::V2) => sbol::v2::Document::read(&submission.body, rdf_format)
+                .map_err(|e| DomainError::Parse(e.to_string()))?
+                .validate()
+                .has_errors(),
+            _ => sbol::v3::Document::read(&submission.body, rdf_format)
+                .map_err(|e| DomainError::Parse(e.to_string()))?
+                .validate()
+                .has_errors(),
+        };
+        if has_errors {
+            return Err(DomainError::Validation(
+                "submitted document failed SBOL validation".into(),
+            ));
         }
 
         // Rewrite the document verbatim at the triple level, not through the
@@ -332,6 +344,9 @@ impl CollectionService {
         }
 
         // Stamp each top level: canonical identity, ownership, and self-link.
+        // SynBioHub stamps `dcterms:created` only on the root Collection (the
+        // submission), not on the imported members, and never stamps
+        // `dcterms:modified` at submission time, so neither is added here.
         for top in &top_levels {
             out.push(iri_triple(
                 &top.new_uri,
@@ -341,23 +356,41 @@ impl CollectionService {
             out.push(literal_triple(
                 &top.new_uri,
                 vocab::SBOL2_VERSION,
-                version,
+                top.version.as_deref().unwrap_or(version),
                 vocab::XSD_STRING,
             ));
             out.push(iri_triple(&top.new_uri, vocab::SBH_TOP_LEVEL, &top.new_uri));
             out.push(iri_triple(&top.new_uri, vocab::SBH_OWNED_BY, &owned_by));
-            out.push(literal_triple(
-                &top.new_uri,
-                vocab::DCTERMS_CREATED,
-                &now,
-                vocab::XSD_DATETIME,
-            ));
-            out.push(literal_triple(
-                &top.new_uri,
-                vocab::DCTERMS_MODIFIED,
-                &now,
-                vocab::XSD_DATETIME,
-            ));
+        }
+
+        // Stamp `sbh:ownedBy` and `sbh:topLevel` on every child object (a subject
+        // re-homed under a top level's identity), mirroring classic which
+        // denormalizes ownership and the owning top level onto every object, not
+        // only the top levels themselves.
+        let top_level_uris: std::collections::HashSet<&str> =
+            top_levels.iter().map(|t| t.new_uri.as_str()).collect();
+        let mut child_subjects: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for triple in &out {
+            if let SubjectTerm::Iri(subject) = &triple.subject {
+                let subject = subject.as_str();
+                if top_level_uris.contains(subject) {
+                    continue;
+                }
+                if seen.insert(subject.to_owned()) {
+                    child_subjects.push(subject.to_owned());
+                }
+            }
+        }
+        for child in &child_subjects {
+            let owning = top_levels
+                .iter()
+                .filter(|t| child.starts_with(&format!("{}/", t.new_persistent_identity)))
+                .max_by_key(|t| t.new_persistent_identity.len());
+            if let Some(top) = owning {
+                out.push(iri_triple(child, vocab::SBH_OWNED_BY, &owned_by));
+                out.push(iri_triple(child, vocab::SBH_TOP_LEVEL, &top.new_uri));
+            }
         }
 
         // Mint the root Collection and its membership, ownership, and metadata.
@@ -399,12 +432,6 @@ impl CollectionService {
         out.push(literal_triple(
             &collection_uri,
             vocab::DCTERMS_CREATED,
-            &now,
-            vocab::XSD_DATETIME,
-        ));
-        out.push(literal_triple(
-            &collection_uri,
-            vocab::DCTERMS_MODIFIED,
             &now,
             vocab::XSD_DATETIME,
         ));
@@ -469,12 +496,14 @@ fn discover_top_levels(source: &[Triple], base: &str) -> Vec<TopLevelMint> {
         let ObjectTerm::Iri(class) = &triple.object else {
             continue;
         };
-        if !TOP_LEVEL_CLASSES.contains(&class.as_str()) {
-            continue;
-        }
         let SubjectTerm::Iri(subject) = &triple.subject else {
             continue;
         };
+        if !TOP_LEVEL_CLASSES.contains(&class.as_str())
+            && !is_generic_top_level(class.as_str(), subject.as_str(), source)
+        {
+            continue;
+        }
         let old_uri = subject.as_str();
         if mints.iter().any(|m| m.old_uri == old_uri) {
             continue;
@@ -484,15 +513,31 @@ fn discover_top_levels(source: &[Triple], base: &str) -> Vec<TopLevelMint> {
         let display = display_id(old_uri, &old_pi, source);
         let new_pi = format!("{base}{display}");
         let new_uri = rewrite_iri(old_uri, &[(old_pi.clone(), new_pi.clone())]);
+        let version = own_version(old_uri, &old_pi, source);
 
         mints.push(TopLevelMint {
             old_uri: old_uri.to_owned(),
             old_persistent_identity: old_pi,
             new_persistent_identity: new_pi,
             new_uri,
+            version,
         });
     }
     mints
+}
+
+/// Whether a custom-typed subject is an SBOL2 `GenericTopLevel`: a top-level with
+/// a foreign `rdf:type` (outside the SBOL namespaces) that still carries SBOL
+/// identity (`sbol:persistentIdentity` and a `displayId`). libSBOLj re-homes such
+/// objects as top-levels, so the submission mint must discover them too;
+/// recognized SBOL and PROV classes are handled by `TOP_LEVEL_CLASSES`.
+fn is_generic_top_level(class: &str, subject: &str, source: &[Triple]) -> bool {
+    if class.starts_with("http://sbols.org/v2#") || class.starts_with("http://sbols.org/v3#") {
+        return false;
+    }
+    object_iri(subject, vocab::SBOL2_PERSISTENT_IDENTITY, source).is_some()
+        && (literal_value(subject, vocab::SBOL2_DISPLAY_ID, source).is_some()
+            || literal_value(subject, vocab::SBOL3_DISPLAY_ID, source).is_some())
 }
 
 /// One submitted top-level object's rewrite: its old identity and the minted
@@ -502,6 +547,22 @@ struct TopLevelMint {
     old_persistent_identity: String,
     new_persistent_identity: String,
     new_uri: String,
+    /// The object's own `sbol:version`, preserved across the re-home so an
+    /// imported member keeps its version rather than adopting the submission's.
+    version: Option<String>,
+}
+
+/// A top-level's own version: its `sbol:version` literal, else the version
+/// segment of its URI (the path after its persistent identity), else `None`.
+fn own_version(old_uri: &str, old_pi: &str, source: &[Triple]) -> Option<String> {
+    if let Some(version) = literal_value(old_uri, vocab::SBOL2_VERSION, source) {
+        return Some(version);
+    }
+    old_uri
+        .strip_prefix(old_pi)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_owned)
 }
 
 /// The version-independent identity of `subject`: its `sbol:persistentIdentity`
@@ -685,6 +746,7 @@ mod tests {
     const FIXTURE: &str = r#"
 @prefix sbol: <http://sbols.org/v2#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
 <http://example.org/cd/1>
     a sbol:ComponentDefinition ;
@@ -692,20 +754,31 @@ mod tests {
     sbol:persistentIdentity <http://example.org/cd> ;
     sbol:version "1" ;
     dcterms:title "My Component" ;
+    sbol:type <http://www.biopax.org/release/biopax-level3.owl#DnaRegion> ;
     sbol:sequenceAnnotation <http://example.org/cd/anno/1> .
 
 <http://example.org/cd/anno/1>
     a sbol:SequenceAnnotation ;
     sbol:displayId "anno" ;
     sbol:persistentIdentity <http://example.org/cd/anno> ;
-    sbol:version "1" .
+    sbol:version "1" ;
+    sbol:location <http://example.org/cd/anno/range/1> .
+
+<http://example.org/cd/anno/range/1>
+    a sbol:Range ;
+    sbol:displayId "range" ;
+    sbol:persistentIdentity <http://example.org/cd/anno/range> ;
+    sbol:version "1" ;
+    sbol:start "1"^^xsd:integer ;
+    sbol:end "4"^^xsd:integer .
 
 <http://example.org/seq/1>
     a sbol:Sequence ;
     sbol:displayId "seq" ;
     sbol:persistentIdentity <http://example.org/seq> ;
     sbol:version "1" ;
-    sbol:elements "atgc" .
+    sbol:elements "atgc" ;
+    sbol:encoding <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .
 "#;
 
     fn submission() -> Submission {

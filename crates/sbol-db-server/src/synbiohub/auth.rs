@@ -341,14 +341,20 @@ async fn enqueue_reset_email(state: &AppState, reset: &PasswordReset) -> Result<
 /// included.
 fn profile_json(user: &User) -> serde_json::Value {
     json!({
+        "id": user.id,
         "username": user.username,
         "name": user.name,
         "email": user.email,
-        "affiliation": user.affiliation,
+        "affiliation": user.affiliation.clone().unwrap_or_default(),
+        "password": "",
         "graphUri": user.graph_uri,
         "isAdmin": user.is_admin,
         "isCurator": user.is_curator,
         "isMember": user.is_member,
+        "resetPasswordLink": user.reset_password_link.clone().unwrap_or_default(),
+        "createdAt": "",
+        "updatedAt": "",
+        "user_external_profiles": [],
     })
 }
 

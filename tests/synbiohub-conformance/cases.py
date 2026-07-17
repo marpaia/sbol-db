@@ -56,6 +56,13 @@ CORPUS_PATH = Path(__file__).resolve().parent / "fixtures" / "smoke-corpus.nt"
 OBJECT_PATH = "/public/smoke/pSmoke/1"
 COLLECTION_PATH = "/public/smoke/smoke_collection/1"
 
+# `/similar` and `/similarCount` key on a role-less near-identical cluster
+# (`simA`/`simB`/`simC` from `simclust.xml`) so the query returns real cluster
+# mates on both sides. SBOLExplorer's cluster path drops any mate carrying a
+# Sequence-Ontology role, so the fixture parts are role-less; `simA`'s mates are
+# `simB` and `simC`.
+SIMILAR_OBJECT_PATH = "/public/simclust/simA/1"
+
 # The scratch collection the mutating suite submits into `testuser`'s namespace
 # and then edits. `SCRATCH_ID` is the submission id; the submission mints a
 # Collection at `<id>_collection` whose member is the uploaded object. The id is
@@ -205,8 +212,14 @@ def query_cases() -> List[Case]:
         Case("uses-count", "plaintext", path=f"{OBJECT_PATH}/usesCount", headers=_PLAIN),
         Case("twins", "json", path=f"{OBJECT_PATH}/twins", headers=_JSON),
         Case("twins-count", "plaintext", path=f"{OBJECT_PATH}/twinsCount", headers=_PLAIN),
-        Case("similar", "json", path=f"{OBJECT_PATH}/similar", headers=_JSON),
-        Case("similar-count", "plaintext", path=f"{OBJECT_PATH}/similarCount", headers=_PLAIN),
+        # Similarity: classic serves the target's uclust cluster mates from
+        # SBOLExplorer (ranked by PageRank) as a JSON row array, and the count as
+        # a plain-text integer. sbol-db serves the same from its native
+        # clustering + PageRank engine. `/similar` compares set-equal (PageRank
+        # ties resolve to different but equivalent orderings across engines);
+        # `/similarCount` compares byte for byte.
+        Case("similar", "json", path=f"{SIMILAR_OBJECT_PATH}/similar", headers=_JSON),
+        Case("similar-count", "plaintext", path=f"{SIMILAR_OBJECT_PATH}/similarCount", headers=_PLAIN),
         # Metadata.
         Case("object-metadata", "json", path=f"{OBJECT_PATH}/metadata", headers=_JSON),
         Case("collection-metadata", "json", path=f"{COLLECTION_PATH}/metadata", headers=_JSON),

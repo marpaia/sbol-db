@@ -120,7 +120,21 @@ async fn add_owner(
         .user
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ApiError::BadRequest("user is required".to_owned()))?;
-    let target_graph = resolve_target_graph(&state, &identifier).await?;
+    // Classic `addOwnedBy` keys the grantee on the path segment after the last
+    // '/' of the posted value (a user profile URI); a value with no '/' yields
+    // an empty key that matches no account, so a bare username or email is
+    // rejected with 400 rather than resolved.
+    let key = match identifier.rsplit_once('/') {
+        Some((_, segment)) => segment,
+        None => "",
+    };
+    let target_graph = state
+        .app
+        .users
+        .find_by_email_or_username(key)
+        .await?
+        .map(|u| u.graph_uri)
+        .ok_or_else(|| ApiError::BadRequest(format!("user {key} not recognized")))?;
     service(&state)
         .add_owner(&user.graph_uri, user.is_admin, &object_uri, &target_graph)
         .await?;

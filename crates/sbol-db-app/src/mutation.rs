@@ -37,6 +37,9 @@ const SBH_TERMS: &str = "http://wiki.synbiohub.org/wiki/Terms/synbiohub#";
 const SBOL2_NS: &str = "http://sbols.org/v2#";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const SBOL2_COLLECTION: &str = "http://sbols.org/v2#Collection";
+const DCTERMS_TITLE: &str = "http://purl.org/dc/terms/title";
+const DCTERMS_DESCRIPTION: &str = "http://purl.org/dc/terms/description";
+const DC_CREATOR: &str = "http://purl.org/dc/elements/1.1/creator";
 
 /// A mutation's failure mode, kept distinct from a plain [`DomainError`] so the
 /// adapter can map an authorization failure to `403` rather than `500`.
@@ -186,14 +189,44 @@ impl MutationService {
         // the graph is both complete (children included) and self-contained.
         let closure = self.store.graph_store_read(&private_graph).await?;
 
-        // Drop the private root Collection's own triples (membership, metadata,
-        // stamps) so the re-mint builds a single fresh public root Collection
-        // over the members rather than re-homing the old one as a member.
-        let source = if is_collection(&closure, &request.source_uri) {
-            strip_subject(closure, &request.source_uri)
-        } else {
-            closure
-        };
+        // Reduce the closure to exactly what classic publishes: for a
+        // Collection, the transitive closure of its `sbol:member` targets (never
+        // the Collection's own triples, which the re-mint rebuilds, and never an
+        // orphan left in the private graph after a `removeMembership`); for a
+        // single object, its own closure. The makePublic form carries no
+        // title/description/creator, so when the request omits them they are
+        // inherited from the private collection's existing metadata, matching
+        // classic SynBioHub which preserves the collection's descriptive fields
+        // across publication.
+        let (source, name, description, creator_name) =
+            if is_collection(&closure, &request.source_uri) {
+                let name = request
+                    .name
+                    .clone()
+                    .or_else(|| literal_object(&closure, &request.source_uri, DCTERMS_TITLE));
+                let description = request
+                    .description
+                    .clone()
+                    .or_else(|| literal_object(&closure, &request.source_uri, DCTERMS_DESCRIPTION));
+                let creator_name = request
+                    .creator_name
+                    .clone()
+                    .or_else(|| literal_object(&closure, &request.source_uri, DC_CREATOR));
+                let members = member_uris(&closure, &request.source_uri);
+                (
+                    reachable_closure(closure, &members),
+                    name,
+                    description,
+                    creator_name,
+                )
+            } else {
+                (
+                    closure,
+                    request.name.clone(),
+                    request.description.clone(),
+                    request.creator_name.clone(),
+                )
+            };
 
         let minted = self.collection.remint_triples(
             source,
@@ -201,9 +234,9 @@ impl MutationService {
             &request.public_id,
             &request.version,
             MintScope::Public,
-            request.name.as_deref(),
-            request.description.as_deref(),
-            request.creator_name.as_deref(),
+            name.as_deref(),
+            description.as_deref(),
+            creator_name.as_deref(),
             &request.citations,
         );
 
@@ -326,10 +359,70 @@ fn is_collection(triples: &[sbol_db_core::Triple], uri: &str) -> bool {
     })
 }
 
-/// Drop every triple whose subject is `uri`, keeping the rest of the closure.
-fn strip_subject(triples: Vec<sbol_db_core::Triple>, uri: &str) -> Vec<sbol_db_core::Triple> {
+/// The literal value of the first `(uri, predicate, ?o)` triple in the closure,
+/// used to carry a collection's descriptive metadata across makePublic.
+fn literal_object(triples: &[sbol_db_core::Triple], uri: &str, predicate: &str) -> Option<String> {
+    triples.iter().find_map(|t| {
+        let SubjectTerm::Iri(s) = &t.subject else {
+            return None;
+        };
+        if s.as_str() != uri || t.predicate.as_str() != predicate {
+            return None;
+        }
+        match &t.object {
+            ObjectTerm::Literal { value, .. } => Some(value.clone()),
+            _ => None,
+        }
+    })
+}
+
+/// The `sbol:member` targets of `collection_uri` in the closure.
+fn member_uris(triples: &[sbol_db_core::Triple], collection_uri: &str) -> Vec<String> {
+    let member = format!("{SBOL2_NS}member");
+    triples
+        .iter()
+        .filter_map(|t| {
+            let SubjectTerm::Iri(s) = &t.subject else {
+                return None;
+            };
+            if s.as_str() != collection_uri || t.predicate.as_str() != member {
+                return None;
+            }
+            match &t.object {
+                ObjectTerm::Iri(o) => Some(o.as_str().to_owned()),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// The transitive closure reachable from `seeds`: every triple whose subject is
+/// a seed or an object IRI reachable from one. This is what classic publishes
+/// for a Collection, the union of its members' object closures; an orphan not
+/// reachable from any member is excluded.
+fn reachable_closure(
+    triples: Vec<sbol_db_core::Triple>,
+    seeds: &[String],
+) -> Vec<sbol_db_core::Triple> {
+    let mut visited: std::collections::HashSet<String> = seeds.iter().cloned().collect();
+    let mut frontier: Vec<String> = seeds.to_vec();
+    while let Some(current) = frontier.pop() {
+        for triple in &triples {
+            let SubjectTerm::Iri(s) = &triple.subject else {
+                continue;
+            };
+            if s.as_str() != current {
+                continue;
+            }
+            if let ObjectTerm::Iri(o) = &triple.object {
+                if visited.insert(o.as_str().to_owned()) {
+                    frontier.push(o.as_str().to_owned());
+                }
+            }
+        }
+    }
     triples
         .into_iter()
-        .filter(|t| !matches!(&t.subject, SubjectTerm::Iri(s) if s.as_str() == uri))
+        .filter(|t| matches!(&t.subject, SubjectTerm::Iri(s) if visited.contains(s.as_str())))
         .collect()
 }

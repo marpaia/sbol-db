@@ -11,6 +11,7 @@
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 /// Flatten one SPARQL binding node to classic's scalar form, mirroring
@@ -99,6 +100,24 @@ fn string_or_null(row: &Map<String, Value>, key: &str) -> Value {
     }
 }
 
+/// The `String` form of [`string_or_empty`] (classic's `value || ''`): a string
+/// value passes through, anything else becomes the empty string.
+fn string_value(row: &Map<String, Value>, key: &str) -> String {
+    match row.get(key) {
+        Some(Value::String(s)) => s.clone(),
+        _ => String::new(),
+    }
+}
+
+/// The `Option<String>` form of [`string_or_null`] (classic's `value || null`):
+/// a non-empty string is `Some`, anything else is `None` (serialized as null).
+fn string_option(row: &Map<String, Value>, key: &str) -> Option<String> {
+    match row.get(key) {
+        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        _ => None,
+    }
+}
+
 /// `<uri>/metadata`: classic emits `sparqlResultsToArray` of the top-level
 /// metadata query verbatim (an array of row objects keyed by the query's vars).
 pub fn metadata_response(results: &Value) -> Response {
@@ -128,38 +147,122 @@ pub fn collections_response(results: &Value) -> Response {
     json_array(rows)
 }
 
+/// One row of classic's search view: the fixed 11-key wire object, with the
+/// keys in classic's emission order (`type, uri, name, description, displayId,
+/// version, sbolType, role, percentMatch, strandAlignment, CIGAR`). Serialized
+/// as a struct so the key order is fixed by field order rather than by the JSON
+/// map's collation, matching classic byte-for-byte.
+#[derive(Serialize)]
+struct SearchRow {
+    #[serde(rename = "type")]
+    type_iri: String,
+    uri: String,
+    name: String,
+    description: String,
+    #[serde(rename = "displayId")]
+    display_id: String,
+    version: String,
+    #[serde(rename = "sbolType")]
+    sbol_type: Option<String>,
+    role: Option<String>,
+    #[serde(rename = "percentMatch")]
+    percent_match: String,
+    #[serde(rename = "strandAlignment")]
+    strand_alignment: String,
+    #[serde(rename = "CIGAR")]
+    cigar: String,
+}
+
 /// `/search`, `<uri>/uses`, `<uri>/twins`, `<uri>/similar` (and sequence
 /// search): classic's search view projects each row to a fixed 11-key object,
 /// renaming `?subject` to `uri`, filling an empty `name` from the `displayId`,
 /// and defaulting the alignment columns. Text fields default to `''`; `sbolType`
 /// and `role` default to null.
 pub fn search_response(results: &Value) -> Response {
-    let rows = results_to_array(results)
+    let rows: Vec<SearchRow> = results_to_array(results)
         .into_iter()
         .map(|row| search_row(&row))
+        .collect();
+    (
+        [(CONTENT_TYPE, "application/json")],
+        serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_owned()),
+    )
+        .into_response()
+}
+
+/// Project one search-result row into classic's 11-key wire object.
+fn search_row(row: &Map<String, Value>) -> SearchRow {
+    let display_id = string_value(row, "displayId");
+    let name = {
+        let name = string_value(row, "name");
+        if name.is_empty() {
+            display_id.clone()
+        } else {
+            name
+        }
+    };
+    SearchRow {
+        type_iri: string_value(row, "type"),
+        uri: string_value(row, "subject"),
+        name,
+        description: string_value(row, "description"),
+        display_id,
+        version: string_value(row, "version"),
+        sbol_type: string_option(row, "sbolType"),
+        role: string_option(row, "role"),
+        percent_match: string_value(row, "percentMatch"),
+        strand_alignment: string_value(row, "strandAlignment"),
+        cigar: string_value(row, "CIGAR"),
+    }
+}
+
+/// `/manage`: classic returns the raw `search()` result rows (not the search
+/// view's alignment projection), each tagged with its `triplestore` origin.
+/// Every row is a root Collection the caller owns, projected to classic's
+/// manage-row keys: identity plus `typeName`, `url`, `prefix`, and
+/// `triplestore`, with the alignment columns absent.
+pub fn manage_response(results: &Value) -> Response {
+    let rows = results_to_array(results)
+        .into_iter()
+        .map(|row| manage_row(&row))
         .collect();
     json_array(rows)
 }
 
-/// Project one search-result row into classic's 11-key wire object.
-fn search_row(row: &Map<String, Value>) -> Value {
-    let display_id = string_or_empty(row, "displayId");
-    let mut name = string_or_empty(row, "name");
-    if name == Value::String(String::new()) {
-        name = display_id.clone();
-    }
+/// Project one owned-collection row into classic's manage-row wire object.
+fn manage_row(row: &Map<String, Value>) -> Value {
+    let uri = string_or_empty(row, "subject");
+    let uri_str = uri.as_str().unwrap_or("");
+    let type_iri = string_or_empty(row, "type");
+    let type_name = type_iri
+        .as_str()
+        .unwrap_or("")
+        .rsplit(['#', '/'])
+        .next()
+        .unwrap_or("")
+        .to_owned();
+    let url = uri_str
+        .strip_prefix("http://synbiohub.org")
+        .unwrap_or(uri_str)
+        .to_owned();
+    let triplestore = if uri_str.contains("/public/") {
+        "public"
+    } else {
+        "private"
+    };
     json!({
-        "type": string_or_empty(row, "type"),
-        "uri": string_or_empty(row, "subject"),
-        "name": name,
+        "uri": uri,
+        "name": string_or_empty(row, "name"),
         "description": string_or_empty(row, "description"),
-        "displayId": display_id,
+        "displayId": string_or_empty(row, "displayId"),
         "version": string_or_empty(row, "version"),
-        "sbolType": string_or_null(row, "sbolType"),
+        "type": type_iri,
+        "typeName": type_name,
+        "prefix": "",
+        "url": url,
         "role": string_or_null(row, "role"),
-        "percentMatch": string_or_empty(row, "percentMatch"),
-        "strandAlignment": string_or_empty(row, "strandAlignment"),
-        "CIGAR": string_or_empty(row, "CIGAR"),
+        "sbolType": string_or_null(row, "sbolType"),
+        "triplestore": triplestore,
     })
 }
 

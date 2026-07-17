@@ -9,7 +9,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use sbol_db_app::AppServices;
 use sbol_db_backend::Backend;
-use sbol_db_jobs::{default_registry, Worker, WorkerConfig};
+use sbol_db_jobs::{default_registry, SearchIndexHandles, Worker, WorkerConfig};
 use sbol_db_server::{router, AppState, Metrics};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{ConfigStore, JobQueue, SbolStore};
@@ -29,7 +29,7 @@ pub async fn run(
 ) -> Result<()> {
     let engine = Arc::new(SparqlEngine::new(backend.triple_source.clone()));
 
-    let worker_setup = if !no_worker {
+    let mut worker_setup = if !no_worker {
         Some(
             build_worker_setup(
                 database_url,
@@ -65,6 +65,21 @@ pub async fn run(
         backend.triple_writer.clone(),
     ));
     let app_services = Arc::new(AppServices::from_backend(&backend));
+
+    // The embedded worker shares this process, so it reindexes into the very
+    // same ranked text index the API reads, alongside the backend's durable
+    // cluster and PageRank stores and its triple source. This is what lets the
+    // `rebuild_search_index` job populate the clusters and PageRank that back
+    // `/similar` and the ranked search.
+    if let Some(setup) = worker_setup.as_mut() {
+        setup.search = Some(SearchIndexHandles {
+            cluster: backend.cluster.clone(),
+            pagerank: backend.pagerank.clone(),
+            text_index: app_services.text_search.clone(),
+            triples: backend.triple_source.clone(),
+        });
+    }
+
     let state = AppState {
         service: backend.store.clone(),
         sparql: engine,
@@ -127,6 +142,12 @@ pub(crate) struct WorkerSetup {
     pub jobs: Arc<dyn JobQueue>,
     pub config_store: Arc<dyn ConfigStore>,
     pub config: WorkerConfig,
+    /// The shared search-index handles the `rebuild_search_index` job needs.
+    /// Present only for the embedded worker, which shares the API's process and
+    /// therefore its in-RAM ranked text index; the standalone `worker`
+    /// subcommand runs in a separate process with no shared index and leaves it
+    /// `None`, so that job kind fails fast there.
+    pub search: Option<SearchIndexHandles>,
 }
 
 impl WorkerSetup {
@@ -136,7 +157,7 @@ impl WorkerSetup {
         // for low-latency wakeups; without it the worker falls back to polling.
         // The config store lets the `wor_sync` job read the joined Web of
         // Registries URL and persist the pulled prefix map.
-        let worker = Worker::new(
+        let mut worker = Worker::new(
             self.jobs,
             self.store,
             self.listener_pool,
@@ -144,6 +165,9 @@ impl WorkerSetup {
             self.config,
         )
         .with_config_store(self.config_store);
+        if let Some(search) = self.search {
+            worker = worker.with_search_index(search);
+        }
         tokio::spawn(async move {
             if let Err(err) = worker.run(cancel).await {
                 tracing::error!(error = %err, "embedded worker exited with error");
@@ -224,6 +248,9 @@ pub(crate) async fn build_worker_setup(
         jobs,
         config_store,
         config,
+        // Wired by the embedded-server path once the shared search index exists;
+        // the standalone worker leaves it unset.
+        search: None,
     })
 }
 

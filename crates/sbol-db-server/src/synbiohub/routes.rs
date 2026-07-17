@@ -376,7 +376,7 @@ pub async fn manage(
         .compute_scope(Some(&user.graph_uri))
         .await?;
     let results = run_scoped_value(&state, &queries::owned_by(&user.graph_uri), scope).await?;
-    Ok(render::search_response(&results))
+    Ok(render::manage_response(&results))
 }
 
 /// `GET /shared`: the objects shared with the caller (`sbh:canView`).

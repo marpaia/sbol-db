@@ -12,7 +12,7 @@ use axum::extract::{Path, State};
 use axum::response::Response;
 use axum::Extension;
 use sbol_db_app::{AlignOptions, SequenceAlignment, SimilarHit};
-use sbol_db_core::{SbolObjectRecord, User};
+use sbol_db_core::{ObjectTerm, Triple, User};
 use serde_json::{json, Map, Value};
 
 use super::routes::{public_uri, scope_for, user_uri, PublicObject, UserObject};
@@ -34,6 +34,12 @@ const VARS: [&str; 9] = [
     "CIGAR",
 ];
 
+const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+const DISPLAY_ID: &str = "http://sbols.org/v2#displayId";
+const VERSION: &str = "http://sbols.org/v2#version";
+const TITLE: &str = "http://purl.org/dc/terms/title";
+const DESCRIPTION: &str = "http://purl.org/dc/terms/description";
+
 /// Run a sequence search extracted from the `/search` grammar under the caller's
 /// scope and render the nine-column projection.
 pub(super) async fn run_sequence_search(
@@ -52,14 +58,11 @@ pub(super) async fn run_sequence_search(
         .align(&query.sequence, options, &scope)
         .await?;
 
-    let iris: Vec<&str> = hits.iter().map(|h| h.sequence_iri.as_str()).collect();
-    let records = state.service.get_objects_by_iris(&iris).await?;
-    let by_iri = index_by_iri(&records);
-
-    let bindings: Vec<Value> = hits
-        .iter()
-        .map(|hit| alignment_binding(hit, by_iri.get(hit.sequence_iri.as_str()).copied()))
-        .collect();
+    let mut bindings: Vec<Value> = Vec::with_capacity(hits.len());
+    for hit in &hits {
+        let meta = fetch_metadata(state, &hit.sequence_iri).await?;
+        bindings.push(alignment_binding(hit, &meta));
+    }
     Ok(render::search_response(&solutions(bindings)))
 }
 
@@ -107,14 +110,11 @@ async fn similar_impl(
     let scope = scope_for(&state, &user).await?;
     let hits: Vec<SimilarHit> = state.app.sequence().similar(&uri, &scope).await?;
 
-    let iris: Vec<&str> = hits.iter().map(|h| h.iri.as_str()).collect();
-    let records = state.service.get_objects_by_iris(&iris).await?;
-    let by_iri = index_by_iri(&records);
-
-    let bindings: Vec<Value> = hits
-        .iter()
-        .map(|hit| similar_binding(&hit.iri, by_iri.get(hit.iri.as_str()).copied()))
-        .collect();
+    let mut bindings: Vec<Value> = Vec::with_capacity(hits.len());
+    for hit in &hits {
+        let meta = fetch_metadata(&state, &hit.iri).await?;
+        bindings.push(similar_binding(&hit.iri, &meta));
+    }
     Ok(render::search_response(&solutions(bindings)))
 }
 
@@ -128,17 +128,76 @@ async fn similar_count_impl(
     Ok(render::count_response(&count_solutions(count)))
 }
 
-/// Map object records by their IRI for per-hit metadata lookup.
-fn index_by_iri(
-    records: &[SbolObjectRecord],
-) -> std::collections::HashMap<&str, &SbolObjectRecord> {
-    records.iter().map(|r| (r.iri.as_str(), r)).collect()
+/// The object-metadata columns a search/`similar` binding carries, projected
+/// from the object's own triples: the SBOL `type`, `displayId`, `version`,
+/// `name` (`dcterms:title`), and `description` (`dcterms:description`). Reading
+/// the object's triples resolves for every write path, including the shared
+/// public graph a `makePublic` writes verbatim, where the `sbol_objects`
+/// derived view is not materialized.
+#[derive(Default)]
+struct RowMeta {
+    type_iri: Option<String>,
+    display_id: Option<String>,
+    version: Option<String>,
+    name: Option<String>,
+    description: Option<String>,
+}
+
+/// Read `iri`'s triples and project the binding metadata, matching
+/// SBOLExplorer's SPARQL projection of a search row.
+async fn fetch_metadata(state: &AppState, iri: &str) -> Result<RowMeta, ApiError> {
+    let triples = state.service.triples_for_subject(iri).await?;
+    Ok(project_metadata(&triples))
+}
+
+/// Project one object's binding metadata from its triples. `rdf:type` prefers an
+/// SBOL vocabulary class (classic reports the SBOL type, not an ancillary
+/// `rdf:type`); the single-valued fields keep the first value seen.
+fn project_metadata(triples: &[Triple]) -> RowMeta {
+    let mut meta = RowMeta::default();
+    for triple in triples {
+        let predicate = triple.predicate.as_str();
+        match predicate {
+            RDF_TYPE => {
+                if let ObjectTerm::Iri(iri) = &triple.object {
+                    let iri = iri.as_str();
+                    let is_sbol = iri.contains("sbols.org");
+                    let have_sbol = meta
+                        .type_iri
+                        .as_deref()
+                        .is_some_and(|current| current.contains("sbols.org"));
+                    if meta.type_iri.is_none() || (is_sbol && !have_sbol) {
+                        meta.type_iri = Some(iri.to_owned());
+                    }
+                }
+            }
+            DISPLAY_ID => set_first(&mut meta.display_id, literal_value(&triple.object)),
+            VERSION => set_first(&mut meta.version, literal_value(&triple.object)),
+            TITLE => set_first(&mut meta.name, literal_value(&triple.object)),
+            DESCRIPTION => set_first(&mut meta.description, literal_value(&triple.object)),
+            _ => {}
+        }
+    }
+    meta
+}
+
+fn set_first(slot: &mut Option<String>, value: Option<String>) {
+    if slot.is_none() {
+        *slot = value;
+    }
+}
+
+fn literal_value(object: &ObjectTerm) -> Option<String> {
+    match object {
+        ObjectTerm::Literal { value, .. } => Some(value.clone()),
+        _ => None,
+    }
 }
 
 /// A sequence-search binding: the object metadata plus the alignment's
 /// `percentMatch`/`strandAlignment`/`CIGAR`.
-fn alignment_binding(hit: &SequenceAlignment, record: Option<&SbolObjectRecord>) -> Value {
-    let mut binding = base_binding(&hit.sequence_iri, record);
+fn alignment_binding(hit: &SequenceAlignment, meta: &RowMeta) -> Value {
+    let mut binding = base_binding(&hit.sequence_iri, meta);
     binding.insert(
         "percentMatch".to_owned(),
         literal(&hit.percent_match.to_string()),
@@ -153,26 +212,31 @@ fn alignment_binding(hit: &SequenceAlignment, record: Option<&SbolObjectRecord>)
 
 /// A `/similar` binding: object metadata only, no alignment columns (matching
 /// SBOLExplorer's cluster-mate contract).
-fn similar_binding(iri: &str, record: Option<&SbolObjectRecord>) -> Value {
-    Value::Object(base_binding(iri, record))
+fn similar_binding(iri: &str, meta: &RowMeta) -> Value {
+    Value::Object(base_binding(iri, meta))
 }
 
-/// The shared object-metadata columns of a binding: subject and, when the
-/// object is known, its displayId/name/description/type.
-fn base_binding(iri: &str, record: Option<&SbolObjectRecord>) -> Map<String, Value> {
+/// The shared object-metadata columns of a binding: subject plus the projected
+/// type/displayId/version/name/description. A field absent from the object is
+/// left unbound so the search view supplies classic's default (`''` for text,
+/// `null` for `sbolType`/`role`).
+fn base_binding(iri: &str, meta: &RowMeta) -> Map<String, Value> {
     let mut binding = Map::new();
     binding.insert("subject".to_owned(), uri_node(iri));
-    if let Some(record) = record {
-        if let Some(display_id) = &record.display_id {
-            binding.insert("displayId".to_owned(), literal(display_id));
-        }
-        if let Some(name) = &record.name {
-            binding.insert("name".to_owned(), literal(name));
-        }
-        if let Some(description) = &record.description {
-            binding.insert("description".to_owned(), literal(description));
-        }
-        binding.insert("type".to_owned(), uri_node(&record.sbol_class));
+    if let Some(type_iri) = &meta.type_iri {
+        binding.insert("type".to_owned(), uri_node(type_iri));
+    }
+    if let Some(display_id) = &meta.display_id {
+        binding.insert("displayId".to_owned(), literal(display_id));
+    }
+    if let Some(version) = &meta.version {
+        binding.insert("version".to_owned(), literal(version));
+    }
+    if let Some(name) = &meta.name {
+        binding.insert("name".to_owned(), literal(name));
+    }
+    if let Some(description) = &meta.description {
+        binding.insert("description".to_owned(), literal(description));
     }
     binding
 }
