@@ -6,10 +6,12 @@ use std::sync::Arc;
 use sbol_db_app::AppServices;
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_sqlite::{
-    connect_and_migrate, SqliteJobRepository, SqlitePool, SqliteStore, SqliteTokenStore,
-    SqliteUserStore,
+    connect_and_migrate, SqliteClusterStore, SqliteJobRepository, SqlitePageRankStore, SqlitePool,
+    SqliteStore, SqliteTokenStore, SqliteUserStore,
 };
-use sbol_db_storage::{AclStore, JobQueue, SbolStore, TokenStore, UserStore};
+use sbol_db_storage::{
+    AclStore, ClusterStore, JobQueue, PageRankStore, SbolStore, TokenStore, UserStore,
+};
 use tempfile::TempDir;
 
 async fn fresh_pool() -> (SqlitePool, TempDir) {
@@ -69,8 +71,11 @@ async fn sqlite_passes_full_conformance_suite() {
     let store_dyn: Arc<dyn SbolStore> = store.clone();
     let acl: Arc<dyn AclStore> = store;
     let users: Arc<dyn UserStore> = Arc::new(SqliteUserStore::new(pool.clone()));
-    let tokens: Arc<dyn TokenStore> = Arc::new(SqliteTokenStore::new(pool));
-    let app =
-        AppServices::new(store_dyn, sparql, sparql_update, jobs, acl).with_identity(users, tokens);
+    let tokens: Arc<dyn TokenStore> = Arc::new(SqliteTokenStore::new(pool.clone()));
+    let pagerank: Arc<dyn PageRankStore> = Arc::new(SqlitePageRankStore::new(pool.clone()));
+    let cluster: Arc<dyn ClusterStore> = Arc::new(SqliteClusterStore::new(pool));
+    let app = AppServices::new(store_dyn, sparql, sparql_update, jobs, acl)
+        .with_identity(users, tokens)
+        .with_sequence_stores(pagerank, cluster);
     sbol_db_conformance::run_all(&app).await;
 }

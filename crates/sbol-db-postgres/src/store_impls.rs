@@ -384,6 +384,10 @@ impl SequenceSearchStore for SbolObjectService {
     ) -> Result<Vec<BatchSequenceMatch>, DomainError> {
         self.sequence_search().search_many(patterns, options).await
     }
+
+    async fn align_candidates(&self, query: &str) -> Result<Vec<(String, String)>, DomainError> {
+        self.sequence_search().align_candidates(query).await
+    }
 }
 
 #[async_trait]

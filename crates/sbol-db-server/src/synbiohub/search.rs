@@ -7,9 +7,43 @@
 //! [`FacetedSearch`], which is all that reaches `AppServices`. The SPARQL text
 //! and the ranking never see the raw path.
 
-use sbol_db_app::{DateField, FacetedSearch};
+use sbol_db_app::{AlignMode, DateField, FacetedSearch};
 
 use crate::ApiError;
+
+/// A sequence-search request extracted from the classic `/search` grammar: the
+/// query nucleotide string and the alignment mode it selects.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SequenceQuery {
+    pub sequence: String,
+    pub mode: AlignMode,
+}
+
+/// Detect a sequence-search facet in the classic `/search` grammar. `sequence=`
+/// and `globalsequence=` run the banded global aligner (vsearch
+/// `usearch_global`); `exactsequence=` takes the exact substring path (vsearch
+/// `--search_exact`). Returns `None` for an ordinary faceted or free-text query,
+/// which the caller then answers through the SPARQL / ranked path.
+pub fn extract_sequence(path: &str) -> Option<SequenceQuery> {
+    for facet in path.split('&') {
+        let Some((key, value)) = facet.split_once('=') else {
+            continue;
+        };
+        let mode = match key {
+            "sequence" | "globalsequence" => AlignMode::GlobalAlign,
+            "exactsequence" => AlignMode::Exact,
+            _ => continue,
+        };
+        if value.is_empty() {
+            continue;
+        }
+        return Some(SequenceQuery {
+            sequence: value.to_owned(),
+            mode,
+        });
+    }
+    None
+}
 
 /// The SBOL2 namespace, the default for a bare `objectType` short name and a
 /// bare predicate key.

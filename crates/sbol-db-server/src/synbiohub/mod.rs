@@ -17,6 +17,7 @@ mod permission;
 mod queries;
 mod routes;
 mod search;
+mod sequence;
 mod submit;
 
 use axum::extract::{Request, State};
@@ -181,6 +182,14 @@ pub fn router(state: AppState) -> Router<AppState> {
             get(routes::public_uses_count),
         )
         .route(
+            "/public/:collectionId/:displayId/:version/similar",
+            get(sequence::public_similar),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/similarCount",
+            get(sequence::public_similar_count),
+        )
+        .route(
             "/public/:collectionId/:displayId/:version/twins",
             get(routes::public_twins),
         )
@@ -248,6 +257,14 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/user/:userId/:collectionId/:displayId/:version/usesCount",
             get(routes::user_uses_count),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/similar",
+            get(sequence::user_similar),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/similarCount",
+            get(sequence::user_similar_count),
         )
         .route(
             "/user/:userId/:collectionId/:displayId/:version/twins",

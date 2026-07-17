@@ -14,6 +14,7 @@ use sbol_db_core::{
     NeighborhoodResult, NewUser, ObjectId, ObjectTerm, SbolObjectRecord, SerializationFormat,
     Triple, User, UserId,
 };
+use sbol_db_search::ClusterId;
 use serde_json::Value;
 
 use crate::{
@@ -191,6 +192,46 @@ pub trait SequenceSearchStore: Send + Sync {
         patterns: &[String],
         options: SequenceSearchOptions,
     ) -> Result<Vec<BatchSequenceMatch>, DomainError>;
+
+    /// Candidate `(sequence_iri, elements)` pairs for the banded aligner: every
+    /// indexed DNA/RNA sequence sharing at least one canonical k-mer with
+    /// `query` (on either strand, since the seeds are canonical). This is the
+    /// k-mer prefilter feeding the alignment verify step in the application
+    /// facade; the store gathers candidates and never aligns, so rust-bio stays
+    /// out of the backends. A query shorter than the k-mer width has no seed, so
+    /// every indexed nucleotide sequence is returned as a candidate.
+    async fn align_candidates(&self, query: &str) -> Result<Vec<(String, String)>, DomainError>;
+}
+
+/// Persistence for sequence cluster assignments backing `/similar`.
+///
+/// Clustering (greedy centroid, `vsearch --cluster_fast --id 0.8`) runs in the
+/// search layer; this store persists the resulting `(sequence, cluster)`
+/// assignments. The search-index rebuild recomputes every assignment and calls
+/// [`replace_clusters`](Self::replace_clusters) to swap the whole table in one
+/// transaction, so a read never sees a partial clustering. Answering `/similar`
+/// at query time needs only this store and [`PageRankStore`]: no aligner, hence
+/// no rust-bio, in the backends.
+#[async_trait]
+pub trait ClusterStore: Send + Sync {
+    /// The cluster a sequence IRI belongs to, or `None` when it is unclustered.
+    async fn cluster_id_of(&self, iri: &str) -> Result<Option<ClusterId>, DomainError>;
+
+    /// The other members of `iri`'s cluster, excluding `iri` itself. Empty when
+    /// `iri` is unclustered or the sole member. This is the `/similar` candidate
+    /// set, which the caller then ranks by PageRank. Order is unspecified.
+    async fn cluster_mates(&self, iri: &str) -> Result<Vec<String>, DomainError>;
+
+    /// Replace every cluster assignment with `pairs` in one transaction: after
+    /// it returns the table reflects exactly these `(sequence_iri, cluster_id)`
+    /// pairs and nothing prior.
+    async fn replace_clusters(&self, pairs: Vec<(String, ClusterId)>) -> Result<(), DomainError>;
+
+    /// Every persisted `(sequence_iri, cluster_id)` assignment, a full scan of
+    /// the cluster table. The ranked-text path builds its cluster-duplicate map
+    /// from these, so a non-centroid cluster member is demoted in free-text
+    /// search. Order is unspecified.
+    async fn all_assignments(&self) -> Result<Vec<(String, ClusterId)>, DomainError>;
 }
 
 /// Substring search over the derived object view.

@@ -1,4 +1,5 @@
 pub mod accel;
+pub mod cluster;
 pub mod graph;
 pub mod job;
 pub mod lab;
@@ -12,6 +13,7 @@ pub mod triple;
 pub mod users;
 
 pub use accel::AccelRepository;
+pub use cluster::SqliteClusterStore;
 pub use graph::GraphRepository;
 pub use job::SqliteJobRepository;
 pub use lab::LabRepository;

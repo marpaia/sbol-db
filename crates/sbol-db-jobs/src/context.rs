@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use sbol_db_core::JobId;
 use sbol_db_search::ranked_text::RankedTextIndex;
-use sbol_db_storage::{JobQueue, PageRankStore, SbolStore, TripleSource};
+use sbol_db_storage::{ClusterStore, JobQueue, PageRankStore, SbolStore, TripleSource};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 /// The handles the `rebuild_search_index` job needs that live outside the
-/// [`SbolStore`] surface: the PageRank persistence, the shared ranked text
-/// index, and a synchronous triple source to compute the link graph over.
+/// [`SbolStore`] surface: the cluster and PageRank persistence, the shared
+/// ranked text index, and a synchronous triple source to compute the link graph
+/// over.
 ///
 /// Bundling them here keeps `tantivy` and the ranked-text types out of the
 /// storage traits: the storage core stays free of the text index, and only a
@@ -17,6 +18,10 @@ use tokio_util::sync::CancellationToken;
 /// requires it.
 #[derive(Clone)]
 pub struct SearchIndexHandles {
+    /// Sequence cluster persistence, replaced wholesale on each rebuild and read
+    /// at search time to apply the cluster-duplicate penalty and answer
+    /// `/similar`.
+    pub cluster: Arc<dyn ClusterStore>,
     /// Object PageRank persistence, replaced wholesale on each rebuild.
     pub pagerank: Arc<dyn PageRankStore>,
     /// The shared ranked text index the rebuild writes and the search adapters

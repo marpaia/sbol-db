@@ -16,6 +16,7 @@ mod accel;
 mod dataset;
 mod engine;
 mod error;
+mod explorer;
 mod results;
 mod rewrite;
 mod update;
@@ -25,5 +26,9 @@ pub use engine::{
     parse_query, GraphScope, ParsedQuery, QueryForm, SparqlEngine, SparqlOptions, SparqlOutcome,
 };
 pub use error::SparqlError;
+pub use explorer::{
+    count_results as explorer_count_results, recognize as recognize_explorer,
+    search_results as explorer_search_results, ExplorerQuery, Paging, COUNT_VARS, SEARCH_VARS,
+};
 pub use results::{ResultFormat, ResultPayload};
 pub use update::{SparqlUpdateEngine, UpdateOutcome};

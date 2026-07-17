@@ -26,17 +26,18 @@ use sbol_db_app::{
     SubmitRequest, PUBLIC_GRAPH,
 };
 use sbol_db_core::{
-    Direction, DomainError, IriString, NeighborhoodQuery, NewUser, ObjectTerm, SerializationFormat,
-    SubjectTerm, Triple,
+    Direction, DomainError, GraphId, IriString, NeighborhoodQuery, NewUser, ObjectTerm,
+    SerializationFormat, SubjectTerm, Triple,
 };
 use sbol_db_search::pagerank::pagerank;
 use sbol_db_search::ranked_text::IndexedPart;
+use sbol_db_search::{cluster_sequences, AlignOptions, ClusterId};
 use sbol_db_server::{serialize_closure, serialize_gff3, serialize_omex};
 use sbol_db_sparql::{GraphScope, SparqlOptions};
 use sbol_db_storage::{
     BlobStore, EnqueueOutcome, GraphWriteMode, ImportInput, ImportOverwrite, JobQueue, JobStatus,
-    ListJobsFilter, ListObjectsFilter, NewJob, SbolStore, SequenceSearchOptions, DEFAULT_QUEUE,
-    SBH_OWNED_BY,
+    ListJobsFilter, ListObjectsFilter, NewJob, RankRow, SbolStore, SequenceSearchOptions,
+    DEFAULT_QUEUE, SBH_OWNED_BY,
 };
 use sha1::{Digest, Sha1};
 
@@ -108,6 +109,10 @@ pub async fn run_all(app: &AppServices) {
     graph_set_semantics(store).await;
     neighborhood_walk(store).await;
     sequence_search(store).await;
+    sequence_align(app).await;
+    similar_sequences(app).await;
+    cluster_recall();
+    ranked_dup_penalty_active(app).await;
     ontology_roundtrip(store).await;
     job_queue_lifecycle(jobs).await;
     acl_scope_hides_private_graph(app).await;
@@ -591,6 +596,360 @@ pub async fn sequence_search(store: &dyn SbolStore) {
         .delete_graph(report.graph_id)
         .await
         .expect("delete_graph");
+}
+
+/// A 40 bp nucleotide sequence with varied composition, the centroid the
+/// clustering scenarios build their near-identical members around.
+const CLUSTER_BASE: &str = "ACGTACGTACGTTTGGCCAAGGTTCCAAGGATCGATCGAT";
+/// A 40 bp sequence sharing no k-mer with [`CLUSTER_BASE`], so it never clusters
+/// with the near-identical set.
+const CLUSTER_UNRELATED: &str = "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT";
+/// The floating-point tolerance for identity comparisons: a native aligner's
+/// `iddef=2` identity is equivalent to vsearch's but not bit-identical, so scores
+/// are asserted within an epsilon rather than by string equality.
+const ALIGN_EPS: f64 = 1e-9;
+
+/// Flip the base at `at` to a different nucleotide, yielding a single-mismatch
+/// variant that stays within the clustering identity threshold.
+fn point_mutant(seq: &str, at: usize) -> String {
+    let mut chars: Vec<char> = seq.chars().collect();
+    chars[at] = if chars[at] == 'A' { 'C' } else { 'A' };
+    chars.into_iter().collect()
+}
+
+/// The identity a CIGAR implies: `M` columns over all columns. `M` counts as an
+/// aligned (match-or-mismatch) column and `I`/`D` as indel columns, so a gap-free
+/// all-`M` alignment implies full identity. The known divergence from vsearch is
+/// asserted through this implied identity rather than by CIGAR string equality.
+fn cigar_implied_identity(cigar: &str) -> f64 {
+    let mut run = 0usize;
+    let mut aligned = 0usize;
+    let mut total = 0usize;
+    for ch in cigar.chars() {
+        if let Some(d) = ch.to_digit(10) {
+            run = run * 10 + d as usize;
+        } else {
+            if ch == 'M' {
+                aligned += run;
+            }
+            total += run;
+            run = 0;
+        }
+    }
+    if total == 0 {
+        0.0
+    } else {
+        aligned as f64 / total as f64
+    }
+}
+
+/// The Sequence IRI a fresh import of [`SIMPLE_COMPONENT_TTL`] projects, seeded
+/// into `app`'s store under `source_uri`.
+async fn import_simple_component(app: &AppServices, source_uri: &str) -> (GraphId, String) {
+    let report = app
+        .store
+        .import_document(ImportInput {
+            body: SIMPLE_COMPONENT_TTL.to_owned(),
+            format: SerializationFormat::Turtle,
+            namespace: None,
+            source_uri: Some(source_uri.to_owned()),
+            document_iri: None,
+            created_by: None,
+            name: None,
+            description: None,
+            overwrite: ImportOverwrite::Fail,
+        })
+        .await
+        .expect("import_document");
+    let objects = app
+        .store
+        .list_objects(&ListObjectsFilter {
+            sbol_class: None,
+            role: None,
+            graph_id: Some(report.graph_id),
+            after_iri: None,
+            limit: 100,
+        })
+        .await
+        .expect("list_objects");
+    let sequence_iri = objects
+        .iter()
+        .find(|o| o.sbol_class.ends_with("#Sequence"))
+        .expect("a sequence object")
+        .iri
+        .as_str()
+        .to_owned();
+    (report.graph_id, sequence_iri)
+}
+
+/// The banded aligner recovers a seeded sequence from a query identical to its
+/// residues: the k-mer prefilter admits it, the aligner scores full identity on
+/// the forward strand, and its CIGAR implies that same identity. The hit set is
+/// exactly the one seeded sequence.
+///
+/// Alignment runs through the facade's [`SequenceService`](sbol_db_app::SequenceService),
+/// which gathers candidates from the backend's k-mer index and verifies each with
+/// the native aligner, so this certifies the whole sequence-search path on each
+/// backend. The identity is asserted within [`ALIGN_EPS`] and the CIGAR by its
+/// implied identity, never by string equality with vsearch.
+pub async fn sequence_align(app: &AppServices) {
+    let (graph_id, sequence_iri) =
+        import_simple_component(app, "conformance://sequence-align").await;
+
+    // The query is the seeded Sequence's own residues, uppercased.
+    let query = "TTGACAGCTAGCTCAGTCCTAGGTATAATGCTAGC";
+    let hits = app
+        .sequence()
+        .align(query, AlignOptions::default(), &GraphScope::Union)
+        .await
+        .expect("align");
+
+    let seen: std::collections::HashSet<&str> =
+        hits.iter().map(|h| h.sequence_iri.as_str()).collect();
+    assert_eq!(
+        seen,
+        std::collections::HashSet::from([sequence_iri.as_str()]),
+        "the hit set is exactly the seeded sequence: {seen:?}"
+    );
+
+    let hit = hits
+        .iter()
+        .find(|h| h.sequence_iri == sequence_iri)
+        .expect("the seeded sequence is a hit");
+    assert!(
+        (hit.percent_match - 1.0).abs() < ALIGN_EPS,
+        "an identical query is full identity within epsilon: {}",
+        hit.percent_match
+    );
+    assert_eq!(
+        hit.strand, '+',
+        "the forward query aligns on the plus strand"
+    );
+    let implied = cigar_implied_identity(&hit.cigar);
+    assert!(
+        (implied - hit.percent_match).abs() < ALIGN_EPS,
+        "the CIGAR's implied identity matches percentMatch: cigar={} implied={implied} percent_match={}",
+        hit.cigar,
+        hit.percent_match
+    );
+
+    app.store
+        .delete_graph(graph_id)
+        .await
+        .expect("delete_graph");
+}
+
+/// `/similar` returns exactly a target's cluster mates, ordered by PageRank, and
+/// never the target itself or an unrelated sequence.
+///
+/// A cluster of near-identical sequences plus one unrelated sequence is grouped
+/// by [`cluster_sequences`] and persisted through the facade's `ClusterStore`;
+/// with per-mate PageRank scores, [`SequenceService::similar`](sbol_db_app::SequenceService::similar)
+/// returns the other cluster members in descending PageRank order, carrying no
+/// alignment columns, and `similarCount` counts exactly those mates. The
+/// unrelated sequence clusters alone, so it is never a mate.
+pub async fn similar_sequences(app: &AppServices) {
+    const TARGET: &str = "urn:sbol-db:conformance:similar:target";
+    const MATE_LOW: &str = "urn:sbol-db:conformance:similar:mate_low";
+    const MATE_HIGH: &str = "urn:sbol-db:conformance:similar:mate_high";
+    const UNRELATED: &str = "urn:sbol-db:conformance:similar:unrelated";
+
+    let assignments = cluster_sequences(
+        vec![
+            (TARGET.to_owned(), CLUSTER_BASE.to_owned()),
+            (MATE_LOW.to_owned(), point_mutant(CLUSTER_BASE, 12)),
+            (MATE_HIGH.to_owned(), point_mutant(CLUSTER_BASE, 27)),
+            (UNRELATED.to_owned(), CLUSTER_UNRELATED.to_owned()),
+        ],
+        &AlignOptions::default(),
+    );
+    // The near-identical set shares the target's cluster; the unrelated one does
+    // not, so it can never surface as a mate.
+    let by_iri: std::collections::HashMap<String, ClusterId> =
+        assignments.iter().cloned().collect();
+    assert_eq!(
+        by_iri[MATE_LOW], by_iri[TARGET],
+        "the low-rank mate clusters with the target"
+    );
+    assert_eq!(
+        by_iri[MATE_HIGH], by_iri[TARGET],
+        "the high-rank mate clusters with the target"
+    );
+    assert_ne!(
+        by_iri[UNRELATED], by_iri[TARGET],
+        "the unrelated sequence clusters apart from the target"
+    );
+
+    app.cluster
+        .replace_clusters(assignments)
+        .await
+        .expect("replace_clusters");
+    app.pagerank
+        .replace_all_ranks(vec![
+            RankRow {
+                iri: MATE_LOW.to_owned(),
+                score: 1.0,
+            },
+            RankRow {
+                iri: MATE_HIGH.to_owned(),
+                score: 5.0,
+            },
+        ])
+        .await
+        .expect("replace_all_ranks");
+
+    let hits = app
+        .sequence()
+        .similar(TARGET, &GraphScope::Union)
+        .await
+        .expect("similar");
+    let order: Vec<&str> = hits.iter().map(|h| h.iri.as_str()).collect();
+    assert_eq!(
+        order,
+        vec![MATE_HIGH, MATE_LOW],
+        "the mates are the other cluster members, ranked by PageRank descending, never the target"
+    );
+    assert!(
+        !order.contains(&UNRELATED),
+        "the unrelated sequence is never a mate"
+    );
+    let count = app
+        .sequence()
+        .similar_count(TARGET, &GraphScope::Union)
+        .await
+        .expect("similar_count");
+    assert_eq!(count, 2, "two cluster mates, excluding the target");
+
+    // Leave the in-memory cluster and rank stores empty for later scenarios.
+    app.cluster
+        .replace_clusters(Vec::new())
+        .await
+        .expect("clear clusters");
+    app.pagerank
+        .replace_all_ranks(Vec::new())
+        .await
+        .expect("clear ranks");
+}
+
+/// Greedy centroid clustering groups a near-identical set into one cluster while
+/// an unrelated sequence stands alone, reproducing `vsearch --cluster_fast --id
+/// 0.8`. The algorithm is pure, so this certifies recall independent of any
+/// backend.
+pub fn cluster_recall() {
+    let assignments = cluster_sequences(
+        vec![
+            ("urn:seq:recall:a".to_owned(), CLUSTER_BASE.to_owned()),
+            (
+                "urn:seq:recall:b".to_owned(),
+                point_mutant(CLUSTER_BASE, 12),
+            ),
+            (
+                "urn:seq:recall:c".to_owned(),
+                point_mutant(CLUSTER_BASE, 27),
+            ),
+            (
+                "urn:seq:recall:unrelated".to_owned(),
+                CLUSTER_UNRELATED.to_owned(),
+            ),
+        ],
+        &AlignOptions::default(),
+    );
+    let by_iri: std::collections::HashMap<String, ClusterId> = assignments.into_iter().collect();
+
+    let cluster = by_iri["urn:seq:recall:a"];
+    assert_eq!(
+        by_iri["urn:seq:recall:b"], cluster,
+        "the first near-identical member joins the centroid's cluster"
+    );
+    assert_eq!(
+        by_iri["urn:seq:recall:c"], cluster,
+        "the second near-identical member joins the centroid's cluster"
+    );
+    assert_ne!(
+        by_iri["urn:seq:recall:unrelated"], cluster,
+        "the unrelated sequence opens its own cluster"
+    );
+    let distinct: std::collections::HashSet<ClusterId> = by_iri.values().copied().collect();
+    assert_eq!(
+        distinct.len(),
+        2,
+        "the near-identical set and the unrelated sequence form exactly two clusters"
+    );
+}
+
+/// With clustering persisted, the `/2` duplicate penalty bites in the served
+/// ranked-text path: a non-centroid duplicate is demoted below its centroid, and
+/// its score halves against the same search with no persisted clusters.
+///
+/// A centroid and a duplicate carry identical text, the centroid holding the
+/// higher PageRank so it ranks first. [`AppServices::ranked_search`] with the
+/// cluster store empty leaves the duplicate's score whole; persisting the two in
+/// one cluster through [`ClusterStore::replace_clusters`] halves the duplicate on
+/// the next served search, dropping it below the centroid. The served path reads
+/// the assignments the store holds, so this fails if `ranked_search` ignores
+/// persisted clusters.
+pub async fn ranked_dup_penalty_active(app: &AppServices) {
+    let centroid = conformance_iri("dup_centroid");
+    let duplicate = conformance_iri("dup_member");
+    app.text_search
+        .rebuild(vec![
+            indexed_part_ranked(&centroid, "dupwidget", "same text", COMPONENT_TYPE, 5.0),
+            indexed_part_ranked(&duplicate, "dupwidget", "same text", COMPONENT_TYPE, 1.0),
+        ])
+        .expect("rebuild index for the duplicate-penalty rule");
+
+    // With the cluster store empty the served search leaves the duplicate whole.
+    app.cluster
+        .replace_clusters(Vec::new())
+        .await
+        .expect("clear clusters");
+    let baseline = ranked(app, "dupwidget").await;
+    let baseline_dup = baseline
+        .iter()
+        .find(|h| h.subject == duplicate)
+        .expect("the duplicate is present without penalty")
+        .score;
+
+    // Persisting the centroid and duplicate in one cluster activates the penalty
+    // on the next served search.
+    app.cluster
+        .replace_clusters(vec![
+            (centroid.clone(), ClusterId(0)),
+            (duplicate.clone(), ClusterId(0)),
+        ])
+        .await
+        .expect("persist the cluster assignments");
+    let penalized = ranked(app, "dupwidget").await;
+    let centroid_score = penalized
+        .iter()
+        .find(|h| h.subject == centroid)
+        .expect("the centroid is present")
+        .score;
+    let dup_score = penalized
+        .iter()
+        .find(|h| h.subject == duplicate)
+        .expect("the duplicate is present under penalty")
+        .score;
+
+    assert!(
+        dup_score < centroid_score,
+        "the duplicate is demoted below its centroid: duplicate={dup_score} centroid={centroid_score}"
+    );
+    assert!(
+        (baseline_dup / dup_score - 2.0).abs() < 1e-6,
+        "the served path halves the duplicate once its cluster is persisted: baseline={baseline_dup} penalized={dup_score}"
+    );
+    assert_eq!(
+        penalized.last().map(|h| h.subject.as_str()),
+        Some(duplicate.as_str()),
+        "the penalized duplicate ranks below the centroid"
+    );
+
+    // Leave the cluster store empty for the scenarios that follow.
+    app.cluster
+        .replace_clusters(Vec::new())
+        .await
+        .expect("clear clusters");
 }
 
 /// Loading an ontology builds its transitive closure: descendants of an

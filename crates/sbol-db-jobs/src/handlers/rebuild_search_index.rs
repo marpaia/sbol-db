@@ -1,21 +1,23 @@
 //! `rebuild_search_index` job handler.
 //!
 //! Rebuilds the native ranked search index in SBOLExplorer's `update_index`
-//! order: clusters, then PageRank, then the tantivy text index. The clusters
-//! step is deferred (clustering is a later phase), so this handler runs the
-//! PageRank and text-index steps and leaves the cluster-duplicate set empty; a
-//! Sequence-typed hit is still penalized at search time, and the duplicate
-//! penalty becomes live once clustering supplies a map.
+//! order: clusters, then PageRank, then the tantivy text index.
 //!
-//! PageRank is computed by [`sbol_db_search::pagerank`] over the store's
-//! triples and persisted atomically through [`PageRankStore`]. The text index
-//! is then rebuilt from every top-level object's metadata joined with a
-//! synthetic keyword field and its fresh PageRank score.
+//! The clustering stage groups the top-level parts by their sequence elements
+//! with [`sbol_db_search::cluster_sequences`] (greedy centroid clustering,
+//! `vsearch --cluster_fast --id 0.8`) and persists the assignments atomically
+//! through [`ClusterStore`]. Search then reads those assignments as a
+//! [`ClusterMap`](sbol_db_search::ranked_text::cluster_map) and divides a hit
+//! whose cluster mate already ranked ahead of it by 2. PageRank is computed by
+//! [`sbol_db_search::pagerank`] over the store's triples and persisted through
+//! [`PageRankStore`]. The text index is then rebuilt from every top-level
+//! object's metadata joined with a synthetic keyword field and its fresh
+//! PageRank score.
 //!
-//! The handler reaches the PageRank store, the shared text index, and the
-//! triple source through the [`SearchIndexHandles`] on the job context rather
-//! than through the [`SbolStore`] surface, so `tantivy` and the ranked-text
-//! types never enter the storage traits.
+//! The handler reaches the cluster store, the PageRank store, the shared text
+//! index, and the triple source through the [`SearchIndexHandles`] on the job
+//! context rather than through the [`SbolStore`] surface, so `tantivy`, the
+//! aligner, and the ranked-text types never enter the storage traits.
 
 use std::collections::HashMap;
 
@@ -24,6 +26,7 @@ use sbol_db_core::{ObjectTerm, SubjectTerm, Triple};
 use sbol_db_search::keywords::{build_keywords, SoTerm};
 use sbol_db_search::pagerank::{pagerank, top_level_iris, top_level_link_graph};
 use sbol_db_search::ranked_text::IndexedPart;
+use sbol_db_search::{cluster_sequences, AlignOptions};
 use sbol_db_storage::RankRow;
 use serde_json::Value;
 
@@ -37,6 +40,10 @@ const DISPLAY_ID: &str = "http://sbols.org/v2#displayId";
 const VERSION: &str = "http://sbols.org/v2#version";
 const SBOL_TYPE: &str = "http://sbols.org/v2#type";
 const ROLE: &str = "http://sbols.org/v2#role";
+/// The `sbol2:sequence` predicate linking a part to its Sequence object.
+const SEQUENCE: &str = "http://sbols.org/v2#sequence";
+/// The `sbol2:elements` predicate carrying a Sequence's nucleotide string.
+const ELEMENTS: &str = "http://sbols.org/v2#elements";
 const TITLE: &str = "http://purl.org/dc/terms/title";
 const DESCRIPTION: &str = "http://purl.org/dc/terms/description";
 
@@ -65,9 +72,7 @@ impl JobHandler for RebuildSearchIndexHandler {
             )
         })?;
 
-        // Clusters -> PageRank -> tantivy, with the clusters step deferred to a
-        // later phase: the cluster-duplicate set is empty, so the divide-by-2
-        // penalty stays inert while the Sequence divide-by-10 penalty is live.
+        // Clusters -> PageRank -> tantivy, SBOLExplorer's `update_index` order.
         //
         // The triple source drives its async backend to completion synchronously,
         // so the full-store scan runs on a blocking thread rather than a runtime
@@ -81,6 +86,21 @@ impl JobHandler for RebuildSearchIndexHandler {
 
         let uris_set = top_level_iris(&all_triples);
         let uris: Vec<String> = uris_set.iter().cloned().collect();
+
+        // Clustering stage: group each top-level part by its sequence elements
+        // and persist the assignments. Alignment is CPU-bound, so it runs on a
+        // blocking thread; the persisted assignments then drive the search-time
+        // divide-by-2 duplicate penalty and answer `/similar`.
+        let part_sequences = collect_part_sequences(&all_triples, &uris_set);
+        let clustered_parts = part_sequences.len();
+        let assignments = tokio::task::spawn_blocking(move || {
+            cluster_sequences(part_sequences, &AlignOptions::default())
+        })
+        .await
+        .map_err(|e| HandlerError::Other(format!("clustering task join: {e}")))?;
+        let clusters = distinct_cluster_count(&assignments);
+        search.cluster.replace_clusters(assignments).await?;
+
         let edges = top_level_link_graph(&all_triples);
         let ranks = pagerank(&edges, &uris);
 
@@ -131,13 +151,21 @@ impl JobHandler for RebuildSearchIndexHandler {
         ctx.log(
             "info",
             "search index rebuilt",
-            serde_json::json!({ "ranked": ranked, "indexed": indexed }),
+            serde_json::json!({
+                "ranked": ranked,
+                "indexed": indexed,
+                "clustered_parts": clustered_parts,
+                "clusters": clusters,
+            }),
         )
         .await;
 
-        Ok(JobOutcome::with_result(
-            serde_json::json!({ "ranked": ranked, "indexed": indexed }),
-        ))
+        Ok(JobOutcome::with_result(serde_json::json!({
+            "ranked": ranked,
+            "indexed": indexed,
+            "clustered_parts": clustered_parts,
+            "clusters": clusters,
+        })))
     }
 }
 
@@ -192,6 +220,57 @@ fn collect_object_metadata(
         }
     }
     metas
+}
+
+/// Gather the `(part_iri, elements)` pairs to cluster, mirroring SBOLExplorer's
+/// clustering query: a top-level part linked to a Sequence whose `elements`
+/// literal supplies the nucleotide string. The cluster is keyed by the part
+/// IRI, so `/similar` on a part resolves its mates directly. A part with more
+/// than one sequence keeps the first seen, and a part is included only when it
+/// is top-level (the indexed subject the duplicate penalty ranks).
+fn collect_part_sequences(
+    triples: &[Triple],
+    top_levels: &std::collections::HashSet<String>,
+) -> Vec<(String, String)> {
+    let mut elements: HashMap<&str, &str> = HashMap::new();
+    for t in triples {
+        if t.predicate.as_str() != ELEMENTS {
+            continue;
+        }
+        if let (SubjectTerm::Iri(seq), ObjectTerm::Literal { value, .. }) = (&t.subject, &t.object)
+        {
+            elements.entry(seq.as_str()).or_insert(value.as_str());
+        }
+    }
+
+    let mut parts: Vec<(String, String)> = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for t in triples {
+        if t.predicate.as_str() != SEQUENCE {
+            continue;
+        }
+        let (SubjectTerm::Iri(part), ObjectTerm::Iri(seq)) = (&t.subject, &t.object) else {
+            continue;
+        };
+        let part = part.as_str();
+        if !top_levels.contains(part) || seen.contains(part) {
+            continue;
+        }
+        if let Some(seq_elements) = elements.get(seq.as_str()) {
+            seen.insert(part);
+            parts.push((part.to_owned(), (*seq_elements).to_owned()));
+        }
+    }
+    parts
+}
+
+/// The number of distinct clusters among a set of assignments.
+fn distinct_cluster_count(assignments: &[(String, sbol_db_search::ClusterId)]) -> usize {
+    assignments
+        .iter()
+        .map(|(_, cluster)| *cluster)
+        .collect::<std::collections::HashSet<_>>()
+        .len()
 }
 
 /// Keep the first value seen for a single-valued field.

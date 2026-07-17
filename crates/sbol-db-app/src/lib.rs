@@ -22,6 +22,7 @@ pub mod memory;
 mod mutation;
 mod permission;
 mod search;
+mod sequence;
 mod submission;
 
 pub use acl::{AclService, PUBLIC_GRAPH};
@@ -36,7 +37,10 @@ pub use edit::{EditService, FieldValue};
 pub use mutation::{MakePublicOutcome, MakePublicRequest, MutationError, MutationService};
 pub use permission::PermissionService;
 pub use sbol_db_search::ranked_text::Hit;
+pub use sbol_db_search::{AlignMode, AlignOptions};
+pub use sbol_db_storage::SequenceAlignment;
 pub use search::{DateField, FacetedSearch};
+pub use sequence::{SequenceService, SimilarHit};
 pub use submission::{SubmissionService, SubmitOutcome, SubmitRequest};
 
 use std::sync::Arc;
@@ -44,7 +48,9 @@ use std::sync::Arc;
 use sbol_db_backend::Backend;
 use sbol_db_search::ranked_text::RankedTextIndex;
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
-use sbol_db_storage::{AclStore, BlobStore, JobQueue, SbolStore, TokenStore, UserStore};
+use sbol_db_storage::{
+    AclStore, BlobStore, ClusterStore, JobQueue, PageRankStore, SbolStore, TokenStore, UserStore,
+};
 
 /// The application facade: the neutral trait objects plus the identity-aware
 /// subsystems every HTTP adapter shares.
@@ -65,6 +71,15 @@ pub struct AppServices {
     pub blobs: Arc<dyn BlobStore>,
     /// Ownership and sharing reads backing ACL-scoped queries.
     pub acl: Arc<dyn AclStore>,
+    /// Object PageRank scores backing sequence-search and `/similar` ranking.
+    /// The rebuild job writes it; the sequence facade reads it. Defaults to a
+    /// non-persistent in-RAM store; a backend-built facade swaps in the durable
+    /// one.
+    pub pagerank: Arc<dyn PageRankStore>,
+    /// Sequence cluster assignments backing `/similar`. The rebuild job writes
+    /// it; the sequence facade reads it. Defaults to a non-persistent in-RAM
+    /// store; a backend-built facade swaps in the durable one.
+    pub cluster: Arc<dyn ClusterStore>,
     /// Turns a caller identity into the graph scope a read is authorized for.
     pub acl_service: AclService,
     /// Account persistence for the identity layer.
@@ -123,6 +138,31 @@ impl AppServices {
             backend.users.clone(),
             backend.tokens.clone(),
         )
+        .with_sequence_stores(backend.pagerank.clone(), backend.cluster.clone())
+    }
+
+    /// Replace the default in-RAM PageRank and cluster stores with durable
+    /// ones, so the sequence facade ranks and answers `/similar` against the
+    /// backend's own tables. [`from_backend`](Self::from_backend) applies this;
+    /// a caller assembling the facade with [`new`](Self::new) may too.
+    pub fn with_sequence_stores(
+        mut self,
+        pagerank: Arc<dyn PageRankStore>,
+        cluster: Arc<dyn ClusterStore>,
+    ) -> Self {
+        self.pagerank = pagerank;
+        self.cluster = cluster;
+        self
+    }
+
+    /// The sequence-search and `/similar` facade over the SBOL store, the
+    /// PageRank scores, and the cluster assignments.
+    pub fn sequence(&self) -> SequenceService {
+        SequenceService::new(
+            self.store.clone(),
+            self.pagerank.clone(),
+            self.cluster.clone(),
+        )
     }
 
     /// Replace the identity layer with explicit user and token stores,
@@ -173,12 +213,16 @@ impl AppServices {
         let blobs: Arc<dyn BlobStore> = Arc::new(blob::FsBlobStore::new(
             std::env::temp_dir().join("sbol-db-blobs"),
         ));
+        let pagerank: Arc<dyn PageRankStore> = Arc::new(memory::InMemoryPageRankStore::new());
+        let cluster: Arc<dyn ClusterStore> = Arc::new(memory::InMemoryClusterStore::new());
         Self {
             store,
             sparql,
             sparql_update,
             jobs,
             acl,
+            pagerank,
+            cluster,
             blobs,
             acl_service,
             users,

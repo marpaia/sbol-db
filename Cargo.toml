@@ -90,6 +90,10 @@ rocksdb = { version = "0.22", default-features = false, features = ["snappy"] }
 
 tantivy = "0.22"
 
+# Pairwise alignment (banded Smith-Waterman) behind sbol-db-search's `align`
+# feature, so rust-bio never enters the storage backends' builds.
+bio = "4"
+
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.16", default-features = false }
 

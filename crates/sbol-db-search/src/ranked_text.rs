@@ -8,9 +8,10 @@
 //! Sequence-typed hit is divided by 10 and a cluster-duplicate is divided by 2.
 //!
 //! The combine and penalties reproduce SBOLExplorer's `search_es` script score
-//! and `create_bindings`. The cluster-duplicate step is the clusters -> pagerank
-//! -> tantivy order with the clusters step deferred: the duplicate map is empty
-//! until clustering lands, so the divide-by-2 hook is present but inert.
+//! and `create_bindings`. The cluster-duplicate step consumes a [`ClusterMap`]
+//! built from the persisted cluster assignments ([`cluster_map`]): a hit whose
+//! cluster mate already ranked ahead of it is divided by 2, SBOLExplorer's
+//! greedy dedup.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -38,10 +39,34 @@ const FETCH_CAP: usize = 10_000;
 /// The heap budget for the single index writer, in bytes.
 const WRITER_HEAP_BYTES: usize = 50_000_000;
 
-/// A cluster map from a subject to the set of subjects considered its
-/// duplicates. Empty until clustering lands; wiring it here keeps the
-/// divide-by-2 penalty ready without changing the query surface later.
+/// A cluster map from a subject to its cluster mates (the other members of its
+/// cluster). The search combine step reads it to apply the divide-by-2
+/// duplicate penalty; [`cluster_map`] builds it from persisted assignments.
 pub type ClusterMap = HashMap<String, Vec<String>>;
+
+/// Build the [`ClusterMap`] from persisted `(subject, cluster)` assignments,
+/// mapping each subject to the other members of its cluster.
+///
+/// This is SBOLExplorer's `uclust2clusters` transform: it groups assignments by
+/// cluster id, then maps every member to the set of its cluster mates (itself
+/// excluded). A singleton cluster maps its sole member to an empty list, which
+/// the penalty treats as no duplicates.
+pub fn cluster_map(
+    assignments: impl IntoIterator<Item = (String, crate::cluster::ClusterId)>,
+) -> ClusterMap {
+    let mut by_cluster: HashMap<crate::cluster::ClusterId, Vec<String>> = HashMap::new();
+    for (subject, cluster) in assignments {
+        by_cluster.entry(cluster).or_default().push(subject);
+    }
+    let mut map = ClusterMap::new();
+    for members in by_cluster.values() {
+        for member in members {
+            let mates: Vec<String> = members.iter().filter(|m| *m != member).cloned().collect();
+            map.insert(member.clone(), mates);
+        }
+    }
+    map
+}
 
 /// The graphs a search is authorized to read. The facade maps its
 /// `GraphScope` onto this so the index enforces the scope in the query rather
@@ -249,8 +274,9 @@ impl RankedTextIndex {
         let scored: Vec<(f64, tantivy::DocAddress)> = searcher.search(&scoped_query, &collector)?;
 
         // Penalties are applied in candidate-score order (SBOLExplorer's ES
-        // order): a subject whose cluster has already been seen is halved. The
-        // duplicate map is empty until clustering lands, so this is inert today.
+        // order): a subject whose cluster mate already ranked ahead of it is
+        // halved, so a non-centroid cluster member is demoted. An empty cluster
+        // map leaves every hit whole.
         let mut hits = Vec::with_capacity(scored.len());
         let mut expanded: HashSet<String> = HashSet::new();
         for (base_score, address) in scored {
@@ -461,6 +487,21 @@ mod tests {
             .unwrap()
             .score;
         assert!((follower_base / follower_hit.score - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cluster_map_groups_members_into_mates() {
+        use crate::cluster::ClusterId;
+        let map = cluster_map(vec![
+            ("a".to_owned(), ClusterId(0)),
+            ("b".to_owned(), ClusterId(0)),
+            ("c".to_owned(), ClusterId(0)),
+            ("d".to_owned(), ClusterId(1)),
+        ]);
+        let mut a_mates = map["a"].clone();
+        a_mates.sort();
+        assert_eq!(a_mates, vec!["b".to_owned(), "c".to_owned()]);
+        assert!(map["d"].is_empty(), "a singleton has no mates");
     }
 
     #[test]

@@ -80,6 +80,11 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     "acc_dirty",      // graph -> () (presence = indexes stale, rebuild on next read)
     // Object PageRank scores backing the native ranked search: iri -> f64 LE.
     "object_pagerank",
+    // Sequence cluster assignments backing /similar. `sequence_cluster` maps
+    // iri -> cluster_id (i64 BE); `sequence_cluster_by_id` keys
+    // cluster_id(BE) + SEP + iri -> () so cluster-mate lookup is a prefix scan.
+    "sequence_cluster",
+    "sequence_cluster_by_id",
     // Counters and schema version.
     "meta",
 ];

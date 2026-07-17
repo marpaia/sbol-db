@@ -3,6 +3,7 @@
 mod auth;
 mod docs;
 mod error;
+mod explorer;
 mod export;
 #[cfg(feature = "lab")]
 mod lab;

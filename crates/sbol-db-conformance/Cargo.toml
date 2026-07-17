@@ -13,7 +13,7 @@ sbol-db-storage.workspace = true
 sbol-db-sparql.workspace = true
 sbol-db-app.workspace = true
 sbol-db-server = { workspace = true, default-features = false }
-sbol-db-search = { workspace = true, features = ["text-index"] }
+sbol-db-search = { workspace = true, features = ["text-index", "align"] }
 sbol.workspace = true
 sbol-genbank.workspace = true
 sbol-fasta.workspace = true

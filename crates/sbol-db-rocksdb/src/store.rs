@@ -658,6 +658,12 @@ impl SequenceSearchStore for RocksdbStore {
         let patterns = patterns.to_vec();
         blocking(move || sequences.search_many(&patterns, options)).await
     }
+
+    async fn align_candidates(&self, query: &str) -> Result<Vec<(String, String)>, DomainError> {
+        let sequences = self.sequences.clone();
+        let query = query.to_owned();
+        blocking(move || sequences.align_candidates(&query)).await
+    }
 }
 
 #[async_trait]

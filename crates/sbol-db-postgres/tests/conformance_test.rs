@@ -6,10 +6,13 @@ use std::sync::Arc;
 
 use sbol_db_app::AppServices;
 use sbol_db_postgres::{
-    connect, run_migrations, JobRepository, PgTokenStore, PgUserStore, SbolObjectService,
+    connect, run_migrations, JobRepository, PgClusterStore, PgPageRankStore, PgTokenStore,
+    PgUserStore, SbolObjectService,
 };
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
-use sbol_db_storage::{AclStore, JobQueue, SbolStore, TokenStore, UserStore};
+use sbol_db_storage::{
+    AclStore, ClusterStore, JobQueue, PageRankStore, SbolStore, TokenStore, UserStore,
+};
 
 async fn fresh_app() -> AppServices {
     let database_url = std::env::var("DATABASE_URL")
@@ -22,7 +25,8 @@ async fn fresh_app() -> AppServices {
          sbol_sequences, sbol_features, sbol_locations, sbol_constraints, \
          sbol_interactions, sbol_participations, sbol_sequence_kmers, sbol_ontologies, \
          sbol_ontology_terms, sbol_ontology_term_aliases, sbol_ontology_closure, \
-         sbol_jobs, sbol_job_attempts, sbol_job_logs, sbh_user, sbh_api_token \
+         sbol_jobs, sbol_job_attempts, sbol_job_logs, sbh_user, sbh_api_token, \
+         object_pagerank, sbol_sequence_cluster \
          RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
@@ -39,8 +43,12 @@ async fn fresh_app() -> AppServices {
     let store: Arc<dyn SbolStore> = service.clone();
     let acl: Arc<dyn AclStore> = service;
     let users: Arc<dyn UserStore> = Arc::new(PgUserStore::new(pool.clone()));
-    let tokens: Arc<dyn TokenStore> = Arc::new(PgTokenStore::new(pool));
-    AppServices::new(store, sparql, sparql_update, jobs, acl).with_identity(users, tokens)
+    let tokens: Arc<dyn TokenStore> = Arc::new(PgTokenStore::new(pool.clone()));
+    let pagerank: Arc<dyn PageRankStore> = Arc::new(PgPageRankStore::new(pool.clone()));
+    let cluster: Arc<dyn ClusterStore> = Arc::new(PgClusterStore::new(pool));
+    AppServices::new(store, sparql, sparql_update, jobs, acl)
+        .with_identity(users, tokens)
+        .with_sequence_stores(pagerank, cluster)
 }
 
 #[tokio::test]

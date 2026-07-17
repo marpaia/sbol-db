@@ -20,8 +20,8 @@ use sbol_db_sparql::{GraphScope, ResultFormat, SparqlOptions};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use super::search::parse_search_path;
-use super::{queries, CurrentUser};
+use super::search::{extract_sequence, parse_search_path};
+use super::{queries, sequence, CurrentUser};
 use crate::{ApiError, AppState};
 
 /// The instance base IRI classic SynBioHub mints objects under.
@@ -147,6 +147,12 @@ async fn run_search(
     grammar: String,
     paging: Paging,
 ) -> Result<Response, ApiError> {
+    // A `sequence=`/`globalsequence=`/`exactsequence=` facet is a sequence
+    // search: align through the facade rather than the SPARQL/ranked path.
+    if let Some(seq) = extract_sequence(&grammar) {
+        return sequence::run_sequence_search(&state, &user, seq).await;
+    }
+
     let mut faceted = parse_search_path(&grammar)?;
     faceted.offset = paging.offset.unwrap_or(0);
     faceted.limit = paging.limit;

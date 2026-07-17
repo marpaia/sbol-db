@@ -11,6 +11,7 @@ description = "Pure ranked-search algorithms for sbol-db: PageRank and the top-l
 sbol-db-core.workspace = true
 serde = { workspace = true }
 tantivy = { workspace = true, optional = true }
+bio = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -18,3 +19,8 @@ default = []
 # which depends on this crate only for the pure link-graph adjacency, never pulls
 # tantivy into its build; the sbol-db-app facade enables it to own the index.
 text-index = ["dep:tantivy"]
+# The rust-bio banded aligner. Off by default so the storage backends, which
+# depend on this crate for the pure link-graph adjacency and the pure align /
+# cluster domain types, never pull rust-bio into their builds; the search and
+# job layers that run alignment enable it.
+align = ["dep:bio"]

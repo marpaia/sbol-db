@@ -14,7 +14,7 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 use sbol_db_core::{DomainError, NewUser, User, UserId};
-use sbol_db_storage::{TokenStore, UserStore};
+use sbol_db_storage::{ClusterId, ClusterStore, PageRankStore, RankRow, TokenStore, UserStore};
 
 /// A process-local [`UserStore`] keyed by [`UserId`], enforcing the same unique
 /// `username` and `email` constraints as the persistent backends.
@@ -150,5 +150,105 @@ impl TokenStore for InMemoryTokenStore {
 
     async fn revoke(&self, token_hash: &str) -> Result<bool, DomainError> {
         Ok(self.tokens.lock().unwrap().remove(token_hash).is_some())
+    }
+}
+
+/// A process-local [`PageRankStore`], the non-persistent default the
+/// [`AppServices::new`](crate::AppServices::new) constructor wires so the
+/// sequence facade has a rank source; a backend-built facade replaces it with
+/// the durable store. Empty until a caller writes ranks.
+#[derive(Default)]
+pub struct InMemoryPageRankStore {
+    ranks: Mutex<HashMap<String, f64>>,
+}
+
+impl InMemoryPageRankStore {
+    /// An empty store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl PageRankStore for InMemoryPageRankStore {
+    async fn rank_of(&self, iri: &str) -> Result<Option<f64>, DomainError> {
+        Ok(self.ranks.lock().unwrap().get(iri).copied())
+    }
+
+    async fn ranks_for(&self, iris: &[String]) -> Result<HashMap<String, f64>, DomainError> {
+        let ranks = self.ranks.lock().unwrap();
+        Ok(iris
+            .iter()
+            .filter_map(|iri| ranks.get(iri).map(|score| (iri.clone(), *score)))
+            .collect())
+    }
+
+    async fn all_ranks(&self) -> Result<Vec<RankRow>, DomainError> {
+        Ok(self
+            .ranks
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(iri, score)| RankRow {
+                iri: iri.clone(),
+                score: *score,
+            })
+            .collect())
+    }
+
+    async fn replace_all_ranks(&self, ranks: Vec<RankRow>) -> Result<(), DomainError> {
+        *self.ranks.lock().unwrap() = ranks.into_iter().map(|r| (r.iri, r.score)).collect();
+        Ok(())
+    }
+}
+
+/// A process-local [`ClusterStore`], the non-persistent default the
+/// [`AppServices::new`](crate::AppServices::new) constructor wires so the
+/// sequence facade can answer `/similar`; a backend-built facade replaces it
+/// with the durable store. Empty until a caller writes assignments.
+#[derive(Default)]
+pub struct InMemoryClusterStore {
+    /// Sequence IRI to the cluster it belongs to.
+    assignments: Mutex<HashMap<String, ClusterId>>,
+}
+
+impl InMemoryClusterStore {
+    /// An empty store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl ClusterStore for InMemoryClusterStore {
+    async fn cluster_id_of(&self, iri: &str) -> Result<Option<ClusterId>, DomainError> {
+        Ok(self.assignments.lock().unwrap().get(iri).copied())
+    }
+
+    async fn cluster_mates(&self, iri: &str) -> Result<Vec<String>, DomainError> {
+        let assignments = self.assignments.lock().unwrap();
+        let Some(cluster) = assignments.get(iri).copied() else {
+            return Ok(Vec::new());
+        };
+        Ok(assignments
+            .iter()
+            .filter(|(mate, c)| **c == cluster && mate.as_str() != iri)
+            .map(|(mate, _)| mate.clone())
+            .collect())
+    }
+
+    async fn replace_clusters(&self, pairs: Vec<(String, ClusterId)>) -> Result<(), DomainError> {
+        *self.assignments.lock().unwrap() = pairs.into_iter().collect();
+        Ok(())
+    }
+
+    async fn all_assignments(&self) -> Result<Vec<(String, ClusterId)>, DomainError> {
+        Ok(self
+            .assignments
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(iri, cluster)| (iri.clone(), *cluster))
+            .collect())
     }
 }

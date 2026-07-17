@@ -518,6 +518,10 @@ impl SequenceSearchStore for SqliteStore {
     ) -> Result<Vec<BatchSequenceMatch>, DomainError> {
         self.sequences.search_many(patterns, options).await
     }
+
+    async fn align_candidates(&self, query: &str) -> Result<Vec<(String, String)>, DomainError> {
+        self.sequences.align_candidates(query).await
+    }
 }
 
 #[async_trait]

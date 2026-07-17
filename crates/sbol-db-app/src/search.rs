@@ -13,7 +13,7 @@
 //! verb is only the relevance surface.
 
 use sbol_db_core::DomainError;
-use sbol_db_search::ranked_text::{ClusterMap, GraphFilter, Hit};
+use sbol_db_search::ranked_text::{cluster_map, GraphFilter, Hit};
 use sbol_db_sparql::GraphScope;
 
 use crate::AppServices;
@@ -80,15 +80,17 @@ fn graph_filter(scope: GraphScope) -> GraphFilter {
 impl AppServices {
     /// Rank the in-scope objects matching the free-text term, narrowed by the
     /// `objectType` facet, and return the requested window plus the total
-    /// number of matches. The cluster-duplicate set is empty until clustering
-    /// lands, so the divide-by-2 penalty is inert.
+    /// number of matches. The cluster-duplicate map is built from the persisted
+    /// sequence-cluster assignments, so a non-centroid cluster member takes the
+    /// index's divide-by-2 penalty. The assignments are scanned per call; the
+    /// map is small relative to the candidate pool.
     pub async fn ranked_search(
         &self,
         query: &FacetedSearch,
         scope: GraphScope,
     ) -> Result<(Vec<Hit>, usize), DomainError> {
         let filter = graph_filter(scope);
-        let clusters = ClusterMap::new();
+        let clusters = cluster_map(self.cluster.all_assignments().await?);
         let free_text = query.free_text.clone().unwrap_or_default();
         let ranked = self
             .text_search

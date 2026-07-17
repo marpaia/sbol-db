@@ -1,6 +1,7 @@
 //! Per-surface repositories over the shared RocksDB handle.
 
 pub mod accel;
+pub mod cluster;
 pub mod graph;
 pub mod job;
 pub mod lab;
@@ -13,6 +14,7 @@ pub mod tokens;
 pub mod triple;
 pub mod users;
 
+pub use cluster::RocksdbClusterStore;
 pub use graph::GraphRepository;
 pub use job::JobRepository;
 pub use lab::LabRepository;
