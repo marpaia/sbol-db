@@ -5,18 +5,19 @@
 //!
 //! The UI is rendered by [Scalar](https://github.com/scalar/scalar), pinned to
 //! a fixed CDN version. `Scalar.createApiReference` mounts a single reference
-//! carrying two same-origin documents — `/openapi.json` (the V1
-//! SynBioHub-compat surface plus the native/lab endpoints) and
-//! `/api/v2/openapi.json` (the idiomatic V2 surface) — and renders a document
-//! switcher so both are visible on one page. The multi-document `sources`
-//! configuration is driven through the explicit `createApiReference` call; the
-//! attribute-based auto-mount does not honor it. The look-and-feel is closest
-//! to FastAPI's auto-generated `/docs` of the modern OpenAPI UIs.
+//! carrying three same-origin documents, each a switcher entry: `/openapi.json`
+//! (the original sbol-db native API), `/synbiohub/openapi.json` (the SynBioHub
+//! v1-compatible API), and `/api/v2/openapi.json` (the idiomatic V2 API). The
+//! multi-document `sources` configuration is driven through the explicit
+//! `createApiReference` call; the attribute-based auto-mount does not honor it.
+//! The look-and-feel is closest to FastAPI's auto-generated `/docs` of the
+//! modern OpenAPI UIs.
 
 use axum::http::header::CONTENT_TYPE;
 use axum::response::IntoResponse;
 
 const OPENAPI_JSON: &str = include_str!("openapi.json");
+const SYNBIOHUB_OPENAPI_JSON: &str = include_str!("synbiohub_openapi.json");
 
 const DOCS_HTML: &str = r#"<!doctype html>
 <html lang="en">
@@ -39,14 +40,19 @@ const DOCS_HTML: &str = r#"<!doctype html>
         hideClientButton: false,
         sources: [
           {
-            title: "SBOL DB (V1 SynBioHub-compat + native/lab)",
-            slug: "v1",
+            title: "sbol-db native API",
+            slug: "native",
             url: "/openapi.json",
             default: true
           },
           {
-            title: "SBOL DB V2 (idiomatic)",
-            slug: "v2",
+            title: "SynBioHub v1 API",
+            slug: "synbiohub-v1",
+            url: "/synbiohub/openapi.json"
+          },
+          {
+            title: "SynBioHub v2 API",
+            slug: "synbiohub-v2",
             url: "/api/v2/openapi.json"
           }
         ]
@@ -58,6 +64,11 @@ const DOCS_HTML: &str = r#"<!doctype html>
 
 pub async fn openapi_json() -> impl IntoResponse {
     ([(CONTENT_TYPE, "application/json")], OPENAPI_JSON)
+}
+
+/// `GET /synbiohub/openapi.json` — the SynBioHub v1-compatible surface.
+pub async fn synbiohub_openapi_json() -> impl IntoResponse {
+    ([(CONTENT_TYPE, "application/json")], SYNBIOHUB_OPENAPI_JSON)
 }
 
 pub async fn docs_html() -> impl IntoResponse {

@@ -1,7 +1,8 @@
 //! Contract tests for the `/docs` render surface and the OpenAPI documents it
 //! embeds. These drive the real axum router over a SQLite backend to prove that
-//! the docs page, the V1 spec, and the V2 spec are all served, parse as valid
-//! JSON, and document a representative set of both surfaces.
+//! the docs page and all three specs (native sbol-db, SynBioHub v1, SynBioHub
+//! v2) are served, parse as valid JSON, and each documents its own surface
+//! without carrying the others.
 
 use std::sync::Arc;
 
@@ -73,7 +74,7 @@ async fn get(app: &axum::Router, uri: &str) -> (StatusCode, String) {
 }
 
 #[tokio::test]
-async fn docs_page_renders_both_surfaces_in_one_reference() {
+async fn docs_page_renders_three_surfaces_in_one_reference() {
     let (app, _dir) = app().await;
     let (status, body) = get(&app, "/docs").await;
     assert_eq!(status, StatusCode::OK, "the docs page is served");
@@ -81,14 +82,16 @@ async fn docs_page_renders_both_surfaces_in_one_reference() {
         body.contains("Scalar.createApiReference"),
         "the docs page mounts via the explicit createApiReference call that drives multi-source"
     );
-    assert!(
-        body.contains("/openapi.json"),
-        "the docs page includes the V1 source"
-    );
-    assert!(
-        body.contains("/api/v2/openapi.json"),
-        "the docs page includes the V2 source in the same reference"
-    );
+    for source in [
+        "/openapi.json",
+        "/synbiohub/openapi.json",
+        "/api/v2/openapi.json",
+    ] {
+        assert!(
+            body.contains(source),
+            "the docs page lists {source} as a switcher source"
+        );
+    }
     // The V2 surface also stays directly reachable at its own page.
     let (v2_status, v2_body) = get(&app, "/api/v2/docs").await;
     assert_eq!(v2_status, StatusCode::OK, "the V2 docs page is served");
@@ -99,21 +102,46 @@ async fn docs_page_renders_both_surfaces_in_one_reference() {
 }
 
 #[tokio::test]
-async fn v1_spec_is_served_and_documents_representative_paths() {
+async fn native_spec_is_served_and_excludes_the_synbiohub_surface() {
     let (app, _dir) = app().await;
     let (status, body) = get(&app, "/openapi.json").await;
-    assert_eq!(status, StatusCode::OK, "the V1 spec is served");
-    let spec: Value = serde_json::from_str(&body).expect("V1 spec is valid JSON");
+    assert_eq!(status, StatusCode::OK, "the native spec is served");
+    let spec: Value = serde_json::from_str(&body).expect("native spec is valid JSON");
+    assert_eq!(spec["openapi"], "3.1.0", "declares OpenAPI 3.1");
+
+    let paths = spec["paths"].as_object().expect("paths object");
+    for path in ["/graphs", "/objects", "/sparql"] {
+        assert!(paths.contains_key(path), "the native spec documents {path}");
+    }
+    assert!(
+        !paths.contains_key("/login") && !paths.contains_key("/submit"),
+        "the native spec does not carry the SynBioHub v1 surface"
+    );
+}
+
+#[tokio::test]
+async fn synbiohub_v1_spec_is_served_and_documents_representative_paths() {
+    let (app, _dir) = app().await;
+    let (status, body) = get(&app, "/synbiohub/openapi.json").await;
+    assert_eq!(status, StatusCode::OK, "the SynBioHub v1 spec is served");
+    let spec: Value = serde_json::from_str(&body).expect("SynBioHub v1 spec is valid JSON");
     assert_eq!(spec["openapi"], "3.1.0", "declares OpenAPI 3.1");
 
     let paths = spec["paths"].as_object().expect("paths object");
     for path in ["/login", "/logout", "/register", "/submit", "/search"] {
-        assert!(paths.contains_key(path), "the V1 spec documents {path}");
+        assert!(
+            paths.contains_key(path),
+            "the SynBioHub v1 spec documents {path}"
+        );
     }
     // The SBOL download lives under the object route hierarchy.
     assert!(
         paths.keys().any(|p| p.ends_with("/sbol")),
-        "the V1 spec documents an SBOL download route"
+        "the SynBioHub v1 spec documents an SBOL download route"
+    );
+    assert!(
+        !paths.contains_key("/graphs"),
+        "the SynBioHub v1 spec does not carry the native surface"
     );
 }
 
@@ -133,9 +161,13 @@ async fn v2_spec_is_served_and_documents_representative_paths() {
 }
 
 #[tokio::test]
-async fn both_spec_routes_serve_valid_json() {
+async fn all_spec_routes_serve_valid_json() {
     let (app, _dir) = app().await;
-    for uri in ["/openapi.json", "/api/v2/openapi.json"] {
+    for uri in [
+        "/openapi.json",
+        "/synbiohub/openapi.json",
+        "/api/v2/openapi.json",
+    ] {
         let (status, body) = get(&app, uri).await;
         assert_eq!(status, StatusCode::OK, "{uri} is served");
         serde_json::from_str::<Value>(&body).unwrap_or_else(|e| panic!("{uri} is valid JSON: {e}"));

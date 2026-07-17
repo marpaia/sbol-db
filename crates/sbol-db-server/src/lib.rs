@@ -272,6 +272,7 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route("/metrics", get(metrics::metrics_handler))
         .route("/docs", get(docs::docs_html))
         .route("/openapi.json", get(docs::openapi_json))
+        .route("/synbiohub/openapi.json", get(docs::synbiohub_openapi_json))
         .route(
             "/graphs",
             post(routes::create_graph).delete(routes::delete_graph_by_document_iri),
