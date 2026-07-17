@@ -54,6 +54,21 @@ Entry points to the project's documentation, organized by topic.
   troubleshooting playbook. Start here when standing sbol-db up in a
   real environment.
 
+## SynBioHub compatibility
+
+- **[Running SynBioHub on sbol-db](synbiohub.md)**: the triplestore
+  interface classic SynBioHub reaches over HTTP, the behaviors sbol-db
+  matches so it stands in for Virtuoso at runtime, and how to run
+  SynBioHub's suite against it.
+- **[Migrating a classic instance](synbiohub-migration.md)**: loading a
+  deployed classic SynBioHub (RDF dump, `synbiohub.sqlite`, `uploads/`,
+  and `config.local.json`) into sbol-db with `sbol-db
+  migrate-synbiohub`, and verifying the result.
+- **[Differential conformance suite](synbiohub-conformance.md)**: the
+  parity harness that diffs sbol-db against a classic SynBioHub
+  reference, how comparison works, how to run each tier, and the
+  environment caveats.
+
 ## Scope
 
 `sbol-db` deliberately stays narrow on SBOL query capabilities and

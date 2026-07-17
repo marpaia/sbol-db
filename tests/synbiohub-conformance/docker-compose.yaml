@@ -1,0 +1,189 @@
+# SynBioHub differential conformance stack.
+#
+# The oracle flip: classic SynBioHub (Node + Virtuoso + SBOLExplorer +
+# Elasticsearch + libSBOLj) is the REFERENCE we diff against, and sbol-db's
+# compat server is the SUBJECT under test, run once per storage backend
+# (postgres/sqlite/rocksdb) exactly as the bench harness does. The driver
+# (conformance.py) issues the identical request to the reference and to each
+# subject and compares per the §7.3 matrix.
+#
+#   docker compose -f docker-compose.yaml up -d
+#   tests/synbiohub-conformance/run-conformance.sh --corpus <dir>
+#
+# Host ports are off the defaults so this stack does not collide with a local
+# sbol-db, Virtuoso, or the bench stack: reference SynBioHub 17777, reference
+# Virtuoso 18990, SBOLExplorer 23162, subject postgres/sqlite/rocksdb
+# 18902/18903/18904.
+#
+# Unlike the bench stack, subject SPARQL auth is left ON (no
+# SBOL_DB_SPARQL_AUTH_DISABLED): the auth and permission cases exercise it.
+#
+# ENVIRONMENT NOTE: the reference services are amd64 images. On Apple Silicon
+# Virtuoso runs under emulation and Elasticsearch 6.3.2 is prone to OOM under
+# emulation; the reference stack is intended for the amd64 CI runner. The
+# subject services and the comparison-library unit tests run anywhere.
+
+services:
+  # --- reference: classic SynBioHub full stack --------------------------- #
+  autoheal:
+    image: willfarrell/autoheal
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=all
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: always
+
+  virtuoso:
+    image: tenforce/virtuoso:virtuoso7.2.5
+    environment:
+      - DBA_PASSWORD=dba
+      - SPARQL_UPDATE=true
+      - VIRT_SPARQL_MaxQueryCostEstimationTime=default
+      - VIRT_SPARQL_MaxQueryExecutionTime=300
+      - VIRT_Parameters_ServerThreads=40
+      - VIRT_HTTPServer_ServerThreads=300
+    volumes:
+      - virtuoso-db:/data
+    ports:
+      - "18990:8890"
+    restart: always
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:6.3.2
+    environment:
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - discovery.type=single-node
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    restart: always
+
+  explorer:
+    image: myersresearchgroup/sbolexplorer:snapshot-synbiohub
+    privileged: true
+    depends_on:
+      - elasticsearch
+      - synbiohub
+    dns: 8.8.8.8
+    volumes:
+      - explorer:/mnt
+    ports:
+      - "23162:13162"
+    restart: always
+
+  synbiohub:
+    image: synbiohub/synbiohub:1.6.1-standalone
+    depends_on:
+      - virtuoso
+    volumes:
+      - sbh:/mnt
+      - virtuoso-db:/virtuoso
+    dns: 8.8.8.8
+    ports:
+      - "17777:7777"
+    restart: always
+
+  # --- subject: sbol-db on Postgres -------------------------------------- #
+  subject-postgres-db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: sbol
+      POSTGRES_PASSWORD: sbol
+      POSTGRES_DB: sbol
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sbol -d sbol"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: always
+
+  subject-postgres-migrate:
+    image: ${SBOLDB_IMAGE:-ghcr.io/marpaia/sbol-db}
+    depends_on:
+      subject-postgres-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://sbol:sbol@subject-postgres-db:5432/sbol
+    command: ["db", "migrate"]
+    restart: "no"
+
+  subject-postgres:
+    image: ${SBOLDB_IMAGE:-ghcr.io/marpaia/sbol-db}
+    depends_on:
+      subject-postgres-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://sbol:sbol@subject-postgres-db:5432/sbol
+      SBOL_DB_SPARQL_AUTH_USER: dba
+      SBOL_DB_SPARQL_AUTH_PASSWORD: dba
+    command: ["server", "--bind", "0.0.0.0:8890"]
+    ports:
+      - "18902:8890"
+    restart: always
+
+  # --- subject: sbol-db on SQLite ---------------------------------------- #
+  subject-sqlite-migrate:
+    image: ${SBOLDB_IMAGE:-ghcr.io/marpaia/sbol-db}
+    user: "0:0"
+    environment:
+      DATABASE_URL: sqlite:///data/sbol.db
+    command: ["db", "migrate"]
+    volumes:
+      - sqlitedata:/data
+    restart: "no"
+
+  subject-sqlite:
+    image: ${SBOLDB_IMAGE:-ghcr.io/marpaia/sbol-db}
+    user: "0:0"
+    depends_on:
+      subject-sqlite-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: sqlite:///data/sbol.db
+      SBOL_DB_SPARQL_AUTH_USER: dba
+      SBOL_DB_SPARQL_AUTH_PASSWORD: dba
+    command: ["server", "--bind", "0.0.0.0:8890"]
+    volumes:
+      - sqlitedata:/data
+    ports:
+      - "18903:8890"
+    restart: always
+
+  # --- subject: sbol-db on RocksDB --------------------------------------- #
+  # `db migrate` initializes the column families and exits before the server
+  # opens, so the exclusive RocksDB lock is never held by two processes at once.
+  subject-rocksdb-migrate:
+    image: ${SBOLDB_IMAGE:-ghcr.io/marpaia/sbol-db}
+    user: "0:0"
+    environment:
+      DATABASE_URL: rocksdb:///data/sbol.rocksdb
+    command: ["db", "migrate"]
+    volumes:
+      - rocksdbdata:/data
+    restart: "no"
+
+  subject-rocksdb:
+    image: ${SBOLDB_IMAGE:-ghcr.io/marpaia/sbol-db}
+    user: "0:0"
+    depends_on:
+      subject-rocksdb-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: rocksdb:///data/sbol.rocksdb
+      SBOL_DB_SPARQL_AUTH_USER: dba
+      SBOL_DB_SPARQL_AUTH_PASSWORD: dba
+    command: ["server", "--bind", "0.0.0.0:8890"]
+    volumes:
+      - rocksdbdata:/data
+    ports:
+      - "18904:8890"
+    restart: always
+
+volumes:
+  virtuoso-db:
+  esdata:
+  explorer:
+  sbh:
+  sqlitedata:
+  rocksdbdata:

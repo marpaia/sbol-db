@@ -85,6 +85,37 @@ async fn main() -> Result<()> {
                 .context("the inspect command requires a backend with introspection support")?;
             cmd::inspect::run(stats, action).await
         }
+        Command::MigrateSynbiohub {
+            source,
+            rdf,
+            sqlite,
+            uploads,
+            config,
+            blob_store,
+            default_graph,
+            skip_migrations,
+            no_reindex,
+        } => {
+            cmd::migrate::run(
+                backend.store.clone(),
+                backend.users.clone(),
+                backend.config.clone(),
+                backend.jobs.clone(),
+                backend.migrator.clone(),
+                cmd::migrate::MigrateInputs {
+                    source,
+                    rdf,
+                    sqlite,
+                    uploads,
+                    config,
+                    blob_store,
+                    default_graph,
+                    skip_migrations,
+                    no_reindex,
+                },
+            )
+            .await
+        }
         Command::Util { .. } => unreachable!("handled before backend open"),
     }
 }

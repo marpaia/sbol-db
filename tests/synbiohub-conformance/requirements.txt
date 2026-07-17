@@ -1,0 +1,6 @@
+# Conformance harness Python dependencies.
+requests>=2.31
+pytest>=7.4
+rdflib>=6.3
+beautifulsoup4>=4.12
+lxml>=4.9
