@@ -14,7 +14,7 @@ use axum::extract::{Multipart, State};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use sbol_db_app::{SubmissionService, SubmitRequest};
-use sbol_db_core::SerializationFormat;
+use sbol_db_core::{DomainError, SerializationFormat};
 use sbol_db_storage::ImportOverwrite;
 
 use super::CurrentUser;
@@ -70,7 +70,8 @@ pub async fn submit(
 
     SubmissionService::new(state.app.store.clone())
         .submit(request)
-        .await?;
+        .await
+        .map_err(submit_error)?;
 
     // Classic SynBioHub answers a successful V1 submission with a bare
     // `text/plain` acknowledgement; the pySBOL2 PartShop client asserts on this
@@ -81,6 +82,17 @@ pub async fn submit(
         "Successfully uploaded",
     )
         .into_response())
+}
+
+/// Map a submission failure to an API error. A validation failure means the
+/// uploaded SBOL did not pass validation, which is a client error (a bad
+/// document), so it surfaces as `400` rather than the generic `500` a raw
+/// [`DomainError::Validation`] maps to.
+fn submit_error(err: DomainError) -> ApiError {
+    match err {
+        DomainError::Validation(message) => ApiError::BadRequest(message),
+        other => ApiError::Domain(other),
+    }
 }
 
 /// Drain the multipart body into a [`SubmitForm`]. Unknown fields are ignored,

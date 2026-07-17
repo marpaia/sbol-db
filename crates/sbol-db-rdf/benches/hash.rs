@@ -3,7 +3,7 @@
 //! sort-and-feed loop directly shows up as ingest slowdown.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use sbol::{Document, RdfFormat};
+use sbol::v3::{Document, RdfFormat};
 use sbol_db_rdf::content_hash;
 
 fn make_fixture(triples_target: usize) -> Vec<sbol::Triple> {

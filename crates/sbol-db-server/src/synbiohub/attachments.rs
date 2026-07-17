@@ -190,6 +190,13 @@ async fn attach_url(
         .name
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| url.rsplit('/').next().unwrap_or("attachment").to_owned());
+    // Classic's attachUrl seeds the attachment display id from `name`
+    // (`data.txt` -> `data_txt`); an explicit `id` field, when present, overrides.
+    let id_seed = form
+        .id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&name);
 
     service(&state)
         .attach_url(
@@ -197,7 +204,7 @@ async fn attach_url(
             user.is_admin,
             &target_uri,
             &name,
-            form.id.as_deref(),
+            Some(id_seed),
             &url,
             form.r#type.as_deref().filter(|s| !s.is_empty()),
         )

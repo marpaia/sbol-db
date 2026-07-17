@@ -26,9 +26,9 @@ pub fn downgrade_sbol3_ntriples(
     ntriples: &str,
     format: SerializationFormat,
 ) -> Result<String, DomainError> {
-    let document = sbol::Document::read(ntriples, sbol::RdfFormat::NTriples)
+    let document = sbol::v3::Document::read(ntriples, sbol::RdfFormat::NTriples)
         .map_err(|e| DomainError::Parse(e.to_string()))?;
-    let (graph, _report) = sbol::downgrade::sbol3_to_sbol2(&document, Default::default())
+    let (graph, _report) = sbol::convert::sbol3_to_sbol2(&document, Default::default())
         .map_err(|e| DomainError::Serialization(e.to_string()))?;
     graph
         .write(rdf_format(format)?)

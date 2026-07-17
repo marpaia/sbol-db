@@ -1,4 +1,4 @@
-use sbol::Document;
+use sbol::v3::Document;
 use sbol_db_core::{IriString, ObjectTerm, Triple};
 use sbol_rdf::{Resource, Term, Triple as RdfTriple};
 

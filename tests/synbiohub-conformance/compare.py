@@ -33,8 +33,29 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from bs4 import BeautifulSoup
-from rdflib import Graph
+from rdflib import Graph, URIRef
 from rdflib.compare import graph_diff, to_isomorphic
+
+# Provenance predicates whose object is a wall-clock timestamp stamped at
+# request time. They are inherently non-deterministic across two independent
+# implementations (and across runs), so semantic RDF comparison drops them
+# before testing graph isomorphism. Includes both the direct literal form and
+# the `dcterms:W3CDTF` value node classic's COMBINE archive writer nests under a
+# `parseType="Resource"` timestamp.
+_VOLATILE_PREDICATES = {
+    URIRef("http://purl.org/dc/terms/created"),
+    URIRef("http://purl.org/dc/terms/modified"),
+    URIRef("http://purl.org/dc/terms/W3CDTF"),
+}
+
+
+def _strip_volatile(graph: Graph) -> Graph:
+    """Drop volatile provenance-timestamp triples so two graphs that differ only
+    in their creation/modification instants still compare as equivalent."""
+    for triple in list(graph.triples((None, None, None))):
+        if triple[1] in _VOLATILE_PREDICATES:
+            graph.remove(triple)
+    return graph
 
 # Elements carrying one of these classes are presentation chrome that classic
 # SynBioHub deliberately excludes from its own golden-master comparison.
@@ -112,8 +133,8 @@ def compare_rdf(reference: str, subject: str, fmt: str = "xml") -> Diff:
     (or with different blank-node labels) are equal; a document missing or
     carrying an extra triple is not. This is the local equivalent of the
     validator's `test_equality:true` graph-isomorphism check."""
-    ref_graph = Graph().parse(data=reference, format=fmt)
-    sub_graph = Graph().parse(data=subject, format=fmt)
+    ref_graph = _strip_volatile(Graph().parse(data=reference, format=fmt))
+    sub_graph = _strip_volatile(Graph().parse(data=subject, format=fmt))
     ref_iso = to_isomorphic(ref_graph)
     sub_iso = to_isomorphic(sub_graph)
     if ref_iso == sub_iso:
@@ -393,8 +414,22 @@ def compare_genbank(reference: str, subject: str) -> Diff:
     return Diff(False, "genbank sequence sets differ\n" + "\n".join(lines))
 
 
+def _canonical_term(term: Dict[str, Any]) -> Dict[str, Any]:
+    """Canonicalize one SPARQL-results RDF term so equivalent encodings compare
+    equal. Virtuoso emits the pre-standard ``type: "typed-literal"`` for a typed
+    literal, while the W3C SPARQL 1.1 JSON Results format encodes the same term
+    as ``type: "literal"`` carrying a ``datatype``. Both denote the identical
+    RDF term, so they fold to one canonical shape."""
+    canon = dict(term)
+    if canon.get("type") == "typed-literal":
+        canon["type"] = "literal"
+    return canon
+
+
 def _binding_key(binding: Dict[str, Any]) -> tuple:
-    return tuple(sorted((var, json.dumps(val, sort_keys=True)) for var, val in binding.items()))
+    return tuple(
+        sorted((var, json.dumps(_canonical_term(val), sort_keys=True)) for var, val in binding.items())
+    )
 
 
 def compare_sparql(reference: Dict[str, Any], subject: Dict[str, Any]) -> Diff:

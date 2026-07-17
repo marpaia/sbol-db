@@ -69,6 +69,21 @@ impl AuthService {
     /// Create an account, argon2-hashing the plaintext password and stamping
     /// the owned graph URI, and return the stored account.
     pub async fn register(&self, registration: Registration) -> Result<User, DomainError> {
+        // Reject a duplicate username or email up front so a re-registration is
+        // a client error, not the database's unique-constraint failure surfacing
+        // as a 500.
+        for identifier in [&registration.username, &registration.email] {
+            if self
+                .users
+                .find_by_email_or_username(identifier)
+                .await?
+                .is_some()
+            {
+                return Err(DomainError::InvalidInput(
+                    "username or email already registered".into(),
+                ));
+            }
+        }
         let password_hash = hash_password(&registration.password)?;
         let graph_uri = Self::graph_uri(&registration.username);
         let new_user = NewUser {
@@ -246,6 +261,20 @@ mod tests {
             is_curator: false,
             is_member: true,
         }
+    }
+
+    #[tokio::test]
+    async fn duplicate_registration_is_invalid_input() {
+        let (auth, _) = service();
+        auth.register(registration("s3cret")).await.unwrap();
+
+        // Same username and email: rejected as a client error, not a database
+        // unique-constraint failure surfacing as an internal error.
+        let err = auth.register(registration("other")).await.unwrap_err();
+        assert!(
+            matches!(err, DomainError::InvalidInput(_)),
+            "re-registration must be InvalidInput, got {err:?}"
+        );
     }
 
     #[tokio::test]

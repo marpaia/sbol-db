@@ -2018,8 +2018,8 @@ pub async fn download_closure_recursion(app: &AppServices) {
 /// this certifies the whole download path (closure crawl plus every serializer)
 /// on each backend.
 pub async fn download_formats_roundtrip(app: &AppServices) {
-    use sbol::constants::{EDAM_IUPAC_DNA, ORIENTATION_INLINE, SBO_DNA, SO_PROMOTER};
-    use sbol::{Component, Document, Range, SbolObject, Sequence, SequenceFeature};
+    use sbol::v3::constants::{EDAM_IUPAC_DNA, ORIENTATION_INLINE, SBO_DNA, SO_PROMOTER};
+    use sbol::v3::{Component, Document, Range, SbolObject, Sequence, SequenceFeature};
 
     const NS: &str = "https://example.org/sbol-db/conformance/download";
     const GRAPH: &str = "urn:sbol-db:conformance:download-formats";

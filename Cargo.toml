@@ -113,3 +113,13 @@ sbol-db-app = { path = "crates/sbol-db-app", version = "0.1.1" }
 sbol-db-jobs = { path = "crates/sbol-db-jobs", version = "0.1.1" }
 sbol-db-ui = { path = "crates/sbol-db-ui", version = "0.1.1" }
 sbol-db-server = { path = "crates/sbol-db-server", version = "0.1.1", default-features = false }
+
+# Build against the local sbol-rs checkout so in-progress edits there take
+# effect. The ^0.2.0 requirements in [workspace.dependencies] are satisfied by
+# the local 0.2.1.
+[patch.crates-io]
+sbol = { path = "/Users/marpaia/git/marpaia/sbol-rs/crates/sbol" }
+sbol-rdf = { path = "/Users/marpaia/git/marpaia/sbol-rs/crates/sbol-rdf" }
+sbol-ontology = { path = "/Users/marpaia/git/marpaia/sbol-rs/crates/sbol-ontology" }
+sbol-genbank = { path = "/Users/marpaia/git/marpaia/sbol-rs/crates/sbol-genbank" }
+sbol-fasta = { path = "/Users/marpaia/git/marpaia/sbol-rs/crates/sbol-fasta" }

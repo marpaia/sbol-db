@@ -1,7 +1,7 @@
 //! Extract typed SBOL projections (Components, Sequences, Features, Locations,
 //! Constraints, Interactions, Participations) from a parsed `sbol::Document`.
 
-use sbol::{Document, Resource, SbolObject};
+use sbol::v3::{Document, Resource, SbolObject};
 use sbol_db_core::{
     ComponentProjection, ConstraintProjection, FeatureProjection, InteractionProjection, IriString,
     LocationProjection, ParticipationProjection, SequenceAlphabet, SequenceProjection,

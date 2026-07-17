@@ -274,7 +274,7 @@ impl SbolObjectService {
                 &plan.target_iri,
                 Some(plan.graph_id),
                 "sbol-rs",
-                Some(sbol::SPEC_VERSION),
+                Some(sbol::v3::SPEC_VERSION),
                 "sbol3-3.1.0",
                 &plan.validation,
             )

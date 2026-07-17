@@ -42,6 +42,8 @@ submits into `testuser`'s namespace.
 
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 from typing import List
 
@@ -56,8 +58,12 @@ COLLECTION_PATH = "/public/smoke/smoke_collection/1"
 
 # The scratch collection the mutating suite submits into `testuser`'s namespace
 # and then edits. `SCRATCH_ID` is the submission id; the submission mints a
-# Collection at `<id>_collection` whose member is the uploaded object.
-SCRATCH_ID = "scratch"
+# Collection at `<id>_collection` whose member is the uploaded object. The id is
+# unique per process so a mutating run never collides with objects a prior run
+# left behind (a `makePublic` leaves a public copy, and a partial teardown leaves
+# the user copy); each run submits into a fresh namespace and stays in sync on
+# both sides. Override with `SCRATCH_ID` in the environment for a fixed id.
+SCRATCH_ID = os.environ.get("SCRATCH_ID") or f"scratch{os.getpid()}t{int(time.time())}"
 SCRATCH_COLLECTION = f"/user/testuser/{SCRATCH_ID}/{SCRATCH_ID}_collection/1"
 SCRATCH_OBJECT = f"/user/testuser/{SCRATCH_ID}/pScratch/1"
 SCRATCH_COLLECTION_URI = f"http://synbiohub.org/user/testuser/{SCRATCH_ID}/{SCRATCH_ID}_collection/1"

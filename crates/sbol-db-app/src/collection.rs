@@ -204,7 +204,7 @@ impl CollectionService {
         // SBOL2 body to the SBOL3 model), rejecting anything that is not a
         // well-formed SBOL document; `validate` rejects a structurally invalid
         // one.
-        let document = sbol::Document::read(&submission.body, rdf_format)
+        let document = sbol::v3::Document::read(&submission.body, rdf_format)
             .map_err(|e| DomainError::Parse(e.to_string()))?;
         let report = document.validate();
         if report.has_errors() {

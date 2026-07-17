@@ -319,7 +319,7 @@ dependencies = [
  "enum-map",
  "fxhash",
  "getset",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "itertools-num",
  "multimap",
  "ndarray",
@@ -2416,7 +2416,7 @@ dependencies = [
  "oxiri",
  "oxrdf",
  "ryu-js",
- "thiserror 2.0.18",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -2428,8 +2428,8 @@ dependencies = [
  "oxilangtag",
  "oxiri",
  "oxsdatatypes",
- "rand 0.9.4",
- "thiserror 2.0.18",
+ "rand 0.8.6",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -2442,7 +2442,7 @@ dependencies = [
  "oxrdf",
  "oxrdfxml",
  "oxttl",
- "thiserror 2.0.18",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -2455,7 +2455,7 @@ dependencies = [
  "oxiri",
  "oxrdf",
  "quick-xml",
- "thiserror 2.0.18",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -2464,7 +2464,7 @@ version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06fa874d87eae638daae9b4e3198864fe2cce68589f227c0b2cf5b62b1530516"
 dependencies = [
- "thiserror 2.0.18",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -2477,7 +2477,7 @@ dependencies = [
  "oxilangtag",
  "oxiri",
  "oxrdf",
- "thiserror 2.0.18",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -2799,7 +2799,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "once_cell",
@@ -2819,7 +2819,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2 1.0.106",
  "quote 1.0.45",
  "syn 2.0.117",
@@ -3398,16 +3398,29 @@ dependencies = [
 
 [[package]]
 name = "sbol"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb2307a1665d1176316bf2ff5b641c783f2c3408e643e0210540397fd2ca9b34"
+version = "0.2.1"
 dependencies = [
- "sbol-ontology",
+ "sbol-convert",
+ "sbol-core",
  "sbol-rdf",
- "serde",
- "sha3",
+ "sbol3",
+]
+
+[[package]]
+name = "sbol-convert"
+version = "0.2.1"
+dependencies = [
+ "sbol-core",
+ "sbol-rdf",
+ "sbol3",
+]
+
+[[package]]
+name = "sbol-core"
+version = "0.2.1"
+dependencies = [
+ "sbol-rdf",
  "thiserror 2.0.18",
- "toml",
 ]
 
 [[package]]
@@ -3756,46 +3769,60 @@ dependencies = [
 
 [[package]]
 name = "sbol-fasta"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daf0f41ebce9d74e4bfbf82c48fbb44c0fc733a83768192cd95910ad27c7444b"
+version = "0.2.1"
 dependencies = [
- "sbol",
  "sbol-rdf",
+ "sbol3",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "sbol-genbank"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fae66cb4e1dbacdee19f6deea609844505a837f0acfd3cd6502cb59be9f074dc"
+version = "0.2.1"
 dependencies = [
  "gb-io",
- "sbol",
+ "sbol-convert",
  "sbol-rdf",
+ "sbol3",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "sbol-ontology"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d79f8a5ac39666000a2b51c02c4519b94d81af735db950c14479ad03930a0d76"
+version = "0.2.1"
 dependencies = [
+ "clap",
  "sha2 0.11.0",
  "ureq",
 ]
 
 [[package]]
 name = "sbol-rdf"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cece322a637ec49ac07721c75a229c28036ab6a80b2d63c2f903aa6adfcf069"
+version = "0.2.1"
 dependencies = [
  "oxjsonld",
  "oxrdf",
  "oxrdfio",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "sbol-rulegen"
+version = "0.2.1"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "sbol3"
+version = "0.2.1"
+dependencies = [
+ "sbol-core",
+ "sbol-ontology",
+ "sbol-rdf",
+ "sbol-rulegen",
+ "sha3",
  "thiserror 2.0.18",
 ]
 
@@ -4054,7 +4081,7 @@ dependencies = [
  "memchr",
  "oxrdf",
  "quick-xml",
- "thiserror 2.0.18",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4069,7 +4096,7 @@ dependencies = [
  "oxiri",
  "oxrdf",
  "oxsdatatypes",
- "rand 0.9.4",
+ "rand 0.8.6",
  "regex",
  "rustc-hash 2.1.2",
  "sha1",
@@ -4077,7 +4104,7 @@ dependencies = [
  "sparesults",
  "spargebra",
  "sparopt",
- "thiserror 2.0.18",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4090,8 +4117,8 @@ dependencies = [
  "oxiri",
  "oxrdf",
  "peg",
- "rand 0.9.4",
- "thiserror 2.0.18",
+ "rand 0.8.6",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4101,7 +4128,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aed7a854b8ea67618f8ce69aabb0e904d7704226060e9d5a2930eb3136c3fa3b"
 dependencies = [
  "oxrdf",
- "rand 0.9.4",
+ "rand 0.8.6",
  "spargebra",
 ]
 

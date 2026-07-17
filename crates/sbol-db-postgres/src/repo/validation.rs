@@ -1,4 +1,4 @@
-use sbol::ValidationReport;
+use sbol::v3::ValidationReport;
 use sbol_db_core::{DomainError, GraphId, Severity, ValidationRunId, ValidationStatus};
 use sqlx::Row;
 use uuid::Uuid;
@@ -64,8 +64,8 @@ impl ValidationRepository {
 
         for issue in report.issues() {
             let severity = match issue.severity {
-                sbol::Severity::Warning => Severity::Warning,
-                sbol::Severity::Error => Severity::Error,
+                sbol::v3::Severity::Warning => Severity::Warning,
+                sbol::v3::Severity::Error => Severity::Error,
                 _ => Severity::Warning,
             };
             let subject_iri = issue.subject.as_iri().map(|i| i.as_str().to_owned());

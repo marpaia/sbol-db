@@ -11,9 +11,11 @@
 //! serializers. No client-supplied `FROM` is ever accepted; the scope is the
 //! read ceiling.
 //!
-//! `?version=sbol2|sbol3` selects the SBOL version for the RDF-bearing formats
-//! (`/sbol`, `/sbolnr`, `/omex`, `/summary`); GenBank, FASTA, and GFF3 are
-//! version-agnostic sequence formats and ignore it.
+//! `?version=sbol2|sbol3` selects the SBOL version for the recursive and
+//! non-recursive RDF closures (`/sbol`, `/sbolnr`); GenBank, FASTA, and GFF3 are
+//! version-agnostic sequence formats and ignore it. `/omex` always archives
+//! SBOL2 (classic SynBioHub downgrades before packing) and `/summary` always
+//! serves classic's SBOL2 `serializeJSON` object, so both ignore the selector.
 
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -28,8 +30,8 @@ use serde::Deserialize;
 use super::routes::{public_uri, scope_for, user_uri, PublicObject, UserObject};
 use super::CurrentUser;
 use crate::serialize::{
-    serialize_closure, serialize_gff3, serialize_omex, OmexAttachment, OmexAttachmentSource,
-    Serialized,
+    serialize_closure, serialize_gff3, serialize_omex, serialize_summary, OmexAttachment,
+    OmexAttachmentSource, Serialized,
 };
 use crate::{ApiError, AppState};
 
@@ -247,8 +249,11 @@ fn render(
         Format::GenBank => serialize_closure(triples, SerializationFormat::GenBank, false)?,
         Format::Fasta => serialize_closure(triples, SerializationFormat::Fasta, false)?,
         Format::Gff3 => serialize_gff3(triples)?,
-        Format::Omex => serialize_omex(triples, sbol2, attachments)?,
-        Format::Summary => serialize_closure(triples, SerializationFormat::JsonLd, sbol2)?,
+        // Classic SynBioHub always downgrades to SBOL2 before packing an OMEX
+        // archive, and its `/summary` is the SBOL2 `serializeJSON` object, so
+        // neither honors the SBOL version selector.
+        Format::Omex => serialize_omex(triples, true, attachments)?,
+        Format::Summary => serialize_summary(triples)?,
     };
     Ok(serialized)
 }

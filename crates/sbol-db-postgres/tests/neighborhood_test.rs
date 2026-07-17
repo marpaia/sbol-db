@@ -205,7 +205,7 @@ async fn forward_walk_produces_round_trip_turtle() {
     let turtle =
         sbol_db_rdf::neighborhood_to_rdf(&result, SerializationFormat::Turtle).expect("serialize");
     // `sbol-rs` should accept the output.
-    let _ = sbol::Document::read(&turtle, sbol::RdfFormat::Turtle).expect("re-parse");
+    let _ = sbol::v3::Document::read(&turtle, sbol::RdfFormat::Turtle).expect("re-parse");
 }
 
 #[tokio::test]
