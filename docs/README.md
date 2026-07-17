@@ -60,6 +60,11 @@ Entry points to the project's documentation, organized by topic.
   interface classic SynBioHub reaches over HTTP, the behaviors sbol-db
   matches so it stands in for Virtuoso at runtime, and how to run
   SynBioHub's suite against it.
+- **[The v2 API](api-v2.md)**: the idiomatic REST surface under
+  `/api/v2`, a second presentation of the same facade the SynBioHub-compat
+  surface presents, with proper HTTP verbs, JSON bodies, real pagination,
+  content negotiation, a consistent error envelope, bearer auth, and the
+  mapping from the v1 endpoints.
 - **[Migrating a classic instance](synbiohub-migration.md)**: loading a
   deployed classic SynBioHub (RDF dump, `synbiohub.sqlite`, `uploads/`,
   and `config.local.json`) into sbol-db with `sbol-db

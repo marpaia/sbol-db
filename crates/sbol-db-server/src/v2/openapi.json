@@ -1,0 +1,466 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "sbol-db V2 API",
+    "version": "0.1.1",
+    "description": "The idiomatic REST presentation of sbol-db's SynBioHub-compatible data store, mounted under `/api/v2`.\n\nV2 is a second presentation of the same facade the V1 SynBioHub adapter serves: it holds no business logic of its own and reads and writes the same dataset. It differs only in wire shape. Where V1 mirrors classic SynBioHub's quirks (GET routes that mutate, a `/search/key=value` path grammar, `X-authorization` tokens, ad-hoc error bodies), V2 uses proper HTTP verbs (POST creates, PATCH edits, DELETE deletes, and no GET mutates), JSON request bodies, real pagination with a total, `Accept`-driven content negotiation, a single consistent error envelope, and `Authorization: Bearer` tokens.\n\nAuthentication is tolerant, matching V1: a missing or unrecognized bearer token is anonymous (scoped to the public graph), never a `401`. A mutating verb attempted anonymously is `403`. Reads are ACL-scoped to the caller's authorized graphs; an out-of-scope object is a non-disclosing `404`.",
+    "contact": {
+      "name": "sbol-db",
+      "url": "https://github.com/marpaia/sbol-db"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0"
+    }
+  },
+  "servers": [
+    {
+      "url": "/api/v2",
+      "description": "The V2 surface on the current server"
+    }
+  ],
+  "tags": [
+    { "name": "Meta", "description": "Version and health probe." },
+    { "name": "Objects", "description": "The object lifecycle under one idiomatic path: read, edit, delete, and publish." },
+    { "name": "Collections", "description": "Mint a submission as a new collection." },
+    { "name": "Search", "description": "Ranked free-text search and nucleotide alignment search, paginated with a total." }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "An `Authorization: Bearer <token>` credential, the token minted by the V1 `/login` route. Tolerant: a missing or unrecognized token is anonymous, not rejected."
+      }
+    },
+    "schemas": {
+      "Version": {
+        "type": "object",
+        "required": ["name", "api", "version"],
+        "properties": {
+          "name": { "type": "string" },
+          "api": { "type": "string" },
+          "version": { "type": "string" }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "description": "The single V2 error envelope. Every non-2xx response carries this shape.",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message", "status"],
+            "properties": {
+              "code": { "type": "string", "description": "A stable machine-readable code, shared with the native surface." },
+              "message": { "type": "string", "description": "A human-readable explanation." },
+              "status": { "type": "integer", "description": "The HTTP status code, echoed for clients that only read the body." }
+            }
+          }
+        }
+      },
+      "SearchHit": {
+        "type": "object",
+        "required": ["uri"],
+        "properties": {
+          "uri": { "type": "string" },
+          "display_id": { "type": ["string", "null"] },
+          "version": { "type": ["string", "null"] },
+          "name": { "type": ["string", "null"] },
+          "description": { "type": ["string", "null"] },
+          "object_type": { "type": ["string", "null"] }
+        }
+      },
+      "SearchResponse": {
+        "type": "object",
+        "required": ["items", "total", "offset", "limit"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/SearchHit" } },
+          "total": { "type": "integer", "description": "The total number of in-scope matches, independent of the returned window." },
+          "offset": { "type": "integer" },
+          "limit": { "type": "integer" }
+        }
+      },
+      "SbolObjectRecord": {
+        "type": "object",
+        "description": "The derived object record: idiomatic JSON metadata for one SBOL object.",
+        "required": ["id", "iri", "sbol_class", "types", "roles", "data", "content_hash"],
+        "properties": {
+          "id": { "type": "string" },
+          "iri": { "type": "string" },
+          "sbol_class": { "type": "string" },
+          "display_id": { "type": ["string", "null"] },
+          "name": { "type": ["string", "null"] },
+          "description": { "type": ["string", "null"] },
+          "graph_id": { "type": ["string", "null"] },
+          "types": { "type": "array", "items": { "type": "string" } },
+          "roles": { "type": "array", "items": { "type": "string" } },
+          "data": {},
+          "content_hash": { "type": "array", "items": { "type": "integer" } }
+        }
+      },
+      "CreateCollectionRequest": {
+        "type": "object",
+        "required": ["id", "version", "content"],
+        "properties": {
+          "id": { "type": "string", "description": "The submission id, the collection segment of every minted URI." },
+          "version": { "type": "string", "description": "The version segment of every minted URI." },
+          "name": { "type": ["string", "null"], "description": "The collection title (`dcterms:title`)." },
+          "description": { "type": ["string", "null"], "description": "The collection description (`dcterms:description`)." },
+          "citations": { "type": "array", "items": { "type": "string" }, "description": "PubMed citation ids." },
+          "creator_name": { "type": ["string", "null"], "description": "The creator name; defaults to the caller's display name." },
+          "format": { "type": ["string", "null"], "description": "The SBOL serialization of `content`: `rdfxml` (default), `turtle`, `jsonld`, `ntriples`." },
+          "overwrite": { "type": ["string", "null"], "description": "Collision policy: `fail` (default), `replace`, or `merge`." },
+          "content": { "type": "string", "description": "The serialized SBOL document." }
+        }
+      },
+      "CollectionCreated": {
+        "type": "object",
+        "required": ["collection_uri", "persistent_identity", "members", "triple_count"],
+        "properties": {
+          "collection_uri": { "type": "string" },
+          "persistent_identity": { "type": "string" },
+          "members": { "type": "array", "items": { "type": "string" } },
+          "graph": { "type": ["string", "null"] },
+          "triple_count": { "type": "integer" }
+        }
+      },
+      "PatchRequest": {
+        "type": "object",
+        "description": "The mutable fields a PATCH may edit. Every field is optional; a present field is applied, an absent one is left untouched.",
+        "properties": {
+          "name": { "type": ["string", "null"], "description": "The object title (`dcterms:title`)." },
+          "description": { "type": ["string", "null"], "description": "The object description (`dcterms:description`)." },
+          "mutable_description": { "type": ["string", "null"], "description": "The mutable rich-text description (`sbh:mutableDescription`)." },
+          "mutable_notes": { "type": ["string", "null"], "description": "The mutable notes (`sbh:mutableNotes`)." },
+          "mutable_source": { "type": ["string", "null"], "description": "The mutable provenance (`sbh:mutableProvenance`)." },
+          "citations": { "type": ["array", "null"], "items": { "type": "string" }, "description": "The full PubMed citation list, replacing the current one when present." }
+        }
+      },
+      "PublishRequest": {
+        "type": "object",
+        "required": ["id", "version"],
+        "properties": {
+          "id": { "type": "string", "description": "The public submission id." },
+          "version": { "type": "string", "description": "The public version." },
+          "name": { "type": ["string", "null"] },
+          "description": { "type": ["string", "null"] },
+          "citations": { "type": "array", "items": { "type": "string" } },
+          "overwrite": { "type": ["string", "null"], "description": "Collision policy against the public collection URI: `fail` (default), `replace`, or `merge`." }
+        }
+      },
+      "PublishResult": {
+        "type": "object",
+        "required": ["collection_uri", "members", "triple_count"],
+        "properties": {
+          "collection_uri": { "type": "string" },
+          "members": { "type": "array", "items": { "type": "string" } },
+          "triple_count": { "type": "integer" }
+        }
+      },
+      "SequenceHit": {
+        "type": "object",
+        "required": ["uri", "percent_match", "strand", "cigar"],
+        "properties": {
+          "uri": { "type": "string" },
+          "percent_match": { "type": "number" },
+          "strand": { "type": "string" },
+          "cigar": { "type": "string" },
+          "display_id": { "type": ["string", "null"] },
+          "name": { "type": ["string", "null"] },
+          "description": { "type": ["string", "null"] },
+          "object_type": { "type": ["string", "null"] }
+        }
+      },
+      "SequenceSearchResponse": {
+        "type": "object",
+        "required": ["items", "total"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/SequenceHit" } },
+          "total": { "type": "integer" }
+        }
+      },
+      "SimilarHit": {
+        "type": "object",
+        "required": ["uri", "pagerank"],
+        "properties": {
+          "uri": { "type": "string" },
+          "pagerank": { "type": "number" },
+          "display_id": { "type": ["string", "null"] },
+          "name": { "type": ["string", "null"] },
+          "description": { "type": ["string", "null"] },
+          "object_type": { "type": ["string", "null"] }
+        }
+      },
+      "SimilarResponse": {
+        "type": "object",
+        "required": ["items", "total"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/SimilarHit" } },
+          "total": { "type": "integer" }
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "An error, in the V2 envelope.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      }
+    },
+    "parameters": {
+      "iri": {
+        "name": "iri",
+        "in": "path",
+        "required": true,
+        "description": "The object IRI as a single percent-encoded path segment.",
+        "schema": { "type": "string" }
+      }
+    }
+  },
+  "security": [
+    { "bearerAuth": [] }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "tags": ["Meta"],
+        "summary": "Version and health probe",
+        "description": "The V2 version and health endpoint. Unauthenticated.",
+        "operationId": "v2Version",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The service name, API generation, and version.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Version" },
+                "example": { "name": "sbol-db", "api": "v2", "version": "0.1.1" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/objects": {
+      "get": {
+        "tags": ["Objects"],
+        "summary": "List objects",
+        "description": "The paginated, ACL-scoped object list. Shares the ranked query and response envelope with `/search`; `type` and `q` narrow it, `limit`/`offset` page it.",
+        "operationId": "v2ListObjects",
+        "parameters": [
+          { "name": "q", "in": "query", "required": false, "description": "A free-text term. Absent ranks the whole in-scope corpus.", "schema": { "type": "string" } },
+          { "name": "type", "in": "query", "required": false, "description": "Restrict to one rdf:type, given as a full IRI.", "schema": { "type": "string" } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "default": 0 } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 50 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of ranked objects with a total.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SearchResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/objects/{iri}": {
+      "get": {
+        "tags": ["Objects"],
+        "summary": "Read one object",
+        "description": "Read one object under the caller's authorized graph scope. An explicit `format` is a closure download; otherwise the representation is chosen by `Accept`: `application/json` (the default) returns idiomatic JSON metadata, and an RDF media type returns the object's RDF closure. An out-of-scope or absent object is a non-disclosing `404`.",
+        "operationId": "v2GetObject",
+        "parameters": [
+          { "$ref": "#/components/parameters/iri" },
+          { "name": "format", "in": "query", "required": false, "description": "A download format: `sbol`, `sbolnr`, `gb`, `fasta`, `gff`, or `omex`. When absent, the representation is negotiated from `Accept`.", "schema": { "type": "string" } },
+          { "name": "version", "in": "query", "required": false, "description": "`sbol2` or `sbol3` (default) for the RDF-bearing formats.", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The object as JSON metadata, an RDF closure, or a download, per `format`/`Accept`.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SbolObjectRecord" } },
+              "text/turtle": { "schema": { "type": "string" } },
+              "application/rdf+xml": { "schema": { "type": "string" } },
+              "application/ld+json": { "schema": { "type": "string" } },
+              "application/n-triples": { "schema": { "type": "string" } }
+            }
+          },
+          "404": { "$ref": "#/components/responses/Error" },
+          "406": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "patch": {
+        "tags": ["Objects"],
+        "summary": "Edit an object's mutable fields",
+        "description": "Edit the object's mutable fields in place. Identity-gated: an anonymous caller is `403`, a non-owner is rejected by the facade.",
+        "operationId": "v2PatchObject",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/PatchRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The edited object record, or `{ \"iri\": ... }` for a verbatim submission with no derived record.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SbolObjectRecord" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "delete": {
+        "tags": ["Objects"],
+        "summary": "Delete an object",
+        "description": "Remove a top-level object and everything whose `sbh:topLevel` names it. Identity-gated; a missing object is `404`, an unauthorized caller is `403`.",
+        "operationId": "v2DeleteObject",
+        "responses": {
+          "204": { "description": "The object was removed." },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/objects/{iri}/publish": {
+      "post": {
+        "tags": ["Objects"],
+        "summary": "Publish a private object",
+        "description": "Publish a private object to the public graph under freshly minted public URIs (classic makePublic). Identity-gated.",
+        "operationId": "v2PublishObject",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/PublishRequest" } }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The object was published. The `Location` header points to the public collection.",
+            "headers": {
+              "Location": { "description": "The public collection's `/objects/{iri}` path.", "schema": { "type": "string" } }
+            },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/PublishResult" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/objects/{iri}/similar": {
+      "get": {
+        "tags": ["Objects"],
+        "summary": "An object's cluster mates",
+        "description": "The object's in-scope sequence-cluster mates, ranked by PageRank.",
+        "operationId": "v2Similar",
+        "parameters": [
+          { "$ref": "#/components/parameters/iri" }
+        ],
+        "responses": {
+          "200": {
+            "description": "The cluster mates with a total.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SimilarResponse" } }
+            }
+          }
+        }
+      }
+    },
+    "/collections": {
+      "post": {
+        "tags": ["Collections"],
+        "summary": "Mint a submission",
+        "description": "Mint a submission into the caller's user namespace. Accepts a JSON body (the SBOL document in a `content` field) or a `multipart/form-data` upload (the document in a `file` part). Identity-gated: an anonymous caller is `403`.",
+        "operationId": "v2CreateCollection",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/CreateCollectionRequest" } },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "version": { "type": "string" },
+                  "name": { "type": "string" },
+                  "description": { "type": "string" },
+                  "citations": { "type": "string", "description": "A comma-separated list of PubMed ids." },
+                  "creator_name": { "type": "string" },
+                  "format": { "type": "string" },
+                  "overwrite": { "type": "string" },
+                  "file": { "type": "string", "format": "binary" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The collection was minted. The `Location` header points to it.",
+            "headers": {
+              "Location": { "description": "The minted collection's `/objects/{iri}` path.", "schema": { "type": "string" } }
+            },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/CollectionCreated" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/search": {
+      "get": {
+        "tags": ["Search"],
+        "summary": "Ranked free-text search",
+        "description": "A ranked, ACL-scoped, paginated free-text search over the in-scope corpus. The query and paging are typed query parameters, not the V1 `/search/key=value` path grammar.",
+        "operationId": "v2Search",
+        "parameters": [
+          { "name": "q", "in": "query", "required": false, "description": "The free-text term. Absent ranks the whole in-scope corpus.", "schema": { "type": "string" } },
+          { "name": "type", "in": "query", "required": false, "description": "Restrict to one rdf:type, given as a full IRI.", "schema": { "type": "string" } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "default": 0 } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 50 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of ranked hits with a total.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SearchResponse" } }
+            }
+          }
+        }
+      }
+    },
+    "/sequences/search": {
+      "get": {
+        "tags": ["Search"],
+        "summary": "Nucleotide alignment search",
+        "description": "Align a query nucleotide string against the in-scope indexed sequences, ordered by `pagerank * percentMatch`.",
+        "operationId": "v2SequenceSearch",
+        "parameters": [
+          { "name": "q", "in": "query", "required": false, "description": "The query nucleotide string. `sequence` is accepted as an alias.", "schema": { "type": "string" } },
+          { "name": "sequence", "in": "query", "required": false, "description": "An alias for `q`.", "schema": { "type": "string" } },
+          { "name": "mode", "in": "query", "required": false, "description": "`global` (the banded aligner, default) or `exact` (exact substring).", "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 50 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The aligned hits with a total.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SequenceSearchResponse" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    }
+  }
+}

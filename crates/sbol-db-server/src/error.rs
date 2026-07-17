@@ -47,9 +47,12 @@ impl From<MutationError> for ApiError {
     }
 }
 
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let (status, kind) = match &self {
+impl ApiError {
+    /// The HTTP status and stable machine code this error maps to. The native
+    /// RFC 7807 response and the V2 error envelope both read it, so the two
+    /// surfaces agree on status semantics from a single source of truth.
+    pub(crate) fn status_and_code(&self) -> (StatusCode, &'static str) {
+        match self {
             ApiError::Domain(DomainError::NotFound(_)) => (StatusCode::NOT_FOUND, "not_found"),
             ApiError::Domain(DomainError::InvalidInput(_)) => {
                 (StatusCode::BAD_REQUEST, "invalid_input")
@@ -81,7 +84,13 @@ impl IntoResponse for ApiError {
             ApiError::Sparql(_) => (StatusCode::INTERNAL_SERVER_ERROR, "sparql_error"),
             ApiError::Timeout => (StatusCode::GATEWAY_TIMEOUT, "timeout"),
             ApiError::Unavailable(_) => (StatusCode::NOT_IMPLEMENTED, "backend_unsupported"),
-        };
+        }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let (status, kind) = self.status_and_code();
         let detail = self.to_string();
         if status.is_server_error() {
             tracing::error!(

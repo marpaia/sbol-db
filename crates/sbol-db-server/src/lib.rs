@@ -11,6 +11,7 @@ pub mod metrics;
 mod routes;
 mod serialize;
 mod synbiohub;
+mod v2;
 
 pub use error::ApiError;
 pub use export::export_subject_rdf;
@@ -303,6 +304,10 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route("/jobs/:id/attempts", get(routes::list_job_attempts))
         .route("/jobs/:id/logs", get(routes::list_job_logs))
         .route("/jobs/:id/cancel", post(routes::cancel_job))
+        // The idiomatic V2 REST surface, a second presentation of the same
+        // facade under a versioned prefix. It carries its own bearer-token
+        // identity layer and inherits the metrics/body-limit/timeout layers.
+        .nest("/api/v2", v2::router(state.clone()))
         .route_layer(axum::middleware::from_fn(metrics::track_metrics));
 
     // SynBioHub/Virtuoso-compatible write surface, behind HTTP Basic auth.

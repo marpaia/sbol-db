@@ -35,7 +35,7 @@ use sbol_db_core::{
 use sbol_db_search::pagerank::pagerank;
 use sbol_db_search::ranked_text::IndexedPart;
 use sbol_db_search::{cluster_sequences, AlignOptions, ClusterId};
-use sbol_db_server::{serialize_closure, serialize_gff3, serialize_omex};
+use sbol_db_server::{export_subject_rdf, serialize_closure, serialize_gff3, serialize_omex};
 use sbol_db_sparql::{GraphScope, SparqlOptions};
 use sbol_db_storage::{
     BlobStore, EnqueueOutcome, GraphWriteMode, ImportInput, ImportOverwrite, JobQueue, JobStatus,
@@ -135,6 +135,7 @@ pub async fn run_all(app: &AppServices) {
     config_roundtrip(app).await;
     admin_user_crud(app).await;
     wor_map_persisted(app).await;
+    v1_v2_data_parity(app).await;
 }
 
 /// The durable configuration store's contract: an unset key reads back absent,
@@ -342,6 +343,199 @@ pub async fn wor_map_persisted(app: &AppServices) {
     ] {
         config.delete(key).await.expect("cleanup federation key");
     }
+}
+
+/// V1 and V2 are two presentations of the one facade, so a single write is
+/// visible identically through the read verbs each surface uses.
+///
+/// One object is written through the shared [`SubmissionService`] verb (the
+/// facade verb both the V1 `POST /submit` and the V2 `POST /api/v2/collections`
+/// routes call). It is then read back two ways, each the verb its surface uses:
+///
+/// * the V1-shaped read is the `GetTopLevelMetadata` SPARQL query run under the
+///   caller's authorized [`GraphScope`] (what the V1 `.../metadata` route runs),
+/// * the V2-shaped read is [`export_subject_rdf`] of the subject's closure (what
+///   the V2 `GET /api/v2/objects/{iri}` route serves under `Accept: text/turtle`
+///   for a verbatim submission, which carries no derived object record).
+///
+/// Both reads surface the same object identity (type, displayId, version,
+/// title) from the one write, and both hide the object from a caller outside its
+/// scope through the exact gate each surface uses: the V1 read returns no rows
+/// under a foreign scope, and the V2 gate (`AclService::graph_of_subject`)
+/// resolves a graph that foreign scope does not name. This certifies there is no
+/// divergence between the two views on any backend.
+pub async fn v1_v2_data_parity(app: &AppServices) {
+    const OWNER: &str = "conformance_parity_owner";
+    const OWNER_GRAPH: &str = "http://synbiohub.org/user/conformance_parity_owner";
+    const INTRUDER_GRAPH: &str = "http://synbiohub.org/user/conformance_parity_intruder";
+    const COMPONENT: &str = "http://synbiohub.org/user/conformance_parity_owner/paritysub/cd/1";
+
+    // The one write, through the shared submission verb both surfaces call.
+    let submissions = SubmissionService::new(app.store.clone());
+    let outcome = submissions
+        .submit(SubmitRequest {
+            owner: OWNER.to_owned(),
+            id: "paritysub".to_owned(),
+            version: "1".to_owned(),
+            name: Some("Parity Roundtrip".to_owned()),
+            description: None,
+            creator_name: None,
+            citations: Vec::new(),
+            body: SUBMISSION_FIXTURE.to_owned(),
+            format: SerializationFormat::Turtle,
+            overwrite: ImportOverwrite::Fail,
+        })
+        .await
+        .expect("submit mints the parity object");
+
+    // The caller's server-computed scope; the V1 read runs under it and the V2
+    // scope gate is checked against it.
+    let scope = app
+        .acl_service
+        .compute_scope(Some(OWNER_GRAPH))
+        .await
+        .expect("owner scope");
+
+    // The V1-shaped read: the metadata SPARQL under the owner's scope.
+    let v1 = v1_metadata_identity(app, COMPONENT, &scope).await;
+    // The V2-shaped read: the subject's RDF closure, the verbatim SBOL2 view.
+    let v2 = export_subject_rdf(
+        app.store.as_ref(),
+        COMPONENT,
+        SerializationFormat::Turtle,
+        false,
+    )
+    .await
+    .expect("V2 subject RDF");
+
+    // The write's identity, as the fixture minted it, surfaces on both surfaces.
+    let expected = ObjectIdentity {
+        display_id: "cd".to_owned(),
+        version: "1".to_owned(),
+        title: "My Component".to_owned(),
+        type_local: "ComponentDefinition".to_owned(),
+    };
+    assert_eq!(
+        v1, expected,
+        "the V1 metadata read surfaces the written identity"
+    );
+    for signal in [&expected.display_id, &expected.version, &expected.title] {
+        assert!(
+            v2.contains(signal.as_str()),
+            "the V2 RDF read carries the written signal {signal:?}: {v2}"
+        );
+    }
+    assert!(
+        v2.contains(&expected.type_local),
+        "the V2 RDF read carries the written type: {v2}"
+    );
+
+    // Both surfaces hide the object from a caller outside its scope, each through
+    // its own gate. The intruder's scope names neither the object's graph nor the
+    // public graph.
+    let intruder_scope = app
+        .acl_service
+        .compute_scope(Some(INTRUDER_GRAPH))
+        .await
+        .expect("intruder scope");
+    let hidden = v1_metadata_rows(app, COMPONENT, &intruder_scope).await;
+    assert_eq!(
+        hidden, 0,
+        "the V1 metadata read returns no rows under a foreign scope"
+    );
+    let graph = app
+        .acl_service
+        .graph_of_subject(COMPONENT)
+        .await
+        .expect("graph of subject")
+        .expect("the minted object resolves to a graph");
+    assert!(
+        !scope_names(&intruder_scope, &graph),
+        "the V2 scope gate excludes the object's graph from a foreign scope"
+    );
+
+    app.store
+        .graph_store_clear(&outcome.graph_iri)
+        .await
+        .expect("clear the parity submission graph");
+}
+
+/// The identity of one object as the V1 `.../metadata` route surfaces it: the
+/// fields a `GetTopLevelMetadata` query binds.
+#[derive(Debug, PartialEq, Eq)]
+struct ObjectIdentity {
+    display_id: String,
+    version: String,
+    title: String,
+    type_local: String,
+}
+
+/// Run the classic `GetTopLevelMetadata` SPARQL for `subject` under `scope` and
+/// parse the single row's identity, the way the V1 metadata route reads.
+async fn v1_metadata_identity(
+    app: &AppServices,
+    subject: &str,
+    scope: &GraphScope,
+) -> ObjectIdentity {
+    let body = v1_metadata_body(app, subject, scope).await;
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("SPARQL-results JSON");
+    let binding = value["results"]["bindings"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .expect("one metadata row");
+    let cell = |var: &str| {
+        binding[var]["value"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let type_iri = cell("type");
+    ObjectIdentity {
+        display_id: cell("displayId"),
+        version: cell("version"),
+        title: cell("name"),
+        type_local: type_iri
+            .rsplit(['#', '/'])
+            .next()
+            .unwrap_or(&type_iri)
+            .to_owned(),
+    }
+}
+
+/// The number of `GetTopLevelMetadata` rows `subject` binds under `scope`; zero
+/// means the V1 read cannot see it.
+async fn v1_metadata_rows(app: &AppServices, subject: &str, scope: &GraphScope) -> usize {
+    let body = v1_metadata_body(app, subject, scope).await;
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("SPARQL-results JSON");
+    value["results"]["bindings"]
+        .as_array()
+        .map(|rows| rows.len())
+        .unwrap_or(0)
+}
+
+/// Execute the classic `GetTopLevelMetadata` SPARQL for `subject` under `scope`,
+/// returning the serialized SPARQL-results body.
+async fn v1_metadata_body(app: &AppServices, subject: &str, scope: &GraphScope) -> Vec<u8> {
+    let query = format!(
+        "PREFIX sbol2: <http://sbols.org/v2#>
+PREFIX dcterms: <http://purl.org/dc/terms/>
+SELECT DISTINCT ?displayId ?version ?name ?type WHERE {{
+    <{subject}> a ?type .
+    OPTIONAL {{ <{subject}> sbol2:displayId ?displayId . }}
+    OPTIONAL {{ <{subject}> sbol2:version ?version . }}
+    OPTIONAL {{ <{subject}> dcterms:title ?name . }}
+}}"
+    );
+    let options = SparqlOptions {
+        authorized_graphs: scope.clone(),
+        ..SparqlOptions::default()
+    };
+    app.sparql
+        .execute(&query, None, None, &options)
+        .await
+        .expect("V1 metadata SPARQL")
+        .payload
+        .body
 }
 
 /// A stub [`WebOfRegistriesClient`] that returns a canned instance list and a

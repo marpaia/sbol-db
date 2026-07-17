@@ -3653,6 +3653,7 @@ dependencies = [
  "sbol-db-jobs",
  "sbol-db-postgres",
  "sbol-db-rdf",
+ "sbol-db-search",
  "sbol-db-sparql",
  "sbol-db-storage",
  "sbol-db-ui",
