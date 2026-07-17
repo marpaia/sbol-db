@@ -19,14 +19,24 @@
     }
   ],
   "tags": [
-    { "name": "Documents",    "description": "Import SBOL documents and inspect what was stored." },
+    { "name": "Graphs",       "description": "Import SBOL documents into named graphs and inspect what was stored." },
     { "name": "Objects",      "description": "Resolve typed SBOL objects by IRI and re-emit them as RDF." },
-    { "name": "Neighborhood", "description": "Bounded recursive graph traversal across `sbol_quads`." },
+    { "name": "Neighborhood", "description": "Bounded recursive graph traversal across the triplestore." },
     { "name": "SPARQL",       "description": "Read-only SPARQL 1.1 evaluator (SELECT / ASK / CONSTRUCT / DESCRIBE)." },
     { "name": "Sequences",    "description": "Nucleotide substring + reverse-complement search backed by the k-mer seed index." },
     { "name": "Ontology",     "description": "Load OBO ontologies (SO, SBO, ...) and resolve transitive `is_a` closure." },
     { "name": "Jobs",         "description": "Background work queue: enqueue, inspect, and cancel async jobs (e.g. document imports). Workers claim with `FOR UPDATE SKIP LOCKED`, leases auto-renew, retries are exponentially backed off." },
-    { "name": "Meta",         "description": "Liveness, readiness, metrics, OpenAPI schema, and this docs page." }
+    { "name": "Meta",         "description": "Liveness, readiness, metrics, OpenAPI schema, and this docs page." },
+    { "name": "SynBioHub v1 Auth",        "description": "SynBioHub-compatible account routes. Bodies accept form-encoded or JSON; responses are Accept-negotiated (a browser gets a redirect and session cookie, an API client gets a machine-readable body). Authenticated calls present the token in the `X-authorization` header." },
+    { "name": "SynBioHub v1 Query",       "description": "SynBioHub-compatible read and search surface. Answers are SPARQL-results JSON, scoped to the caller's authorized graphs resolved from `X-authorization`." },
+    { "name": "SynBioHub v1 Submission",  "description": "SynBioHub-compatible submission and object lifecycle verbs (submit, makePublic, remove, replace, removeCollection, icon). Owner-gated through the facade." },
+    { "name": "SynBioHub v1 Edit",        "description": "SynBioHub-compatible field edits: mutable text fields, citations, and the generic edit/add/remove of a field plus collection membership. Owner-gated." },
+    { "name": "SynBioHub v1 Permissions", "description": "SynBioHub-compatible object sharing: grant and revoke another account's view access. Owner-gated." },
+    { "name": "SynBioHub v1 Downloads",   "description": "SynBioHub-compatible closure downloads in each exchange format (SBOL, GenBank, FASTA, GFF3, OMEX, summary). ACL-scoped." },
+    { "name": "SynBioHub v1 Attachments", "description": "SynBioHub-compatible attachment upload (file or external URL) and blob download." },
+    { "name": "SynBioHub v1 Admin",       "description": "SynBioHub-compatible admin surface. Every route requires an authenticated administrator (`X-authorization`); a non-admin or anonymous caller gets 403." },
+    { "name": "SynBioHub v1 Plugins",     "description": "SynBioHub-compatible plugin proxying and the temp-file / async-stream handoffs." },
+    { "name": "SynBioHub v1 SPARQL",      "description": "Virtuoso-protocol authenticated SPARQL query and Graph Store CRUD endpoints, behind HTTP Basic auth. SynBioHub points its `sparql-graph-crud-auth/` writes here." }
   ],
   "paths": {
     "/healthz": {
@@ -106,12 +116,12 @@
       }
     },
 
-    "/documents": {
+    "/graphs": {
       "post": {
-        "tags": ["Documents"],
-        "summary": "Import a design document",
-        "description": "Parses the request body as SBOL 3 RDF, SBOL 2 RDF, GenBank, or FASTA in the format derived from the `format` query parameter or the `Content-Type` header. Non-SBOL-3 inputs are converted to SBOL 3, then persisted inside one transaction (objects + quads + typed projections + validation) and returned as an import report.",
-        "operationId": "importDocument",
+        "tags": ["Graphs"],
+        "summary": "Import a design document into a named graph",
+        "description": "Parses the request body as SBOL 3 RDF, SBOL 2 RDF, GenBank, or FASTA in the format derived from the `format` query parameter or the `Content-Type` header. Non-SBOL-3 inputs are converted to SBOL 3, then persisted inside one transaction (objects + triples + typed projections + validation) and returned as an import report.",
+        "operationId": "createGraph",
         "parameters": [
           { "$ref": "#/components/parameters/SerializationFormat" },
           { "name": "namespace",    "in": "query", "schema": { "type": "string", "format": "uri" }, "description": "Namespace IRI for formats that need one. SBOL 2 uses it only as an upgrade fallback; GenBank and FASTA use it for emitted SBOL 3 object identities." },
@@ -119,7 +129,8 @@
           { "name": "document_iri", "in": "query", "schema": { "type": "string", "format": "uri" } },
           { "name": "name",         "in": "query", "schema": { "type": "string" } },
           { "name": "description",  "in": "query", "schema": { "type": "string" } },
-          { "name": "created_by",   "in": "query", "schema": { "type": "string" } }
+          { "name": "created_by",   "in": "query", "schema": { "type": "string" } },
+          { "name": "overwrite",    "in": "query", "schema": { "type": "integer", "enum": [0, 1, 2], "default": 0 }, "description": "0 fails on an existing `document_iri` (default), 1 replaces that graph, 2 merges into it. Replace and merge require `document_iri`." }
         ],
         "requestBody": {
           "required": true,
@@ -144,36 +155,63 @@
           },
           "400": { "$ref": "#/components/responses/BadRequest" }
         }
+      },
+      "delete": {
+        "tags": ["Graphs"],
+        "summary": "Delete a graph by its document IRI",
+        "description": "Resolves the graph named by `document_iri` and deletes it at graph granularity: its triples, derived objects, and registry row.",
+        "operationId": "deleteGraphByDocumentIri",
+        "parameters": [
+          { "name": "document_iri", "in": "query", "required": true, "schema": { "type": "string", "format": "uri" } }
+        ],
+        "responses": {
+          "204": { "description": "Graph deleted." },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
       }
     },
-    "/documents/{id}": {
+    "/graphs/{id}": {
       "get": {
-        "tags": ["Documents"],
-        "summary": "Fetch document metadata",
-        "operationId": "getDocument",
+        "tags": ["Graphs"],
+        "summary": "Fetch graph metadata",
+        "operationId": "getGraph",
         "parameters": [
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],
         "responses": {
           "200": {
-            "description": "Document found.",
+            "description": "Graph found.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/DocumentRecord" }
+                "schema": { "$ref": "#/components/schemas/GraphRecord" }
               }
             }
           },
           "404": { "$ref": "#/components/responses/NotFound" }
         }
+      },
+      "delete": {
+        "tags": ["Graphs"],
+        "summary": "Delete a graph by its surrogate id",
+        "description": "Deletes one document graph by its surrogate id at graph granularity: its triples, derived objects, and registry row.",
+        "operationId": "deleteGraph",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "204": { "description": "Graph deleted." },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
       }
     },
 
-    "/documents/bulk": {
+    "/graphs/bulk": {
       "post": {
-        "tags": ["Documents"],
+        "tags": ["Graphs"],
         "summary": "Atomic bulk import",
-        "description": "Imports up to 100 documents inside one Postgres transaction. **Either every document commits or none do** — if any document fails to parse or persist, the entire batch is rolled back and the first error is returned unchanged. Per-document validation runs and projection events are still recorded individually, but they share the outer transaction's atomicity.",
-        "operationId": "createDocumentsBulk",
+        "description": "Imports up to 100 graphs inside one transaction. **Either every graph commits or none do**. If any graph fails to parse or persist, the entire batch is rolled back and the first error is returned unchanged. Per-graph validation runs and projection events are still recorded individually, but they share the outer transaction's atomicity.",
+        "operationId": "createGraphsBulk",
         "requestBody": {
           "required": true,
           "content": {
@@ -184,7 +222,7 @@
         },
         "responses": {
           "200": {
-            "description": "All documents committed.",
+            "description": "All graphs committed.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/BulkImportResponse" }
@@ -225,7 +263,7 @@
         "parameters": [
           { "name": "sbol_class",  "in": "query", "schema": { "type": "string", "format": "uri" } },
           { "name": "role",        "in": "query", "schema": { "type": "string", "format": "uri" } },
-          { "name": "document_id", "in": "query", "schema": { "type": "string", "format": "uuid" } },
+          { "name": "graph_id",    "in": "query", "schema": { "type": "string", "format": "uuid" } },
           { "name": "after",       "in": "query", "schema": { "type": "string", "format": "uri" }, "description": "Cursor: last `iri` from the prior page." },
           { "name": "limit",       "in": "query", "schema": { "type": "integer", "default": 1000, "minimum": 1, "maximum": 5000 } }
         ],
@@ -691,6 +729,30 @@
         }
       }
     },
+    "/jobs/{id}/logs": {
+      "get": {
+        "tags": ["Jobs"],
+        "summary": "Structured log lines for a job",
+        "description": "Returns the log lines a job's handler emitted, oldest first, keyset-paginated by `after_id`. Returns 404 when the job id does not exist.",
+        "operationId": "jobLogs",
+        "parameters": [
+          { "name": "id",       "in": "path",  "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "after_id", "in": "query", "schema": { "type": "integer", "format": "int64" }, "description": "Cursor: last log `id` from the prior page." },
+          { "name": "limit",    "in": "query", "schema": { "type": "integer", "default": 500, "minimum": 1 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Log lines ordered by `id` ascending.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/JobLog" } }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
     "/jobs/{id}/cancel": {
       "post": {
         "tags": ["Jobs"],
@@ -921,6 +983,1046 @@
       }
     },
 
+    "/login": {
+      "post": {
+        "tags": ["SynBioHub v1 Auth"],
+        "summary": "Authenticate and mint a session token",
+        "description": "Verifies credentials and issues an API token. An API client gets the bare token as `text/plain`; a browser gets a session cookie and a 302 to `next`.",
+        "operationId": "sbhLogin",
+        "parameters": [ { "$ref": "#/components/parameters/SbhAccept" } ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": ["email", "password"],
+                "properties": {
+                  "email":    { "type": "string", "description": "Account email or username." },
+                  "password": { "type": "string" },
+                  "next":     { "type": "string", "description": "Browser redirect target after login." }
+                }
+              }
+            },
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email", "password"],
+                "properties": {
+                  "email":    { "type": "string" },
+                  "password": { "type": "string" },
+                  "next":     { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Authenticated. The token as a `text/plain` body.", "content": { "text/plain": { "schema": { "type": "string" } } } },
+          "302": { "description": "Browser flow: session cookie set and redirect to `next`." },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/logout": {
+      "post": {
+        "tags": ["SynBioHub v1 Auth"],
+        "summary": "Revoke the presented token",
+        "description": "Revokes the token in `X-authorization`. A browser additionally has its session cookie cleared and is redirected home.",
+        "operationId": "sbhLogout",
+        "parameters": [
+          { "$ref": "#/components/parameters/XAuthorization" },
+          { "$ref": "#/components/parameters/SbhAccept" }
+        ],
+        "responses": {
+          "200": { "description": "Token revoked." },
+          "302": { "description": "Browser flow: session cookie cleared and redirect home." }
+        }
+      }
+    },
+    "/register": {
+      "post": {
+        "tags": ["SynBioHub v1 Auth"],
+        "summary": "Create an account",
+        "description": "Creates a member account when public signup is enabled, otherwise 403. New accounts are members, not admins or curators.",
+        "operationId": "sbhRegister",
+        "parameters": [ { "$ref": "#/components/parameters/SbhAccept" } ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "username", "email"],
+                "properties": {
+                  "name":        { "type": "string" },
+                  "username":    { "type": "string" },
+                  "email":       { "type": "string" },
+                  "affiliation": { "type": "string" },
+                  "password":    { "type": "string" },
+                  "password1":   { "type": "string" },
+                  "password2":   { "type": "string", "description": "Confirmation; must match `password1`/`password` when present." },
+                  "next":        { "type": "string" }
+                }
+              }
+            },
+            "application/json": { "schema": { "type": "object", "additionalProperties": true } }
+          }
+        },
+        "responses": {
+          "200": { "description": "Account created (API client).", "content": { "text/plain": { "schema": { "type": "string" } } } },
+          "302": { "description": "Browser flow: redirect to `next`." },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/profile": {
+      "get": {
+        "tags": ["SynBioHub v1 Auth"],
+        "summary": "The authenticated account",
+        "operationId": "sbhGetProfile",
+        "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ],
+        "responses": {
+          "200": { "description": "The caller's account as JSON.", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["SynBioHub v1 Auth"],
+        "summary": "Update display name and affiliation",
+        "operationId": "sbhUpdateProfile",
+        "parameters": [
+          { "$ref": "#/components/parameters/XAuthorization" },
+          { "$ref": "#/components/parameters/SbhAccept" }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name":        { "type": "string" },
+                  "affiliation": { "type": "string" }
+                }
+              }
+            },
+            "application/json": { "schema": { "type": "object", "additionalProperties": true } }
+          }
+        },
+        "responses": {
+          "200": { "description": "Profile updated.", "content": { "text/plain": { "schema": { "type": "string" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/resetPassword": {
+      "post": {
+        "tags": ["SynBioHub v1 Auth"],
+        "summary": "Request a password reset link",
+        "description": "Mints a single-use reset link and enqueues its delivery email. The response is identical whether or not the address is registered, so it does not leak account existence.",
+        "operationId": "sbhResetPassword",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["email"], "properties": { "email": { "type": "string", "description": "Account email or username." } } } },
+            "application/json": { "schema": { "type": "object", "required": ["email"], "properties": { "email": { "type": "string" } } } }
+          }
+        },
+        "responses": {
+          "200": { "description": "Reset acknowledged.", "content": { "text/plain": { "schema": { "type": "string" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/setNewPassword": {
+      "post": {
+        "tags": ["SynBioHub v1 Auth"],
+        "summary": "Consume a reset link and set a new password",
+        "description": "Consumes the reset link from `/resetPassword` and stores the new password hash. An unrecognized or already-used link is a 400.",
+        "operationId": "sbhSetNewPassword",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token":             { "type": "string" },
+                  "link":              { "type": "string" },
+                  "resetPasswordLink": { "type": "string" },
+                  "password":          { "type": "string" },
+                  "password1":         { "type": "string" },
+                  "password2":         { "type": "string" }
+                }
+              }
+            },
+            "application/json": { "schema": { "type": "object", "additionalProperties": true } }
+          }
+        },
+        "responses": {
+          "200": { "description": "Password updated.", "content": { "text/plain": { "schema": { "type": "string" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+
+    "/search": {
+      "get": {
+        "tags": ["SynBioHub v1 Query"],
+        "summary": "Search the in-scope corpus",
+        "description": "A `q` parameter routes to the native object-text search; its absence ranks the whole in-scope corpus through the SynBioHub relevance path.",
+        "operationId": "sbhSearchRoot",
+        "parameters": [
+          { "$ref": "#/components/parameters/XAuthorization" },
+          { "name": "q",            "in": "query", "schema": { "type": "string" }, "description": "Free-text query. When present, the native object-text search answers." },
+          { "name": "object_type",  "in": "query", "schema": { "type": "string" } },
+          { "name": "property_uri", "in": "query", "schema": { "type": "string", "format": "uri" } },
+          { "name": "offset",       "in": "query", "schema": { "type": "integer" } },
+          { "name": "limit",        "in": "query", "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/SparqlResultsJson" }
+        }
+      }
+    },
+    "/search/{query}": {
+      "get": {
+        "tags": ["SynBioHub v1 Query"],
+        "summary": "Search using the classic path grammar",
+        "description": "The SynBioHub search grammar as a path segment, e.g. `/search/objectType=Component&<so:0000167>plasmid`. Free text ranks over the index; a purely faceted query runs as accelerated SPARQL. A `sequence=`/`globalsequence=`/`exactsequence=` facet aligns as a sequence search.",
+        "operationId": "sbhSearch",
+        "parameters": [
+          { "$ref": "#/components/parameters/XAuthorization" },
+          { "name": "query",  "in": "path",  "required": true, "schema": { "type": "string" }, "description": "The classic search grammar (may contain slashes)." },
+          { "name": "offset", "in": "query", "schema": { "type": "integer" } },
+          { "name": "limit",  "in": "query", "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/SparqlResultsJson" },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/searchCount": {
+      "get": {
+        "tags": ["SynBioHub v1 Query"],
+        "summary": "Count matches for an empty query",
+        "operationId": "sbhSearchCountRoot",
+        "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ],
+        "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } }
+      }
+    },
+    "/searchCount/{query}": {
+      "get": {
+        "tags": ["SynBioHub v1 Query"],
+        "summary": "Count matches for the classic search grammar",
+        "operationId": "sbhSearchCount",
+        "parameters": [
+          { "$ref": "#/components/parameters/XAuthorization" },
+          { "name": "query", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/SparqlResultsJson" },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/{type}/count": {
+      "get": {
+        "tags": ["SynBioHub v1 Query"],
+        "summary": "Count top-level objects of one SBOL2 type",
+        "operationId": "sbhTypeCount",
+        "parameters": [
+          { "$ref": "#/components/parameters/XAuthorization" },
+          { "name": "type", "in": "path", "required": true, "schema": { "type": "string" }, "example": "ComponentDefinition" }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } }
+      }
+    },
+    "/rootCollections": {
+      "get": {
+        "tags": ["SynBioHub v1 Query"],
+        "summary": "Collections that are not members of any Collection",
+        "operationId": "sbhRootCollections",
+        "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ],
+        "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } }
+      }
+    },
+    "/manage": {
+      "get": {
+        "tags": ["SynBioHub v1 Query"],
+        "summary": "Top-level objects the caller owns",
+        "description": "Requires an authenticated caller; anonymous requests get 401.",
+        "operationId": "sbhManage",
+        "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/SparqlResultsJson" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/shared": {
+      "get": {
+        "tags": ["SynBioHub v1 Query"],
+        "summary": "Objects shared with the caller",
+        "description": "Requires an authenticated caller; anonymous requests get 401.",
+        "operationId": "sbhShared",
+        "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/SparqlResultsJson" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+
+    "/public/{collectionId}/{displayId}/{version}/metadata": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Object metadata", "operationId": "sbhPublicMetadata", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/uses": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Objects that use this object", "operationId": "sbhPublicUses", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/usesCount": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Count objects that use this object", "operationId": "sbhPublicUsesCount", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/twins": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Objects sharing this object's sequence or role", "operationId": "sbhPublicTwins", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/twinsCount": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Count twins of this object", "operationId": "sbhPublicTwinsCount", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/similar": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Sequence-similar objects", "operationId": "sbhPublicSimilar", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/similarCount": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Count sequence-similar objects", "operationId": "sbhPublicSimilarCount", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/subCollections": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Child Collections of this Collection", "operationId": "sbhPublicSubCollections", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/sbol": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Downloads"], "summary": "Download the object's SBOL closure", "operationId": "sbhPublicSbol", "responses": { "200": { "description": "SBOL RDF for the object's closure.", "content": { "application/rdf+xml": { "schema": { "type": "string" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/sbolnr": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Downloads"], "summary": "Download the object only (non-recursive SBOL)", "operationId": "sbhPublicSbolNr", "responses": { "200": { "description": "SBOL RDF for the object, without its closure.", "content": { "application/rdf+xml": { "schema": { "type": "string" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/gb": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Downloads"], "summary": "Download as GenBank", "operationId": "sbhPublicGenBank", "responses": { "200": { "description": "GenBank flat file.", "content": { "chemical/x-genbank": { "schema": { "type": "string" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/fasta": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Downloads"], "summary": "Download as FASTA", "operationId": "sbhPublicFasta", "responses": { "200": { "description": "FASTA sequences.", "content": { "chemical/x-fasta": { "schema": { "type": "string" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/gff": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Downloads"], "summary": "Download as GFF3", "operationId": "sbhPublicGff", "responses": { "200": { "description": "GFF3 features.", "content": { "text/plain": { "schema": { "type": "string" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/omex": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Downloads"], "summary": "Download as an OMEX archive", "operationId": "sbhPublicOmex", "responses": { "200": { "description": "OMEX (COMBINE) archive with the SBOL closure and its attachments.", "content": { "application/zip": { "schema": { "type": "string", "format": "binary" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/summary": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Downloads"], "summary": "A JSON summary of the object", "operationId": "sbhPublicSummary", "responses": { "200": { "description": "Object summary.", "content": { "application/json": { "schema": { "type": "object" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/remove": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get":  { "tags": ["SynBioHub v1 Submission"], "summary": "Remove the object (browser-form GET)", "operationId": "sbhPublicRemoveGet",  "responses": { "200": { "description": "Removed." }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" } } },
+      "post": { "tags": ["SynBioHub v1 Submission"], "summary": "Remove the object", "operationId": "sbhPublicRemove", "responses": { "200": { "description": "Removed." }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/replace": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get":  { "tags": ["SynBioHub v1 Submission"], "summary": "Replace the object's contents (browser-form GET)", "operationId": "sbhPublicReplaceGet",  "responses": { "200": { "description": "Replaced." }, "403": { "$ref": "#/components/responses/Forbidden" } } },
+      "post": { "tags": ["SynBioHub v1 Submission"], "summary": "Replace the object's contents", "operationId": "sbhPublicReplace", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Replaced." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/removeCollection": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get":  { "tags": ["SynBioHub v1 Submission"], "summary": "Remove the Collection and its members (browser-form GET)", "operationId": "sbhPublicRemoveCollectionGet",  "responses": { "200": { "description": "Removed." }, "403": { "$ref": "#/components/responses/Forbidden" } } },
+      "post": { "tags": ["SynBioHub v1 Submission"], "summary": "Remove the Collection and its members", "operationId": "sbhPublicRemoveCollection", "responses": { "200": { "description": "Removed." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/icon": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Submission"], "summary": "Upload the object's icon", "operationId": "sbhPublicIcon", "requestBody": { "required": true, "content": { "multipart/form-data": { "schema": { "type": "object", "properties": { "file": { "type": "string", "format": "binary" } } } } } }, "responses": { "200": { "description": "Icon stored." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/edit/{field}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" },
+        { "$ref": "#/components/parameters/SbhField" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Edit"], "summary": "Set a field's value", "operationId": "sbhPublicEditField", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Field updated." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/add/{field}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" },
+        { "$ref": "#/components/parameters/SbhField" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Edit"], "summary": "Append a value to a field", "operationId": "sbhPublicAddField", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Value added." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/remove/{field}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" },
+        { "$ref": "#/components/parameters/SbhField" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Edit"], "summary": "Remove a value from a field", "operationId": "sbhPublicRemoveField", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Value removed." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/addToCollection": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Edit"], "summary": "Add the object to a Collection", "operationId": "sbhPublicAddToCollection", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Membership added." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/removeMembership": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Edit"], "summary": "Remove the object from a Collection", "operationId": "sbhPublicRemoveMembership", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Membership removed." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/addOwner": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Permissions"], "summary": "Grant another account view access", "operationId": "sbhPublicAddOwner", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Access granted." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/removeOwner/{username}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" },
+        { "$ref": "#/components/parameters/SbhUsername" }
+      ],
+      "get":  { "tags": ["SynBioHub v1 Permissions"], "summary": "Revoke an account's view access (browser-form GET)", "operationId": "sbhPublicRemoveOwnerGet",  "responses": { "200": { "description": "Access revoked." }, "403": { "$ref": "#/components/responses/Forbidden" } } },
+      "post": { "tags": ["SynBioHub v1 Permissions"], "summary": "Revoke an account's view access", "operationId": "sbhPublicRemoveOwner", "responses": { "200": { "description": "Access revoked." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/attach": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Attachments"], "summary": "Upload a file attachment", "operationId": "sbhPublicAttach", "requestBody": { "required": true, "content": { "multipart/form-data": { "schema": { "type": "object", "properties": { "file": { "type": "string", "format": "binary" } } } } } }, "responses": { "200": { "description": "Attachment stored." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/attachURL": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Attachments"], "summary": "Attach an external URL", "operationId": "sbhPublicAttachUrl", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "URL attached." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/public/{collectionId}/{displayId}/{version}/download": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Attachments"], "summary": "Download the stored attachment blob", "operationId": "sbhPublicDownload", "responses": { "200": { "description": "The stored blob, with its original content type.", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+
+    "/submit": {
+      "post": {
+        "tags": ["SynBioHub v1 Submission"],
+        "summary": "Submit an SBOL document into the caller's user graph",
+        "description": "Mints an SBOL document into the authenticated caller's own user graph. Anonymous callers are rejected.",
+        "operationId": "sbhSubmit",
+        "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id":            { "type": "string", "description": "Target collection display id." },
+                  "version":       { "type": "string" },
+                  "name":          { "type": "string" },
+                  "description":   { "type": "string" },
+                  "citations":     { "type": "string" },
+                  "overwrite_merge": { "type": "string" },
+                  "file":          { "type": "string", "format": "binary", "description": "The SBOL document to submit." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Submission accepted.", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/updateMutableDescription": {
+      "post": { "tags": ["SynBioHub v1 Edit"], "summary": "Update an object's mutableDescription", "operationId": "sbhUpdateMutableDescription", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Updated." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/updateMutableNotes": {
+      "post": { "tags": ["SynBioHub v1 Edit"], "summary": "Update an object's mutableNotes", "operationId": "sbhUpdateMutableNotes", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Updated." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/updateMutableSource": {
+      "post": { "tags": ["SynBioHub v1 Edit"], "summary": "Update an object's mutableSource", "operationId": "sbhUpdateMutableSource", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Updated." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/updateCitations": {
+      "post": { "tags": ["SynBioHub v1 Edit"], "summary": "Update an object's citations", "operationId": "sbhUpdateCitations", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Updated." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+
+    "/user/{userId}/{collectionId}/{displayId}/{version}/metadata": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Object metadata", "operationId": "sbhUserMetadata", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/uses": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Objects that use this object", "operationId": "sbhUserUses", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/usesCount": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Count objects that use this object", "operationId": "sbhUserUsesCount", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/twins": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Objects sharing this object's sequence or role", "operationId": "sbhUserTwins", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/twinsCount": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Count twins of this object", "operationId": "sbhUserTwinsCount", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/similar": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Sequence-similar objects", "operationId": "sbhUserSimilar", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/similarCount": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Count sequence-similar objects", "operationId": "sbhUserSimilarCount", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/subCollections": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Query"], "summary": "Child Collections of this Collection", "operationId": "sbhUserSubCollections", "responses": { "200": { "$ref": "#/components/responses/SparqlResultsJson" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/sbol": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Downloads"], "summary": "Download the object's SBOL closure", "operationId": "sbhUserSbol", "responses": { "200": { "description": "SBOL RDF for the object's closure.", "content": { "application/rdf+xml": { "schema": { "type": "string" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/sbolnr": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Downloads"], "summary": "Download the object only (non-recursive SBOL)", "operationId": "sbhUserSbolNr", "responses": { "200": { "description": "SBOL RDF for the object, without its closure.", "content": { "application/rdf+xml": { "schema": { "type": "string" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/gb": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Downloads"], "summary": "Download as GenBank", "operationId": "sbhUserGenBank", "responses": { "200": { "description": "GenBank flat file.", "content": { "chemical/x-genbank": { "schema": { "type": "string" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/fasta": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Downloads"], "summary": "Download as FASTA", "operationId": "sbhUserFasta", "responses": { "200": { "description": "FASTA sequences.", "content": { "chemical/x-fasta": { "schema": { "type": "string" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/gff": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Downloads"], "summary": "Download as GFF3", "operationId": "sbhUserGff", "responses": { "200": { "description": "GFF3 features.", "content": { "text/plain": { "schema": { "type": "string" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/omex": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Downloads"], "summary": "Download as an OMEX archive", "operationId": "sbhUserOmex", "responses": { "200": { "description": "OMEX (COMBINE) archive with the SBOL closure and its attachments.", "content": { "application/zip": { "schema": { "type": "string", "format": "binary" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/summary": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Downloads"], "summary": "A JSON summary of the object", "operationId": "sbhUserSummary", "responses": { "200": { "description": "Object summary.", "content": { "application/json": { "schema": { "type": "object" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/makePublic": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Submission"], "summary": "Publish a user object to a public Collection", "operationId": "sbhUserMakePublic", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Published." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/remove": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get":  { "tags": ["SynBioHub v1 Submission"], "summary": "Remove the object (browser-form GET)", "operationId": "sbhUserRemoveGet",  "responses": { "200": { "description": "Removed." }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" } } },
+      "post": { "tags": ["SynBioHub v1 Submission"], "summary": "Remove the object", "operationId": "sbhUserRemove", "responses": { "200": { "description": "Removed." }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/replace": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get":  { "tags": ["SynBioHub v1 Submission"], "summary": "Replace the object's contents (browser-form GET)", "operationId": "sbhUserReplaceGet",  "responses": { "200": { "description": "Replaced." }, "403": { "$ref": "#/components/responses/Forbidden" } } },
+      "post": { "tags": ["SynBioHub v1 Submission"], "summary": "Replace the object's contents", "operationId": "sbhUserReplace", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Replaced." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/removeCollection": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get":  { "tags": ["SynBioHub v1 Submission"], "summary": "Remove the Collection and its members (browser-form GET)", "operationId": "sbhUserRemoveCollectionGet",  "responses": { "200": { "description": "Removed." }, "403": { "$ref": "#/components/responses/Forbidden" } } },
+      "post": { "tags": ["SynBioHub v1 Submission"], "summary": "Remove the Collection and its members", "operationId": "sbhUserRemoveCollection", "responses": { "200": { "description": "Removed." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/icon": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Submission"], "summary": "Upload the object's icon", "operationId": "sbhUserIcon", "requestBody": { "required": true, "content": { "multipart/form-data": { "schema": { "type": "object", "properties": { "file": { "type": "string", "format": "binary" } } } } } }, "responses": { "200": { "description": "Icon stored." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/edit/{field}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" },
+        { "$ref": "#/components/parameters/SbhField" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Edit"], "summary": "Set a field's value", "operationId": "sbhUserEditField", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Field updated." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/add/{field}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" },
+        { "$ref": "#/components/parameters/SbhField" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Edit"], "summary": "Append a value to a field", "operationId": "sbhUserAddField", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Value added." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/remove/{field}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" },
+        { "$ref": "#/components/parameters/SbhField" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Edit"], "summary": "Remove a value from a field", "operationId": "sbhUserRemoveField", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Value removed." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/addToCollection": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Edit"], "summary": "Add the object to a Collection", "operationId": "sbhUserAddToCollection", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Membership added." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/removeMembership": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Edit"], "summary": "Remove the object from a Collection", "operationId": "sbhUserRemoveMembership", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Membership removed." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/addOwner": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Permissions"], "summary": "Grant another account view access", "operationId": "sbhUserAddOwner", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Access granted." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/removeOwner/{username}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" },
+        { "$ref": "#/components/parameters/SbhUsername" }
+      ],
+      "get":  { "tags": ["SynBioHub v1 Permissions"], "summary": "Revoke an account's view access (browser-form GET)", "operationId": "sbhUserRemoveOwnerGet",  "responses": { "200": { "description": "Access revoked." }, "403": { "$ref": "#/components/responses/Forbidden" } } },
+      "post": { "tags": ["SynBioHub v1 Permissions"], "summary": "Revoke an account's view access", "operationId": "sbhUserRemoveOwner", "responses": { "200": { "description": "Access revoked." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/attach": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Attachments"], "summary": "Upload a file attachment", "operationId": "sbhUserAttach", "requestBody": { "required": true, "content": { "multipart/form-data": { "schema": { "type": "object", "properties": { "file": { "type": "string", "format": "binary" } } } } } }, "responses": { "200": { "description": "Attachment stored." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/attachURL": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "post": { "tags": ["SynBioHub v1 Attachments"], "summary": "Attach an external URL", "operationId": "sbhUserAttachUrl", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "URL attached." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/user/{userId}/{collectionId}/{displayId}/{version}/download": {
+      "parameters": [
+        { "$ref": "#/components/parameters/XAuthorization" },
+        { "$ref": "#/components/parameters/SbhUserId" },
+        { "$ref": "#/components/parameters/SbhCollectionId" },
+        { "$ref": "#/components/parameters/SbhDisplayId" },
+        { "$ref": "#/components/parameters/SbhVersion" }
+      ],
+      "get": { "tags": ["SynBioHub v1 Attachments"], "summary": "Download the stored attachment blob", "operationId": "sbhUserDownload", "responses": { "200": { "description": "The stored blob, with its original content type.", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+
+    "/callPlugin": {
+      "post": { "tags": ["SynBioHub v1 Plugins"], "summary": "Proxy a call to an external plugin", "operationId": "sbhCallPlugin", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "The plugin's response, proxied back." } } }
+    },
+    "/expose/{id}": {
+      "get": { "tags": ["SynBioHub v1 Plugins"], "summary": "Serve a plugin temp file", "operationId": "sbhExpose", "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ], "responses": { "200": { "description": "The exposed file.", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/stream/{id}": {
+      "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+      "get":    { "tags": ["SynBioHub v1 Plugins"], "summary": "Stream a plugin's async output", "operationId": "sbhServeStream", "responses": { "200": { "description": "The streamed output." }, "404": { "$ref": "#/components/responses/NotFound" } } },
+      "delete": { "tags": ["SynBioHub v1 Plugins"], "summary": "Clear a stream", "operationId": "sbhClearStream", "responses": { "200": { "description": "Stream cleared." } } }
+    },
+    "/updateWebOfRegistries": {
+      "post": { "tags": ["SynBioHub v1 Plugins"], "summary": "Web of Registries update callback", "description": "The public callback a federated registry invokes to push updates. Authenticated by the shared update secret, not the admin gate.", "operationId": "sbhUpdateWebOfRegistries", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Update accepted." } } }
+    },
+
+    "/admin": {
+      "get": { "tags": ["SynBioHub v1 Admin"], "summary": "Instance status summary", "description": "Every persisted configuration section keyed by name.", "operationId": "sbhAdminDashboard", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "responses": { "200": { "description": "Configuration snapshot.", "content": { "application/json": { "schema": { "type": "object" } } } }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/graphs": {
+      "get": { "tags": ["SynBioHub v1 Admin"], "summary": "List every graph", "operationId": "sbhAdminGraphs", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "responses": { "200": { "description": "All graphs, admin-scoped.", "content": { "application/json": { "schema": { "type": "object" } } } }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/sparql": {
+      "get": { "tags": ["SynBioHub v1 Admin"], "summary": "Unscoped SPARQL query across all graphs", "operationId": "sbhAdminSparql", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" }, { "name": "query", "in": "query", "required": true, "schema": { "type": "string" } } ], "responses": { "200": { "$ref": "#/components/responses/SparqlResult" }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/log": {
+      "get": { "tags": ["SynBioHub v1 Admin"], "summary": "Tail the server log", "operationId": "sbhAdminLog", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "responses": { "200": { "description": "Recent log lines.", "content": { "text/plain": { "schema": { "type": "string" } } } }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/mail": {
+      "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ],
+      "get":  { "tags": ["SynBioHub v1 Admin"], "summary": "Read the mail configuration", "operationId": "sbhAdminGetMail", "responses": { "200": { "description": "Mail config, or null when unset.", "content": { "application/json": { "schema": { "type": "object" } } } }, "403": { "$ref": "#/components/responses/Forbidden" } } },
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Write the mail configuration", "operationId": "sbhAdminSetMail", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Saved." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/theme": {
+      "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ],
+      "get":  { "tags": ["SynBioHub v1 Admin"], "summary": "Read the theme configuration", "operationId": "sbhAdminGetTheme", "responses": { "200": { "description": "Theme config, or null when unset.", "content": { "application/json": { "schema": { "type": "object" } } } }, "403": { "$ref": "#/components/responses/Forbidden" } } },
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Write the theme configuration", "operationId": "sbhAdminSetTheme", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Saved." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/usersConfig": {
+      "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ],
+      "get":  { "tags": ["SynBioHub v1 Admin"], "summary": "Read the user-signup policy", "operationId": "sbhAdminGetUsersConfig", "responses": { "200": { "description": "Signup policy, or null when unset.", "content": { "application/json": { "schema": { "type": "object" } } } }, "403": { "$ref": "#/components/responses/Forbidden" } } },
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Write the user-signup policy", "operationId": "sbhAdminSetUsersConfig", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Saved." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/reindex": {
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Rebuild the ranked search index", "description": "Enqueues a full ranked-search-index rebuild (recomputes PageRank and rebuilds the text index) and returns the job id.", "operationId": "sbhAdminReindex", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "responses": { "202": { "description": "Rebuild enqueued.", "content": { "application/json": { "schema": { "type": "object", "properties": { "jobId": { "type": "string", "format": "uuid" } } } } } }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/createUser": {
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Create an account", "operationId": "sbhAdminCreateUser", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "201": { "description": "Account created.", "content": { "application/json": { "schema": { "type": "object" } } } }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/updateUser": {
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Update an account", "operationId": "sbhAdminUpdateUser", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Account updated.", "content": { "application/json": { "schema": { "type": "object" } } } }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/admin/deleteUser": {
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Delete an account", "operationId": "sbhAdminDeleteUser", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Account deleted." }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+    "/admin/federate": {
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Federate this instance into a Web of Registries", "operationId": "sbhAdminFederate", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Federation registered." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/retrieveFromWebOfRegistries": {
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Refresh the registry list from the Web of Registries", "operationId": "sbhAdminRetrieve", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "responses": { "200": { "description": "Registry list refreshed." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/registries": {
+      "get": { "tags": ["SynBioHub v1 Admin"], "summary": "List federated registries", "operationId": "sbhAdminRegistries", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "responses": { "200": { "description": "Known registries.", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/saveRegistry": {
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Add or update a registry", "operationId": "sbhAdminSaveRegistry", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Registry saved." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/deleteRegistry": {
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Delete a registry", "operationId": "sbhAdminDeleteRegistry", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Registry deleted." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/remotes": {
+      "get": { "tags": ["SynBioHub v1 Admin"], "summary": "List configured remotes", "description": "ICE and Benchling remotes.", "operationId": "sbhAdminRemotes", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "responses": { "200": { "description": "Configured remotes.", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/saveRemote": {
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Add or update a remote", "operationId": "sbhAdminSaveRemote", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Remote saved." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/deleteRemote": {
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Delete a remote", "operationId": "sbhAdminDeleteRemote", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Remote deleted." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/plugins": {
+      "get": { "tags": ["SynBioHub v1 Admin"], "summary": "List registered plugins", "operationId": "sbhAdminPlugins", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "responses": { "200": { "description": "Registered plugins.", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/savePlugin": {
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Add or update a plugin", "operationId": "sbhAdminSavePlugin", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Plugin saved." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/deletePlugin": {
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Delete a plugin", "operationId": "sbhAdminDeletePlugin", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Plugin deleted." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/sbolexplorer/updateIndex": {
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "SBOLExplorer index-update shim", "description": "Compatibility shim over the native search engine; triggers the same rebuild as `/admin/reindex`.", "operationId": "sbhAdminExplorerUpdateIndex", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "responses": { "200": { "description": "Rebuild triggered." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/sbolexplorer/config": {
+      "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ],
+      "get":  { "tags": ["SynBioHub v1 Admin"], "summary": "Read the SBOLExplorer config shim", "operationId": "sbhAdminExplorerGetConfig", "responses": { "200": { "description": "Config values.", "content": { "application/json": { "schema": { "type": "object" } } } }, "403": { "$ref": "#/components/responses/Forbidden" } } },
+      "post": { "tags": ["SynBioHub v1 Admin"], "summary": "Write the SBOLExplorer config shim", "operationId": "sbhAdminExplorerSetConfig", "requestBody": { "$ref": "#/components/requestBodies/SbhFormOrJson" }, "responses": { "200": { "description": "Saved." }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+    "/admin/sbolexplorer/log": {
+      "get": { "tags": ["SynBioHub v1 Admin"], "summary": "SBOLExplorer log shim", "operationId": "sbhAdminExplorerLog", "parameters": [ { "$ref": "#/components/parameters/XAuthorization" } ], "responses": { "200": { "description": "Log lines.", "content": { "text/plain": { "schema": { "type": "string" } } } }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+    },
+
+    "/sparql-auth": {
+      "parameters": [
+        { "name": "query",             "in": "query", "schema": { "type": "string" }, "description": "SynBioHub and Virtuoso pass the update string in `query`, not `update`." },
+        { "name": "update",            "in": "query", "schema": { "type": "string" } },
+        { "name": "default-graph-uri", "in": "query", "schema": { "type": "string", "format": "uri" } }
+      ],
+      "get":  { "tags": ["SynBioHub v1 SPARQL"], "summary": "Authenticated SPARQL 1.1 Update (URL form)", "description": "HTTP Basic auth (default `dba`/`dba`, matching Virtuoso). Executes a SPARQL Update. A raw `application/sparql-update` body is also accepted.", "operationId": "sparqlAuthGet", "security": [ { "basicAuth": [] } ], "responses": { "200": { "description": "Update applied." }, "401": { "$ref": "#/components/responses/Unauthorized" } } },
+      "post": { "tags": ["SynBioHub v1 SPARQL"], "summary": "Authenticated SPARQL 1.1 Update (body form)", "operationId": "sparqlAuthPost", "security": [ { "basicAuth": [] } ], "requestBody": { "required": false, "content": { "application/sparql-update": { "schema": { "type": "string" } }, "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "query": { "type": "string" }, "update": { "type": "string" }, "default-graph-uri": { "type": "string" } } } } } }, "responses": { "200": { "description": "Update applied." }, "401": { "$ref": "#/components/responses/Unauthorized" } } }
+    },
+    "/sparql-graph-crud-auth": {
+      "parameters": [
+        { "name": "graph",        "in": "query", "schema": { "type": "string", "format": "uri" }, "description": "The graph IRI to read or write." },
+        { "name": "graph-uri",    "in": "query", "schema": { "type": "string", "format": "uri" } },
+        { "name": "default",      "in": "query", "schema": { "type": "boolean" }, "description": "Target the default graph instead of a named one." }
+      ],
+      "get":    { "tags": ["SynBioHub v1 SPARQL"], "summary": "SPARQL 1.1 Graph Store: read a graph", "description": "The Virtuoso-compatible Graph Store CRUD endpoint, behind HTTP Basic auth. SynBioHub also configures the trailing-slash form `/sparql-graph-crud-auth/`.", "operationId": "graphStoreGet", "security": [ { "basicAuth": [] } ], "responses": { "200": { "description": "The graph, serialized as RDF." }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" } } },
+      "post":   { "tags": ["SynBioHub v1 SPARQL"], "summary": "SPARQL 1.1 Graph Store: merge triples into a graph", "operationId": "graphStorePost", "security": [ { "basicAuth": [] } ], "requestBody": { "required": true, "content": { "text/turtle": { "schema": { "type": "string" } }, "application/rdf+xml": { "schema": { "type": "string" } }, "application/n-triples": { "schema": { "type": "string" } } } }, "responses": { "200": { "description": "Triples merged." }, "401": { "$ref": "#/components/responses/Unauthorized" } } },
+      "put":    { "tags": ["SynBioHub v1 SPARQL"], "summary": "SPARQL 1.1 Graph Store: replace a graph", "operationId": "graphStorePut", "security": [ { "basicAuth": [] } ], "requestBody": { "required": true, "content": { "text/turtle": { "schema": { "type": "string" } }, "application/rdf+xml": { "schema": { "type": "string" } }, "application/n-triples": { "schema": { "type": "string" } } } }, "responses": { "200": { "description": "Graph replaced." }, "401": { "$ref": "#/components/responses/Unauthorized" } } },
+      "delete": { "tags": ["SynBioHub v1 SPARQL"], "summary": "SPARQL 1.1 Graph Store: delete a graph", "operationId": "graphStoreDelete", "security": [ { "basicAuth": [] } ], "responses": { "200": { "description": "Graph deleted." }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" } } }
+    },
+
     "/openapi.json": {
       "get": {
         "tags": ["Meta"],
@@ -996,7 +2098,27 @@
         "in": "query",
         "description": "Include literal-position edges in the result (does not affect the traversal frontier).",
         "schema": { "type": "boolean", "default": false }
-      }
+      },
+      "XAuthorization": {
+        "name": "X-authorization",
+        "in": "header",
+        "required": false,
+        "description": "SynBioHub session token. Present it to act as the authenticated account; omit it for anonymous access to public objects.",
+        "schema": { "type": "string" }
+      },
+      "SbhAccept": {
+        "name": "Accept",
+        "in": "header",
+        "required": false,
+        "description": "When it includes `text/html` the response is the browser flow (redirect plus session cookie); otherwise an API-client body is returned.",
+        "schema": { "type": "string" }
+      },
+      "SbhUserId":       { "name": "userId",       "in": "path", "required": true, "schema": { "type": "string" } },
+      "SbhCollectionId": { "name": "collectionId", "in": "path", "required": true, "schema": { "type": "string" } },
+      "SbhDisplayId":    { "name": "displayId",    "in": "path", "required": true, "schema": { "type": "string" } },
+      "SbhVersion":      { "name": "version",      "in": "path", "required": true, "schema": { "type": "string" } },
+      "SbhField":        { "name": "field",        "in": "path", "required": true, "schema": { "type": "string" }, "description": "The property to edit, add to, or remove from." },
+      "SbhUsername":     { "name": "username",     "in": "path", "required": true, "schema": { "type": "string" } }
     },
     "responses": {
       "BadRequest": {
@@ -1026,6 +2148,37 @@
           "application/n-triples":           { "schema": { "type": "string" } },
           "application/ld+json":             { "schema": { "type": "object" } }
         }
+      },
+      "SparqlResultsJson": {
+        "description": "SPARQL 1.1 Query Results JSON: a `head.vars` list and a `results.bindings` array.",
+        "content": {
+          "application/sparql-results+json": { "schema": { "type": "object" } }
+        }
+      },
+      "Unauthorized": {
+        "description": "Authentication is required and none was presented, or the credentials were rejected.",
+        "content": { "text/plain": { "schema": { "type": "string" } } }
+      },
+      "Forbidden": {
+        "description": "The caller is authenticated but not permitted (e.g. not the owner, or not an administrator).",
+        "content": { "text/plain": { "schema": { "type": "string" } } }
+      }
+    },
+    "requestBodies": {
+      "SbhFormOrJson": {
+        "required": true,
+        "description": "Form-encoded (classic SynBioHub) or JSON (API clients). The `Content-Type` selects the parser.",
+        "content": {
+          "application/x-www-form-urlencoded": { "schema": { "type": "object", "additionalProperties": { "type": "string" } } },
+          "application/json":                  { "schema": { "type": "object", "additionalProperties": true } }
+        }
+      }
+    },
+    "securitySchemes": {
+      "basicAuth": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "HTTP Basic auth for the Virtuoso-protocol SPARQL endpoints. Defaults to `dba`/`dba` to match Virtuoso; configurable, and skippable behind a trusted proxy."
       }
     },
     "schemas": {
@@ -1048,17 +2201,32 @@
           "validation_issue_count": { "type": "integer", "minimum": 0 }
         }
       },
-      "DocumentRecord": {
+      "GraphRecord": {
         "type": "object",
+        "required": ["id", "serialization_format", "content_hash", "created_at", "updated_at"],
         "properties": {
           "id":                   { "type": "string", "format": "uuid" },
-          "document_iri":         { "type": "string", "format": "uri" },
-          "name":                 { "type": "string" },
-          "description":          { "type": "string" },
+          "document_iri":         { "type": "string", "format": "uri", "nullable": true },
+          "name":                 { "type": "string", "nullable": true },
+          "description":          { "type": "string", "nullable": true },
           "serialization_format": { "type": "string" },
-          "source_uri":           { "type": "string" },
-          "created_by":           { "type": "string" },
-          "created_at":           { "type": "string", "format": "date-time" }
+          "source_uri":           { "type": "string", "nullable": true },
+          "content_hash":         { "type": "array", "items": { "type": "integer" }, "description": "Content hash of the stored serialization, as a byte array." },
+          "created_at":           { "type": "string", "format": "date-time" },
+          "updated_at":           { "type": "string", "format": "date-time" }
+        }
+      },
+      "JobLog": {
+        "type": "object",
+        "required": ["id", "job_id", "level", "message", "fields", "created_at"],
+        "properties": {
+          "id":         { "type": "integer", "format": "int64" },
+          "job_id":     { "type": "string", "format": "uuid" },
+          "attempt_no": { "type": "integer", "nullable": true },
+          "level":      { "type": "string", "description": "Log level, e.g. `info`, `warn`, `error`." },
+          "message":    { "type": "string" },
+          "fields":     { "description": "Structured context attached to the line." },
+          "created_at": { "type": "string", "format": "date-time" }
         }
       },
       "SbolObjectRecord": {
@@ -1152,9 +2320,9 @@
       },
       "BulkImportRequest": {
         "type": "object",
-        "required": ["documents"],
+        "required": ["graphs"],
         "properties": {
-          "documents": {
+          "graphs": {
             "type": "array",
             "maxItems": 100,
             "items": {
