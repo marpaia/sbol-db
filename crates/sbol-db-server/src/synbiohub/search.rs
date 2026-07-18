@@ -71,15 +71,22 @@ pub fn parse_search_path(path: &str) -> Result<FacetedSearch, ApiError> {
         return Ok(search);
     }
 
-    let parts: Vec<&str> = path.split('&').collect();
-    let (facets, free_text) = parts.split_at(parts.len() - 1);
-
-    for facet in facets {
-        parse_facet(facet, &mut search)?;
-    }
-
-    if let Some(text) = free_text.first() {
-        search.free_text = parse_free_text(text);
+    // A `key=value` segment is a facet; only the trailing segment may be bare
+    // free text. Classifying by `=` presence (rather than assuming the last
+    // segment is always free text) keeps a facet-only query like
+    // `objectType=ComponentDefinition` a facet instead of misreading it as a
+    // free-text term, which would drop the type filter.
+    let parts: Vec<&str> = path.split('&').filter(|p| !p.is_empty()).collect();
+    for (i, part) in parts.iter().enumerate() {
+        if part.contains('=') {
+            parse_facet(part, &mut search)?;
+        } else if i == parts.len() - 1 {
+            search.free_text = parse_free_text(part);
+        } else {
+            return Err(ApiError::BadRequest(format!(
+                "search facet '{part}' is not a key=value pair"
+            )));
+        }
     }
 
     Ok(search)
@@ -187,6 +194,18 @@ mod tests {
         assert!(search.class.is_none());
         assert!(search.predicate_eq.is_empty());
         assert_eq!(search.free_text.as_deref(), Some("plasmid"));
+    }
+
+    #[test]
+    fn facet_only_query_keeps_the_facet() {
+        // A single `objectType=` segment with no trailing free text is a facet,
+        // not a free-text term: the class filter must be set and free text empty.
+        let search = parse_search_path("objectType=ComponentDefinition").expect("parse");
+        assert_eq!(
+            search.class.as_deref(),
+            Some("http://sbols.org/v2#ComponentDefinition")
+        );
+        assert!(search.free_text.is_none());
     }
 
     #[test]

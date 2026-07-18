@@ -17,15 +17,38 @@ and to each subject, then compares the responses semantically per the payload.
 | `docker-compose.yaml` | reference SynBioHub full stack + three sbol-db subjects |
 | `compare.py` | comparison library (HTML, semantic SBOL/GFF/OMEX, SPARQL/JSON) |
 | `conformance.py` | pytest driver: identical-request fan-out, auth token threading, mutation read-back |
-| `cases.py` | the Elasticsearch-independent read/metadata/SPARQL/download subset |
+| `cases.py` | the full V1 case list (byte-equal tier: every endpoint except /similar + /similarCount) |
+| `cycle.sh` | one-command reproducible full-corpus run (reference + subject + seed + reindex + differential) |
+| `seed_both.py` | submit an identical corpus to the reference and the subject |
+| `run53.py` | run the full case list and print a per-case pass/fail table |
+| `reference-patches/patch_explorer.py` | in-place SBOLExplorer corpus-indexing fixes applied by cycle.sh |
 | `subject.py` | boots a local sbol-db subject (SQLite/RocksDB) as a subprocess and seeds it |
 | `conftest.py` | live fixtures (reference/subject targets, stack health gate) |
 | `test_compare.py` | comparison-library unit tests (no stack required) |
 | `test_conformance_driver.py` | driver fan-out unit tests (no stack required) |
 | `test_subject_smoke.py` | self-consistency smoke: subject side end to end, no classic stack |
 | `test_differential_subset.py` | best-effort live subset run (skips when the stack is down) |
-| `fixtures/smoke-corpus.nt` | the shared seed corpus (one Collection + ComponentDefinition + Sequence) |
+| `fixtures/corpus/smoke.xml` | the object-scoped anchor (mints /public/smoke/pSmoke/1 on both sides) |
+| `fixtures/smoke-corpus.nt` | the N-Triples form of the smoke anchor, for the graph-store subset |
 | `run-conformance.sh` | bring up the stack, run the matrix, write the diff report |
+
+## One-command full-corpus run
+
+```sh
+tests/synbiohub-conformance/cycle.sh run
+```
+
+`cycle.sh run` brings the reference up with its full search stack
+(`useSBOLExplorer=true` + Elasticsearch + SBOLExplorer), applies the
+container-local SBOLExplorer patches the corpus needs (`patch_explorer.py`:
+drop vsearch's redundant `-sort length`, skip empty/gapped/non-nucleotide
+sequences, resolve real `sbolType`/`type` in the empty-`/search` projection),
+seeds the full SBOL2 test corpus into the reference and the subject
+identically, rebuilds the subject's native search index on its embedded worker,
+then runs the byte-equal differential. Set `FRESH=1` to tear the reference down
+(`down -v`) and reseed it from scratch; a warm reference is reused and only the
+subject is reseeded. `/similar` and `/similarCount` are outside this tier and
+are characterized in `docs/similar-explorer-gap.md`.
 
 ## Comparison methods
 
@@ -74,10 +97,15 @@ tests/synbiohub-conformance/.venv/bin/python -m pytest \
 
 ## Running the live matrix
 
-The reference services are amd64 images. On Apple Silicon Virtuoso is emulated
-and Elasticsearch 6.3.2 is prone to OOM under emulation, so the full live run is
-intended for the amd64 CI runner. The comparison-library and driver unit tests
-run anywhere.
+The reference services are amd64 images. On Apple Silicon they run under
+emulation; the full stack (Virtuoso 7.2.5 + SynBioHub snapshot-standalone +
+Elasticsearch 6.3.2 + SBOLExplorer) boots and drives the full-corpus differential
+on a 128 GB arm64 host. Elasticsearch 6.3.2 is memory-hungry under emulation, so
+give Docker generous memory. The comparison-library and driver unit tests run
+anywhere.
+
+The `cycle.sh run` path above is the maintained entry point. `run-conformance.sh`
+and `test_differential_subset.py` remain for the pytest-driven subset:
 
 ```sh
 cp tests/synbiohub-conformance/.env.example tests/synbiohub-conformance/.env   # adjust
@@ -85,25 +113,9 @@ tests/synbiohub-conformance/run-conformance.sh --corpus ~/git/SynBioHub/synbiohu
 ```
 
 `test_differential_subset.py` runs the Elasticsearch-independent
-read/metadata/SPARQL/download subset (`cases.py`) against the live reference and
-every subject. It seeds the shared corpus into the reference's Virtuoso (the Node
-app then serves it) and into each subject's graph store, and is gated on the
-`stack` fixture, so it skips cleanly when the reference or any subject is
-unreachable.
-
-### Live-run status on this developer environment (Apple Silicon)
-
-Observed on an arm64 host with Docker present and the reference images cached:
-the reference stack (Virtuoso 7.2.5 + SynBioHub 1.6.1-standalone) boots and both
-containers report healthy under amd64 emulation. Virtuoso is directly usable
-(the corpus loads and SPARQL returns it). The classic SynBioHub Node app,
-however, gates **every** route behind its first-boot `/setup` onboarding, and
-even once onboarded it serves objects only through its submission pipeline
-(libSBOLj conversion + Elasticsearch 6.3.2 indexing); Elasticsearch OOMs under
-emulation. A valid classic-vs-sbol-db comparison of even the ES-independent
-subset therefore could not be driven here, so `test_differential_subset.py`
-remains best-effort and CI-runner (amd64) territory. The self-consistency smoke
-proves the subject side regardless.
+read/metadata/SPARQL/download subset (`read_subset_cases()` in `cases.py`)
+against the live reference and every subject. It is gated on the `stack` fixture,
+so it skips cleanly when the reference or any subject is unreachable.
 
 The runner leaves the stack up and prints the teardown command; pass `--down` to
 tear it down afterward. The reference-vs-subject diff report is written to

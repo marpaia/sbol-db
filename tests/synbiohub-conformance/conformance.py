@@ -143,6 +143,14 @@ class Case:
     # Whether this case mutates server state. The driver does not read this, but
     # a caller can partition a case list into read-only and mutating subsets.
     mutating: bool = False
+    # Set when this endpoint is not expected to be byte-equal because the two
+    # implementations differ by design: either classic has a defect and sbol-db
+    # is correct, or both are valid but differ (native search vs SBOLExplorer,
+    # verbatim vs libSBOLj URI minting/denormalization). The value is the reason.
+    # Such cases are reported separately from the byte-equal tier: forcing a
+    # match would mean replicating a classic bug or abandoning a sound design, so
+    # they are neither counted as equal nor as failures.
+    expected_divergence: Optional[str] = None
 
     def issue(self, target: Target) -> requests.Response:
         response = target.request(

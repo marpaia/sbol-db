@@ -27,6 +27,7 @@ const BOUNDARY: &str = "sboldbmakepublicboundary";
 const FIXTURE: &str = r#"
 @prefix sbol: <http://sbols.org/v2#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
 <http://example.org/cd/1>
     a sbol:ComponentDefinition ;
@@ -34,20 +35,31 @@ const FIXTURE: &str = r#"
     sbol:persistentIdentity <http://example.org/cd> ;
     sbol:version "1" ;
     dcterms:title "My Component" ;
+    sbol:type <http://www.biopax.org/release/biopax-level3.owl#DnaRegion> ;
     sbol:sequenceAnnotation <http://example.org/cd/anno/1> .
 
 <http://example.org/cd/anno/1>
     a sbol:SequenceAnnotation ;
     sbol:displayId "anno" ;
     sbol:persistentIdentity <http://example.org/cd/anno> ;
-    sbol:version "1" .
+    sbol:version "1" ;
+    sbol:location <http://example.org/cd/anno/range/1> .
+
+<http://example.org/cd/anno/range/1>
+    a sbol:Range ;
+    sbol:displayId "range" ;
+    sbol:persistentIdentity <http://example.org/cd/anno/range> ;
+    sbol:version "1" ;
+    sbol:start "1"^^xsd:integer ;
+    sbol:end "4"^^xsd:integer .
 
 <http://example.org/seq/1>
     a sbol:Sequence ;
     sbol:displayId "seq" ;
     sbol:persistentIdentity <http://example.org/seq> ;
     sbol:version "1" ;
-    sbol:elements "atgc" .
+    sbol:elements "atgc" ;
+    sbol:encoding <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .
 "#;
 
 /// Build a router over a fresh SQLite backend. The returned `TempDir` owns the

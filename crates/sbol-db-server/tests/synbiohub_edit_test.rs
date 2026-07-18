@@ -36,6 +36,7 @@ const SBH_MUTABLE_DESCRIPTION: &str =
 const FIXTURE: &str = r#"
 @prefix sbol: <http://sbols.org/v2#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
 <http://example.org/cd/1>
     a sbol:ComponentDefinition ;
@@ -43,20 +44,31 @@ const FIXTURE: &str = r#"
     sbol:persistentIdentity <http://example.org/cd> ;
     sbol:version "1" ;
     dcterms:title "My Component" ;
+    sbol:type <http://www.biopax.org/release/biopax-level3.owl#DnaRegion> ;
     sbol:sequenceAnnotation <http://example.org/cd/anno/1> .
 
 <http://example.org/cd/anno/1>
     a sbol:SequenceAnnotation ;
     sbol:displayId "anno" ;
     sbol:persistentIdentity <http://example.org/cd/anno> ;
-    sbol:version "1" .
+    sbol:version "1" ;
+    sbol:location <http://example.org/cd/anno/range/1> .
+
+<http://example.org/cd/anno/range/1>
+    a sbol:Range ;
+    sbol:displayId "range" ;
+    sbol:persistentIdentity <http://example.org/cd/anno/range> ;
+    sbol:version "1" ;
+    sbol:start "1"^^xsd:integer ;
+    sbol:end "4"^^xsd:integer .
 
 <http://example.org/seq/1>
     a sbol:Sequence ;
     sbol:displayId "seq" ;
     sbol:persistentIdentity <http://example.org/seq> ;
     sbol:version "1" ;
-    sbol:elements "atgc" .
+    sbol:elements "atgc" ;
+    sbol:encoding <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .
 "#;
 
 async fn app() -> (axum::Router, TempDir) {
@@ -253,17 +265,16 @@ async fn owner_edits_refresh_modified() {
     let token = register_and_login(&app, "Alice Example", "alice").await;
     submit(&app, &token).await;
 
-    let modified_before = sparql_objects(&app, PRIVATE_COLLECTION, DCTERMS_MODIFIED)
-        .await
-        .into_iter()
-        .next()
-        .expect("mint stamps dcterms:modified");
+    // Classic stamps `dcterms:created` at submit but not `dcterms:modified`; the
+    // first edit establishes `dcterms:modified`, and a later edit refreshes it.
+    assert!(
+        sparql_objects(&app, PRIVATE_COLLECTION, DCTERMS_MODIFIED)
+            .await
+            .is_empty(),
+        "submit does not stamp dcterms:modified"
+    );
 
-    // Cross a whole-second boundary so the refreshed second-resolution timestamp
-    // is strictly greater than the mint's.
-    tokio::time::sleep(Duration::from_millis(1_100)).await;
-
-    // Mutable description: uri in the body.
+    // Mutable description: uri in the body. The first edit establishes modified.
     let (status, _) = post_form(
         &app,
         "/updateMutableDescription",
@@ -279,6 +290,15 @@ async fn owner_edits_refresh_modified() {
         StatusCode::OK,
         "owner updateMutableDescription succeeds"
     );
+    let modified_before = sparql_objects(&app, PRIVATE_COLLECTION, DCTERMS_MODIFIED)
+        .await
+        .into_iter()
+        .next()
+        .expect("the first edit stamps dcterms:modified");
+
+    // Cross a whole-second boundary so the refreshed second-resolution timestamp
+    // is strictly greater than the first edit's.
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
 
     // Generic field edit: dcterms:title through the path-based /edit/:field.
     let (status, _) = post_form(
@@ -369,12 +389,14 @@ async fn add_owner_grants_then_revokes_view() {
         "Bob cannot see the object before addOwner: {manage}"
     );
 
-    // Alice grants Bob ownership of the collection.
+    // Alice grants Bob ownership of the collection. Classic's addOwnedBy keys the
+    // grantee on the last path segment of a posted user profile URI, so the value
+    // is Bob's profile URI, not a bare username.
     let (status, _) = post_form(
         &app,
         "/user/alice/mysubmission/mysubmission_collection/1/addOwner",
         Some(&alice),
-        &[("user", "bob")],
+        &[("user", "http://synbiohub.org/user/bob")],
     )
     .await;
     assert_eq!(status, StatusCode::OK, "owner addOwner succeeds");

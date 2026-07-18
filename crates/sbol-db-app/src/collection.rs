@@ -315,19 +315,28 @@ impl CollectionService {
         let base = self.base_namespace(owner, id, scope);
         let owned_by = self.user_graph_iri(owner);
 
-        // One rewrite entry per submitted top level, keyed on its old persistent
-        // identity so the top level and all of its children re-home together.
+        // Two rewrite entries per submitted top level. `old_uri -> new_uri`
+        // re-homes the object node itself and any children nested under its
+        // versioned URI onto the addressable minted URI. `old_pi -> new_pi`
+        // re-homes persistent-identity-form references and children nested
+        // under the bare identity. `rewrite_iri` prefers the longest matching
+        // key, so the object node and its versioned children resolve to
+        // `new_uri` while version-less references still re-home. A version-less
+        // top level has `old_uri == old_pi`; adding only the URI mapping keeps
+        // its content on the addressable versioned URI instead of splitting it
+        // between the bare persistent identity and a stamped stub.
         let mut top_levels = discover_top_levels(&source, &base, version);
         top_levels.sort_by(|a, b| a.new_uri.cmp(&b.new_uri));
-        let rename: Vec<(String, String)> = top_levels
-            .iter()
-            .map(|t| {
-                (
-                    t.old_persistent_identity.clone(),
-                    t.new_persistent_identity.clone(),
-                )
-            })
-            .collect();
+        let mut rename: Vec<(String, String)> = Vec::new();
+        for top in &top_levels {
+            rename.push((top.old_uri.clone(), top.new_uri.clone()));
+            if top.old_persistent_identity != top.old_uri {
+                rename.push((
+                    top.old_persistent_identity.clone(),
+                    top.new_persistent_identity.clone(),
+                ));
+            }
+        }
 
         // The set of managed subjects (each minted top level) whose stamped
         // predicates the transform re-derives rather than carries over.
@@ -356,6 +365,12 @@ impl CollectionService {
                 &top.new_uri,
                 vocab::SBOL2_PERSISTENT_IDENTITY,
                 &top.new_persistent_identity,
+            ));
+            out.push(literal_triple(
+                &top.new_uri,
+                vocab::SBOL2_DISPLAY_ID,
+                &top.display,
+                vocab::XSD_STRING,
             ));
             out.push(literal_triple(
                 &top.new_uri,
@@ -536,10 +551,68 @@ fn discover_top_levels(source: &[Triple], base: &str, default_version: &str) -> 
             old_persistent_identity: old_pi,
             new_persistent_identity: new_pi,
             new_uri,
+            display,
             version: Some(effective_version),
         });
     }
+    disambiguate_collisions(&mut mints, base);
     mints
+}
+
+/// The source namespace of a top level: its persistent identity minus the
+/// trailing display-id segment. `http://x.org/cd/BBa_B0015` -> `http://x.org/cd`.
+fn source_namespace(pi: &str) -> &str {
+    pi.rsplit_once('/').map(|(ns, _)| ns).unwrap_or(pi)
+}
+
+/// Resolve re-home collisions the way SynBioHub's libSBOLj compliance pass does.
+///
+/// Two distinct source objects can share a display id under different source
+/// namespaces (`.../cd/BBa_B0015` and `.../seq/BBa_B0015`), so they mint onto the
+/// same target URI and would merge into one object. libSBOLj disambiguates by
+/// folding the source namespace's last segment into the display id (`cd_BBa_B0015`,
+/// `seq_BBa_B0015`), applied across every object of a source namespace involved in
+/// a collision (so a non-colliding sibling like `cd_BBa_F2620` is prefixed too).
+/// Namespaces with no collision are left untouched, so clean corpora keep their
+/// verbatim display ids.
+fn disambiguate_collisions(mints: &mut [TopLevelMint], base: &str) {
+    use std::collections::{HashMap, HashSet};
+
+    // Target persistent identity -> the distinct source namespaces reaching it.
+    let mut sources_by_target: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for mint in mints.iter() {
+        sources_by_target
+            .entry(mint.new_persistent_identity.as_str())
+            .or_default()
+            .insert(source_namespace(&mint.old_persistent_identity));
+    }
+
+    // Source namespaces that collide with another namespace on some target.
+    let colliding: HashSet<String> = sources_by_target
+        .values()
+        .filter(|sources| sources.len() > 1)
+        .flat_map(|sources| sources.iter().map(|ns| (*ns).to_owned()))
+        .collect();
+    if colliding.is_empty() {
+        return;
+    }
+
+    for mint in mints.iter_mut() {
+        let namespace = source_namespace(&mint.old_persistent_identity);
+        if !colliding.contains(namespace) {
+            continue;
+        }
+        let Some(segment) = namespace.rsplit('/').next().filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        mint.display = format!("{segment}_{}", mint.display);
+        mint.new_persistent_identity = format!("{base}{}", mint.display);
+        mint.new_uri = format!(
+            "{}/{}",
+            mint.new_persistent_identity,
+            mint.version.as_deref().unwrap_or("1")
+        );
+    }
 }
 
 /// Whether a custom-typed subject is an SBOL2 `GenericTopLevel`: a top-level with
@@ -563,6 +636,11 @@ struct TopLevelMint {
     old_persistent_identity: String,
     new_persistent_identity: String,
     new_uri: String,
+    /// The canonical `sbol:displayId` stamped on the minted object. Normally the
+    /// source display id; a collision (see [`disambiguate_collisions`]) folds the
+    /// source namespace segment into it (`cd_BBa_B0015`) to keep two distinct
+    /// objects from re-homing onto one URI.
+    display: String,
     /// The object's own `sbol:version`, preserved across the re-home so an
     /// imported member keeps its version rather than adopting the submission's.
     version: Option<String>,
@@ -703,6 +781,7 @@ fn is_managed_stamp(triple: &Triple, managed: &std::collections::HashSet<String>
         vocab::SBH_TOP_LEVEL
             | vocab::SBH_OWNED_BY
             | vocab::SBOL2_PERSISTENT_IDENTITY
+            | vocab::SBOL2_DISPLAY_ID
             | vocab::SBOL2_VERSION
             | vocab::DCTERMS_CREATED
             | vocab::DCTERMS_MODIFIED
@@ -854,6 +933,137 @@ mod tests {
             !member_uris.iter().any(|u| u.ends_with("/vlcd")),
             "no version-less member URI remains: {member_uris:?}"
         );
+
+        // The object's content re-homes onto the versioned URI, not the bare
+        // persistent identity: type, displayId, and the sequence reference all
+        // sit on `.../vlcd/1`, and the sequence reference points at the versioned
+        // Sequence. The version-less URI is only the persistentIdentity value, so
+        // it never appears as a typed subject (the doubling defect).
+        let versioned = "http://synbiohub.org/user/alice/mysubmission/vlcd/1";
+        let bare_pi = "http://synbiohub.org/user/alice/mysubmission/vlcd";
+        assert!(
+            has_iri(
+                &minted.triples,
+                versioned,
+                vocab::RDF_TYPE,
+                "http://sbols.org/v2#ComponentDefinition"
+            ),
+            "content type is stamped on the versioned URI"
+        );
+        assert!(
+            has_literal(&minted.triples, versioned, vocab::SBOL2_DISPLAY_ID, "vlcd"),
+            "displayId re-homes onto the versioned URI"
+        );
+        assert!(
+            has_iri(
+                &minted.triples,
+                versioned,
+                vocab::SBOL2_PERSISTENT_IDENTITY,
+                bare_pi
+            ),
+            "persistentIdentity of the versioned object is the version-less identity"
+        );
+        assert!(
+            has_iri(
+                &minted.triples,
+                versioned,
+                "http://sbols.org/v2#sequence",
+                "http://synbiohub.org/user/alice/mysubmission/vlseq/1"
+            ),
+            "the sequence reference re-homes onto the versioned Sequence URI"
+        );
+        assert!(
+            !minted.triples.iter().any(|t| matches!(
+                &t.subject,
+                SubjectTerm::Iri(s) if s.as_str() == bare_pi
+            )),
+            "the bare persistent identity never appears as a subject (no doubling)"
+        );
+    }
+
+    /// Two objects sharing a display id under different source namespaces
+    /// (`.../cd/BBa_B0015` and `.../seq/BBa_B0015`), the collision libSBOLj
+    /// disambiguates with `cd_`/`seq_`.
+    const COLLIDING_FIXTURE: &str = r#"
+@prefix sbol: <http://sbols.org/v2#> .
+
+<http://partsregistry.org/cd/BBa_B0015>
+    a sbol:ComponentDefinition ;
+    sbol:displayId "BBa_B0015" ;
+    sbol:persistentIdentity <http://partsregistry.org/cd/BBa_B0015> ;
+    sbol:type <http://www.biopax.org/release/biopax-level3.owl#DnaRegion> ;
+    sbol:sequence <http://partsregistry.org/seq/BBa_B0015> .
+
+<http://partsregistry.org/seq/BBa_B0015>
+    a sbol:Sequence ;
+    sbol:displayId "BBa_B0015" ;
+    sbol:persistentIdentity <http://partsregistry.org/seq/BBa_B0015> ;
+    sbol:elements "atgc" ;
+    sbol:encoding <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .
+"#;
+
+    #[test]
+    fn display_id_collision_disambiguates_by_source_namespace() {
+        let submission = Submission {
+            body: COLLIDING_FIXTURE.to_owned(),
+            format: SerializationFormat::Turtle,
+            name: Some("Collision".to_owned()),
+            description: None,
+            creator_name: None,
+            citations: vec![],
+        };
+        let minted = CollectionService::new()
+            .mint_uris(&submission, OWNER, ID, VERSION, MintScope::User)
+            .expect("mint");
+        let member_uris: Vec<&str> = minted.members.iter().map(|m| m.as_str()).collect();
+        let cd = "http://synbiohub.org/user/alice/mysubmission/cd_BBa_B0015/1";
+        let seq = "http://synbiohub.org/user/alice/mysubmission/seq_BBa_B0015/1";
+        // The two objects re-home onto distinct, source-namespace-prefixed URIs
+        // rather than merging onto one `.../BBa_B0015/1`.
+        assert!(
+            member_uris.contains(&cd),
+            "CD prefixed with cd_: {member_uris:?}"
+        );
+        assert!(
+            member_uris.contains(&seq),
+            "Sequence prefixed with seq_: {member_uris:?}"
+        );
+        assert!(
+            !member_uris.iter().any(|u| u.ends_with("/BBa_B0015/1")),
+            "no unprefixed colliding URI remains: {member_uris:?}"
+        );
+        // Each keeps a single, correct type and a prefixed displayId literal.
+        assert!(has_iri(
+            &minted.triples,
+            cd,
+            vocab::RDF_TYPE,
+            "http://sbols.org/v2#ComponentDefinition"
+        ));
+        assert!(has_iri(
+            &minted.triples,
+            seq,
+            vocab::RDF_TYPE,
+            "http://sbols.org/v2#Sequence"
+        ));
+        assert!(has_literal(
+            &minted.triples,
+            cd,
+            vocab::SBOL2_DISPLAY_ID,
+            "cd_BBa_B0015"
+        ));
+        assert!(has_literal(
+            &minted.triples,
+            seq,
+            vocab::SBOL2_DISPLAY_ID,
+            "seq_BBa_B0015"
+        ));
+        // The CD's sequence reference re-homes onto the prefixed Sequence URI.
+        assert!(has_iri(
+            &minted.triples,
+            cd,
+            "http://sbols.org/v2#sequence",
+            seq
+        ));
     }
 
     fn has_iri(triples: &[Triple], subject: &str, predicate: &str, object: &str) -> bool {

@@ -173,6 +173,16 @@ def main() -> int:
         default="/tmp/sbol-db-subject.sqlite",
         help="path to the subject's SQLite store, promoted so testuser is admin",
     )
+    ap.add_argument(
+        "--skip-reference",
+        action="store_true",
+        help="do not submit to the reference (it is already seeded with this corpus)",
+    )
+    ap.add_argument(
+        "--skip-subject",
+        action="store_true",
+        help="do not submit to the subject (it is already seeded with this corpus)",
+    )
     args = ap.parse_args()
 
     files = sorted(Path(args.corpus).glob("*.xml"))
@@ -180,21 +190,31 @@ def main() -> int:
         print(f"no .xml files under {args.corpus}", file=sys.stderr)
         return 2
 
-    _ensure_reference_setup(args.reference)
-    ref_tok = _login(args.reference)
-    _ensure_subject_user(args.subject)
-    _promote_subject_admin(args.subject_db)
-    subj_tok = _login(args.subject)
-    if not _is_token(ref_tok) or not _is_token(subj_tok):
-        print("could not obtain both tokens", file=sys.stderr)
-        return 1
+    ref_tok = None
+    subj_tok = None
+    if not args.skip_reference:
+        _ensure_reference_setup(args.reference)
+        ref_tok = _login(args.reference)
+        if not _is_token(ref_tok):
+            print("could not obtain reference token", file=sys.stderr)
+            return 1
+    if not args.skip_subject:
+        _ensure_subject_user(args.subject)
+        _promote_subject_admin(args.subject_db)
+        subj_tok = _login(args.subject)
+        if not _is_token(subj_tok):
+            print("could not obtain subject token", file=sys.stderr)
+            return 1
 
     for path in files:
         coll_id = path.stem.lower().replace("-", "_").replace(".", "_")
-        rs, _ = _submit(args.reference, ref_tok, coll_id, path)
-        ss, _ = _submit(args.subject, subj_tok, coll_id, path)
-        rp, _ = _make_public(args.reference, ref_tok, coll_id)
-        sp, _ = _make_public(args.subject, subj_tok, coll_id)
+        rs = ss = rp = sp = "skip"
+        if ref_tok is not None:
+            rs, _ = _submit(args.reference, ref_tok, coll_id, path)
+            rp, _ = _make_public(args.reference, ref_tok, coll_id)
+        if subj_tok is not None:
+            ss, _ = _submit(args.subject, subj_tok, coll_id, path)
+            sp, _ = _make_public(args.subject, subj_tok, coll_id)
         print(f"{path.name}: submit reference={rs} subject={ss}; makePublic reference={rp} subject={sp}")
     return 0
 

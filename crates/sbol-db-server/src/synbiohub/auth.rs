@@ -138,6 +138,14 @@ pub async fn register(
     let form: RegisterBody = parse_body(&headers, &body)?;
     let name = required(form.name, "name")?;
     let username = required(form.username, "username")?;
+    // Classic validates the username with `validator.isAlphanumeric`: non-empty
+    // and ASCII letters/digits only (no underscores, spaces, or punctuation).
+    // A drop-in must reject the same inputs with the same 400.
+    if username.is_empty() || !username.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(ApiError::BadRequest(
+            "Please enter a valid username".to_owned(),
+        ));
+    }
     let email = required(form.email, "email")?;
     let password = form
         .password1

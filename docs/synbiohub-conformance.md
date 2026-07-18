@@ -159,60 +159,85 @@ targets. Because the reference enforces `requireLogin`, unauthenticated public
 reads answer `401`; the driver mints a token on both sides for every case so
 body shapes are compared rather than masked by a `401`/`200` status split.
 
-## Known divergences and their resolution
+## The full-corpus differential
 
-The differential surfaced a family of V1 wire-shape bugs in the sbol-db adapter
-(`crates/sbol-db-server/src/synbiohub/`). Classic SynBioHub never returns raw
-SPARQL-results JSON to a V1 client: `sparql.queryJson` folds each result into a
-plain array of row objects, and the count endpoints answer a bare integer in a
-`text/plain` body. The adapter now reproduces those projections through
-`synbiohub/render.rs`, so the following are **fixed** and compare equal:
+`cycle.sh run` is the authoritative live differential. It brings up the classic
+reference, seeds the full SBOL2 test corpus (180 files) into the reference and
+the subject through `/submit` and `/makePublic` (`seed_both.py`), rebuilds the
+subject's native search index, and runs `run53.py`, which issues each case's
+identical request to both sides and compares by payload.
 
-- `POST /submit` returns the `text/plain` ack `Successfully uploaded` (was JSON).
-- `<uri>/metadata` returns a JSON array of metadata row objects (was
-  SPARQL-results JSON).
-- `/search`, `/search/<grammar>`, `<uri>/uses`, `<uri>/twins` return classic's
-  11-key search-result array (`type`, `uri`, `name`, `description`, `displayId`,
-  `version`, `sbolType`, `role`, `percentMatch`, `strandAlignment`, `CIGAR`).
-- `/rootCollections` and `<uri>/subCollections` return the collection array
-  (`uri`, `name`, `description`, `displayId`, `version`).
-- `/:type/count`, `/searchCount`, `<uri>/usesCount`, `<uri>/twinsCount` return a
-  bare integer in a `text/plain` body.
+`run53.py` mutates the reference (the tier exercises `/submit`, `/makePublic`,
+edit, and account routes), so a trustworthy run wipes the reference first: use
+`FRESH=1 cycle.sh run`. A non-`FRESH` rerun reuses the reference's persisted
+state from the prior run and reads back mutated values, which is not a clean
+comparison.
 
-Some divergences are **justified** and are not forced to a false match:
+Both sides mint under `http://synbiohub.org/` and validate submissions as SBOL2
+through `sbol-rs`, so identical corpus input produces identical top-level
+identities and the responses compare directly.
 
-- `GET /profile`: the reference reports `isAdmin`/`isCurator` `true` because
-  `testuser` is the `/setup` administrator, while the self-registered subject
-  account reports `false`; the reference also carries per-instance volatile
-  fields (`id`, `createdAt`, `updatedAt`, `user_external_profiles`) that can
-  never match across two independently seeded instances. The subject also omits
-  `password`/`resetPasswordLink`, which is the safer contract.
-- `/sparql` typed literals: the reference (Virtuoso) emits the legacy
-  `{"type":"typed-literal"}` token, while the subject emits the SPARQL 1.1
-  spec-correct `{"type":"literal"}` with the same datatype. ASK results match.
+## Result
+
+The byte-equal tier — every V1 endpoint whose two implementations agree by
+design — compares **equal across the full corpus**. This covers the read and
+query surface (`/metadata`, `/rootCollections`, `/subCollections`, `/uses`,
+`/twins`, the `/:type/count` family, `/manage`, `/shared`, `/sparql`), every
+download format (`/sbol`, `/sbolnr`, versioned SBOL, `/gff`, `/fasta`,
+`/genbank`, `/omex`, `/summary`), and the mutating surface (`/submit`,
+`/makePublic`, the edit and permission routes, `/register`, `/login`,
+`/logout`, profile).
+
+A small set of endpoints diverge by design and are reported separately, each
+with a recorded reason (`Case.expected_divergence`). They are not forced to a
+false match: matching them would mean replicating a classic defect or
+abandoning a sound design choice.
+
+### Classic defects, where sbol-db is correct
+
+- `POST /resetPassword`: classic answers `401` for a known email and `500`
+  (`Cannot set property 'resetPasswordLink' of null`) for an unknown one. A
+  reset request carries no credentials, so sbol-db returns the correct `200`
+  acknowledgement regardless of whether the address exists, which also avoids
+  disclosing account existence.
+- `/search/objectType=<type>`: SBOLExplorer returns `[]` for an object-type
+  facet. sbol-db resolves the facet to an `rdf:type` filter and returns the
+  matching objects.
+
+### Both valid, different by design
+
+- `/search` and `/search/<text>`: classic ranks through SBOLExplorer's
+  Elasticsearch scoring; sbol-db ranks through its native BM25 index, so the
+  result ordering and recall differ. This is the ranked-search analogue of the
+  `/similar` model difference documented in
+  [`similar-explorer-gap.md`](similar-explorer-gap.md).
 - `<uri>/similar` and `<uri>/similarCount`: the reference ranks cluster mates
-  through SBOLExplorer; the subject computes similarity natively, so the ranked
-  membership legitimately differs.
-- `/manage` and `/shared`: both sides now return a JSON array
-  (`application/json`), but the reference decorates each row with derived
-  presentation fields (`typeName`, `url`, `triplestore`, `prefix`) that are
-  view-layer concerns rather than object state.
+  through SBOLExplorer's vsearch clustering; sbol-db clusters with a native
+  global-identity model. The gap is measured and explained in
+  [`similar-explorer-gap.md`](similar-explorer-gap.md).
+- `/ComponentDefinition/count` and the empty `/search` and `/searchCount`: two
+  URI-minting differences move these. Classic's libSBOLj compliance pass folds a
+  source URI's namespace segment into the display id (`http://…/example/toggle_switch`
+  becomes `example_toggle_switch`) even absent a collision, while sbol-db keeps
+  the submitted display id. Classic also drops a submitted object whose source
+  URI already lies under the instance's own public namespace, treating it as a
+  reference to an existing object, while sbol-db preserves every submitted
+  object, so its object count is one higher. Where two submitted objects share a
+  display id under different source namespaces (`.../cd/BBa_B0015` and
+  `.../seq/BBa_B0015`), both engines disambiguate identically with the source
+  namespace prefix (`cd_BBa_B0015`, `seq_BBa_B0015`), so those objects compare
+  equal.
+- `/sparql` `SELECT COUNT(*)` over the public graph: libSBOLj re-mints child
+  objects (`SequenceAnnotation`, `Location`, `Component`) as versioned
+  identities and stamps `sbol:version` on each, while sbol-db stores children
+  verbatim as submitted. The two graphs are semantically equivalent — every
+  download and serialization case compares byte-equal — so only the raw triple
+  total differs.
 
-Remaining divergences that need deeper work (tracked, not yet fixed):
-
-- **Numeric parity of counts / `/rootCollections` / empty `/search`.** These are
-  entangled with two conditions and cannot be attributed to a shape bug: the
-  reference carries residual public state from prior conformance runs
-  (`public/scratch`, `green_collection`), and two curated corpus files fail to
-  ingest on the subject (`act_example.xml` trips an SBOL3 `hasNamespace`
-  validation rule on an SBOL2 submit; `memberAnnotations.xml` hits an RDF parse
-  error) where libSBOLj accepts both. A clean numeric pass needs the reference
-  reset and both ingest bugs fixed.
-- **Serializer parity.** `<uri>/fasta` uses the Sequence displayId in the record
-  header where classic uses the owning ComponentDefinition displayId;
-  `<uri>/omex` labels the SBOL member with the SBOL3 format URI and omits the
-  `metadata.rdf` member; `<uri>/summary` emits JSON-LD where classic emits
-  libSBOLj's `serializeJSON` object. These are P3-serializer changes.
+The typed-literal token also differs on `/sparql`: the reference (Virtuoso)
+emits the legacy `{"type":"typed-literal"}`, while sbol-db emits the SPARQL 1.1
+`{"type":"literal"}` with the same datatype. The comparator treats these as
+equal, since the binding value and datatype are identical.
 
 The self-consistency smoke (`test_subject_smoke.py`) proves the subject side
 end to end regardless of whether the classic reference is reachable.

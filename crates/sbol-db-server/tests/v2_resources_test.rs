@@ -29,14 +29,16 @@ const FIXTURE: &str = r#"
     sbol:displayId "cd" ;
     sbol:persistentIdentity <http://example.org/cd> ;
     sbol:version "1" ;
-    dcterms:title "My Component" .
+    dcterms:title "My Component" ;
+    sbol:type <http://www.biopax.org/release/biopax-level3.owl#DnaRegion> .
 
 <http://example.org/seq/1>
     a sbol:Sequence ;
     sbol:displayId "seq" ;
     sbol:persistentIdentity <http://example.org/seq> ;
     sbol:version "1" ;
-    sbol:elements "atgc" .
+    sbol:elements "atgc" ;
+    sbol:encoding <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .
 "#;
 
 /// Build a router over a fresh SQLite backend. The returned `TempDir` owns the

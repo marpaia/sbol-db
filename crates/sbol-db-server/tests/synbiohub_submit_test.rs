@@ -25,6 +25,7 @@ const BOUNDARY: &str = "sboldbsubmitboundary";
 const FIXTURE: &str = r#"
 @prefix sbol: <http://sbols.org/v2#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
 <http://example.org/cd/1>
     a sbol:ComponentDefinition ;
@@ -32,20 +33,31 @@ const FIXTURE: &str = r#"
     sbol:persistentIdentity <http://example.org/cd> ;
     sbol:version "1" ;
     dcterms:title "My Component" ;
+    sbol:type <http://www.biopax.org/release/biopax-level3.owl#DnaRegion> ;
     sbol:sequenceAnnotation <http://example.org/cd/anno/1> .
 
 <http://example.org/cd/anno/1>
     a sbol:SequenceAnnotation ;
     sbol:displayId "anno" ;
     sbol:persistentIdentity <http://example.org/cd/anno> ;
-    sbol:version "1" .
+    sbol:version "1" ;
+    sbol:location <http://example.org/cd/anno/range/1> .
+
+<http://example.org/cd/anno/range/1>
+    a sbol:Range ;
+    sbol:displayId "range" ;
+    sbol:persistentIdentity <http://example.org/cd/anno/range> ;
+    sbol:version "1" ;
+    sbol:start "1"^^xsd:integer ;
+    sbol:end "4"^^xsd:integer .
 
 <http://example.org/seq/1>
     a sbol:Sequence ;
     sbol:displayId "seq" ;
     sbol:persistentIdentity <http://example.org/seq> ;
     sbol:version "1" ;
-    sbol:elements "atgc" .
+    sbol:elements "atgc" ;
+    sbol:encoding <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .
 "#;
 
 /// Build a router over a fresh SQLite backend. The returned `TempDir` owns the
@@ -200,9 +212,9 @@ async fn authenticated_submit_reads_back_minted_collection_and_members() {
     let component = "http://synbiohub.org/user/alice/mysubmission/cd/1";
     let sequence = "http://synbiohub.org/user/alice/mysubmission/seq/1";
 
-    // Read the submission back through /manage: the owned-object listing the
-    // caller sees under its own scope. The collection and both members appear,
-    // owned by the caller, at the minted URIs.
+    // Read the submission back through /manage: the owned-submission listing the
+    // caller sees under its own scope. Classic's /manage lists the root
+    // Collections a user owns, not their members, so only the collection appears.
     let res = app
         .clone()
         .oneshot(
@@ -225,14 +237,48 @@ async fn authenticated_submit_reads_back_minted_collection_and_members() {
         manage.contains(collection),
         "manage lists the minted collection: {manage}"
     );
+
+    // The members are minted under the caller's scope and readable: the collection
+    // links to both at their minted URIs.
+    let members = collection_members(&app, &token, collection).await;
     assert!(
-        manage.contains(component),
-        "manage lists the minted component: {manage}"
+        members.contains(&component.to_owned()),
+        "the collection lists the minted component: {members:?}"
     );
     assert!(
-        manage.contains(sequence),
-        "manage lists the minted sequence: {manage}"
+        members.contains(&sequence.to_owned()),
+        "the collection lists the minted sequence: {members:?}"
     );
+}
+
+/// The `sbol:member` object URIs of `collection`, read through the unscoped
+/// `/sparql` endpoint (union of named graphs, so a private submission is
+/// visible).
+async fn collection_members(app: &axum::Router, token: &str, collection: &str) -> Vec<String> {
+    let query = format!("SELECT ?m WHERE {{ <{collection}> <http://sbols.org/v2#member> ?m }}");
+    let qs = serde_urlencoded::to_string([("query", query.as_str())]).expect("encode query");
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/sparql?{qs}"))
+                .header("x-authorization", token)
+                .header("accept", "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("sparql request");
+    assert_eq!(res.status(), StatusCode::OK, "sparql member read succeeds");
+    let json: serde_json::Value =
+        serde_json::from_str(&body_string(res).await).expect("sparql json");
+    json["results"]["bindings"]
+        .as_array()
+        .expect("bindings array")
+        .iter()
+        .filter_map(|b| b["m"]["value"].as_str().map(str::to_owned))
+        .collect()
 }
 
 #[tokio::test]
