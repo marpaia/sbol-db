@@ -23,10 +23,12 @@ measure and explain them, not to force equality.
 
 ## Method
 
-Both `/similar` HTTP surfaces mint object URIs differently on submit (see the
-addressing defect below), so an IRI-to-IRI set comparison over the HTTP layer is
-not apples-to-apples. Because both engines cluster by sequence, each part is
-keyed by its sequence `elements` to normalize away the URI-shape differences.
+The two engines reshape object URIs differently on submit (classic rewrites
+displayIds, e.g. `cd_BBa_C0062`), so an IRI-to-IRI set comparison over the HTTP
+layer is not apples-to-apples. Because both engines cluster by sequence, each
+part is keyed by its sequence `elements` to normalize away the URI-shape
+differences, a comparison that is robust regardless of how either side mints
+URIs.
 For each subject part that carries a sequence, the subject cluster-mate set (from
 `sbol_sequence_cluster`) and the reference cluster-mate set (from SBOLExplorer's
 `clusters_dump`) are each mapped to the set of mate sequences, then compared for
@@ -113,29 +115,6 @@ by the reference with `cd_BBa_C0062` (701 bp CDS, k-mer Jaccard 0.000) and
 also makes vsearch centroid selection partly input-order dependent, so a slice of
 these reference clusters is not reproducible in principle.
 
-## The one real bug found: `/similar` addressing, not clustering
-
-Separate from clustering quality, the subject's V1 `/similar` HTTP surface returns
-an empty result for essentially the entire corpus. On submit, sbol-db mints member
-object IRIs verbatim and version-less (for example
-`http://synbiohub.org/public/labhost_all/adenoviral_DNA`, with the version carried
-as a property), whereas classic SynBioHub rewrites members to a versioned IRI
-(`.../adenoviral_DNA/1`) and often reshapes the displayId (`cd_BBa_C0062`). The
-`/public/:collectionId/:displayId/:version/similar` route builds the lookup IRI by
-always appending the version, so for a version-less object it looks up
-`.../adenoviral_DNA/1`, which is absent from the version-agnostic cluster table,
-and returns `[]` even though the object has cluster mates.
-
-Confirmation: `EF587312` is the one corpus object minted with a versioned IRI, and
-`/public/ef587312/EF587312/1/similar` returns real mates, while the 4423
-version-less objects return empty. The cluster data is correct; only the HTTP
-addressing misses. The root cause is submission-time URI minting, which affects
-all V1 object addressing (the plain object GET also 404s for these URLs), so a
-targeted `/similar`-only patch would be inconsistent with the rest of the V1
-surface. The fix belongs with submission minting or a version-agnostic V1
-resolver and is out of scope for the clustering measurement; it is recorded here
-for separate work.
-
 ## Implication: byte-parity with vsearch is not worth pursuing
 
 The clustering gap (mean Jaccard ~0.51, 31% exact set match) is almost entirely a
@@ -147,5 +126,6 @@ reproducing its chaining and order sensitivity, trading away the precision and
 near-linear scalability of the native global model for a target that is itself not
 fully reproducible. The 293 borderline cases are the only differences a threshold
 tweak could move, and they split roughly evenly between the engines, so no single
-adjustment closes the gap. The native clustering is sound; the remaining work is
-the `/similar` addressing bug above, which is orthogonal to clustering quality.
+adjustment closes the gap. The native global-identity clustering is the sounder
+primitive: more precise, near-linear, and independent of vsearch's input-order
+sensitivity.
