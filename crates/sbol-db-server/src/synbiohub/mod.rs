@@ -21,6 +21,7 @@ mod render;
 mod routes;
 mod search;
 mod sequence;
+mod setup;
 mod share;
 mod submit;
 mod support;
@@ -55,6 +56,9 @@ pub fn router(state: AppState) -> Router<AppState> {
         )
         .route("/resetPassword", post(auth::reset_password))
         .route("/setNewPassword", post(auth::set_new_password))
+        // First-launch setup: provision the first administrator + branding. The
+        // UI shows its setup wizard when /admin/theme reports firstLaunch.
+        .route("/setup", get(setup::get_setup).post(setup::post_setup))
         // The public Web of Registries update callback. Not admin-gated; it is
         // authenticated by the shared update secret, matching classic.
         .route(
@@ -70,15 +74,10 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/stream/:id",
             get(plugins::serve_stream).delete(plugins::clear_stream),
         )
-        // Submission: mint an SBOL document into the caller's own user graph.
-        // Identity-gated; anonymous callers are rejected.
         // Admin resources classic serves to anonymous callers so the UI can
         // render: theme/plugins/registries GET are public; the theme POST
         // self-authorizes (ConfigService rejects a non-admin with 403).
-        .route(
-            "/admin/theme",
-            get(admin::get_theme).post(admin::set_theme),
-        )
+        .route("/admin/theme", get(admin::get_theme).post(admin::set_theme))
         .route("/admin/plugins", get(admin::plugins))
         .route("/admin/registries", get(admin::registries))
         // Jobs: the cancel/restart actions (the caller's `/jobs` list is served
@@ -180,6 +179,9 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/user/:userId/:collectionId/:displayId/:version/copyFromRemote",
             get(support::user_copy_from_remote).post(support::user_copy_from_remote),
         )
+        // Classic's /browse is the logged-in root-collections listing the UI
+        // browses; it returns the same collection array as /rootCollections.
+        .route("/browse", get(routes::root_collections))
         .route("/submit", post(submit::submit))
         // Classic registers `/submit/` (trailing slash); Express matches both,
         // so accept both to stay a drop-in for clients built against either.

@@ -32,6 +32,10 @@ struct SubmitForm {
     format: Option<String>,
     file: Option<String>,
     file_name: Option<String>,
+    /// The existing collection URI to add the submission to, when the client
+    /// submits into a collection rather than creating a new one (the UI sends
+    /// `rootCollections`/`collections`). Its id/version replace `id`/`version`.
+    root_collections: Option<String>,
 }
 
 /// `POST /submit`: mint a submission into the caller's user namespace.
@@ -47,12 +51,33 @@ pub async fn submit(
     };
 
     let form = parse_form(multipart).await?;
-    let id = required(form.id, "id")?;
-    let version = required(form.version, "version")?;
-    let body = required(form.file, "file")?;
+    // Submitting into an existing collection: the client sends its URI as
+    // `rootCollections`, and the submission merges into it. Otherwise `id` and
+    // `version` name a new collection to mint.
+    let root_collections = form.root_collections.filter(|s| !s.is_empty());
+    let (id, version) = match &root_collections {
+        Some(uri) => collection_id_version(uri)
+            .ok_or_else(|| ApiError::BadRequest(format!("unrecognized collection URI: {uri}")))?,
+        None => (required(form.id, "id")?, required(form.version, "version")?),
+    };
 
-    let format = resolve_format(form.format.as_deref(), form.file_name.as_deref())?;
-    let overwrite = resolve_overwrite_merge(form.overwrite_merge.as_deref())?;
+    // The UI creates an empty collection by submitting metadata with no file
+    // (classic accepts this). An absent or empty file mints just the root
+    // collection, so default to an empty document.
+    let (body, format) = match form.file.filter(|f| !f.is_empty()) {
+        Some(file) => (
+            file,
+            resolve_format(form.format.as_deref(), form.file_name.as_deref())?,
+        ),
+        None => (String::new(), SerializationFormat::Turtle),
+    };
+    // Adding to an existing collection always merges into it; otherwise honor
+    // the client's overwrite/merge policy for the new collection.
+    let overwrite = if root_collections.is_some() {
+        ImportOverwrite::Merge
+    } else {
+        resolve_overwrite_merge(form.overwrite_merge.as_deref())?
+    };
     let citations = parse_citations(form.citations.as_deref());
 
     let request = SubmitRequest {
@@ -116,6 +141,9 @@ async fn parse_form(mut multipart: Multipart) -> Result<SubmitForm, ApiError> {
             Some("description") => form.description = Some(field_text(field).await?),
             Some("citations") => form.citations = Some(field_text(field).await?),
             Some("overwrite_merge") => form.overwrite_merge = Some(field_text(field).await?),
+            Some("rootCollections") | Some("collections") => {
+                form.root_collections = Some(field_text(field).await?)
+            }
             Some("format") => form.format = Some(field_text(field).await?),
             _ => {
                 // Drain and discard any unrecognized part.
@@ -157,6 +185,20 @@ fn parse_citations(raw: Option<&str>) -> Vec<String> {
 /// Resolve the submission's SBOL serialization from the explicit `format` field,
 /// falling back to the uploaded file's extension, then to RDF/XML (classic's
 /// default). Non-RDF formats are rejected: a submission mints from RDF triples.
+/// Extract the submission `(id, version)` from an existing collection URI of the
+/// form `…/<id>/<id>_collection/<version>`: the version is the last segment and
+/// the id is the `<collectionId>_collection` segment with its `_collection`
+/// suffix removed.
+fn collection_id_version(uri: &str) -> Option<(String, String)> {
+    let mut segments = uri.trim_end_matches('/').rsplit('/');
+    let version = segments.next()?.to_owned();
+    let id = segments.next()?.strip_suffix("_collection")?.to_owned();
+    if id.is_empty() || version.is_empty() {
+        return None;
+    }
+    Some((id, version))
+}
+
 fn resolve_format(
     format: Option<&str>,
     file_name: Option<&str>,

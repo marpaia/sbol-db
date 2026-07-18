@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 
 use super::{config_err, parse_config_value, CurrentUser};
 use crate::error::ApiError;
+use crate::synbiohub::setup::is_first_launch;
 use crate::AppState;
 
 /// The config key holding the outgoing-mail settings (`fromAddress`,
@@ -72,21 +73,30 @@ pub async fn set_mail(
 /// show the first-run setup wizard (`firstLaunch`). Classic composes this object
 /// from its config; sbol-db composes it from its server config, then overlays
 /// any stored `theme` section (custom name, colors) on top. `firstLaunch` is
-/// always false: an sbol-db instance is provisioned on startup, not through a
-/// setup wizard.
+/// true until the instance is provisioned through [`crate::synbiohub::setup`],
+/// which creates the first administrator and records the branding.
 pub async fn get_theme(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let first_launch = is_first_launch(&state).await?;
     let mut config = json!({
         "instanceName": "SynBioHub",
         "frontendURL": "",
         "instanceUrl": "",
         "uriPrefix": "http://synbiohub.org/",
         "frontPageText": "",
-        "firstLaunch": false,
+        "firstLaunch": first_launch,
         "altHome": "",
+        "currentTheme": "",
+        "themeParameters": [{ "name": "Base Color", "variable": "baseColor", "value": "#D25627" }],
         "showModuleInteractions": false,
         "removePublicEnabled": false,
         "allowPublicSignup": state.config.allow_public_signup,
         "requireLogin": false,
+        "pluginsUseLocalCompose": false,
+        "pluginLocalComposePrefix": "",
+        "suppressInfoLogs": false,
+        "suppressDebugLogs": false,
+        "suppressWarningLogs": false,
+        "suppressErrorLogs": false,
     });
     if let (Value::Object(base), Some(Value::Object(stored))) = (
         &mut config,

@@ -350,8 +350,11 @@ mod tests {
         }
     }
 
-    /// Every admin route, as `(method, path)`. The gate runs before body
-    /// parsing, so an empty body is fine for the rejection checks.
+    /// Every admin-gated route, as `(method, path)`. The gate runs before body
+    /// parsing, so an empty body is fine for the rejection checks. The
+    /// `theme`/`plugins`/`registries` GETs are deliberately absent: classic
+    /// serves them to anonymous callers so the UI can render, so they live in
+    /// the public router and are covered by [`public_config_gets_are_anonymous`].
     fn admin_routes() -> Vec<(&'static str, &'static str)> {
         vec![
             ("GET", "/admin"),
@@ -360,7 +363,6 @@ mod tests {
             ("GET", "/admin/log"),
             ("GET", "/admin/mail"),
             ("POST", "/admin/mail"),
-            ("GET", "/admin/theme"),
             ("POST", "/admin/theme"),
             ("GET", "/admin/users"),
             ("POST", "/admin/users"),
@@ -370,13 +372,11 @@ mod tests {
             ("POST", "/admin/deleteUser"),
             ("POST", "/admin/federate"),
             ("POST", "/admin/retrieveFromWebOfRegistries"),
-            ("GET", "/admin/registries"),
             ("POST", "/admin/saveRegistry"),
             ("POST", "/admin/deleteRegistry"),
             ("GET", "/admin/remotes"),
             ("POST", "/admin/saveRemote"),
             ("POST", "/admin/deleteRemote"),
-            ("GET", "/admin/plugins"),
             ("POST", "/admin/savePlugin"),
             ("POST", "/admin/deletePlugin"),
             ("POST", "/admin/explorerUpdateIndex"),
@@ -449,6 +449,17 @@ mod tests {
                 StatusCode::FORBIDDEN,
                 "non-admin {method} {path} must be 403"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn public_config_gets_are_anonymous() {
+        let fx = fixture().await;
+        // Classic serves these branding/registry reads to anonymous callers so
+        // the UI can render before login; sbol-db mounts them publicly too.
+        for path in ["/admin/theme", "/admin/plugins", "/admin/registries"] {
+            let (status, _) = send(&fx.app, "GET", path, None, None, Body::empty()).await;
+            assert_eq!(status, StatusCode::OK, "anonymous GET {path} must be 200");
         }
     }
 
