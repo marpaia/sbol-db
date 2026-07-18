@@ -317,7 +317,7 @@ impl CollectionService {
 
         // One rewrite entry per submitted top level, keyed on its old persistent
         // identity so the top level and all of its children re-home together.
-        let mut top_levels = discover_top_levels(&source, &base);
+        let mut top_levels = discover_top_levels(&source, &base, version);
         top_levels.sort_by(|a, b| a.new_uri.cmp(&b.new_uri));
         let rename: Vec<(String, String)> = top_levels
             .iter()
@@ -491,7 +491,7 @@ impl CollectionService {
 /// Find every submitted top-level object and compute its minted identity. Each
 /// top level re-homes to `<base><displayId>`; its version-qualified URI follows
 /// by re-homing the submitted URI onto that persistent identity.
-fn discover_top_levels(source: &[Triple], base: &str) -> Vec<TopLevelMint> {
+fn discover_top_levels(source: &[Triple], base: &str, default_version: &str) -> Vec<TopLevelMint> {
     let mut mints: Vec<TopLevelMint> = Vec::new();
     for triple in source {
         if triple.predicate.as_str() != vocab::RDF_TYPE {
@@ -516,15 +516,27 @@ fn discover_top_levels(source: &[Triple], base: &str) -> Vec<TopLevelMint> {
         let old_pi = old_persistent_identity(old_uri, source);
         let display = display_id(old_uri, &old_pi, source);
         let new_pi = format!("{base}{display}");
-        let new_uri = rewrite_iri(old_uri, &[(old_pi.clone(), new_pi.clone())]);
-        let version = own_version(old_uri, &old_pi, source);
+        // SynBioHub always addresses a top level at
+        // `<persistentIdentity>/<version>`. A source object may be version-less
+        // (its URI is its persistent identity, legal in SBOL2 where version is
+        // optional), so fall back to the submission version and always append a
+        // version segment; otherwise the minted URI is unaddressable over the V1
+        // routes, which build the lookup IRI as `<displayId>/<version>`.
+        let effective_version =
+            own_version(old_uri, &old_pi, source).unwrap_or_else(|| default_version.to_owned());
+        let rehomed = rewrite_iri(old_uri, &[(old_pi.clone(), new_pi.clone())]);
+        let new_uri = if rehomed == new_pi {
+            format!("{new_pi}/{effective_version}")
+        } else {
+            rehomed
+        };
 
         mints.push(TopLevelMint {
             old_uri: old_uri.to_owned(),
             old_persistent_identity: old_pi,
             new_persistent_identity: new_pi,
             new_uri,
-            version,
+            version: Some(effective_version),
         });
     }
     mints
@@ -794,6 +806,54 @@ mod tests {
             creator_name: Some("Alice Example".to_owned()),
             citations: vec!["12345678".to_owned()],
         }
+    }
+
+    /// A version-less SBOL2 submission: the ComponentDefinition and Sequence URIs
+    /// equal their persistent identities and carry no `sbol:version` (legal in
+    /// SBOL2). This exercises the mint path that previously produced version-less,
+    /// unaddressable top-level URIs.
+    const VERSIONLESS_FIXTURE: &str = r#"
+@prefix sbol: <http://sbols.org/v2#> .
+
+<http://example.org/vlcd>
+    a sbol:ComponentDefinition ;
+    sbol:displayId "vlcd" ;
+    sbol:persistentIdentity <http://example.org/vlcd> ;
+    sbol:type <http://www.biopax.org/release/biopax-level3.owl#DnaRegion> ;
+    sbol:sequence <http://example.org/vlseq> .
+
+<http://example.org/vlseq>
+    a sbol:Sequence ;
+    sbol:displayId "vlseq" ;
+    sbol:persistentIdentity <http://example.org/vlseq> ;
+    sbol:elements "atgc" ;
+    sbol:encoding <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .
+"#;
+
+    #[test]
+    fn version_less_top_level_mints_a_versioned_addressable_uri() {
+        let submission = Submission {
+            body: VERSIONLESS_FIXTURE.to_owned(),
+            format: SerializationFormat::Turtle,
+            name: Some("Version-less".to_owned()),
+            description: None,
+            creator_name: None,
+            citations: vec![],
+        };
+        let minted = CollectionService::new()
+            .mint_uris(&submission, OWNER, ID, VERSION, MintScope::User)
+            .expect("mint");
+        let member_uris: Vec<&str> = minted.members.iter().map(|m| m.as_str()).collect();
+        // The minted top-level URI carries the submission version segment, so the
+        // V1 routes (which address `<displayId>/<version>`) can resolve it.
+        assert!(
+            member_uris.contains(&"http://synbiohub.org/user/alice/mysubmission/vlcd/1"),
+            "version-less source mints a versioned, addressable URI: {member_uris:?}"
+        );
+        assert!(
+            !member_uris.iter().any(|u| u.ends_with("/vlcd")),
+            "no version-less member URI remains: {member_uris:?}"
+        );
     }
 
     fn has_iri(triples: &[Triple], subject: &str, predicate: &str, object: &str) -> bool {
