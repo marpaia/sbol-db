@@ -15,10 +15,11 @@ use sbol_db_jobs::handlers::rebuild_search_index::RebuildSearchIndexHandler;
 use sbol_db_jobs::{JobContext, JobHandler, SearchIndexHandles};
 use sbol_db_search::ranked_text::{cluster_map, ClusterMap, GraphFilter, Hit, RankedTextIndex};
 use sbol_db_sqlite::{
-    connect_and_migrate, SqliteClusterStore, SqliteJobRepository, SqlitePageRankStore, SqliteStore,
+    connect_and_migrate, SqliteClusterStore, SqliteJobRepository, SqlitePageRankStore,
+    SqliteSketchStore, SqliteStore,
 };
 use sbol_db_storage::{
-    ClusterStore, GraphWriteMode, JobQueue, PageRankStore, SbolStore, TripleSource,
+    ClusterStore, GraphWriteMode, JobQueue, PageRankStore, SbolStore, SketchStore, TripleSource,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -104,6 +105,7 @@ async fn rebuild_populates_ranks_and_index() {
     let sqlite_store = SqliteStore::new(pool.clone());
     let cluster: Arc<dyn ClusterStore> = Arc::new(SqliteClusterStore::new(pool.clone()));
     let pagerank: Arc<dyn PageRankStore> = Arc::new(SqlitePageRankStore::new(pool.clone()));
+    let sketch: Arc<dyn SketchStore> = Arc::new(SqliteSketchStore::new(pool.clone()));
     let text_index = Arc::new(RankedTextIndex::in_ram().expect("in-ram index"));
     let triples: Arc<dyn TripleSource> = sqlite_store.triple_source();
     let jobs: Arc<dyn JobQueue> = Arc::new(SqliteJobRepository::new(pool.clone()));
@@ -118,6 +120,7 @@ async fn rebuild_populates_ranks_and_index() {
         search: Some(SearchIndexHandles {
             cluster: cluster.clone(),
             pagerank: pagerank.clone(),
+            sketch: sketch.clone(),
             text_index: text_index.clone(),
             triples,
         }),

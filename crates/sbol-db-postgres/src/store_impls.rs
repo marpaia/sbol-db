@@ -388,6 +388,17 @@ impl SequenceSearchStore for SbolObjectService {
     async fn align_candidates(&self, query: &str) -> Result<Vec<(String, String)>, DomainError> {
         self.sequence_search().align_candidates(query).await
     }
+
+    async fn sequences_by_iris(
+        &self,
+        iris: &[String],
+    ) -> Result<Vec<(String, String)>, DomainError> {
+        self.sequence_search().sequences_by_iris(iris).await
+    }
+
+    async fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
+        self.sequence_search().all_nucleotide_sequences().await
+    }
 }
 
 #[async_trait]

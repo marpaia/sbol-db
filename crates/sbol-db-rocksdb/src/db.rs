@@ -57,6 +57,14 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     "seq",
     "seq_kmer",
     "seq_kmer_by_iri",
+    // MinHash/LSH similarity sketch index. `seq_sketch` maps iri -> signature
+    // bytes; `seq_lsh_band` keys band_hash(8, BE) ++ iri -> () so a band's
+    // members are one prefix scan; `seq_lsh_band_by_iri` mirrors
+    // iri ++ SEP ++ band_hash(8, BE) -> () so a re-index drops a sequence's old
+    // bands.
+    "seq_sketch",
+    "seq_lsh_band",
+    "seq_lsh_band_by_iri",
     // Job queue.
     "job",
     "job_idem",

@@ -208,8 +208,31 @@ impl SequenceSearchRepository {
         self.collect_candidates(iris)
     }
 
-    /// Every indexed DNA/RNA sequence, the short-query candidate set (no seed).
-    fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
+    /// The `(iri, elements)` for the DNA/RNA sequences among `iris`, dropping any
+    /// that is absent or non-nucleotide. Materializes the sketch candidate set's
+    /// elements for the banded aligner.
+    pub fn sequences_by_iris(&self, iris: &[String]) -> Result<Vec<(String, String)>, DomainError> {
+        let mut out = Vec::new();
+        for iri in iris {
+            let Some(blob) = self.db.get_cf("seq", iri.as_bytes())? else {
+                continue;
+            };
+            let rec: SeqRec = serde_json::from_slice(&blob)
+                .map_err(|e| DomainError::Serialization(e.to_string()))?;
+            let (Some(elements), Some(alpha)) = (rec.elements, rec.alphabet) else {
+                continue;
+            };
+            if alpha != "DNA" && alpha != "RNA" {
+                continue;
+            }
+            out.push((iri.clone(), elements));
+        }
+        Ok(out)
+    }
+
+    /// Every indexed DNA/RNA sequence, the short-query candidate set (no seed)
+    /// and the full set the search-index rebuild sketches.
+    pub fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
         let mut out = Vec::new();
         self.db.for_each("seq", |key, blob| {
             let rec: SeqRec = serde_json::from_slice(blob)

@@ -53,13 +53,14 @@ pub use stats::{
 pub use traits::{
     distinct_graph_iris, distinct_object_iris, AclStore, BlobStore, ClusterStore, ConfigStore,
     GraphStore, JobQueue, NeighborhoodStore, ObjectStore, OntologyStore, PageRankStore, SbolStore,
-    SequenceSearchStore, TextSearchStore, TokenStore, TripleSource, TripleWriter, UserStore,
-    SBH_CAN_VIEW, SBH_OWNED_BY,
+    SequenceSearchStore, SketchStore, TextSearchStore, TokenStore, TripleSource, TripleWriter,
+    UserStore, SBH_CAN_VIEW, SBH_OWNED_BY,
 };
 
-/// Re-exported so backends and consumers name the cluster id through the storage
-/// contract without also depending on `sbol-db-search` directly.
-pub use sbol_db_search::ClusterId;
+/// Re-exported so backends and consumers name the cluster id and similarity
+/// sketch through the storage contract without also depending on
+/// `sbol-db-search` directly.
+pub use sbol_db_search::{ClusterId, Signature};
 pub use triple::{
     GraphFilter, IdGraphFilter, IdQuad, PatternObject, PatternSubject, TermId, TermKey, TermValue,
 };

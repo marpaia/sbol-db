@@ -12,6 +12,7 @@ pub mod pg_stats;
 pub mod projection;
 pub mod projections;
 pub mod sequence_search;
+pub mod sketch;
 pub mod sql_console;
 pub mod tokens;
 pub mod triple;
@@ -35,6 +36,7 @@ pub use pg_stats::{
 pub use projection::{ProjectionEvent, ProjectionEventRepository};
 pub use projections::{TypedProjectionCounts, TypedProjectionRepository};
 pub use sequence_search::SequenceSearchRepository;
+pub use sketch::PgSketchStore;
 pub use sql_console::PgSqlConsole;
 pub use tokens::PgTokenStore;
 pub use triple::TripleRepository;

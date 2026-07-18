@@ -8,7 +8,9 @@
 //! link graph.
 //!
 //! [`pagerank`] holds the top-level link graph and the power-iteration PageRank
-//! that scores objects. [`keywords`] builds the synthetic keyword field from a
+//! that scores objects. [`minhash`] builds the discriminating MinHash/LSH
+//! similarity sketch that drives scalable clustering and similarity search.
+//! [`keywords`] builds the synthetic keyword field from a
 //! display id, its Sequence Ontology role, and its biopax type. [`ranked_text`]
 //! is the tantivy ranked-text index that combines a fuzzy multi-field text score
 //! with PageRank; it is gated behind the `text-index` feature so the storage
@@ -20,6 +22,7 @@
 pub mod align;
 pub mod cluster;
 pub mod keywords;
+pub mod minhash;
 pub mod pagerank;
 
 #[cfg(feature = "text-index")]
@@ -27,6 +30,7 @@ pub mod ranked_text;
 
 pub use align::{AlignMode, AlignOptions, Alignment};
 pub use cluster::ClusterId;
+pub use minhash::{band_hashes, sketch, Signature, SketchParams};
 
 #[cfg(feature = "align")]
 pub use align::align_pair;

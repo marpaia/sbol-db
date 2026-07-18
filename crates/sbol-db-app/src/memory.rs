@@ -16,7 +16,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sbol_db_core::{ConfigEntry, DomainError, NewUser, User, UserId};
 use sbol_db_storage::{
-    ClusterId, ClusterStore, ConfigStore, PageRankStore, RankRow, TokenStore, UserStore,
+    ClusterId, ClusterStore, ConfigStore, PageRankStore, RankRow, Signature, SketchStore,
+    TokenStore, UserStore,
 };
 use serde_json::Value;
 
@@ -229,6 +230,85 @@ impl InMemoryClusterStore {
     /// An empty store.
     pub fn new() -> Self {
         Self::default()
+    }
+}
+
+/// A process-local [`SketchStore`], the non-persistent default the
+/// [`AppServices::new`](crate::AppServices::new) constructor wires so the
+/// sequence facade's align path has a similarity index; a backend-built facade
+/// replaces it with the durable store. Empty until a caller writes a sketch.
+#[derive(Default)]
+pub struct InMemorySketchStore {
+    /// Sequence IRI to its MinHash signature.
+    sketches: Mutex<HashMap<String, Signature>>,
+    /// Sequence IRI to the LSH band hashes it falls into.
+    bands: Mutex<HashMap<String, Vec<u64>>>,
+}
+
+impl InMemorySketchStore {
+    /// An empty store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl SketchStore for InMemorySketchStore {
+    async fn put_sketch(
+        &self,
+        iri: &str,
+        signature: &Signature,
+        bands: &[u64],
+    ) -> Result<(), DomainError> {
+        self.sketches
+            .lock()
+            .unwrap()
+            .insert(iri.to_owned(), signature.clone());
+        self.bands
+            .lock()
+            .unwrap()
+            .insert(iri.to_owned(), bands.to_vec());
+        Ok(())
+    }
+
+    async fn sketch_of(&self, iri: &str) -> Result<Option<Signature>, DomainError> {
+        Ok(self.sketches.lock().unwrap().get(iri).cloned())
+    }
+
+    async fn candidates_by_bands(&self, bands: &[u64]) -> Result<Vec<String>, DomainError> {
+        let query: std::collections::HashSet<u64> = bands.iter().copied().collect();
+        let mut out = Vec::new();
+        for (iri, seq_bands) in self.bands.lock().unwrap().iter() {
+            if seq_bands.iter().any(|b| query.contains(b)) {
+                out.push(iri.clone());
+            }
+        }
+        Ok(out)
+    }
+
+    async fn all_sketches(&self) -> Result<Vec<(String, Signature)>, DomainError> {
+        Ok(self
+            .sketches
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(iri, sig)| (iri.clone(), sig.clone()))
+            .collect())
+    }
+
+    async fn replace_all_sketches(
+        &self,
+        entries: Vec<(String, Signature, Vec<u64>)>,
+    ) -> Result<(), DomainError> {
+        let mut sketches = self.sketches.lock().unwrap();
+        let mut bands = self.bands.lock().unwrap();
+        sketches.clear();
+        bands.clear();
+        for (iri, signature, band_hashes) in entries {
+            sketches.insert(iri.clone(), signature);
+            bands.insert(iri, band_hashes);
+        }
+        Ok(())
     }
 }
 

@@ -7,11 +7,12 @@ use std::sync::Arc;
 use sbol_db_app::AppServices;
 use sbol_db_postgres::{
     connect, run_migrations, JobRepository, PgClusterStore, PgConfigStore, PgPageRankStore,
-    PgTokenStore, PgUserStore, SbolObjectService,
+    PgSketchStore, PgTokenStore, PgUserStore, SbolObjectService,
 };
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
-    AclStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore, TokenStore, UserStore,
+    AclStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore, SketchStore,
+    TokenStore, UserStore,
 };
 
 async fn fresh_app() -> AppServices {
@@ -46,10 +47,11 @@ async fn fresh_app() -> AppServices {
     let tokens: Arc<dyn TokenStore> = Arc::new(PgTokenStore::new(pool.clone()));
     let pagerank: Arc<dyn PageRankStore> = Arc::new(PgPageRankStore::new(pool.clone()));
     let cluster: Arc<dyn ClusterStore> = Arc::new(PgClusterStore::new(pool.clone()));
+    let sketch: Arc<dyn SketchStore> = Arc::new(PgSketchStore::new(pool.clone()));
     let config: Arc<dyn ConfigStore> = Arc::new(PgConfigStore::new(pool));
     AppServices::new(store, sparql, sparql_update, jobs, acl)
         .with_identity(users, tokens)
-        .with_sequence_stores(pagerank, cluster)
+        .with_sequence_stores(pagerank, cluster, sketch)
         .with_config(config)
 }
 

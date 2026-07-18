@@ -1,7 +1,9 @@
 //! `rebuild_search_index` job handler.
 //!
-//! Rebuilds the native ranked search index in SBOLExplorer's `update_index`
-//! order: clusters, then PageRank, then the tantivy text index.
+//! Rebuilds the native ranked search index: the MinHash/LSH sketch index, then
+//! clusters, then PageRank, then the tantivy text index. The sketch index leads
+//! so the sequence-search align path can generate candidates from a fresh index;
+//! clusters through tantivy then follow SBOLExplorer's `update_index` order.
 //!
 //! The clustering stage groups the top-level parts by their sequence elements
 //! with [`sbol_db_search::cluster_sequences`] (greedy centroid clustering,
@@ -26,7 +28,9 @@ use sbol_db_core::{ObjectTerm, SubjectTerm, Triple};
 use sbol_db_search::keywords::{build_keywords, SoTerm};
 use sbol_db_search::pagerank::{pagerank, top_level_iris, top_level_link_graph};
 use sbol_db_search::ranked_text::IndexedPart;
-use sbol_db_search::{cluster_sequences, AlignOptions};
+use sbol_db_search::{
+    band_hashes, cluster_sequences, sketch, AlignOptions, Signature, SketchParams,
+};
 use sbol_db_storage::RankRow;
 use serde_json::Value;
 
@@ -86,6 +90,21 @@ impl JobHandler for RebuildSearchIndexHandler {
 
         let uris_set = top_level_iris(&all_triples);
         let uris: Vec<String> = uris_set.iter().cloned().collect();
+
+        // Sketch stage: sketch every DNA/RNA sequence in the derived view and
+        // swap the whole MinHash/LSH index in. The elements come from the derived
+        // `sbol_sequences` view (keyed by the Sequence IRI) rather than the raw
+        // triples, so the index covers the corpus whatever its source SBOL
+        // version and its keys match the align path's candidate lookups. A
+        // non-nucleotide sequence yields no canonical k-mer and is left
+        // unsketched. Sketching is CPU-bound, so it runs on a blocking thread.
+        let sequence_elements = ctx.service.all_nucleotide_sequences().await?;
+        let sketched_input = sequence_elements.len();
+        let sketch_entries = tokio::task::spawn_blocking(move || build_sketches(sequence_elements))
+            .await
+            .map_err(|e| HandlerError::Other(format!("sketch task join: {e}")))?;
+        let sketched = sketch_entries.len();
+        search.sketch.replace_all_sketches(sketch_entries).await?;
 
         // Clustering stage: group each top-level part by its sequence elements
         // and persist the assignments. Alignment is CPU-bound, so it runs on a
@@ -156,6 +175,8 @@ impl JobHandler for RebuildSearchIndexHandler {
                 "indexed": indexed,
                 "clustered_parts": clustered_parts,
                 "clusters": clusters,
+                "sketched": sketched,
+                "sketched_input": sketched_input,
             }),
         )
         .await;
@@ -165,6 +186,8 @@ impl JobHandler for RebuildSearchIndexHandler {
             "indexed": indexed,
             "clustered_parts": clustered_parts,
             "clusters": clusters,
+            "sketched": sketched,
+            "sketched_input": sketched_input,
         })))
     }
 }
@@ -262,6 +285,21 @@ fn collect_part_sequences(
         }
     }
     parts
+}
+
+/// Sketch each `(iri, elements)` into `(iri, signature, band_hashes)`, dropping a
+/// sequence that yields no canonical k-mer (too short, or non-nucleotide). The
+/// entries feed [`SketchStore::replace_all_sketches`].
+fn build_sketches(sequences: Vec<(String, String)>) -> Vec<(String, Signature, Vec<u64>)> {
+    let params = SketchParams::default();
+    let mut out = Vec::with_capacity(sequences.len());
+    for (iri, elements) in sequences {
+        if let Some(sig) = sketch(&elements, &params) {
+            let bands = band_hashes(&sig, &params);
+            out.push((iri, sig, bands));
+        }
+    }
+    out
 }
 
 /// The number of distinct clusters among a set of assignments.

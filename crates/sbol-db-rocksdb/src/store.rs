@@ -664,6 +664,20 @@ impl SequenceSearchStore for RocksdbStore {
         let query = query.to_owned();
         blocking(move || sequences.align_candidates(&query)).await
     }
+
+    async fn sequences_by_iris(
+        &self,
+        iris: &[String],
+    ) -> Result<Vec<(String, String)>, DomainError> {
+        let sequences = self.sequences.clone();
+        let iris = iris.to_vec();
+        blocking(move || sequences.sequences_by_iris(&iris)).await
+    }
+
+    async fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
+        let sequences = self.sequences.clone();
+        blocking(move || sequences.all_nucleotide_sequences()).await
+    }
 }
 
 #[async_trait]

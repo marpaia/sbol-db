@@ -75,6 +75,7 @@ pub async fn run(
         setup.search = Some(SearchIndexHandles {
             cluster: backend.cluster.clone(),
             pagerank: backend.pagerank.clone(),
+            sketch: backend.sketch.clone(),
             text_index: app_services.text_search.clone(),
             triples: backend.triple_source.clone(),
         });

@@ -522,6 +522,17 @@ impl SequenceSearchStore for SqliteStore {
     async fn align_candidates(&self, query: &str) -> Result<Vec<(String, String)>, DomainError> {
         self.sequences.align_candidates(query).await
     }
+
+    async fn sequences_by_iris(
+        &self,
+        iris: &[String],
+    ) -> Result<Vec<(String, String)>, DomainError> {
+        self.sequences.sequences_by_iris(iris).await
+    }
+
+    async fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
+        self.sequences.all_nucleotide_sequences().await
+    }
 }
 
 #[async_trait]

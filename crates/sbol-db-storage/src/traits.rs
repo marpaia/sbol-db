@@ -14,7 +14,7 @@ use sbol_db_core::{
     NeighborhoodQuery, NeighborhoodResult, NewUser, ObjectId, ObjectTerm, SbolObjectRecord,
     SerializationFormat, Triple, User, UserId,
 };
-use sbol_db_search::ClusterId;
+use sbol_db_search::{ClusterId, Signature};
 use serde_json::Value;
 
 use crate::{
@@ -200,7 +200,27 @@ pub trait SequenceSearchStore: Send + Sync {
     /// facade; the store gathers candidates and never aligns, so rust-bio stays
     /// out of the backends. A query shorter than the k-mer width has no seed, so
     /// every indexed nucleotide sequence is returned as a candidate.
+    ///
+    /// The similarity-search align path draws its candidates from the MinHash/LSH
+    /// [`SketchStore`] instead; this k-mer prefilter remains the fallback for a
+    /// query too short to sketch.
     async fn align_candidates(&self, query: &str) -> Result<Vec<(String, String)>, DomainError>;
+
+    /// The `(sequence_iri, elements)` for the DNA/RNA sequences among `iris`,
+    /// dropping any IRI that is absent or non-nucleotide. This materializes the
+    /// elements of the [`SketchStore`] candidate set so the application facade
+    /// can align them; order is unspecified.
+    async fn sequences_by_iris(
+        &self,
+        iris: &[String],
+    ) -> Result<Vec<(String, String)>, DomainError>;
+
+    /// Every DNA/RNA `(sequence_iri, elements)` in the derived view, the full set
+    /// the search-index rebuild sketches into the [`SketchStore`]. Keyed by the
+    /// Sequence object's IRI, the same key the align path materializes elements
+    /// by, so the sketch index and the align candidates stay aligned regardless
+    /// of the source SBOL version. Order is unspecified.
+    async fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError>;
 }
 
 /// Persistence for sequence cluster assignments backing `/similar`.
@@ -232,6 +252,80 @@ pub trait ClusterStore: Send + Sync {
     /// from these, so a non-centroid cluster member is demoted in free-text
     /// search. Order is unspecified.
     async fn all_assignments(&self) -> Result<Vec<(String, ClusterId)>, DomainError>;
+
+    /// Assign one sequence to a cluster, upserting: a later assignment for the
+    /// same IRI overwrites the earlier one. This is the incremental write path a
+    /// single new sequence takes, sparing the whole-table
+    /// [`replace_clusters`](Self::replace_clusters) a full rebuild runs.
+    ///
+    /// The default reads every assignment, splices in `(iri, cluster)`, and
+    /// writes them all back through [`replace_clusters`](Self::replace_clusters);
+    /// a backend with a native upsert overrides it.
+    async fn assign_cluster(&self, iri: &str, cluster: ClusterId) -> Result<(), DomainError> {
+        let mut all = self.all_assignments().await?;
+        all.retain(|(existing, _)| existing != iri);
+        all.push((iri.to_owned(), cluster));
+        self.replace_clusters(all).await
+    }
+
+    /// The largest cluster id in use, or `None` when no sequence is clustered.
+    /// The incremental assign path opens a fresh cluster at one past this id.
+    ///
+    /// The default scans every assignment; a backend with an aggregate query
+    /// overrides it.
+    async fn max_cluster_id(&self) -> Result<Option<ClusterId>, DomainError> {
+        Ok(self
+            .all_assignments()
+            .await?
+            .into_iter()
+            .map(|(_, cluster)| cluster)
+            .max())
+    }
+}
+
+/// Persistence for the MinHash/LSH similarity sketch index.
+///
+/// The sketch and its band hashes are computed in the search layer
+/// ([`sbol_db_search::minhash`]); this store persists a sequence's
+/// [`Signature`] and the LSH band buckets it falls into, and serves the
+/// candidate-generation query. Candidate generation is a posting-list union
+/// over band hashes ([`candidates_by_bands`](Self::candidates_by_bands)): the
+/// sequences sharing at least one band with a query, which the banded aligner
+/// then verifies. The store never sketches or aligns, so the algorithm stays in
+/// the pure search crate and rust-bio stays out of the backends.
+#[async_trait]
+pub trait SketchStore: Send + Sync {
+    /// Persist `iri`'s signature and its band buckets, replacing any prior
+    /// sketch and bands for that IRI so a re-index leaves no stale postings.
+    async fn put_sketch(
+        &self,
+        iri: &str,
+        signature: &Signature,
+        bands: &[u64],
+    ) -> Result<(), DomainError>;
+
+    /// The stored signature for `iri`, or `None` when it is unsketched.
+    async fn sketch_of(&self, iri: &str) -> Result<Option<Signature>, DomainError>;
+
+    /// The distinct sequence IRIs sharing at least one of `bands`, the LSH
+    /// candidate set for a query with those band hashes. Order is unspecified.
+    async fn candidates_by_bands(&self, bands: &[u64]) -> Result<Vec<String>, DomainError>;
+
+    /// Every stored `(sequence_iri, signature)` pair, for a full rebuild. Order
+    /// is unspecified.
+    async fn all_sketches(&self) -> Result<Vec<(String, Signature)>, DomainError>;
+
+    /// Replace every stored sketch and band posting with `entries` in one
+    /// transaction: after it returns the index reflects exactly these
+    /// `(sequence_iri, signature, band_hashes)` and nothing prior. The
+    /// search-index rebuild swaps the whole index in through this, the sketch
+    /// counterpart of [`ClusterStore::replace_clusters`] and
+    /// [`PageRankStore::replace_all_ranks`], so a rebuild never leaves a stale
+    /// posting behind.
+    async fn replace_all_sketches(
+        &self,
+        entries: Vec<(String, Signature, Vec<u64>)>,
+    ) -> Result<(), DomainError>;
 }
 
 /// Substring search over the derived object view.

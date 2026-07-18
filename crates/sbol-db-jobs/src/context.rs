@@ -3,7 +3,7 @@ use std::sync::Arc;
 use sbol_db_core::JobId;
 use sbol_db_search::ranked_text::RankedTextIndex;
 use sbol_db_storage::{
-    ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore, TripleSource,
+    ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore, SketchStore, TripleSource,
 };
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -26,6 +26,9 @@ pub struct SearchIndexHandles {
     pub cluster: Arc<dyn ClusterStore>,
     /// Object PageRank persistence, replaced wholesale on each rebuild.
     pub pagerank: Arc<dyn PageRankStore>,
+    /// The MinHash/LSH similarity sketch index, replaced wholesale on each
+    /// rebuild so the sequence-search align path can generate candidates from it.
+    pub sketch: Arc<dyn SketchStore>,
     /// The shared ranked text index the rebuild writes and the search adapters
     /// read.
     pub text_index: Arc<RankedTextIndex>,

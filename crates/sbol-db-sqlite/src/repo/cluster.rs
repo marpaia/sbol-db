@@ -96,4 +96,28 @@ impl ClusterStore for SqliteClusterStore {
         }
         Ok(out)
     }
+
+    async fn assign_cluster(&self, iri: &str, cluster: ClusterId) -> Result<(), DomainError> {
+        sqlx::query(
+            "INSERT INTO sbol_sequence_cluster (sequence_iri, cluster_id) VALUES (?, ?) \
+             ON CONFLICT (sequence_iri) DO UPDATE SET cluster_id = excluded.cluster_id",
+        )
+        .bind(iri)
+        .bind(cluster.0)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn max_cluster_id(&self) -> Result<Option<ClusterId>, DomainError> {
+        let row = sqlx::query("SELECT MAX(cluster_id) AS max_id FROM sbol_sequence_cluster")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(row
+            .try_get::<Option<i64>, _>("max_id")
+            .map_err(db_err)?
+            .map(ClusterId))
+    }
 }

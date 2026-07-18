@@ -18,21 +18,21 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use sbol_db_postgres::{
     JobRepository, PgClusterStore, PgConfigStore, PgMigrator, PgPageRankStore, PgPool,
-    PgSqlConsole, PgStatsRepository, PgTokenStore, PgUserStore, SbolObjectService,
+    PgSketchStore, PgSqlConsole, PgStatsRepository, PgTokenStore, PgUserStore, SbolObjectService,
 };
 use sbol_db_rocksdb::{
     RocksdbClusterStore, RocksdbConfigStore, RocksdbJobs, RocksdbMigrator, RocksdbPageRankStore,
-    RocksdbStats, RocksdbStore, RocksdbTokenStore, RocksdbUserStore,
+    RocksdbSketchStore, RocksdbStats, RocksdbStore, RocksdbTokenStore, RocksdbUserStore,
 };
 use sbol_db_sqlite::{
     SqliteClusterStore, SqliteConfigStore, SqliteJobRepository, SqliteMigrator,
-    SqlitePageRankStore, SqlitePool, SqliteSqlConsole, SqliteStats, SqliteStore, SqliteTokenStore,
-    SqliteUserStore,
+    SqlitePageRankStore, SqlitePool, SqliteSketchStore, SqliteSqlConsole, SqliteStats, SqliteStore,
+    SqliteTokenStore, SqliteUserStore,
 };
 use sbol_db_storage::{
     AclStore, BackendKind, ClusterStore, ConfigStore, DbStats, JobQueue, LabStore, LsmStats,
-    Migrator, PageRankStore, SbolStore, SqlConsole, TokenStore, TripleSource, TripleWriter,
-    UserStore,
+    Migrator, PageRankStore, SbolStore, SketchStore, SqlConsole, TokenStore, TripleSource,
+    TripleWriter, UserStore,
 };
 
 /// A ready-to-use storage backend: the neutral trait objects every consumer
@@ -48,6 +48,9 @@ pub struct Backend {
     pub pagerank: Arc<dyn PageRankStore>,
     /// Sequence cluster assignments backing `/similar`.
     pub cluster: Arc<dyn ClusterStore>,
+    /// MinHash/LSH similarity sketch index backing scalable clustering and
+    /// sequence-similarity candidate generation.
+    pub sketch: Arc<dyn SketchStore>,
     /// Durable instance configuration (registries, remotes, plugins, mail,
     /// theme).
     pub config: Arc<dyn ConfigStore>,
@@ -139,6 +142,7 @@ impl Backend {
         let acl: Arc<dyn AclStore> = store.clone();
         let pagerank: Arc<dyn PageRankStore> = Arc::new(SqlitePageRankStore::new(pool.clone()));
         let cluster: Arc<dyn ClusterStore> = Arc::new(SqliteClusterStore::new(pool.clone()));
+        let sketch: Arc<dyn SketchStore> = Arc::new(SqliteSketchStore::new(pool.clone()));
         let config: Arc<dyn ConfigStore> = Arc::new(SqliteConfigStore::new(pool.clone()));
         let triple_source = store.triple_source();
         let triple_writer = store.triple_writer();
@@ -155,6 +159,7 @@ impl Backend {
             acl,
             pagerank,
             cluster,
+            sketch,
             config,
             jobs,
             users,
@@ -175,6 +180,7 @@ impl Backend {
         let acl: Arc<dyn AclStore> = store.clone();
         let pagerank: Arc<dyn PageRankStore> = Arc::new(RocksdbPageRankStore::new(db.clone()));
         let cluster: Arc<dyn ClusterStore> = Arc::new(RocksdbClusterStore::new(db.clone()));
+        let sketch: Arc<dyn SketchStore> = Arc::new(RocksdbSketchStore::new(db.clone()));
         let config: Arc<dyn ConfigStore> = Arc::new(RocksdbConfigStore::new(db.clone()));
         let triple_source = store.triple_source();
         let triple_writer = store.triple_writer();
@@ -190,6 +196,7 @@ impl Backend {
             acl,
             pagerank,
             cluster,
+            sketch,
             config,
             jobs,
             users,
@@ -210,6 +217,7 @@ impl Backend {
         let service = Arc::new(SbolObjectService::new(pool.clone()));
         let pagerank: Arc<dyn PageRankStore> = Arc::new(PgPageRankStore::new(pool.clone()));
         let cluster: Arc<dyn ClusterStore> = Arc::new(PgClusterStore::new(pool.clone()));
+        let sketch: Arc<dyn SketchStore> = Arc::new(PgSketchStore::new(pool.clone()));
         let config: Arc<dyn ConfigStore> = Arc::new(PgConfigStore::new(pool.clone()));
         let triple_source = service.triple_source();
         let triple_writer = service.triple_writer();
@@ -228,6 +236,7 @@ impl Backend {
             acl,
             pagerank,
             cluster,
+            sketch,
             config,
             jobs,
             users,

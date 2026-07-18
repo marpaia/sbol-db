@@ -172,7 +172,7 @@ impl SequenceSearchRepository {
         collect_rows(rows)
     }
 
-    async fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
+    pub async fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
         let rows = sqlx::query(
             r#"
             SELECT iri::text AS iri, elements
@@ -181,6 +181,29 @@ impl SequenceSearchRepository {
               AND alphabet IN ('DNA', 'RNA')
             "#,
         )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        collect_rows(rows)
+    }
+
+    pub async fn sequences_by_iris(
+        &self,
+        iris: &[String],
+    ) -> Result<Vec<(String, String)>, DomainError> {
+        if iris.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            r#"
+            SELECT iri::text AS iri, elements
+            FROM sbol_sequences
+            WHERE elements IS NOT NULL
+              AND alphabet IN ('DNA', 'RNA')
+              AND iri::text = ANY($1::text[])
+            "#,
+        )
+        .bind(iris)
         .fetch_all(&self.pool)
         .await
         .map_err(db_err)?;

@@ -1113,12 +1113,38 @@ pub async fn sequence_search(store: &dyn SbolStore) {
         .expect("delete_graph");
 }
 
-/// A 40 bp nucleotide sequence with varied composition, the centroid the
-/// clustering scenarios build their near-identical members around.
-const CLUSTER_BASE: &str = "ACGTACGTACGTTTGGCCAAGGTTCCAAGGATCGATCGAT";
-/// A 40 bp sequence sharing no k-mer with [`CLUSTER_BASE`], so it never clusters
-/// with the near-identical set.
-const CLUSTER_UNRELATED: &str = "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT";
+/// A 400 bp nucleotide sequence with varied composition, the representative the
+/// clustering scenarios build their near-identical members around. The MinHash/
+/// LSH candidate index discriminates on k=14 k-mers, so the representative runs
+/// several hundred bases: at that length a single point mutation leaves the
+/// k-mer Jaccard high enough that the variant reliably lands in a shared LSH
+/// band and the aligner confirms the match.
+const CLUSTER_BASE: &str = concat!(
+    "ACGTACGTACGTTTGGCCAAGGTTCCAAGGATCGATCGAT",
+    "GGCCTTAAGGCCTTAAGATCGATCCGGAATTCCGGTTAACC",
+    "TTGGAACCTTGGAACCGGTTCCAAGGTTCCAAGATCGATCG",
+    "CCAAGGTTCCAAGGTTGGCCAAGGTTCCGGATCGATCGATT",
+    "AGCTAGCTAGCTGGCCAATTCCGGTTAAGGCCTTAAGGCCA",
+    "TCGATCGATCGAAGGCCTTAAGGCCTTGGAACCTTGGAACC",
+    "GATCCGGAATTCCGGTTAACCAGCTAGCTAGCTGGCCAATT",
+    "CCGGTTCCAAGGTTCCAAGATCGATCGACGTACGTACGTTT",
+    "AATTCCGGTTAACCGGCCTTAAGGCCTTAAGGTTGGAACCT",
+    "GGTTCCAAGGTTCCAAGGCCTTAAGGCCTTAAGATCGATCG",
+);
+/// A 400 bp homopolymer sharing no k-mer with [`CLUSTER_BASE`], so it never
+/// lands in a shared LSH band and never clusters with the near-identical set.
+const CLUSTER_UNRELATED: &str = concat!(
+    "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+);
 /// The floating-point tolerance for identity comparisons: a native aligner's
 /// `iddef=2` identity is equivalent to vsearch's but not bit-identical, so scores
 /// are asserted within an epsilon rather than by string equality.
@@ -1194,19 +1220,38 @@ async fn import_simple_component(app: &AppServices, source_uri: &str) -> (GraphI
         .iri
         .as_str()
         .to_owned();
+
+    // The sequence-search align path draws candidates from the MinHash/LSH
+    // sketch index, which the derived-view write path maintains incrementally.
+    // Index the just-imported sequence so the align scenario finds it without a
+    // full rebuild, mirroring a real single-sequence write.
+    let elements = app
+        .store
+        .sequences_by_iris(std::slice::from_ref(&sequence_iri))
+        .await
+        .expect("sequences_by_iris")
+        .into_iter()
+        .find(|(iri, _)| iri == &sequence_iri)
+        .map(|(_, elements)| elements)
+        .expect("the seeded sequence has elements");
+    app.sequence()
+        .assign_new_sequence(&sequence_iri, &elements)
+        .await
+        .expect("index the seeded sequence sketch");
+
     (report.graph_id, sequence_iri)
 }
 
 /// The banded aligner recovers a seeded sequence from a query identical to its
-/// residues: the k-mer prefilter admits it, the aligner scores full identity on
-/// the forward strand, and its CIGAR implies that same identity. The hit set is
-/// exactly the one seeded sequence.
+/// residues: the sketch index admits it as a candidate, the aligner scores full
+/// identity on the forward strand, and its CIGAR implies that same identity. The
+/// hit set is exactly the one seeded sequence.
 ///
 /// Alignment runs through the facade's [`SequenceService`](sbol_db_app::SequenceService),
-/// which gathers candidates from the backend's k-mer index and verifies each with
-/// the native aligner, so this certifies the whole sequence-search path on each
-/// backend. The identity is asserted within [`ALIGN_EPS`] and the CIGAR by its
-/// implied identity, never by string equality with vsearch.
+/// which gathers candidates from the MinHash/LSH sketch index and verifies each
+/// with the native aligner, so this certifies the whole sequence-search path on
+/// each backend. The identity is asserted within [`ALIGN_EPS`] and the CIGAR by
+/// its implied identity, never by string equality with vsearch.
 pub async fn sequence_align(app: &AppServices) {
     let (graph_id, sequence_iri) =
         import_simple_component(app, "conformance://sequence-align").await;

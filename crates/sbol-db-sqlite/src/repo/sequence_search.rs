@@ -217,7 +217,7 @@ impl SequenceSearchRepository {
         collect_candidates(rows)
     }
 
-    async fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
+    pub async fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
         let rows = sqlx::query(
             "SELECT iri, elements FROM sbol_sequences \
              WHERE elements IS NOT NULL AND alphabet IN ('DNA', 'RNA')",
@@ -225,6 +225,28 @@ impl SequenceSearchRepository {
         .fetch_all(&self.pool)
         .await
         .map_err(db_err)?;
+        collect_candidates(rows)
+    }
+
+    pub async fn sequences_by_iris(
+        &self,
+        iris: &[String],
+    ) -> Result<Vec<(String, String)>, DomainError> {
+        if iris.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
+            "SELECT iri, elements FROM sbol_sequences \
+             WHERE elements IS NOT NULL AND alphabet IN ('DNA', 'RNA') AND iri IN (",
+        );
+        {
+            let mut sep = qb.separated(", ");
+            for iri in iris {
+                sep.push_bind(iri);
+            }
+        }
+        qb.push(")");
+        let rows = qb.build().fetch_all(&self.pool).await.map_err(db_err)?;
         collect_candidates(rows)
     }
 

@@ -61,8 +61,8 @@ use sbol_db_backend::Backend;
 use sbol_db_search::ranked_text::RankedTextIndex;
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
-    AclStore, BlobStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore, TokenStore,
-    UserStore,
+    AclStore, BlobStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore,
+    SketchStore, TokenStore, UserStore,
 };
 
 /// The application facade: the neutral trait objects plus the identity-aware
@@ -93,6 +93,12 @@ pub struct AppServices {
     /// it; the sequence facade reads it. Defaults to a non-persistent in-RAM
     /// store; a backend-built facade swaps in the durable one.
     pub cluster: Arc<dyn ClusterStore>,
+    /// The MinHash/LSH similarity sketch index backing the sequence-search align
+    /// path's candidate generation. The rebuild job writes it and the sequence
+    /// facade reads it; the incremental write path updates a single sequence in
+    /// place. Defaults to a non-persistent in-RAM store; a backend-built facade
+    /// swaps in the durable one.
+    pub sketch: Arc<dyn SketchStore>,
     /// Durable instance configuration (registries, remotes, plugins, mail,
     /// theme), the replacement for classic SynBioHub's `config.local.json`.
     /// Defaults to a non-persistent in-RAM store; a backend-built facade swaps
@@ -171,7 +177,11 @@ impl AppServices {
             backend.users.clone(),
             backend.tokens.clone(),
         )
-        .with_sequence_stores(backend.pagerank.clone(), backend.cluster.clone())
+        .with_sequence_stores(
+            backend.pagerank.clone(),
+            backend.cluster.clone(),
+            backend.sketch.clone(),
+        )
         .with_config(backend.config.clone())
     }
 
@@ -183,9 +193,11 @@ impl AppServices {
         mut self,
         pagerank: Arc<dyn PageRankStore>,
         cluster: Arc<dyn ClusterStore>,
+        sketch: Arc<dyn SketchStore>,
     ) -> Self {
         self.pagerank = pagerank;
         self.cluster = cluster;
+        self.sketch = sketch;
         self
     }
 
@@ -236,6 +248,7 @@ impl AppServices {
             self.store.clone(),
             self.pagerank.clone(),
             self.cluster.clone(),
+            self.sketch.clone(),
         )
     }
 
@@ -289,6 +302,7 @@ impl AppServices {
         ));
         let pagerank: Arc<dyn PageRankStore> = Arc::new(memory::InMemoryPageRankStore::new());
         let cluster: Arc<dyn ClusterStore> = Arc::new(memory::InMemoryClusterStore::new());
+        let sketch: Arc<dyn SketchStore> = Arc::new(memory::InMemorySketchStore::new());
         let config: Arc<dyn ConfigStore> = Arc::new(memory::InMemoryConfigStore::new());
         let federation_client: Arc<dyn WebOfRegistriesClient> =
             Arc::new(federation::HttpWebOfRegistriesClient::new());
@@ -303,6 +317,7 @@ impl AppServices {
             acl,
             pagerank,
             cluster,
+            sketch,
             config,
             blobs,
             acl_service,

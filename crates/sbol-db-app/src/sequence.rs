@@ -23,10 +23,12 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use sbol_db_core::DomainError;
-use sbol_db_search::{align_pair, AlignMode, AlignOptions};
+use sbol_db_search::{
+    align_pair, band_hashes, sketch, AlignMode, AlignOptions, ClusterId, SketchParams,
+};
 use sbol_db_sparql::GraphScope;
 use sbol_db_storage::{
-    ClusterStore, PageRankStore, SbolStore, SequenceAlignment, SequenceSearchOptions,
+    ClusterStore, PageRankStore, SbolStore, SequenceAlignment, SequenceSearchOptions, SketchStore,
 };
 
 /// The rank a part carries when it has no stored PageRank score, SBOLExplorer's
@@ -51,6 +53,7 @@ pub struct SequenceService {
     store: Arc<dyn SbolStore>,
     pagerank: Arc<dyn PageRankStore>,
     cluster: Arc<dyn ClusterStore>,
+    sketch: Arc<dyn SketchStore>,
 }
 
 impl SequenceService {
@@ -58,11 +61,13 @@ impl SequenceService {
         store: Arc<dyn SbolStore>,
         pagerank: Arc<dyn PageRankStore>,
         cluster: Arc<dyn ClusterStore>,
+        sketch: Arc<dyn SketchStore>,
     ) -> Self {
         Self {
             store,
             pagerank,
             cluster,
+            sketch,
         }
     }
 
@@ -144,15 +149,23 @@ impl SequenceService {
         Ok(out)
     }
 
-    /// The banded-align path: gather the k-mer prefilter's candidates and align
-    /// each, keeping only those the aligner accepts (identity at or above the
-    /// threshold within the sequence-length window).
+    /// The banded-align path: draw candidates from the MinHash/LSH sketch index
+    /// and align each, keeping only those the aligner accepts (identity at or
+    /// above the threshold within the sequence-length window).
+    ///
+    /// The query is sketched and its LSH band hashes drive
+    /// [`SketchStore::candidates_by_bands`], so only sequences sharing a band
+    /// (high k-mer Jaccard, either strand since the k-mers are canonical) are
+    /// aligned: candidate work is bounded by neighborhood size, not by the whole
+    /// corpus. A query too short to sketch has no bands, so it falls back to the
+    /// k-mer prefilter (which itself scans the whole corpus for a sub-k-mer
+    /// query), preserving recall for degenerate probes.
     async fn global(
         &self,
         query: &str,
         options: &AlignOptions,
     ) -> Result<Vec<SequenceAlignment>, DomainError> {
-        let candidates = self.store.align_candidates(query).await?;
+        let candidates = self.align_candidates(query).await?;
         let mut out = Vec::new();
         for (iri, elements) in candidates {
             if let Some(aln) = align_pair(query, &elements, options) {
@@ -166,6 +179,93 @@ impl SequenceService {
             }
         }
         Ok(out)
+    }
+
+    /// The `(sequence_iri, elements)` candidates the banded aligner verifies for
+    /// `query`. Sketches the query and unions its LSH band buckets, then
+    /// materializes those candidates' elements; a query too short to sketch falls
+    /// back to the store's k-mer prefilter.
+    async fn align_candidates(&self, query: &str) -> Result<Vec<(String, String)>, DomainError> {
+        match sketch(query, &SketchParams::default()) {
+            Some(sig) => {
+                let bands = band_hashes(&sig, &SketchParams::default());
+                let iris = self.sketch.candidates_by_bands(&bands).await?;
+                self.store.sequences_by_iris(&iris).await
+            }
+            None => self.store.align_candidates(query).await,
+        }
+    }
+
+    /// Assign one just-written sequence to a cluster and index its sketch,
+    /// incrementally, without a full rebuild. Computes the sequence's MinHash
+    /// sketch, unions its LSH band buckets to find the near neighbors already
+    /// indexed, aligns against them, and joins the first neighbor's cluster at or
+    /// above the identity threshold; if none accepts it opens a fresh cluster one
+    /// past the largest in use. The sketch is then persisted so later sequences
+    /// can find this one. A sequence too short to sketch draws no candidates and
+    /// opens its own cluster. Returns the assigned [`ClusterId`].
+    ///
+    /// This is the derived-view write path's counterpart to the bulk rebuild: a
+    /// single new sequence updates the materialized sketch and cluster indexes in
+    /// place, so `/similar` and the align path see it immediately without
+    /// reclustering the corpus.
+    pub async fn assign_new_sequence(
+        &self,
+        sequence_iri: &str,
+        elements: &str,
+    ) -> Result<ClusterId, DomainError> {
+        let params = SketchParams::default();
+        let Some(sig) = sketch(elements, &params) else {
+            // Too short to sketch: open its own cluster, no sketch to persist.
+            let cluster = self.next_cluster_id().await?;
+            self.cluster.assign_cluster(sequence_iri, cluster).await?;
+            return Ok(cluster);
+        };
+        let bands = band_hashes(&sig, &params);
+
+        // Candidate neighbors sharing a band, excluding the sequence itself.
+        let candidate_iris: Vec<String> = self
+            .sketch
+            .candidates_by_bands(&bands)
+            .await?
+            .into_iter()
+            .filter(|iri| iri != sequence_iri)
+            .collect();
+        let candidates = self.store.sequences_by_iris(&candidate_iris).await?;
+
+        let pair_opts = AlignOptions {
+            mode: AlignMode::GlobalAlign,
+            min_identity: AlignOptions::default().min_identity,
+            max_accepts: 1,
+            min_seqlen: 0,
+            max_seqlen: u32::MAX,
+        };
+
+        let mut assigned: Option<ClusterId> = None;
+        for (iri, cand_elements) in &candidates {
+            if align_pair(elements, cand_elements, &pair_opts).is_some() {
+                if let Some(cluster) = self.cluster.cluster_id_of(iri).await? {
+                    assigned = Some(cluster);
+                    break;
+                }
+            }
+        }
+
+        let cluster = match assigned {
+            Some(cluster) => cluster,
+            None => self.next_cluster_id().await?,
+        };
+        self.sketch.put_sketch(sequence_iri, &sig, &bands).await?;
+        self.cluster.assign_cluster(sequence_iri, cluster).await?;
+        Ok(cluster)
+    }
+
+    /// The id for a fresh cluster: one past the largest in use, or 0 when none.
+    async fn next_cluster_id(&self) -> Result<ClusterId, DomainError> {
+        Ok(match self.cluster.max_cluster_id().await? {
+            Some(ClusterId(max)) => ClusterId(max + 1),
+            None => ClusterId(0),
+        })
     }
 
     /// Sort alignments by `pagerank * percentMatch` descending, with the IRI as
@@ -349,16 +449,23 @@ PREFIX sbol: <http://sbols.org/v3#>
     #[tokio::test]
     async fn global_align_finds_a_near_identical_variant() {
         let (app, _dir) = sqlite_facade().await;
-        let sequence_iri = import_sequence(&app).await;
+        let seq = app.sequence();
 
-        // Flip one internal base: a ~0.97-identity variant the banded aligner
-        // accepts above the 0.8 floor, reached through the k-mer prefilter.
-        let mut variant: Vec<char> = ELEMENTS.to_uppercase().chars().collect();
-        variant[17] = if variant[17] == 'A' { 'C' } else { 'A' };
-        let variant: String = variant.into_iter().collect();
+        // The align path draws candidates from the MinHash/LSH sketch index, so
+        // the target must be sketched (real parts run hundreds of bases; a point
+        // mutation then keeps the k-mer Jaccard high enough to collide) and its
+        // sketch must be indexed, which the incremental write path does.
+        let target = rand_seq(101, 400);
+        let sequence_iri = import_labeled_sequence(&app, "galign", &target).await;
+        seq.assign_new_sequence(&sequence_iri, &target)
+            .await
+            .expect("index the target sketch");
 
-        let hits = app
-            .sequence()
+        // Flip one base: a ~0.997-identity variant the banded aligner accepts
+        // above the 0.8 floor, reached through the sketch candidate query.
+        let variant = mutate(&target, 9, 1);
+
+        let hits = seq
             .align(&variant, AlignOptions::default(), &GraphScope::Union)
             .await
             .expect("align");
@@ -425,5 +532,172 @@ PREFIX sbol: <http://sbols.org/v3#>
             .await
             .expect("similar_count");
         assert_eq!(count, 2, "two cluster mates, excluding the target");
+    }
+
+    /// SplitMix64 finalizer, a deterministic 64-bit mixer for test fixtures.
+    fn splitmix64(mut x: u64) -> u64 {
+        x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = x;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// A deterministic pseudo-random uppercase ACGT sequence of length `len`.
+    fn rand_seq(seed: u64, len: usize) -> String {
+        let bases = [b'A', b'C', b'G', b'T'];
+        let mut x = seed.wrapping_add(1);
+        let mut s = String::with_capacity(len);
+        for _ in 0..len {
+            x = splitmix64(x);
+            s.push(bases[(x >> 40) as usize % 4] as char);
+        }
+        s
+    }
+
+    /// Flip `count` bases at positions derived from `seed`.
+    fn mutate(seq: &str, seed: u64, count: usize) -> String {
+        let mut v: Vec<u8> = seq.bytes().collect();
+        let mut x = seed.wrapping_add(1);
+        for _ in 0..count {
+            x = splitmix64(x);
+            let at = (x >> 40) as usize % v.len();
+            v[at] = if v[at] == b'A' { b'C' } else { b'A' };
+        }
+        String::from_utf8(v).unwrap()
+    }
+
+    /// Import a one-Component-one-Sequence SBOL3 document under `label` and
+    /// return the Sequence object's IRI.
+    async fn import_labeled_sequence(app: &AppServices, label: &str, elements: &str) -> String {
+        let doc = format!(
+            r#"
+BASE <https://example.org/sbol-db/{label}/>
+PREFIX :     <https://example.org/sbol-db/{label}/>
+PREFIX SO:   <https://identifiers.org/SO:>
+PREFIX EDAM: <https://identifiers.org/edam:>
+PREFIX sbol: <http://sbols.org/v3#>
+
+:part
+    a                  sbol:Component ;
+    sbol:displayId     "part" ;
+    sbol:hasNamespace  <https://example.org/sbol-db/{label}> ;
+    sbol:role          SO:0000167 ;
+    sbol:hasSequence   :part_seq .
+
+:part_seq
+    a                  sbol:Sequence ;
+    sbol:displayId     "part_seq" ;
+    sbol:hasNamespace  <https://example.org/sbol-db/{label}> ;
+    sbol:elements      "{elements}" ;
+    sbol:encoding      EDAM:format_1207 .
+"#
+        );
+        let report = app
+            .store
+            .import_document(ImportInput {
+                body: doc,
+                format: SerializationFormat::Turtle,
+                namespace: None,
+                source_uri: Some(format!("seq-test://{label}")),
+                document_iri: None,
+                created_by: None,
+                name: None,
+                description: None,
+                overwrite: ImportOverwrite::Fail,
+            })
+            .await
+            .expect("import_document");
+        let objects = app
+            .store
+            .list_objects(&ListObjectsFilter {
+                sbol_class: None,
+                role: None,
+                graph_id: Some(report.graph_id),
+                after_iri: None,
+                limit: 100,
+            })
+            .await
+            .expect("list_objects");
+        objects
+            .iter()
+            .find(|o| o.sbol_class.ends_with("#Sequence"))
+            .expect("a Sequence object")
+            .iri
+            .as_str()
+            .to_owned()
+    }
+
+    /// A single near-duplicate sequence written after another lands in its
+    /// cluster through the incremental assign path, with no full rebuild: the
+    /// sketch index surfaces the base as a candidate, the aligner accepts, and
+    /// the new sequence joins the base's cluster. An unrelated sequence opens its
+    /// own. The align path then finds the near-dup off the just-updated sketch.
+    #[tokio::test]
+    async fn incremental_assign_lands_near_dup_in_the_expected_cluster() {
+        let (app, _dir) = sqlite_facade().await;
+        let seq = app.sequence();
+
+        let base = rand_seq(11, 400);
+        let near = mutate(&base, 5, 2);
+        let unrelated = rand_seq(50_000, 400);
+
+        let base_iri = import_labeled_sequence(&app, "base", &base).await;
+        let near_iri = import_labeled_sequence(&app, "near", &near).await;
+        let unrelated_iri = import_labeled_sequence(&app, "unrelated", &unrelated).await;
+
+        // No clustering exists yet: nothing has been assigned or rebuilt.
+        assert!(
+            app.cluster.all_assignments().await.unwrap().is_empty(),
+            "no assignments before the incremental writes"
+        );
+
+        // Each sequence is assigned incrementally as it is written, one at a
+        // time, never triggering a corpus rebuild.
+        let base_cluster = seq
+            .assign_new_sequence(&base_iri, &base)
+            .await
+            .expect("assign base");
+        let near_cluster = seq
+            .assign_new_sequence(&near_iri, &near)
+            .await
+            .expect("assign near-dup");
+        let unrelated_cluster = seq
+            .assign_new_sequence(&unrelated_iri, &unrelated)
+            .await
+            .expect("assign unrelated");
+
+        assert_eq!(
+            near_cluster, base_cluster,
+            "the near-duplicate joins the base's cluster incrementally"
+        );
+        assert_ne!(
+            unrelated_cluster, base_cluster,
+            "the unrelated sequence opens its own cluster"
+        );
+
+        // The persisted clustering answers `/similar`: the base's only mate is
+        // the near-duplicate.
+        let mates = seq
+            .similar(&base_iri, &GraphScope::Union)
+            .await
+            .expect("similar");
+        let mate_iris: Vec<&str> = mates.iter().map(|m| m.iri.as_str()).collect();
+        assert_eq!(
+            mate_iris,
+            vec![near_iri.as_str()],
+            "the base's cluster mate is the near-duplicate"
+        );
+
+        // The align path draws candidates from the incrementally updated sketch
+        // index and finds the near-duplicate for the base query.
+        let hits = seq
+            .align(&base, AlignOptions::default(), &GraphScope::Union)
+            .await
+            .expect("align");
+        assert!(
+            hits.iter().any(|h| h.sequence_iri == near_iri),
+            "the align path finds the near-duplicate off the fresh sketch index"
+        );
     }
 }

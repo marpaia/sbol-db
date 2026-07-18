@@ -3730,6 +3730,7 @@ dependencies = [
  "sbol-db-core",
  "sbol-db-derive",
  "sbol-db-rdf",
+ "sbol-db-search",
  "sbol-db-sparql",
  "sbol-db-storage",
  "sbol-rdf",
