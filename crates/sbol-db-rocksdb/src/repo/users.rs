@@ -202,6 +202,22 @@ impl UserStore for RocksdbUserStore {
         })
         .await
     }
+
+    async fn any_admin(&self) -> Result<bool, DomainError> {
+        let db = self.db.clone();
+        blocking(move || {
+            let mut found = false;
+            db.for_each(CF_USERS, |_, value| {
+                if decode::<User>(value)?.is_admin {
+                    found = true;
+                    return Ok(false);
+                }
+                Ok(true)
+            })?;
+            Ok(found)
+        })
+        .await
+    }
 }
 
 /// Write an account plus its username/email lookup entries in one batch.

@@ -460,6 +460,10 @@ pub trait UserStore: Send + Sync {
     /// Delete the account with `id`, returning whether a row was removed
     /// (`false` when no such account exists).
     async fn delete_user(&self, id: UserId) -> Result<bool, DomainError>;
+
+    /// Whether any administrator account exists. First-launch setup uses this to
+    /// decide whether an instance still needs its initial administrator.
+    async fn any_admin(&self) -> Result<bool, DomainError>;
 }
 
 /// API-token persistence for the identity layer.

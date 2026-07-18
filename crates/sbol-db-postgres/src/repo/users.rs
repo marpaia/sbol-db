@@ -145,6 +145,15 @@ impl UserStore for PgUserStore {
             .map_err(db_err)?;
         Ok(result.rows_affected() > 0)
     }
+
+    async fn any_admin(&self) -> Result<bool, DomainError> {
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sbh_user WHERE is_admin = true)")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(db_err)?;
+        Ok(exists)
+    }
 }
 
 fn row_to_user(row: sqlx::postgres::PgRow) -> Result<User, DomainError> {

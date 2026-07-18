@@ -3,8 +3,8 @@
 //! A fresh instance has no administrator; the SynBioHub UI detects this through
 //! `firstLaunch` on `/admin/theme` and shows a setup wizard, which POSTs `/setup`
 //! to create the first administrator and record the instance's branding/policy.
-//! Setup runs once: it is refused after the instance is provisioned (the
-//! `setupComplete` config marker is set).
+//! Setup runs once: it is refused once an administrator exists, so a seeded or
+//! migrated instance that already has one is provisioned and browsable.
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -14,26 +14,21 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use sbol_db_app::Registration;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use super::auth::parse_body;
 use crate::error::ApiError;
 use crate::AppState;
 
-/// Config key marking the instance as provisioned; its presence flips
-/// `firstLaunch` to false.
-const SETUP_COMPLETE_KEY: &str = "setupComplete";
 /// Config key holding the instance branding/policy the theme endpoint serves.
 const THEME_KEY: &str = "theme";
 
-/// Whether the instance still needs first-launch setup (no `setupComplete`
-/// marker). Read by [`super::admin`]'s theme endpoint as `firstLaunch`.
+/// Whether the instance still needs first-launch setup: it has no administrator.
+/// Read by [`super::admin`]'s theme endpoint as `firstLaunch`. Deriving this from
+/// admin presence (rather than a stored marker) means a seeded or migrated
+/// instance that already has an administrator is correctly not first-launch.
 pub(super) async fn is_first_launch(state: &AppState) -> Result<bool, ApiError> {
-    let done = matches!(
-        state.app.config.get(SETUP_COMPLETE_KEY).await?,
-        Some(Value::Bool(true))
-    );
-    Ok(!done)
+    Ok(!state.app.auth.any_admin().await?)
 }
 
 /// The first-launch form the SynBioHub UI POSTs as JSON.
@@ -122,8 +117,8 @@ pub async fn post_setup(
         })
         .await?;
 
-    // Persist the branding/policy the theme endpoint serves, then mark the
-    // instance provisioned so `firstLaunch` reads false.
+    // Persist the branding/policy the theme endpoint serves. Creating the
+    // administrator above already flips `firstLaunch` to false.
     let color = form
         .color
         .filter(|s| !s.is_empty())
@@ -139,11 +134,6 @@ pub async fn post_setup(
         "requireLogin": form.require_login.unwrap_or(false),
     });
     state.app.config.set(THEME_KEY, &theme).await?;
-    state
-        .app
-        .config
-        .set(SETUP_COMPLETE_KEY, &json!(true))
-        .await?;
 
     Ok(plain(StatusCode::OK, "SynBioHub configured"))
 }

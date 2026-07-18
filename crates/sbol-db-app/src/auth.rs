@@ -66,6 +66,12 @@ impl AuthService {
         format!("http://synbiohub.org/user/{username}")
     }
 
+    /// Whether the instance has any administrator. A fresh instance has none and
+    /// still needs first-launch setup.
+    pub async fn any_admin(&self) -> Result<bool, DomainError> {
+        self.users.any_admin().await
+    }
+
     /// Create an account, argon2-hashing the plaintext password and stamping
     /// the owned graph URI, and return the stored account.
     pub async fn register(&self, registration: Registration) -> Result<User, DomainError> {
@@ -271,6 +277,26 @@ mod tests {
             is_curator: false,
             is_member: true,
         }
+    }
+
+    #[tokio::test]
+    async fn any_admin_reflects_administrator_presence() {
+        let (auth, _) = service();
+        // A fresh instance has no administrator: still first-launch.
+        assert!(!auth.any_admin().await.unwrap());
+        // A non-admin registration does not provision the instance.
+        auth.register(registration("s3cret")).await.unwrap();
+        assert!(!auth.any_admin().await.unwrap());
+        // Registering an administrator flips it.
+        auth.register(Registration {
+            username: "root".into(),
+            email: "root@example.org".into(),
+            is_admin: true,
+            ..registration("s3cret")
+        })
+        .await
+        .unwrap();
+        assert!(auth.any_admin().await.unwrap());
     }
 
     #[tokio::test]

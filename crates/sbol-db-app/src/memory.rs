@@ -132,6 +132,10 @@ impl UserStore for InMemoryUserStore {
     async fn delete_user(&self, id: UserId) -> Result<bool, DomainError> {
         Ok(self.users.lock().unwrap().remove(&id).is_some())
     }
+
+    async fn any_admin(&self) -> Result<bool, DomainError> {
+        Ok(self.users.lock().unwrap().values().any(|u| u.is_admin))
+    }
 }
 
 /// A process-local [`TokenStore`] mapping a token hash to the account it
