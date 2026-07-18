@@ -350,6 +350,15 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
             axum::http::StatusCode::REQUEST_TIMEOUT,
             config.request_timeout,
         ))
+        // Permissive CORS so a browser SPA (e.g. the SynBioHub frontend, which
+        // calls this V1 API cross-origin) can drive the API, matching classic
+        // SynBioHub's `app.use(cors())`.
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any),
+        )
 }
 
 /// Catch-all that logs unmatched requests and returns a JSON-shaped

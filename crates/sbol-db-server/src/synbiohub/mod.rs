@@ -72,6 +72,15 @@ pub fn router(state: AppState) -> Router<AppState> {
         )
         // Submission: mint an SBOL document into the caller's own user graph.
         // Identity-gated; anonymous callers are rejected.
+        // Admin resources classic serves to anonymous callers so the UI can
+        // render: theme/plugins/registries GET are public; the theme POST
+        // self-authorizes (ConfigService rejects a non-admin with 403).
+        .route(
+            "/admin/theme",
+            get(admin::get_theme).post(admin::set_theme),
+        )
+        .route("/admin/plugins", get(admin::plugins))
+        .route("/admin/registries", get(admin::registries))
         // Jobs: the cancel/restart actions (the caller's `/jobs` list is served
         // by the native server router).
         .route("/actions/job/cancel", post(jobs::cancel_job))

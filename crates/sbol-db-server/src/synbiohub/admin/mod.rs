@@ -19,6 +19,12 @@ mod plugins_routes;
 mod users_routes;
 
 pub use federation_routes::update_web_of_registries;
+// Handlers classic serves publicly (theme/plugins/registries GET) or that
+// self-authorize (theme POST), mounted on the public router by [`super::router`]
+// so an anonymous browser can read them, matching classic's gates.
+pub(super) use config_routes::{get_theme, set_theme};
+pub(super) use federation_routes::registries;
+pub(super) use plugins_routes::plugins;
 
 use axum::extract::{Extension, State};
 use axum::http::header::CONTENT_TYPE;
@@ -56,10 +62,6 @@ pub fn router(state: AppState) -> Router<AppState> {
             get(config_routes::get_mail).post(config_routes::set_mail),
         )
         .route(
-            "/admin/theme",
-            get(config_routes::get_theme).post(config_routes::set_theme),
-        )
-        .route(
             "/admin/users",
             get(config_routes::get_users_config).post(config_routes::set_users_config),
         )
@@ -73,7 +75,6 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/admin/retrieveFromWebOfRegistries",
             post(federation_routes::retrieve),
         )
-        .route("/admin/registries", get(federation_routes::registries))
         .route(
             "/admin/saveRegistry",
             post(federation_routes::save_registry),
@@ -89,7 +90,6 @@ pub fn router(state: AppState) -> Router<AppState> {
             post(federation_routes::delete_remote),
         )
         // External plugins (rendering/download/submit/curation/authorization).
-        .route("/admin/plugins", get(plugins_routes::plugins))
         .route("/admin/savePlugin", post(plugins_routes::save_plugin))
         .route("/admin/deletePlugin", post(plugins_routes::delete_plugin))
         // SBOLExplorer shims over the native search engine, at classic's paths.

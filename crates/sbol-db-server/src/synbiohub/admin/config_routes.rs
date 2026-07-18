@@ -67,9 +67,36 @@ pub async fn set_mail(
     set_section(&state, &user, MAIL_KEY, &headers, &body).await
 }
 
-/// `GET /admin/theme`.
+/// `GET /admin/theme` — the instance branding and policy the SynBioHub UI reads
+/// to render (name, URI prefix, signup/login policy) and to decide whether to
+/// show the first-run setup wizard (`firstLaunch`). Classic composes this object
+/// from its config; sbol-db composes it from its server config, then overlays
+/// any stored `theme` section (custom name, colors) on top. `firstLaunch` is
+/// always false: an sbol-db instance is provisioned on startup, not through a
+/// setup wizard.
 pub async fn get_theme(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    get_section(&state, THEME_KEY).await
+    let mut config = json!({
+        "instanceName": "SynBioHub",
+        "frontendURL": "",
+        "instanceUrl": "",
+        "uriPrefix": "http://synbiohub.org/",
+        "frontPageText": "",
+        "firstLaunch": false,
+        "altHome": "",
+        "showModuleInteractions": false,
+        "removePublicEnabled": false,
+        "allowPublicSignup": state.config.allow_public_signup,
+        "requireLogin": false,
+    });
+    if let (Value::Object(base), Some(Value::Object(stored))) = (
+        &mut config,
+        state.app.config_service().get(THEME_KEY).await?,
+    ) {
+        for (key, value) in stored {
+            base.insert(key, value);
+        }
+    }
+    Ok(Json(config))
 }
 
 /// `POST /admin/theme`.
