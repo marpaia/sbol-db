@@ -70,6 +70,9 @@ pub fn router(state: AppState) -> Router<AppState> {
         // Submission: mint an SBOL document into the caller's own user graph.
         // Identity-gated; anonymous callers are rejected.
         .route("/submit", post(submit::submit))
+        // Classic registers `/submit/` (trailing slash); Express matches both,
+        // so accept both to stay a drop-in for clients built against either.
+        .route("/submit/", post(submit::submit))
         // Destructive object verbs. Classic triggers these with GET on the
         // object path (a browser-form quirk); the facade holds the real verbs
         // and gates every one on caller ownership.
@@ -259,7 +262,7 @@ pub fn router(state: AppState) -> Router<AppState> {
             post(attachments::public_attach),
         )
         .route(
-            "/public/:collectionId/:displayId/:version/attachURL",
+            "/public/:collectionId/:displayId/:version/attachUrl",
             post(attachments::public_attach_url),
         )
         .route(
@@ -331,7 +334,7 @@ pub fn router(state: AppState) -> Router<AppState> {
             post(attachments::user_attach),
         )
         .route(
-            "/user/:userId/:collectionId/:displayId/:version/attachURL",
+            "/user/:userId/:collectionId/:displayId/:version/attachUrl",
             post(attachments::user_attach_url),
         )
         .route(

@@ -57,11 +57,11 @@ pub fn router(state: AppState) -> Router<AppState> {
             get(config_routes::get_theme).post(config_routes::set_theme),
         )
         .route(
-            "/admin/usersConfig",
+            "/admin/users",
             get(config_routes::get_users_config).post(config_routes::set_users_config),
         )
         .route("/admin/reindex", post(reindex))
-        .route("/admin/createUser", post(users_routes::create_user))
+        .route("/admin/newUser", post(users_routes::create_user))
         .route("/admin/updateUser", post(users_routes::update_user))
         .route("/admin/deleteUser", post(users_routes::delete_user))
         // Web of Registries federation and ICE/Benchling remotes.
@@ -89,16 +89,17 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/admin/plugins", get(plugins_routes::plugins))
         .route("/admin/savePlugin", post(plugins_routes::save_plugin))
         .route("/admin/deletePlugin", post(plugins_routes::delete_plugin))
-        // SBOLExplorer shims over the native search engine.
+        // SBOLExplorer shims over the native search engine, at classic's paths.
         .route(
-            "/admin/sbolexplorer/updateIndex",
+            "/admin/explorerUpdateIndex",
             post(explorer_routes::update_index),
         )
         .route(
-            "/admin/sbolexplorer/config",
+            "/admin/explorer",
             get(explorer_routes::get_config).post(explorer_routes::set_config),
         )
-        .route("/admin/sbolexplorer/log", get(explorer_routes::log))
+        .route("/admin/explorerLog", get(explorer_routes::log))
+        .route("/admin/explorerIndexingLog", get(explorer_routes::log))
         // The gate runs after identity resolution: `route_layer` wraps
         // outermost-last, so `attach_current_user` populates `CurrentUser`
         // first and `require_admin` reads it.
@@ -358,10 +359,10 @@ mod tests {
             ("POST", "/admin/mail"),
             ("GET", "/admin/theme"),
             ("POST", "/admin/theme"),
-            ("GET", "/admin/usersConfig"),
-            ("POST", "/admin/usersConfig"),
+            ("GET", "/admin/users"),
+            ("POST", "/admin/users"),
             ("POST", "/admin/reindex"),
-            ("POST", "/admin/createUser"),
+            ("POST", "/admin/newUser"),
             ("POST", "/admin/updateUser"),
             ("POST", "/admin/deleteUser"),
             ("POST", "/admin/federate"),
@@ -375,10 +376,10 @@ mod tests {
             ("GET", "/admin/plugins"),
             ("POST", "/admin/savePlugin"),
             ("POST", "/admin/deletePlugin"),
-            ("POST", "/admin/sbolexplorer/updateIndex"),
-            ("GET", "/admin/sbolexplorer/config"),
-            ("POST", "/admin/sbolexplorer/config"),
-            ("GET", "/admin/sbolexplorer/log"),
+            ("POST", "/admin/explorerUpdateIndex"),
+            ("GET", "/admin/explorer"),
+            ("POST", "/admin/explorer"),
+            ("GET", "/admin/explorerLog"),
         ]
     }
 
@@ -510,7 +511,7 @@ mod tests {
         // Create.
         let (status, body) = json_post(
             &fx.app,
-            "/admin/createUser",
+            "/admin/newUser",
             &fx.admin_token,
             json!({
                 "username": "dana",

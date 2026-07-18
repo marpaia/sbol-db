@@ -22,14 +22,14 @@ use crate::AppState;
 /// The config key holding the (now-internal) SBOLExplorer settings.
 const EXPLORER_KEY: &str = "sbolexplorer";
 
-/// `POST /admin/sbolexplorer/updateIndex` — enqueue a full ranked-search-index
+/// `POST /admin/explorerUpdateIndex` — enqueue a full ranked-search-index
 /// rebuild. The native counterpart to classic's SBOLExplorer index-update call;
 /// it reuses the shared reindex enqueue path.
 pub async fn update_index(state: State<AppState>) -> Response {
     super::reindex(state).await
 }
 
-/// `GET /admin/sbolexplorer/config` — the stored SBOLExplorer settings, or a
+/// `GET /admin/explorer` — the stored SBOLExplorer settings, or a
 /// native default advertising the internal engine when unset.
 pub async fn get_config(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let value = state.app.config_service().get(EXPLORER_KEY).await?;
@@ -38,7 +38,7 @@ pub async fn get_config(State(state): State<AppState>) -> Result<Json<Value>, Ap
     )))
 }
 
-/// `POST /admin/sbolexplorer/config` — persist the SBOLExplorer settings.
+/// `POST /admin/explorer` — persist the SBOLExplorer settings.
 pub async fn set_config(
     State(state): State<AppState>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
@@ -56,7 +56,7 @@ pub async fn set_config(
     Ok(Json(json!({ "status": "ok" })))
 }
 
-/// `GET /admin/sbolexplorer/log` — the native engine's index-rebuild log
+/// `GET /admin/explorerLog` — the native engine's index-rebuild log
 /// envelope. The rebuild runs as the `rebuild_search_index` job; its per-run
 /// detail is available through the job-logs API.
 pub async fn log() -> Json<Value> {

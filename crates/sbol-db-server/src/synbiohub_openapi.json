@@ -1694,7 +1694,7 @@
         }
       }
     },
-    "/public/{collectionId}/{displayId}/{version}/attachURL": {
+    "/public/{collectionId}/{displayId}/{version}/attachUrl": {
       "parameters": [
         {
           "$ref": "#/components/parameters/XAuthorization"
@@ -3048,7 +3048,7 @@
         }
       }
     },
-    "/user/{userId}/{collectionId}/{displayId}/{version}/attachURL": {
+    "/user/{userId}/{collectionId}/{displayId}/{version}/attachUrl": {
       "parameters": [
         {
           "$ref": "#/components/parameters/XAuthorization"
@@ -3453,7 +3453,7 @@
         }
       }
     },
-    "/admin/usersConfig": {
+    "/admin/users": {
       "parameters": [
         {
           "$ref": "#/components/parameters/XAuthorization"
@@ -3536,7 +3536,7 @@
         }
       }
     },
-    "/admin/createUser": {
+    "/admin/newUser": {
       "post": {
         "tags": [
           "SynBioHub v1 Admin"
@@ -3925,7 +3925,7 @@
         }
       }
     },
-    "/admin/sbolexplorer/updateIndex": {
+    "/admin/explorerUpdateIndex": {
       "post": {
         "tags": [
           "SynBioHub v1 Admin"
@@ -3948,7 +3948,7 @@
         }
       }
     },
-    "/admin/sbolexplorer/config": {
+    "/admin/explorer": {
       "parameters": [
         {
           "$ref": "#/components/parameters/XAuthorization"
@@ -3995,7 +3995,7 @@
         }
       }
     },
-    "/admin/sbolexplorer/log": {
+    "/admin/explorerLog": {
       "get": {
         "tags": [
           "SynBioHub v1 Admin"

@@ -82,12 +82,12 @@ pub async fn set_theme(
     set_section(&state, &user, THEME_KEY, &headers, &body).await
 }
 
-/// `GET /admin/usersConfig`.
+/// `GET /admin/users`.
 pub async fn get_users_config(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     get_section(&state, USERS_CONFIG_KEY).await
 }
 
-/// `POST /admin/usersConfig`.
+/// `POST /admin/users`.
 pub async fn set_users_config(
     State(state): State<AppState>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,

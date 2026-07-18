@@ -1,6 +1,6 @@
 //! Admin user CRUD over the identity [`UserStore`](sbol_db_storage::UserStore).
 //!
-//! `POST /admin/createUser` registers an account (argon2-hashing the password
+//! `POST /admin/newUser` registers an account (argon2-hashing the password
 //! through [`AuthService`](sbol_db_app::AuthService)); `POST /admin/updateUser`
 //! edits an existing account's profile and membership flags; `POST
 //! /admin/deleteUser` removes one. All three are admin-gated by the router.
@@ -40,7 +40,7 @@ struct CreateUserBody {
     is_member: Option<bool>,
 }
 
-/// `POST /admin/createUser` — create an account with the given profile and
+/// `POST /admin/newUser` — create an account with the given profile and
 /// membership flags. A duplicate `username` or `email` is a `400`, matching
 /// classic's rejection. New accounts are members unless `isMember=false`.
 pub async fn create_user(

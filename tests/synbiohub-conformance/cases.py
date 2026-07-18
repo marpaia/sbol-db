@@ -497,7 +497,7 @@ def mutating_cases() -> List[Case]:
             "attach-url",
             "status",
             method="POST",
-            path=f"{SCRATCH_OBJECT}/attachURL",
+            path=f"{SCRATCH_OBJECT}/attachUrl",
             data={
                 "url": "https://example.org/data.txt",
                 "name": "data.txt",
@@ -653,6 +653,34 @@ def admin_cases() -> List[Case]:
         Case("admin-registries", "status", path="/admin/registries", auth=True),
         Case("admin-remotes", "status", path="/admin/remotes", auth=True),
         Case("admin-plugins", "status", path="/admin/plugins", auth=True),
+        # The renamed/added admin GET routes, at classic's exact paths.
+        Case("admin-explorer", "status", path="/admin/explorer", auth=True),
+        Case(
+            "admin-explorer-log",
+            "status",
+            path="/admin/explorerLog",
+            auth=True,
+            expected_divergence=(
+                "classic proxies this to the external SBOLExplorer service, which "
+                "hangs in the container; sbol-db serves the native engine's log "
+                "immediately"
+            ),
+        ),
+        Case(
+            "admin-explorer-indexing-log",
+            "status",
+            path="/admin/explorerIndexingLog",
+            auth=True,
+            expected_divergence=(
+                "classic proxies this to the external SBOLExplorer service, which "
+                "hangs in the container; sbol-db serves the native engine's log "
+                "immediately"
+            ),
+        ),
+        Case("admin-users", "status", path="/admin/users", auth=True),
+        Case("admin-log", "status", path="/admin/log", auth=True),
+        Case("admin-mail", "status", path="/admin/mail", auth=True),
+        Case("admin-theme", "status", path="/admin/theme", auth=True),
     ]
 
 

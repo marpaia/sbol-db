@@ -427,7 +427,7 @@ mod tests {
 
         let (status, body) = json_post(
             &fx.app,
-            "/admin/sbolexplorer/updateIndex",
+            "/admin/explorerUpdateIndex",
             &fx.admin_token,
             json!({}),
         )

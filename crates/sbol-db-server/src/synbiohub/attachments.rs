@@ -1,7 +1,7 @@
-//! SynBioHub v1 attachment routes: attach, attachURL, download.
+//! SynBioHub v1 attachment routes: attach, attachUrl, download.
 //!
 //! `POST <uri>/attach` stores an uploaded file in the blob store and mints a
-//! `sbol:Attachment` top-level linked to the object; `POST <uri>/attachURL`
+//! `sbol:Attachment` top-level linked to the object; `POST <uri>/attachUrl`
 //! records an external URL as an attachment with no local blob; `GET
 //! <uri>/download` streams a stored blob back, gzip-encoded, with the media type
 //! recorded on the attachment. The attach verbs are owner-gated through the
@@ -139,9 +139,9 @@ async fn parse_attach_form(mut multipart: Multipart) -> Result<AttachForm, ApiEr
     Ok(form)
 }
 
-// --- attachURL ----------------------------------------------------------------
+// --- attachUrl ----------------------------------------------------------------
 
-/// The fields a `POST <uri>/attachURL` carries: the external `url`, an optional
+/// The fields a `POST <uri>/attachUrl` carries: the external `url`, an optional
 /// display `name`, the media `type` IRI, and an optional display-id `id`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -212,7 +212,7 @@ async fn attach_url(
     Ok(success())
 }
 
-/// Parse the attachURL body as JSON when the `Content-Type` says so, else as
+/// Parse the attachUrl body as JSON when the `Content-Type` says so, else as
 /// form-encoded, matching the other V1 mutation routes.
 fn parse_url_form(headers: &HeaderMap, body: &[u8]) -> Result<AttachUrlForm, ApiError> {
     if body.is_empty() {
