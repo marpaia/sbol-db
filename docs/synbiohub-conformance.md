@@ -179,19 +179,39 @@ identities and the responses compare directly.
 
 ## Result
 
-The byte-equal tier — every V1 endpoint whose two implementations agree by
-design — compares **equal across the full corpus**. This covers the read and
-query surface (`/metadata`, `/rootCollections`, `/subCollections`, `/uses`,
-`/twins`, the `/:type/count` family, `/manage`, `/shared`, `/sparql`), every
-download format (`/sbol`, `/sbolnr`, versioned SBOL, `/gff`, `/fasta`,
-`/genbank`, `/omex`, `/summary`), and the mutating surface (`/submit`,
-`/makePublic`, the edit and permission routes, `/register`, `/login`,
-`/logout`, profile).
+The differential exercises the **whole in-scope V1 surface** — every classic
+endpoint the adapter serves — and the byte-equal tier (endpoints whose two
+implementations agree by design) compares **76/76 equal across the full
+corpus**, with 18 endpoints reported separately as documented divergences.
 
-A small set of endpoints diverge by design and are reported separately, each
-with a recorded reason (`Case.expected_divergence`). They are not forced to a
-false match: matching them would mean replicating a classic defect or
-abandoning a sound design choice.
+The byte-equal tier covers:
+
+- the read and query surface (`/metadata`, `/rootCollections`,
+  `/subCollections`, `/uses`, `/twins`, the `/:type/count` family, `/manage`,
+  `/shared`, `/sparql`);
+- every download format (`/sbol`, `/sbolnr`, versioned SBOL, `/gff`, `/fasta`,
+  `/genbank`, `/omex`, `/summary`), plus bare and version-less object resolution
+  (`GET <object>`, `/full`, version-less `/sbol`);
+- the mutating surface (`/submit`, `/makePublic`, the edit and permission
+  routes, `/register`, `/login`, `/logout`, profile);
+- the admin surface (dashboard, graphs, sparql, log, mail, theme, users,
+  registries, remotes, plugins, explorer, virtuoso, listLogs) at classic's exact
+  paths;
+- the UI-support, jobs, remote-federation, and share-link surfaces
+  (`/api/stream`, `/sbsearch`, `/actions/job/*`, `/remoteLogin`, `/remoteSearch`,
+  `<object>/copyFromRemote`, `<object>/shareLink`, and the `/:hash/share/*`
+  read routes).
+
+The share-link routes use classic's hash (`sha1('synbiohub_' + sha1(uri) +
+salt)`); with the shared default salt (`synbiohub_change_me`) a hash minted by
+either side verifies on both, so the differential mints a share hash and reads
+the private object back through it.
+
+The remaining endpoints diverge by design and are reported separately, each with
+a recorded reason (`Case.expected_divergence`). They are not forced to a false
+match: matching them would mean replicating a classic defect or abandoning a
+sound design choice. In every one, sbol-db is the correct (or more secure) side,
+or the two are equally valid.
 
 ### Classic defects, where sbol-db is correct
 
@@ -203,6 +223,19 @@ abandoning a sound design choice.
 - `/search/objectType=<type>`: SBOLExplorer returns `[]` for an object-type
   facet. sbol-db resolves the facet to an `rdf:type` filter and returns the
   matching objects.
+- `/admin/explorerLog` and `/admin/explorerIndexingLog`: classic proxies these
+  to the external SBOLExplorer service, which hangs in the reference container;
+  sbol-db serves the native engine's log directly.
+- `/autocomplete` and `/api/datatables`: classic's autocomplete title cache is
+  unpopulated in the container (returns `[]`) and its DataTables handler `500`s
+  without the full browser query; sbol-db answers both from live scoped queries.
+- `/updateWebOfRegistries`: sbol-db validates the shared update secret and
+  rejects a wrong one with `403`; classic accepts a bad secret with `200`.
+- `/callPlugin`: classic `500`s on an empty plugin call; sbol-db returns `404`
+  for the unknown plugin.
+- Jobs (`/admin/jobs`, `/actions/job/*`, `/corruptLog`): classic's jobs feature
+  is disabled in the reference container (`404`); sbol-db's job queue is always
+  available.
 
 ### Both valid, different by design
 
@@ -233,6 +266,13 @@ abandoning a sound design choice.
   verbatim as submitted. The two graphs are semantically equivalent — every
   download and serialization case compares byte-equal — so only the raw triple
   total differs.
+- version-less `/sbolnr`: classic's version-less resolution inlines the
+  referenced Sequence, returning a fuller closure than its own versioned
+  `/sbolnr` route (so classic disagrees with itself); sbol-db returns the same
+  non-recursive closure for both.
+- `GET <object>/icon`: classic serves the object's icon image (permission gated);
+  sbol-db's adapter serves the icon upload (`POST`) and leaves image fetching to
+  sbol-db's own UI.
 
 The typed-literal token also differs on `/sparql`: the reference (Virtuoso)
 emits the legacy `{"type":"typed-literal"}`, while sbol-db emits the SPARQL 1.1

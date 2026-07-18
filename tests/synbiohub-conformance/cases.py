@@ -382,6 +382,47 @@ def support_cases() -> List[Case]:
             headers=_PLAIN,
         ),
         Case("remote-search", "status", path="/remoteSearch/plasmid", headers=_JSON, auth=True),
+        # Remaining endpoint coverage: an object with no attachment bundle and an
+        # unknown expose id both 404 on either side; the plugin proxy handshake is
+        # exercised below.
+        Case("attachment-download", "status", path=f"{OBJECT_PATH}/download", auth=True),
+        Case("expose-unknown", "status", path="/expose/nonexistent", auth=True),
+        Case(
+            "icon",
+            "status",
+            path=f"{OBJECT_PATH}/icon",
+            auth=True,
+            expected_divergence=(
+                "classic's GET /icon serves the object's icon image (permission "
+                "gated, 403 here); sbol-db's adapter serves the icon upload (POST) "
+                "and leaves image fetching to sbol-db's own UI"
+            ),
+        ),
+        Case(
+            "update-web-of-registries",
+            "status",
+            method="POST",
+            path="/updateWebOfRegistries?secret=nope",
+            data={},
+            headers=_PLAIN,
+            expected_divergence=(
+                "sbol-db validates the shared update secret and rejects a wrong "
+                "one with 403; classic accepts a bad secret with 200"
+            ),
+        ),
+        Case(
+            "call-plugin",
+            "status",
+            method="POST",
+            path="/callPlugin",
+            data={},
+            headers=_PLAIN,
+            auth=True,
+            expected_divergence=(
+                "classic 500s on an empty plugin call; sbol-db returns 404 for the "
+                "unknown plugin"
+            ),
+        ),
         Case(
             "copy-from-remote",
             "status",
@@ -820,6 +861,15 @@ def admin_cases() -> List[Case]:
         Case("admin-log", "status", path="/admin/log", auth=True),
         Case("admin-mail", "status", path="/admin/mail", auth=True),
         Case("admin-theme", "status", path="/admin/theme", auth=True),
+        Case(
+            "admin-federate-empty",
+            "status",
+            method="POST",
+            path="/admin/federate",
+            data={},
+            headers=_PLAIN,
+            auth=True,
+        ),
         Case("admin-virtuoso", "status", path="/admin/virtuoso", auth=True),
         Case("admin-list-logs", "status", path="/admin/listLogs", auth=True),
         Case(
