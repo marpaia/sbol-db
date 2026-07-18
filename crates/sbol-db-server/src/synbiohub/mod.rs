@@ -73,6 +73,50 @@ pub fn router(state: AppState) -> Router<AppState> {
         // Classic registers `/submit/` (trailing slash); Express matches both,
         // so accept both to stay a drop-in for clients built against either.
         .route("/submit/", post(submit::submit))
+        // Bare object resolution (classic's `views.topLevel`): a GET on the
+        // object URI, its `/full` alias, and the version-less persistent identity
+        // all return the object's recursive SBOL closure for a non-HTML client. A
+        // version-less URI resolves to the latest version.
+        .route(
+            "/public/:collectionId/:displayId/:version",
+            get(download::public_object),
+        )
+        .route(
+            "/public/:collectionId/:displayId/:version/full",
+            get(download::public_object_full),
+        )
+        .route(
+            "/public/:collectionId/:displayId",
+            get(download::public_object_pi),
+        )
+        .route(
+            "/public/:collectionId/:displayId/sbol",
+            get(download::public_sbol_pi),
+        )
+        .route(
+            "/public/:collectionId/:displayId/sbolnr",
+            get(download::public_sbolnr_pi),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version",
+            get(download::user_object),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/full",
+            get(download::user_object_full),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId",
+            get(download::user_object_pi),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/sbol",
+            get(download::user_sbol_pi),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/sbolnr",
+            get(download::user_sbolnr_pi),
+        )
         // Destructive object verbs. Classic triggers these with GET on the
         // object path (a browser-form quirk); the facade holds the real verbs
         // and gates every one on caller ownership.

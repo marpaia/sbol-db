@@ -69,6 +69,38 @@ pub(super) fn user_uri(object: &UserObject) -> String {
     )
 }
 
+/// A version-less public object path, `/public/<collectionId>/<displayId>`: the
+/// persistent identity, which the caller resolves to the latest version.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicObjectPi {
+    pub collection_id: String,
+    pub display_id: String,
+}
+
+/// A version-less user object path, `/user/<userId>/<collectionId>/<displayId>`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserObjectPi {
+    pub user_id: String,
+    pub collection_id: String,
+    pub display_id: String,
+}
+
+pub(super) fn public_pi_uri(object: &PublicObjectPi) -> String {
+    format!(
+        "{BASE}public/{}/{}",
+        object.collection_id, object.display_id
+    )
+}
+
+pub(super) fn user_pi_uri(object: &UserObjectPi) -> String {
+    format!(
+        "{BASE}user/{}/{}/{}",
+        object.user_id, object.collection_id, object.display_id
+    )
+}
+
 // --- /search and /searchCount ------------------------------------------------
 
 /// The query parameters the bare `GET /search` route accepts. This path is
@@ -415,7 +447,7 @@ pub(super) async fn scope_for(
 
 /// Run a SPARQL query under the caller's scope and parse the engine's
 /// SPARQL-results JSON into a value the classic-shape renderers project from.
-async fn run_scoped_value(
+pub(super) async fn run_scoped_value(
     state: &AppState,
     query: &str,
     scope: GraphScope,

@@ -27,7 +27,10 @@ use sbol_db_core::{DomainError, SerializationFormat, Triple, User};
 use sbol_db_sparql::GraphScope;
 use serde::Deserialize;
 
-use super::routes::{public_uri, scope_for, user_uri, PublicObject, UserObject};
+use super::routes::{
+    public_pi_uri, public_uri, run_scoped_value, scope_for, user_pi_uri, user_uri, PublicObject,
+    PublicObjectPi, UserObject, UserObjectPi,
+};
 use super::CurrentUser;
 use crate::serialize::{
     serialize_closure, serialize_gff3, serialize_omex, serialize_summary, OmexAttachment,
@@ -135,6 +138,146 @@ download_routes!(public_fasta, user_fasta, Format::Fasta);
 download_routes!(public_gff, user_gff, Format::Gff3);
 download_routes!(public_omex, user_omex, Format::Omex);
 download_routes!(public_summary, user_summary, Format::Summary);
+
+/// Resolve a persistent-identity URI to its latest version's object URI, scoped
+/// to the caller. Classic serves a version-less object URI as the newest
+/// version; the highest `sbol:version` under the persistent identity wins.
+/// Returns `None` when no versioned object is visible.
+async fn latest_version_uri(
+    state: &AppState,
+    scope: GraphScope,
+    persistent_identity: &str,
+) -> Result<Option<String>, ApiError> {
+    let query = format!(
+        "PREFIX sbol2: <http://sbols.org/v2#>\n\
+         SELECT ?version WHERE {{ ?s sbol2:persistentIdentity <{persistent_identity}> ; \
+         sbol2:version ?version }} ORDER BY DESC(?version) LIMIT 1"
+    );
+    let value = run_scoped_value(state, &query, scope).await?;
+    let version = value["results"]["bindings"]
+        .get(0)
+        .and_then(|b| b["version"]["value"].as_str())
+        .map(str::to_owned);
+    Ok(version.map(|v| format!("{persistent_identity}/{v}")))
+}
+
+/// Generate the bare object-resolution handlers (public and user) that classic
+/// serves off `views.topLevel`: a `GET` on the object URI (and its `/full`
+/// alias) returns the object's recursive SBOL closure for any non-HTML client,
+/// the same bytes as the `/sbol` route. A version-less URI resolves to the
+/// latest version first.
+macro_rules! object_routes {
+    ($public:ident, $user:ident, $public_pi:ident, $user_pi:ident) => {
+        pub async fn $public(
+            State(state): State<AppState>,
+            Extension(CurrentUser(user)): Extension<CurrentUser>,
+            Path(object): Path<PublicObject>,
+        ) -> Result<Response, ApiError> {
+            let display_id = object.display_id.clone();
+            download(
+                state,
+                user,
+                public_uri(&object),
+                display_id,
+                Format::Sbol,
+                None,
+            )
+            .await
+        }
+
+        pub async fn $user(
+            State(state): State<AppState>,
+            Extension(CurrentUser(user)): Extension<CurrentUser>,
+            Path(object): Path<UserObject>,
+        ) -> Result<Response, ApiError> {
+            let display_id = object.display_id.clone();
+            download(
+                state,
+                user,
+                user_uri(&object),
+                display_id,
+                Format::Sbol,
+                None,
+            )
+            .await
+        }
+
+        pub async fn $public_pi(
+            State(state): State<AppState>,
+            Extension(CurrentUser(user)): Extension<CurrentUser>,
+            Path(object): Path<PublicObjectPi>,
+        ) -> Result<Response, ApiError> {
+            let pi = public_pi_uri(&object);
+            let scope = scope_for(&state, &user).await?;
+            let uri = latest_version_uri(&state, scope, &pi)
+                .await?
+                .ok_or_else(|| ApiError::NotFound(pi))?;
+            download(state, user, uri, object.display_id, Format::Sbol, None).await
+        }
+
+        pub async fn $user_pi(
+            State(state): State<AppState>,
+            Extension(CurrentUser(user)): Extension<CurrentUser>,
+            Path(object): Path<UserObjectPi>,
+        ) -> Result<Response, ApiError> {
+            let pi = user_pi_uri(&object);
+            let scope = scope_for(&state, &user).await?;
+            let uri = latest_version_uri(&state, scope, &pi)
+                .await?
+                .ok_or_else(|| ApiError::NotFound(pi))?;
+            download(state, user, uri, object.display_id, Format::Sbol, None).await
+        }
+    };
+}
+
+// The bare object GET and its `/full` alias both serve the recursive SBOL
+// closure; `full` is classic's whole-object page, which is the same closure for
+// a non-HTML client.
+object_routes!(public_object, user_object, public_object_pi, user_object_pi);
+object_routes!(
+    public_object_full,
+    user_object_full,
+    public_object_pi_full,
+    user_object_pi_full
+);
+
+/// Generate version-less download handlers for one format: resolve the
+/// persistent identity to its latest version, then serve as usual. Classic
+/// serves `/public/<c>/<d>/sbol` (no version) as the newest version's closure.
+macro_rules! versionless_download_routes {
+    ($public:ident, $user:ident, $format:expr) => {
+        pub async fn $public(
+            State(state): State<AppState>,
+            Extension(CurrentUser(user)): Extension<CurrentUser>,
+            Path(object): Path<PublicObjectPi>,
+            Query(params): Query<DownloadParams>,
+        ) -> Result<Response, ApiError> {
+            let pi = public_pi_uri(&object);
+            let scope = scope_for(&state, &user).await?;
+            let uri = latest_version_uri(&state, scope, &pi)
+                .await?
+                .ok_or_else(|| ApiError::NotFound(pi))?;
+            download(state, user, uri, object.display_id, $format, params.version).await
+        }
+
+        pub async fn $user(
+            State(state): State<AppState>,
+            Extension(CurrentUser(user)): Extension<CurrentUser>,
+            Path(object): Path<UserObjectPi>,
+            Query(params): Query<DownloadParams>,
+        ) -> Result<Response, ApiError> {
+            let pi = user_pi_uri(&object);
+            let scope = scope_for(&state, &user).await?;
+            let uri = latest_version_uri(&state, scope, &pi)
+                .await?
+                .ok_or_else(|| ApiError::NotFound(pi))?;
+            download(state, user, uri, object.display_id, $format, params.version).await
+        }
+    };
+}
+
+versionless_download_routes!(public_sbol_pi, user_sbol_pi, Format::Sbol);
+versionless_download_routes!(public_sbolnr_pi, user_sbolnr_pi, Format::SbolNonRecursive);
 
 /// Crawl the ACL-scoped closure of `uri` and render it as `format`, returning
 /// the bytes as a download attachment named after the object's display id.

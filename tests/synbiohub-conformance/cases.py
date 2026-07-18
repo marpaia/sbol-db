@@ -60,6 +60,7 @@ CORPUS_PATH = Path(__file__).resolve().parent / "fixtures" / "smoke-corpus.nt"
 # The seeded public object and collection, addressed by the V1 path grammar
 # `/public/<collectionId>/<displayId>/<version>`.
 OBJECT_PATH = "/public/smoke/pSmoke/1"
+OBJECT_PATH_PI = "/public/smoke/pSmoke"
 COLLECTION_PATH = "/public/smoke/smoke_collection/1"
 
 # The scratch collection the mutating suite submits into `testuser`'s namespace
@@ -101,6 +102,7 @@ LOGIN_PASSWORD = "test"
 
 _JSON = {"Accept": "application/json"}
 _PLAIN = {"Accept": "text/plain"}
+_RDFXML = {"Accept": "application/rdf+xml"}
 _SPARQL_JSON = {"Accept": "application/sparql-results+json"}
 
 
@@ -311,6 +313,30 @@ def download_cases() -> List[Case]:
         Case("genbank", "genbank", path=f"{OBJECT_PATH}/gb"),
         Case("omex", "omex", path=f"{OBJECT_PATH}/omex"),
         Case("summary", "json", path=f"{OBJECT_PATH}/summary", headers=_JSON),
+        # Bare object resolution (classic's views.topLevel): a GET on the object
+        # URI, its /full alias, and the version-less persistent identity serve the
+        # object's SBOL closure for a non-HTML client. Requested as RDF so classic
+        # returns SBOL rather than the HTML page.
+        Case("object-bare", "sbol", path=OBJECT_PATH, headers=_RDFXML),
+        Case("object-full", "sbol", path=f"{OBJECT_PATH}/full", headers=_RDFXML),
+        Case(
+            "object-versionless",
+            "sbol",
+            path=OBJECT_PATH_PI,
+            headers=_RDFXML,
+        ),
+        Case("sbol-versionless", "sbol", path=f"{OBJECT_PATH_PI}/sbol"),
+        Case(
+            "sbolnr-versionless",
+            "sbol",
+            path=f"{OBJECT_PATH_PI}/sbolnr",
+            expected_divergence=(
+                "classic's version-less resolution returns a fuller closure than "
+                "its own versioned /sbolnr route (it inlines the referenced "
+                "Sequence), so version-less and versioned disagree on classic; "
+                "sbol-db returns the same non-recursive closure for both"
+            ),
+        ),
     ]
 
 
