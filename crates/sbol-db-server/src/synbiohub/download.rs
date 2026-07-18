@@ -41,7 +41,7 @@ use crate::{ApiError, AppState};
 /// The download format a route serves, selecting the closure kind (recursive vs
 /// non-recursive), the serializer, and the attachment file extension.
 #[derive(Clone, Copy)]
-enum Format {
+pub(super) enum Format {
     /// The recursive RDF closure as RDF/XML.
     Sbol,
     /// The non-recursive RDF closure as RDF/XML.
@@ -230,16 +230,47 @@ macro_rules! object_routes {
     };
 }
 
-// The bare object GET and its `/full` alias both serve the recursive SBOL
-// closure; `full` is classic's whole-object page, which is the same closure for
-// a non-HTML client.
+// The bare object GET and the version-less persistent identity both serve the
+// recursive SBOL closure for a non-HTML client.
 object_routes!(public_object, user_object, public_object_pi, user_object_pi);
-object_routes!(
-    public_object_full,
-    user_object_full,
-    public_object_pi_full,
-    user_object_pi_full
-);
+
+/// `GET <object>/full` (public) — classic's whole-object page, the same
+/// recursive closure as the bare object for a non-HTML client. Only the
+/// versioned form exists (classic has no version-less `/full`).
+pub async fn public_object_full(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(object): Path<PublicObject>,
+) -> Result<Response, ApiError> {
+    let display_id = object.display_id.clone();
+    download(
+        state,
+        user,
+        public_uri(&object),
+        display_id,
+        Format::Sbol,
+        None,
+    )
+    .await
+}
+
+/// `GET <object>/full` (user); see [`public_object_full`].
+pub async fn user_object_full(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(object): Path<UserObject>,
+) -> Result<Response, ApiError> {
+    let display_id = object.display_id.clone();
+    download(
+        state,
+        user,
+        user_uri(&object),
+        display_id,
+        Format::Sbol,
+        None,
+    )
+    .await
+}
 
 /// Generate version-less download handlers for one format: resolve the
 /// persistent identity to its latest version, then serve as usual. Classic
@@ -289,8 +320,22 @@ async fn download(
     format: Format,
     version: Option<String>,
 ) -> Result<Response, ApiError> {
-    let sbol2 = wants_sbol2(version.as_deref())?;
     let scope = scope_for(&state, &user).await?;
+    download_scoped(state, scope, uri, display_id, format, version).await
+}
+
+/// [`download`] with the read scope supplied directly rather than computed from
+/// an identity. The share-link path uses this: a valid share hash authorizes the
+/// object, so the closure is read under [`GraphScope::Union`].
+pub(super) async fn download_scoped(
+    state: AppState,
+    scope: GraphScope,
+    uri: String,
+    display_id: String,
+    format: Format,
+    version: Option<String>,
+) -> Result<Response, ApiError> {
+    let sbol2 = wants_sbol2(version.as_deref())?;
     let triples = fetch_closure(&state, &uri, format, scope).await?;
     if triples.is_empty() {
         return Err(ApiError::NotFound(uri));

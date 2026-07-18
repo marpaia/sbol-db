@@ -32,7 +32,7 @@ pub use acl::{AclService, PUBLIC_GRAPH};
 pub use attachment::{
     attachment_uris, read_attachment, AttachmentRef, AttachmentService, UNKNOWN_ATTACHMENT_TYPE,
 };
-pub use auth::{AuthService, PasswordReset, Registration};
+pub use auth::{share_hash, AuthService, PasswordReset, Registration};
 pub use blob::FsBlobStore;
 pub use collection::{CollectionService, MintScope, MintedSubmission, Submission};
 pub use config::{ConfigError, ConfigService};

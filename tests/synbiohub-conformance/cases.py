@@ -48,12 +48,23 @@ suite submits into `testuser`'s namespace.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from pathlib import Path
 from typing import List
 
 from conformance import Case
+
+# The default per-instance share/password salt both classic (`shareLinkSalt`) and
+# sbol-db (`password_salt`) ship with, so a share hash matches on both sides.
+SHARE_SALT = "synbiohub_change_me"
+
+
+def _share_hash(uri: str) -> str:
+    """classic's `sha1('synbiohub_' + sha1(uri) + shareLinkSalt)`, lowercase hex."""
+    inner = hashlib.sha1(uri.encode()).hexdigest()
+    return hashlib.sha1(f"synbiohub_{inner}{SHARE_SALT}".encode()).hexdigest()
 
 CORPUS_PATH = Path(__file__).resolve().parent / "fixtures" / "smoke-corpus.nt"
 
@@ -75,6 +86,9 @@ SCRATCH_COLLECTION = f"/user/testuser/{SCRATCH_ID}/{SCRATCH_ID}_collection/1"
 SCRATCH_OBJECT = f"/user/testuser/{SCRATCH_ID}/pScratch/1"
 SCRATCH_COLLECTION_URI = f"http://synbiohub.org/user/testuser/{SCRATCH_ID}/{SCRATCH_ID}_collection/1"
 SCRATCH_OBJECT_URI = f"http://synbiohub.org/user/testuser/{SCRATCH_ID}/pScratch/1"
+# The share-hash path for the private scratch object: a holder of this hash reads
+# it without login. Valid only while the object is private (before makePublic).
+SCRATCH_SHARE = f"{SCRATCH_OBJECT}/{_share_hash(SCRATCH_OBJECT_URI)}/share"
 
 # The single-object SBOL2 document the scratch submit uploads. A minimal
 # compliant ComponentDefinition so the submit succeeds on libSBOLj (reference)
@@ -340,10 +354,98 @@ def download_cases() -> List[Case]:
     ]
 
 
+def support_cases() -> List[Case]:
+    """UI-support data APIs. `api/stream` (unknown id) and the `sbsearch` entry
+    point compare on status; autocomplete and the DataTables feed are documented
+    divergences because classic is non-functional in the reference container (its
+    autocomplete title cache is unpopulated, and its DataTables handler 500s
+    without the full browser query), while sbol-db answers them from live
+    queries."""
+    return [
+        Case(
+            "api-stream-unknown",
+            "status",
+            path="/api/stream/nonexistent123",
+            auth=True,
+        ),
+        Case("sbsearch", "status", path="/sbsearch", auth=True),
+        # Remote federation client. remoteLogin/Search are classic's deprecated
+        # no-HTML aliases for login/search; copyFromRemote is a no-op for a local
+        # object. All compare on status (the search body divergence is covered by
+        # search-freetext).
+        Case(
+            "remote-login",
+            "status",
+            method="POST",
+            path="/remoteLogin",
+            data={"email": LOGIN_EMAIL, "password": LOGIN_PASSWORD},
+            headers=_PLAIN,
+        ),
+        Case("remote-search", "status", path="/remoteSearch/plasmid", headers=_JSON, auth=True),
+        Case(
+            "copy-from-remote",
+            "status",
+            path=f"{OBJECT_PATH}/copyFromRemote",
+            auth=True,
+        ),
+        Case(
+            "corrupt-log",
+            "status",
+            path="/corruptLog",
+            auth=True,
+            expected_divergence=(
+                "classic's jobs/corrupt-object-log feature is disabled in the "
+                "reference container (404); sbol-db validates on submit and serves "
+                "an empty corrupt-object log"
+            ),
+        ),
+        Case(
+            "job-cancel",
+            "status",
+            method="POST",
+            path="/actions/job/cancel",
+            data={"id": "00000000-0000-0000-0000-000000000000"},
+            headers=_PLAIN,
+            auth=True,
+            expected_divergence=(
+                "classic's jobs feature is disabled in the reference container "
+                "(404); sbol-db's job queue answers the cancel action"
+            ),
+        ),
+        Case(
+            "autocomplete",
+            "json",
+            path="/autocomplete/pSmoke",
+            headers=_JSON,
+            auth=True,
+            expected_divergence=(
+                "classic's autocomplete title cache is unpopulated in the "
+                "reference container (returns []); sbol-db answers from a live "
+                "scoped title-prefix query"
+            ),
+        ),
+        Case(
+            "datatables",
+            "json",
+            path=(
+                "/api/datatables?type=collectionMembers&collectionUri="
+                "http://synbiohub.org/public/labhost_all/labhost_all_collection/1"
+                "&draw=1&start=0&length=5"
+            ),
+            headers=_JSON,
+            auth=True,
+            expected_divergence=(
+                "classic's DataTables handler 500s without the full browser query "
+                "(order/search parameters); sbol-db returns the members feed"
+            ),
+        ),
+    ]
+
+
 def read_only_cases() -> List[Case]:
     """Every case that leaves server state untouched: auth reads, the query
-    surface, and the download surface."""
-    return auth_read_cases() + query_cases() + download_cases()
+    surface, the download surface, and the UI-support data APIs."""
+    return auth_read_cases() + query_cases() + download_cases() + support_cases()
 
 
 # --------------------------------------------------------------------------- #
@@ -387,6 +489,17 @@ def mutating_cases() -> List[Case]:
             readback=f"{SCRATCH_COLLECTION}/sbol",
             readback_category="sbol",
         ),
+        # Share links (while the scratch object is still private): the owner mints
+        # a share hash, and a logged-in holder of the hash reads the object.
+        Case("share-link", "status", path=f"{SCRATCH_OBJECT}/shareLink", auth=True),
+        Case(
+            "share-metadata",
+            "json",
+            path=f"{SCRATCH_SHARE}/metadata",
+            headers=_JSON,
+            auth=True,
+        ),
+        Case("share-sbol", "sbol", path=f"{SCRATCH_SHARE}/sbol", headers=_RDFXML, auth=True),
         # Mutable text fields (uri in body).
         Case(
             "update-mutable-description",
@@ -707,6 +820,18 @@ def admin_cases() -> List[Case]:
         Case("admin-log", "status", path="/admin/log", auth=True),
         Case("admin-mail", "status", path="/admin/mail", auth=True),
         Case("admin-theme", "status", path="/admin/theme", auth=True),
+        Case("admin-virtuoso", "status", path="/admin/virtuoso", auth=True),
+        Case("admin-list-logs", "status", path="/admin/listLogs", auth=True),
+        Case(
+            "admin-jobs",
+            "status",
+            path="/admin/jobs",
+            auth=True,
+            expected_divergence=(
+                "classic's jobs feature is disabled in the reference container "
+                "(404); sbol-db's job queue is always available"
+            ),
+        ),
     ]
 
 

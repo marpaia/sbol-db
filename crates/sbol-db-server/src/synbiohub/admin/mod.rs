@@ -48,6 +48,9 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/admin/graphs", get(data_routes::graphs))
         .route("/admin/sparql", get(data_routes::sparql))
         .route("/admin/log", get(config_routes::log))
+        .route("/admin/jobs", get(super::jobs::admin_jobs))
+        .route("/admin/virtuoso", get(super::jobs::virtuoso))
+        .route("/admin/listLogs", get(super::jobs::list_logs))
         .route(
             "/admin/mail",
             get(config_routes::get_mail).post(config_routes::set_mail),

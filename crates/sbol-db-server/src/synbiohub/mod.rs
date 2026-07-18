@@ -12,6 +12,7 @@ mod attachments;
 mod auth;
 mod download;
 mod edit;
+mod jobs;
 mod mutate;
 mod permission;
 mod plugins;
@@ -20,7 +21,9 @@ mod render;
 mod routes;
 mod search;
 mod sequence;
+mod share;
 mod submit;
+mod support;
 
 use axum::extract::{Request, State};
 use axum::middleware::Next;
@@ -69,6 +72,105 @@ pub fn router(state: AppState) -> Router<AppState> {
         )
         // Submission: mint an SBOL document into the caller's own user graph.
         // Identity-gated; anonymous callers are rejected.
+        // Jobs: the cancel/restart actions (the caller's `/jobs` list is served
+        // by the native server router).
+        .route("/actions/job/cancel", post(jobs::cancel_job))
+        .route("/actions/job/restart", post(jobs::restart_job))
+        .route("/corruptLog", get(jobs::corrupt_log))
+        // UI-support data APIs (autocomplete, DataTables feed, result stream,
+        // sequence-search entry point).
+        .route("/autocomplete/:query", get(support::autocomplete))
+        .route("/api/datatables", get(support::datatables))
+        .route(
+            "/api/stream/:id",
+            get(support::stream).delete(support::stream),
+        )
+        .route(
+            "/sbsearch",
+            get(support::sbsearch_get).post(support::sbsearch_post),
+        )
+        // Share links: mint a share hash for an object, and the hash-scoped
+        // read surface that serves the (possibly private) object without login.
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/shareLink",
+            get(share::share_link),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share",
+            get(share::share_bare),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share/full",
+            get(share::share_full),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share/sbol",
+            get(share::share_sbol),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share/sbolnr",
+            get(share::share_sbolnr),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share/gb",
+            get(share::share_genbank),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share/fasta",
+            get(share::share_fasta),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share/gff",
+            get(share::share_gff),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share/omex",
+            get(share::share_omex),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share/summary",
+            get(share::share_summary),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share/metadata",
+            get(share::share_metadata),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share/subCollections",
+            get(share::share_sub_collections),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share/uses",
+            get(share::share_uses),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share/usesCount",
+            get(share::share_uses_count),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share/twins",
+            get(share::share_twins),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/:hash/share/twinsCount",
+            get(share::share_twins_count),
+        )
+        // Remote federation client. The remoteLogin/Search/Submit routes are
+        // classic's deprecated no-HTML aliases for login/search/submit;
+        // copyFromRemote imports an object from the registry that owns it.
+        .route("/remoteLogin", post(auth::login))
+        .route("/remoteSearch", get(routes::search_root))
+        .route("/remoteSearch/*query", get(routes::search))
+        .route("/remoteSubmit", post(submit::submit))
+        .route("/remoteSubmit/", post(submit::submit))
+        .route(
+            "/public/:collectionId/:displayId/:version/copyFromRemote",
+            get(support::public_copy_from_remote).post(support::public_copy_from_remote),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/:version/copyFromRemote",
+            get(support::user_copy_from_remote).post(support::user_copy_from_remote),
+        )
         .route("/submit", post(submit::submit))
         // Classic registers `/submit/` (trailing slash); Express matches both,
         // so accept both to stay a drop-in for clients built against either.

@@ -411,7 +411,10 @@ fn content_type(headers: &HeaderMap) -> String {
 /// Deserialize a request body as JSON when the `Content-Type` says so, else as
 /// form-encoded. Classic posts `application/x-www-form-urlencoded`; API clients
 /// often send JSON.
-fn parse_body<T: DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Result<T, ApiError> {
+pub(super) fn parse_body<T: DeserializeOwned>(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<T, ApiError> {
     if content_type(headers) == "application/json" {
         serde_json::from_slice(body)
             .map_err(|e| ApiError::BadRequest(format!("invalid JSON body: {e}")))

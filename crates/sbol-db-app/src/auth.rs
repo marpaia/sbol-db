@@ -231,6 +231,16 @@ fn legacy_hash(salt: &str, password: &str) -> String {
     hex::encode(Sha1::digest(format!("{salt}{inner}").as_bytes()))
 }
 
+/// The share-link hash for an object URI, `sha1('synbiohub_' + sha1(uri) +
+/// salt)` in lowercase hex, matching classic SynBioHub's `shareLink` /
+/// `datatables` computation (`sha1('synbiohub_' + sha1(uri) + shareLinkSalt)`).
+/// A holder of this hash may read the object without an account, so the salt is
+/// the per-instance secret that makes the hash unguessable.
+pub fn share_hash(uri: &str, salt: &str) -> String {
+    let inner = hex::encode(Sha1::digest(uri.as_bytes()));
+    hex::encode(Sha1::digest(format!("synbiohub_{inner}{salt}").as_bytes()))
+}
+
 /// The stored form of an API token: sha3-256 of the plaintext, hex-encoded.
 fn token_hash(token: &str) -> String {
     hex::encode(Sha3_256::digest(token.as_bytes()))
