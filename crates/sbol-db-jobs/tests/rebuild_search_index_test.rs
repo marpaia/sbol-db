@@ -172,6 +172,17 @@ async fn rebuild_populates_ranks_and_index() {
         hits[0].subject
     );
 
+    // The sketch stage sourced sequences from the verbatim SBOL2 triples, so the
+    // persisted MinHash/LSH index is populated even though the derived typed view
+    // is empty for a graph-store submission. This is the version-agnostic rebuild
+    // path: verbatim SBOL2 sketches just like an upgraded SBOL3 import, so the
+    // incremental sequence-search align path has a durable index on this corpus.
+    let sketches = sketch.all_sketches().await.expect("all sketches");
+    assert!(
+        !sketches.is_empty(),
+        "rebuild must persist sketches for verbatim SBOL2 sequences"
+    );
+
     // Feeding the persisted clusters into the search activates the divide-by-2
     // duplicate penalty: of the two clustered promoters, whichever ranks first
     // keeps its score and its cluster mate is halved. The two match the query

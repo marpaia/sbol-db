@@ -48,6 +48,11 @@ const ROLE: &str = "http://sbols.org/v2#role";
 const SEQUENCE: &str = "http://sbols.org/v2#sequence";
 /// The `sbol2:elements` predicate carrying a Sequence's nucleotide string.
 const ELEMENTS: &str = "http://sbols.org/v2#elements";
+/// The `sbol3:elements` predicate. The sketch and clustering stages read both
+/// vocabularies so a verbatim SBOL 2 submission and an upgraded SBOL 3 import
+/// populate the indexes identically, from the triples rather than the
+/// version-specific derived view.
+const ELEMENTS_V3: &str = "http://sbols.org/v3#elements";
 const TITLE: &str = "http://purl.org/dc/terms/title";
 const DESCRIPTION: &str = "http://purl.org/dc/terms/description";
 
@@ -91,14 +96,15 @@ impl JobHandler for RebuildSearchIndexHandler {
         let uris_set = top_level_iris(&all_triples);
         let uris: Vec<String> = uris_set.iter().cloned().collect();
 
-        // Sketch stage: sketch every DNA/RNA sequence in the derived view and
-        // swap the whole MinHash/LSH index in. The elements come from the derived
-        // `sbol_sequences` view (keyed by the Sequence IRI) rather than the raw
-        // triples, so the index covers the corpus whatever its source SBOL
-        // version and its keys match the align path's candidate lookups. A
-        // non-nucleotide sequence yields no canonical k-mer and is left
-        // unsketched. Sketching is CPU-bound, so it runs on a blocking thread.
-        let sequence_elements = ctx.service.all_nucleotide_sequences().await?;
+        // Sketch stage: sketch every DNA/RNA sequence and swap the whole
+        // MinHash/LSH index in. Sequences come from the raw triples (any subject
+        // carrying an `elements` literal, SBOL 2 or SBOL 3), keyed by the Sequence
+        // IRI, so the persisted index covers every ingest path -- including a
+        // verbatim SBOL 2 submission whose derived typed view is empty -- and its
+        // keys match the align path's candidate lookups. A non-nucleotide sequence
+        // yields no canonical k-mer and is left unsketched. Sketching is
+        // CPU-bound, so it runs on a blocking thread.
+        let sequence_elements = collect_all_sequences(&all_triples);
         let sketched_input = sequence_elements.len();
         let sketch_entries = tokio::task::spawn_blocking(move || build_sketches(sequence_elements))
             .await
@@ -245,6 +251,30 @@ fn collect_object_metadata(
     metas
 }
 
+/// Every `(sequence_iri, elements)` pair in the triple set: any subject carrying
+/// an `elements` literal under the SBOL 2 or SBOL 3 vocabulary. This is the
+/// version-agnostic source for the persisted sketch index, so a verbatim SBOL 2
+/// graph (whose derived typed view is empty) is sketched identically to an
+/// upgraded SBOL 3 import, and the keys are the Sequence IRIs the align path
+/// looks up. A subject with more than one elements value keeps the first seen.
+fn collect_all_sequences(triples: &[Triple]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for t in triples {
+        let pred = t.predicate.as_str();
+        if pred != ELEMENTS && pred != ELEMENTS_V3 {
+            continue;
+        }
+        if let (SubjectTerm::Iri(seq), ObjectTerm::Literal { value, .. }) = (&t.subject, &t.object)
+        {
+            if seen.insert(seq.as_str()) {
+                out.push((seq.as_str().to_owned(), value.as_str().to_owned()));
+            }
+        }
+    }
+    out
+}
+
 /// Gather the `(part_iri, elements)` pairs to cluster, mirroring SBOLExplorer's
 /// clustering query: a top-level part linked to a Sequence whose `elements`
 /// literal supplies the nucleotide string. The cluster is keyed by the part
@@ -257,7 +287,8 @@ fn collect_part_sequences(
 ) -> Vec<(String, String)> {
     let mut elements: HashMap<&str, &str> = HashMap::new();
     for t in triples {
-        if t.predicate.as_str() != ELEMENTS {
+        let pred = t.predicate.as_str();
+        if pred != ELEMENTS && pred != ELEMENTS_V3 {
             continue;
         }
         if let (SubjectTerm::Iri(seq), ObjectTerm::Literal { value, .. }) = (&t.subject, &t.object)
