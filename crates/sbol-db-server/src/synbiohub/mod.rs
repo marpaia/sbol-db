@@ -342,8 +342,13 @@ pub fn router(state: AppState) -> Router<AppState> {
         // facets, counts, members, uses, twins, and metadata are SPARQL over
         // the shared engine, all under the caller's authorized graph scope.
         .route("/search", get(routes::search_root))
+        // The UI issues the term-less search as `/search/?offset=&limit=`; the
+        // trailing slash matches neither `/search` nor the catch-all, so route
+        // it to the same term-less handler classic serves.
+        .route("/search/", get(routes::search_root))
         .route("/search/*query", get(routes::search))
         .route("/searchCount", get(routes::search_count_root))
+        .route("/searchCount/", get(routes::search_count_root))
         .route("/searchCount/*query", get(routes::search_count))
         .route("/:type/count", get(routes::type_count))
         .route("/rootCollections", get(routes::root_collections))
@@ -704,6 +709,16 @@ mod tests {
         let (status, body) = send_get(&app, "/search/plasmid", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.trim(), "[]", "search response: {body}");
+
+        // The UI's term-less search carries a trailing slash and paging in the
+        // query string; classic accepts it, so the trailing-slash forms resolve
+        // to the same term-less handlers rather than 404.
+        let (status, body) = send_get(&app, "/search/?offset=0&limit=50", None).await;
+        assert_eq!(status, StatusCode::OK, "GET /search/ must resolve");
+        assert_eq!(body.trim(), "[]", "term-less search response: {body}");
+        let (status, body) = send_get(&app, "/searchCount/", None).await;
+        assert_eq!(status, StatusCode::OK, "GET /searchCount/ must resolve");
+        assert_eq!(body.trim(), "0", "term-less count response: {body}");
 
         // Root collections is SPARQL over the accelerator.
         let (status, _body) = send_get(&app, "/rootCollections", None).await;
