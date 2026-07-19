@@ -33,15 +33,58 @@ const SBOLDB = process.env.SBOLDB || 'http://localhost:18903';
 const CLASSIC = process.env.CLASSIC || 'http://localhost:17777';
 const OUT = process.env.OUT || path.join(__dirname, 'report.json');
 
-/** The structural signature of a value: keys and value-types, not values. */
+/**
+ * The structural signature of a value: keys and value-types, not values.
+ *
+ * Arrays union the shapes of ALL elements so the signature is independent of
+ * element order (two backends may list the same objects in a different order)
+ * and reflects optional fields that only some elements carry (e.g. `role` is a
+ * string on a ComponentDefinition and absent on an Activity, so the array's
+ * element shape carries `role:string|undefined`). An empty array is `array<>`,
+ * which [`shapesMatch`] treats as compatible with any populated array.
+ */
 function shapeOf(v, depth = 0) {
   if (v === null) return 'null';
-  if (Array.isArray(v)) return v.length ? `array<${shapeOf(v[0], depth + 1)}>` : 'array<empty>';
+  if (Array.isArray(v)) {
+    if (!v.length) return 'array<>';
+    return `array<${unionShape(v, depth + 1)}>`;
+  }
   if (typeof v === 'object') {
     if (depth > 3) return 'object';
     return '{' + Object.keys(v).sort().map((k) => `${k}:${shapeOf(v[k], depth + 1)}`).join(',') + '}';
   }
   return typeof v;
+}
+
+/** The union of element shapes across an array: per-key sets of value-types. */
+function unionShape(items, depth) {
+  const objects = items.filter((x) => x && typeof x === 'object' && !Array.isArray(x));
+  if (objects.length !== items.length) {
+    // Mixed or scalar elements: union their raw shapes.
+    return [...new Set(items.map((x) => shapeOf(x, depth)))].sort().join('|');
+  }
+  const keyTypes = new Map();
+  for (const obj of objects) {
+    for (const k of Object.keys(obj)) {
+      if (!keyTypes.has(k)) keyTypes.set(k, new Set());
+      keyTypes.get(k).add(shapeOf(obj[k], depth + 1));
+    }
+    // Keys absent from this element are optional across the array.
+    for (const k of keyTypes.keys()) if (!(k in obj)) keyTypes.get(k).add('undefined');
+  }
+  const keys = [...keyTypes.keys()].sort();
+  return '{' + keys.map((k) => `${k}:${[...keyTypes.get(k)].sort().join('|')}`).join(',') + '}';
+}
+
+/**
+ * Whether two shape signatures are compatible. Exact match, or one side is an
+ * empty array (`array<>`) and the other is any array: an empty result set is a
+ * data difference between the two corpora, not a schema divergence.
+ */
+function shapesMatch(a, b) {
+  if (a === b) return true;
+  const emptyArrayVsArray = (x, y) => x === 'array<>' && y.startsWith('array<');
+  return emptyArrayVsArray(a, b) || emptyArrayVsArray(b, a);
 }
 
 /** Classify a raw response body into a comparable shape signature. */
@@ -143,8 +186,12 @@ async function buildRoutes() {
       fetchOne(CLASSIC, 'GET', req.path, req.headers),
     ]);
     const authScoped = [401, 403].includes(sbol.status) || [401, 403].includes(classic.status);
+    // Both sides erroring the same way (e.g. 404) is not a schema divergence.
+    const bothError = sbol.status >= 400 && classic.status >= 400;
     const divergent =
-      !authScoped && (sbol.status !== classic.status || sbol.shape !== classic.shape);
+      !authScoped &&
+      !bothError &&
+      (sbol.status !== classic.status || !shapesMatch(sbol.shape, classic.shape));
     rows.push({ method: 'GET', path: req.path, sbol, classic, authScoped, divergent, replayed: true });
   }
 
