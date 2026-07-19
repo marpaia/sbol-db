@@ -66,6 +66,25 @@ pub(super) async fn run_sequence_search(
     Ok(render::search_response(&solutions(bindings)))
 }
 
+/// Count the matches of a sequence search, for `/searchCount/<sequence facet>`.
+pub(super) async fn run_sequence_count(
+    state: &AppState,
+    user: &Option<User>,
+    query: SequenceQuery,
+) -> Result<Response, ApiError> {
+    let scope = scope_for(state, user).await?;
+    let options = AlignOptions {
+        mode: query.mode,
+        ..AlignOptions::default()
+    };
+    let hits = state
+        .app
+        .sequence()
+        .align(&query.sequence, options, &scope)
+        .await?;
+    Ok(render::count_response(&count_solutions(hits.len())))
+}
+
 /// `GET /public/:collectionId/:displayId/:version/similar`.
 pub async fn public_similar(
     State(state): State<AppState>,

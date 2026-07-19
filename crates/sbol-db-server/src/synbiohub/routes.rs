@@ -18,7 +18,7 @@ use sbol_db_sparql::{GraphScope, ResultFormat, SparqlOptions};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use super::search::{extract_sequence, parse_search_path};
+use super::search::{extract_sequence, has_sequence_facet, parse_search_path};
 use super::{queries, render, sequence, CurrentUser};
 use crate::{ApiError, AppState};
 
@@ -182,6 +182,11 @@ async fn run_search(
     if let Some(seq) = extract_sequence(&grammar) {
         return sequence::run_sequence_search(&state, &user, seq).await;
     }
+    // A sequence facet with no sequence yet (the UI's initial `globalsequence=`)
+    // has nothing to align, so it matches nothing, as classic answers.
+    if has_sequence_facet(&grammar) {
+        return Ok(render::search_response(&hits_to_solutions(&[])));
+    }
 
     let mut faceted = parse_search_path(&grammar)?;
     faceted.offset = paging.offset.unwrap_or(0);
@@ -205,6 +210,14 @@ async fn run_search_count(
     user: Option<User>,
     grammar: String,
 ) -> Result<Response, ApiError> {
+    // Sequence-search count mirrors run_search: a real sequence counts its
+    // alignment hits; an empty sequence facet counts nothing, as classic does.
+    if let Some(seq) = extract_sequence(&grammar) {
+        return sequence::run_sequence_count(&state, &user, seq).await;
+    }
+    if has_sequence_facet(&grammar) {
+        return Ok(render::count_response(&count_to_solutions(0)));
+    }
     let faceted = parse_search_path(&grammar)?;
     let scope = scope_for(&state, &user).await?;
     if faceted.free_text.is_some() {

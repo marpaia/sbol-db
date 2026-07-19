@@ -720,6 +720,16 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "GET /searchCount/ must resolve");
         assert_eq!(body.trim(), "0", "term-less count response: {body}");
 
+        // The UI's sequence-search form submits an empty `globalsequence=`
+        // before a sequence is entered; classic answers with no matches rather
+        // than treating the key as an RDF predicate (which would 400).
+        let (status, body) = send_get(&app, "/search/globalsequence=&", None).await;
+        assert_eq!(status, StatusCode::OK, "empty sequence search must resolve");
+        assert_eq!(body.trim(), "[]", "empty sequence search response: {body}");
+        let (status, body) = send_get(&app, "/searchCount/globalsequence=&", None).await;
+        assert_eq!(status, StatusCode::OK, "empty sequence count must resolve");
+        assert_eq!(body.trim(), "0", "empty sequence count response: {body}");
+
         // Root collections is SPARQL over the accelerator.
         let (status, _body) = send_get(&app, "/rootCollections", None).await;
         assert_eq!(status, StatusCode::OK);

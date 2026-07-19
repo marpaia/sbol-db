@@ -45,6 +45,20 @@ pub fn extract_sequence(path: &str) -> Option<SequenceQuery> {
     None
 }
 
+/// Whether the grammar carries a sequence facet (`sequence`, `globalsequence`,
+/// or `exactsequence`), regardless of value. The UI's sequence-search form
+/// submits an empty `globalsequence=` before a query is entered; classic answers
+/// that with no matches, so the caller returns an empty result rather than
+/// misreading the key as an RDF predicate facet.
+pub fn has_sequence_facet(path: &str) -> bool {
+    path.split('&').any(|facet| {
+        matches!(
+            facet.split_once('='),
+            Some(("sequence" | "globalsequence" | "exactsequence", _))
+        )
+    })
+}
+
 /// The SBOL2 namespace, the default for a bare `objectType` short name and a
 /// bare predicate key.
 const SBOL2_NS: &str = "http://sbols.org/v2#";
@@ -248,5 +262,20 @@ mod tests {
     fn malformed_facet_is_an_error_not_a_panic() {
         assert!(parse_search_path("objectType&promoter").is_err());
         assert!(parse_search_path("=value&promoter").is_err());
+    }
+
+    #[test]
+    fn sequence_facets_are_detected_regardless_of_value() {
+        // The UI submits an empty `globalsequence=` before a sequence is typed.
+        assert!(has_sequence_facet("globalsequence=&"));
+        assert!(has_sequence_facet("sequence=ATGC"));
+        assert!(has_sequence_facet("exactsequence=ATGC"));
+        assert!(!has_sequence_facet("objectType=ComponentDefinition"));
+        // An empty sequence has nothing to align, so extraction yields nothing.
+        assert!(extract_sequence("globalsequence=&").is_none());
+        assert_eq!(
+            extract_sequence("globalsequence=ATGC").map(|q| q.sequence),
+            Some("ATGC".to_owned())
+        );
     }
 }
