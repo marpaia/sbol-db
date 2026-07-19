@@ -1,8 +1,9 @@
 //! Admin surface for the SynBioHub v1 adapter.
 //!
 //! Every route in this module is admin-gated: [`require_admin`] rejects an
-//! anonymous or non-administrator caller with `403` before the handler runs,
-//! matching classic SynBioHub's `requireAdmin` gate on the `/admin/*` actions.
+//! anonymous caller with `401` and a signed-in non-administrator with `403`
+//! before the handler runs, matching classic SynBioHub's `requireAdmin` gate on
+//! the `/admin/*` actions.
 //! The gate is security-critical, so it is applied as a route layer to the
 //! whole admin router rather than repeated per handler.
 //!
@@ -113,9 +114,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         ))
 }
 
-/// Reject any caller that is not an authenticated administrator with `403`.
-/// Both an anonymous caller and a signed-in non-admin get the same status, so
-/// the gate never reveals whether a valid session exists.
+/// Gate an admin route: an authenticated administrator passes; a signed-in
+/// non-admin is `403 Forbidden`; an anonymous caller is `401 Unauthorized`.
+/// Distinguishing the two matches classic and standard HTTP semantics, so a UI
+/// that gets `401` knows to prompt for login rather than show "forbidden".
 async fn require_admin(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     req: axum::extract::Request,
@@ -123,7 +125,8 @@ async fn require_admin(
 ) -> Response {
     match user {
         Some(user) if user.is_admin => next.run(req).await,
-        _ => forbidden("administrator privileges are required"),
+        Some(_) => forbidden("administrator privileges are required"),
+        None => unauthorized("authentication is required"),
     }
 }
 
@@ -176,6 +179,17 @@ pub async fn reindex(State(state): State<AppState>) -> Response {
 pub(super) fn forbidden(message: &str) -> Response {
     (
         StatusCode::FORBIDDEN,
+        [(CONTENT_TYPE, "text/plain")],
+        message.to_owned(),
+    )
+        .into_response()
+}
+
+/// A `401` with a plain-text body, the admin gate's response to an anonymous
+/// caller (classic distinguishes this from a signed-in non-admin's `403`).
+fn unauthorized(message: &str) -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
         [(CONTENT_TYPE, "text/plain")],
         message.to_owned(),
     )
@@ -424,17 +438,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_admin_and_anonymous_are_forbidden_on_every_admin_route() {
+    async fn admin_routes_gate_anonymous_401_and_non_admin_403() {
         let fx = fixture().await;
         for (method, path) in admin_routes() {
-            // Anonymous.
+            // Anonymous: 401 Unauthorized (no credentials).
             let (status, _) = send(&fx.app, method, path, None, None, Body::empty()).await;
             assert_eq!(
                 status,
-                StatusCode::FORBIDDEN,
-                "anonymous {method} {path} must be 403"
+                StatusCode::UNAUTHORIZED,
+                "anonymous {method} {path} must be 401"
             );
-            // Authenticated non-admin.
+            // Authenticated non-admin: 403 Forbidden (credentials, no rights).
             let (status, _) = send(
                 &fx.app,
                 method,

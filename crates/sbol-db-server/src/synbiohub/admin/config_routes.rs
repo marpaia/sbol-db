@@ -42,7 +42,12 @@ async fn set_section(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<Json<Value>, ApiError> {
-    let is_admin = user.as_ref().map(|u| u.is_admin).unwrap_or(false);
+    let Some(caller) = user.as_ref() else {
+        return Err(ApiError::Unauthorized(
+            "authentication is required".to_owned(),
+        ));
+    };
+    let is_admin = caller.is_admin;
     let value = parse_config_value(headers, body)?;
     state
         .app

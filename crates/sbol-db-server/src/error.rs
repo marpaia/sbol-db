@@ -12,6 +12,8 @@ pub enum ApiError {
     Domain(#[from] DomainError),
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
     #[error("forbidden: {0}")]
     Forbidden(String),
     #[error("not found: {0}")]
@@ -64,6 +66,7 @@ impl ApiError {
             }
             ApiError::Domain(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
+            ApiError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "unauthorized"),
             ApiError::Forbidden(_) => (StatusCode::FORBIDDEN, "forbidden"),
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
             ApiError::Sparql(SparqlError::Parse(_)) => {
