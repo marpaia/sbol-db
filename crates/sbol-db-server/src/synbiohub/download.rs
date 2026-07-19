@@ -143,7 +143,7 @@ download_routes!(public_summary, user_summary, Format::Summary);
 /// to the caller. Classic serves a version-less object URI as the newest
 /// version; the highest `sbol:version` under the persistent identity wins.
 /// Returns `None` when no versioned object is visible.
-async fn latest_version_uri(
+pub(super) async fn latest_version_uri(
     state: &AppState,
     scope: GraphScope,
     persistent_identity: &str,

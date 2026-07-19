@@ -254,6 +254,17 @@ pub async fn root_collections(
     Ok(render::collections_response(&results))
 }
 
+/// `GET /browse`: the same root collections as [`root_collections`], rendered in
+/// classic's `/browse` shape (each entry carries the route `url` and `public`).
+pub async fn browse(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> Result<Response, ApiError> {
+    let scope = scope_for(&state, &user).await?;
+    let results = run_scoped_value(&state, &queries::root_collections(), scope).await?;
+    Ok(render::browse_response(&results))
+}
+
 // --- object-scoped: /uses /twins /subCollections /metadata -------------------
 
 pub async fn public_uses(
@@ -350,6 +361,131 @@ pub async fn user_metadata(
     Path(object): Path<UserObject>,
 ) -> Result<Response, ApiError> {
     metadata_impl(state.0, user.0 .0, user_uri(&object)).await
+}
+
+// Version-less object-relation routes. The UI fetches an object's relations off
+// its persistent identity (no version), which classic resolves to the latest
+// version; sbol-db resolves the same way, then delegates to the versioned impl.
+
+/// Resolve a version-less object path to its latest-version URI under the
+/// caller's scope, or `404` when no version is visible.
+pub(super) async fn resolve_pi(
+    state: &AppState,
+    user: &Option<User>,
+    pi: String,
+) -> Result<String, ApiError> {
+    let scope = scope_for(state, user).await?;
+    super::download::latest_version_uri(state, scope, &pi)
+        .await?
+        .ok_or(ApiError::NotFound(pi))
+}
+
+pub async fn public_uses_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
+    uses_impl(state.0, user.0 .0, uri, false).await
+}
+
+pub async fn public_uses_count_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
+    uses_impl(state.0, user.0 .0, uri, true).await
+}
+
+pub async fn public_twins_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
+    twins_impl(state.0, user.0 .0, uri, false).await
+}
+
+pub async fn public_twins_count_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
+    twins_impl(state.0, user.0 .0, uri, true).await
+}
+
+pub async fn public_sub_collections_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
+    sub_collections_impl(state.0, user.0 .0, uri).await
+}
+
+pub async fn public_metadata_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
+    metadata_impl(state.0, user.0 .0, uri).await
+}
+
+pub async fn user_uses_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
+    uses_impl(state.0, user.0 .0, uri, false).await
+}
+
+pub async fn user_uses_count_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
+    uses_impl(state.0, user.0 .0, uri, true).await
+}
+
+pub async fn user_twins_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
+    twins_impl(state.0, user.0 .0, uri, false).await
+}
+
+pub async fn user_twins_count_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
+    twins_impl(state.0, user.0 .0, uri, true).await
+}
+
+pub async fn user_sub_collections_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
+    sub_collections_impl(state.0, user.0 .0, uri).await
+}
+
+pub async fn user_metadata_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
+    metadata_impl(state.0, user.0 .0, uri).await
 }
 
 async fn uses_impl(

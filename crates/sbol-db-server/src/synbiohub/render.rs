@@ -147,6 +147,39 @@ pub fn collections_response(results: &Value) -> Response {
     json_array(rows)
 }
 
+/// The `/browse` collection listing: the same collections as
+/// [`collections_response`] plus the two fields classic's `/browse` adds, the
+/// route `url` (the object URI's path) and the `public` flag.
+pub fn browse_response(results: &Value) -> Response {
+    let rows = results_to_array(results)
+        .into_iter()
+        .map(|row| {
+            let uri = row.get("Collection").and_then(Value::as_str).unwrap_or("");
+            json!({
+                "uri": uri,
+                "name": string_or_empty(&row, "name"),
+                "description": string_or_empty(&row, "description"),
+                "displayId": string_or_empty(&row, "displayId"),
+                "version": string_or_empty(&row, "version"),
+                "url": object_path(uri),
+                "public": uri.contains("/public/"),
+            })
+        })
+        .collect();
+    json_array(rows)
+}
+
+/// The route path of an object URI: the substring from `/public/` or `/user/`
+/// onward, which is what the UI navigates to. Falls back to the whole URI.
+fn object_path(uri: &str) -> String {
+    for marker in ["/public/", "/user/"] {
+        if let Some(idx) = uri.find(marker) {
+            return uri[idx..].to_owned();
+        }
+    }
+    uri.to_owned()
+}
+
 /// One row of classic's search view: the fixed 11-key wire object, with the
 /// keys in classic's emission order (`type, uri, name, description, displayId,
 /// version, sbolType, role, percentMatch, strandAlignment, CIGAR`). Serialized

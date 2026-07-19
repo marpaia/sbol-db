@@ -179,9 +179,10 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/user/:userId/:collectionId/:displayId/:version/copyFromRemote",
             get(support::user_copy_from_remote).post(support::user_copy_from_remote),
         )
-        // Classic's /browse is the logged-in root-collections listing the UI
-        // browses; it returns the same collection array as /rootCollections.
-        .route("/browse", get(routes::root_collections))
+        // Classic's /browse is the root-collections listing the UI browses; it
+        // returns each collection with the route `url` and `public` flag that
+        // /rootCollections omits.
+        .route("/browse", get(routes::browse))
         .route("/submit", post(submit::submit))
         // Classic registers `/submit/` (trailing slash); Express matches both,
         // so accept both to stay a drop-in for clients built against either.
@@ -386,6 +387,40 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/public/:collectionId/:displayId/:version/metadata",
             get(routes::public_metadata),
         )
+        // Version-less relations: the UI fetches these off the persistent
+        // identity (no version), which resolves to the latest version.
+        .route(
+            "/public/:collectionId/:displayId/uses",
+            get(routes::public_uses_pi),
+        )
+        .route(
+            "/public/:collectionId/:displayId/usesCount",
+            get(routes::public_uses_count_pi),
+        )
+        .route(
+            "/public/:collectionId/:displayId/similar",
+            get(sequence::public_similar_pi),
+        )
+        .route(
+            "/public/:collectionId/:displayId/similarCount",
+            get(sequence::public_similar_count_pi),
+        )
+        .route(
+            "/public/:collectionId/:displayId/twins",
+            get(routes::public_twins_pi),
+        )
+        .route(
+            "/public/:collectionId/:displayId/twinsCount",
+            get(routes::public_twins_count_pi),
+        )
+        .route(
+            "/public/:collectionId/:displayId/subCollections",
+            get(routes::public_sub_collections_pi),
+        )
+        .route(
+            "/public/:collectionId/:displayId/metadata",
+            get(routes::public_metadata_pi),
+        )
         // Download surface: the object's closure rendered in each exchange
         // format, ACL-scoped through the shared downloader and P3 serializers.
         .route(
@@ -462,6 +497,39 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/user/:userId/:collectionId/:displayId/:version/metadata",
             get(routes::user_metadata),
+        )
+        // Version-less relations (resolve to the latest version).
+        .route(
+            "/user/:userId/:collectionId/:displayId/uses",
+            get(routes::user_uses_pi),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/usesCount",
+            get(routes::user_uses_count_pi),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/similar",
+            get(sequence::user_similar_pi),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/similarCount",
+            get(sequence::user_similar_count_pi),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/twins",
+            get(routes::user_twins_pi),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/twinsCount",
+            get(routes::user_twins_count_pi),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/subCollections",
+            get(routes::user_sub_collections_pi),
+        )
+        .route(
+            "/user/:userId/:collectionId/:displayId/metadata",
+            get(routes::user_metadata_pi),
         )
         .route(
             "/user/:userId/:collectionId/:displayId/:version/sbol",
@@ -733,6 +801,20 @@ mod tests {
         // Root collections is SPARQL over the accelerator.
         let (status, _body) = send_get(&app, "/rootCollections", None).await;
         assert_eq!(status, StatusCode::OK);
+
+        // /browse is the root-collections listing in classic's richer shape.
+        let (status, body) = send_get(&app, "/browse", None).await;
+        assert_eq!(status, StatusCode::OK, "/browse must resolve");
+        assert_eq!(body.trim(), "[]", "empty /browse: {body}");
+
+        // A version-less relation on a nonexistent object resolves to 404, not a
+        // 500 -- the persistent identity has no visible version.
+        let (status, _body) = send_get(&app, "/public/nope/nope/usesCount", None).await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "missing version-less object is 404"
+        );
     }
 
     #[tokio::test]

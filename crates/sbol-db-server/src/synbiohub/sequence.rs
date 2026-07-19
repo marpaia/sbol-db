@@ -15,7 +15,10 @@ use sbol_db_app::{AlignOptions, SequenceAlignment, SimilarHit};
 use sbol_db_core::{ObjectTerm, Triple, User};
 use serde_json::{json, Map, Value};
 
-use super::routes::{public_uri, scope_for, user_uri, PublicObject, UserObject};
+use super::routes::{
+    public_pi_uri, public_uri, resolve_pi, scope_for, user_pi_uri, user_uri, PublicObject,
+    PublicObjectPi, UserObject, UserObjectPi,
+};
 use super::search::SequenceQuery;
 use super::{render, CurrentUser};
 use crate::{ApiError, AppState};
@@ -119,6 +122,44 @@ pub async fn user_similar_count(
     Path(object): Path<UserObject>,
 ) -> Result<Response, ApiError> {
     similar_count_impl(state, user, user_uri(&object)).await
+}
+
+/// `GET /public/:collectionId/:displayId/similar` (version-less): resolve the
+/// persistent identity to the latest version, then list similar objects.
+pub async fn public_similar_pi(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(object): Path<PublicObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state, &user, public_pi_uri(&object)).await?;
+    similar_impl(state, user, uri).await
+}
+
+pub async fn public_similar_count_pi(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(object): Path<PublicObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state, &user, public_pi_uri(&object)).await?;
+    similar_count_impl(state, user, uri).await
+}
+
+pub async fn user_similar_pi(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(object): Path<UserObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state, &user, user_pi_uri(&object)).await?;
+    similar_impl(state, user, uri).await
+}
+
+pub async fn user_similar_count_pi(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(object): Path<UserObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state, &user, user_pi_uri(&object)).await?;
+    similar_count_impl(state, user, uri).await
 }
 
 async fn similar_impl(
