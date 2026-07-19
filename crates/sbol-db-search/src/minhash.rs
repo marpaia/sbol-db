@@ -183,7 +183,7 @@ mod tests {
 
     /// Deterministic pseudo-random ACGT sequence of length `len`.
     fn rand_seq(seed: u64, len: usize) -> String {
-        let bases = [b'A', b'C', b'G', b'T'];
+        let bases = *b"ACGT";
         let mut x = seed.wrapping_add(1);
         let mut s = String::with_capacity(len);
         for _ in 0..len {
