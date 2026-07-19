@@ -38,6 +38,8 @@ use crate::download::RemoteObjectResolver;
 pub const WEB_OF_REGISTRIES_KEY: &str = "webOfRegistries";
 /// The joined Web of Registries base URL, set by [`FederationService::federate`].
 pub const WEB_OF_REGISTRIES_URL_KEY: &str = "webOfRegistriesUrl";
+/// The Web of Registries URL shown before an instance has joined one.
+pub const DEFAULT_WEB_OF_REGISTRIES_URL: &str = "https://wor.synbiohub.org";
 /// This instance's id in the Web of Registries, returned by the join.
 pub const WEB_OF_REGISTRIES_ID_KEY: &str = "webOfRegistriesId";
 /// The shared secret returned by the join, used to authenticate the
@@ -313,6 +315,25 @@ impl FederationService {
             .into_iter()
             .filter_map(|(k, v)| v.as_str().map(|s| (k, s.to_owned())))
             .collect())
+    }
+
+    /// The Web of Registries URL this instance is joined to, or the default one
+    /// when it has not joined any.
+    pub async fn web_of_registries_url(&self) -> Result<String, DomainError> {
+        let url = self.string_setting(WEB_OF_REGISTRIES_URL_KEY).await?;
+        Ok(if url.is_empty() {
+            DEFAULT_WEB_OF_REGISTRIES_URL.to_owned()
+        } else {
+            url
+        })
+    }
+
+    /// Whether this instance has joined a Web of Registries (it carries an id).
+    pub async fn is_registered(&self) -> Result<bool, DomainError> {
+        Ok(!self
+            .string_setting(WEB_OF_REGISTRIES_ID_KEY)
+            .await?
+            .is_empty())
     }
 
     /// Upsert a single `uri -> url` registry entry. Admin-gated.

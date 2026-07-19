@@ -20,6 +20,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use sbol_db_app::FederationError;
+use sbol_db_core::DomainError;
 use sbol_db_storage::{EnqueueOutcome, NewJob};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -101,16 +102,28 @@ pub async fn retrieve(State(state): State<AppState>) -> Response {
     }
 }
 
-/// `GET /admin/registries` — the current `uriPrefix -> instanceUrl` map.
+/// `GET /admin/registries` — classic's registries envelope: the `uri -> url`
+/// entries the UI iterates to rewrite result links, plus the Web of Registries
+/// URL and whether this instance has joined one.
 pub async fn registries(State(state): State<AppState>) -> Response {
-    match state.app.federation().registries().await {
-        Ok(pairs) => {
-            let map: serde_json::Map<String, Value> = pairs
-                .into_iter()
-                .map(|(k, v)| (k, Value::String(v)))
-                .collect();
-            Json(Value::Object(map)).into_response()
-        }
+    let federation = state.app.federation();
+    let result = async {
+        let registries: Vec<Value> = federation
+            .registries()
+            .await?
+            .into_iter()
+            .map(|(uri, url)| json!({ "uri": uri, "url": url }))
+            .collect();
+        Ok::<_, DomainError>(json!({
+            "registries": registries,
+            "registered": federation.is_registered().await?,
+            "wor": federation.web_of_registries_url().await?,
+            "errors": [],
+        }))
+    }
+    .await;
+    match result {
+        Ok(body) => Json(body).into_response(),
         Err(e) => fed_error(FederationError::Domain(e)),
     }
 }
@@ -513,9 +526,44 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        let map: Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(map["https://a.org/"], "https://a.org");
-        assert_eq!(map["https://b.org/"], "https://b.org");
+        // Classic's envelope: a `registries` array of `{uri, url}` plus the
+        // joined WoR URL and registered flag.
+        let envelope: Value = serde_json::from_str(&body).unwrap();
+        let entries = envelope["registries"].as_array().expect("registries array");
+        let find = |uri: &str| {
+            entries
+                .iter()
+                .find(|e| e["uri"] == uri)
+                .and_then(|e| e["url"].as_str())
+        };
+        assert_eq!(find("https://a.org/"), Some("https://a.org"));
+        assert_eq!(find("https://b.org/"), Some("https://b.org"));
+        assert_eq!(envelope["registered"], Value::Bool(true));
+        assert_eq!(envelope["wor"], "https://wor.example.org");
+        assert_eq!(envelope["errors"], json!([]));
+    }
+
+    /// A fresh instance reports classic's registries envelope with an empty
+    /// array (not a bare `{}`), so the UI's `for (const r of registries)` never
+    /// iterates a non-array.
+    #[tokio::test]
+    async fn registries_envelope_is_array_on_a_fresh_instance() {
+        let fx = fixture().await;
+        let (status, body) = send(
+            &fx.app,
+            "GET",
+            "/admin/registries",
+            None,
+            None,
+            Body::empty(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let envelope: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(envelope["registries"], json!([]));
+        assert_eq!(envelope["registered"], Value::Bool(false));
+        assert_eq!(envelope["wor"], "https://wor.synbiohub.org");
+        assert_eq!(envelope["errors"], json!([]));
     }
 
     /// The public webhook is gated on the stored update secret: wrong or missing
