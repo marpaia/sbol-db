@@ -12,11 +12,11 @@ depends on.
 
 ## Prerequisites
 
-Three services running (see `synbiohub2_ui_on_sboldb` notes for the stack):
+Three services running:
 
-- the UI at `http://localhost:3333` (the `sbh3frontend` container) pointed at
-  sbol-db,
-- sbol-db at `http://localhost:18903` seeded with the conformance corpus,
+- the UI at `http://localhost:3333` pointed at sbol-db, and sbol-db at
+  `http://localhost:18903` seeded with the conformance corpus. Start both with
+  `../synbiohub-ui/run.sh up --seed /tmp/sbol-db-subject.sqlite`.
 - classic SynBioHub at `http://localhost:17777` seeded with the same corpus (the
   conformance reference stack).
 

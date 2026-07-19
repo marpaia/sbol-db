@@ -1,0 +1,23 @@
+# The SynBioHub frontend (sbh3frontend) pointed at a host-run sbol-db.
+#
+# sbol-db runs as a host process (fast to rebuild while developing); only the
+# frontend runs here. `run.sh` starts sbol-db, then brings this up.
+#
+# `backend` is read by the browser, so it must be a host URL (localhost).
+# `backendSS` is read by the frontend's Next.js server inside the container, so
+# it reaches the host through host.docker.internal (the extra_hosts mapping is
+# required on Linux; Docker Desktop provides it anyway).
+name: sbol-db-ui
+
+services:
+  ui:
+    image: synbiohub/sbh3frontend:snapshot
+    container_name: sbol-db-ui
+    ports:
+      - "${UI_PORT:-3333}:3333"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      backend: "http://localhost:${SBOLDB_PORT:-18903}"
+      backendSS: "http://host.docker.internal:${SBOLDB_PORT:-18903}"
+    restart: unless-stopped
