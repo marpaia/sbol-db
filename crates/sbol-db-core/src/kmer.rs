@@ -181,6 +181,117 @@ impl Iterator for CanonicalIter<'_> {
     }
 }
 
+/// Reverse-complement a packed k-mer of width `k` (2 bits per base) held in a
+/// `u64`. The complement is taken over the low `2 * k` bits; higher bits are
+/// assumed clear. `k` must satisfy `1 <= k <= 32`.
+pub fn reverse_complement_u64(kmer: u64, k: usize) -> u64 {
+    let mut src = kmer;
+    let mut rc: u64 = 0;
+    for _ in 0..k {
+        let comp = (src & 0b11) ^ 0b11;
+        rc = (rc << 2) | comp;
+        src >>= 2;
+    }
+    rc
+}
+
+/// Iterate canonical packed k-mers of arbitrary width `k` over `elements`,
+/// yielding the canonical (`min(forward, reverse_complement)`) `u64` for each
+/// window and skipping any window containing an ambiguous base. This is the
+/// wider-`k`, `u64`-packed sibling of [`canonical_kmers`]: the similarity sketch
+/// picks a `k` beyond [`KMER_K`] for the specificity a substring seed does not
+/// need, while sharing the same base encoding so DNA/RNA (`T`/`U`) and
+/// reverse-complement variants collapse identically. `k` must satisfy
+/// `1 <= k <= 32`.
+pub fn canonical_kmers_u64(elements: &str, k: usize) -> impl Iterator<Item = u64> + '_ {
+    let mask = if k >= 32 {
+        u64::MAX
+    } else {
+        (1u64 << (2 * k)) - 1
+    };
+    CanonicalIterU64 {
+        bytes: elements.as_bytes(),
+        k,
+        mask,
+        index: 0,
+        primed: false,
+        forward: 0,
+    }
+}
+
+struct CanonicalIterU64<'a> {
+    bytes: &'a [u8],
+    k: usize,
+    mask: u64,
+    index: usize,
+    primed: bool,
+    forward: u64,
+}
+
+impl CanonicalIterU64<'_> {
+    fn canonical_of(&self, forward: u64) -> u64 {
+        forward.min(reverse_complement_u64(forward, self.k))
+    }
+}
+
+impl Iterator for CanonicalIterU64<'_> {
+    type Item = u64;
+
+    fn next(&mut self) -> Option<u64> {
+        let n = self.bytes.len();
+        if self.k == 0 || n < self.k {
+            return None;
+        }
+        let last_start = n - self.k;
+        loop {
+            if !self.primed {
+                if self.index > last_start {
+                    return None;
+                }
+                let mut acc: u64 = 0;
+                let mut i = self.index;
+                let stop = i + self.k;
+                let mut bad: Option<usize> = None;
+                while i < stop {
+                    match base_code(self.bytes[i]) {
+                        Some(code) => acc = ((acc << 2) | code as u64) & self.mask,
+                        None => {
+                            bad = Some(i);
+                            break;
+                        }
+                    }
+                    i += 1;
+                }
+                if let Some(b) = bad {
+                    self.index = b + 1;
+                    continue;
+                }
+                self.forward = acc;
+                self.primed = true;
+                self.index += 1;
+                return Some(self.canonical_of(acc));
+            } else {
+                let new_idx = self.index + self.k - 1;
+                if new_idx >= n {
+                    return None;
+                }
+                match base_code(self.bytes[new_idx]) {
+                    Some(code) => {
+                        self.forward = ((self.forward << 2) | code as u64) & self.mask;
+                        self.index += 1;
+                        return Some(self.canonical_of(self.forward));
+                    }
+                    None => {
+                        self.primed = false;
+                        self.index = new_idx + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Encode a fixed-width k-mer string into its packed integer. Returns `None`
 /// if the input length differs from [`KMER_K`] or contains ambiguous bases.
 pub fn encode_kmer(s: &str) -> Option<u32> {

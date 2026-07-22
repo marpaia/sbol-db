@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
+use sbol_db_app::AppServices;
 use sbol_db_postgres::{connect, run_migrations, JobRepository, SbolObjectService};
 use sbol_db_server::{router, AppState, Metrics, SchemaCache, ServerConfig};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
@@ -33,6 +34,13 @@ async fn state() -> AppState {
         .with_jobs_repo(jobs.clone());
     AppState {
         lab: service.clone(),
+        app: Arc::new(AppServices::new(
+            service.clone(),
+            sparql.clone(),
+            sparql_update.clone(),
+            jobs.clone(),
+            service.clone(),
+        )),
         service,
         sparql,
         sparql_update,

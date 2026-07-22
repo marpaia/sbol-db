@@ -17,15 +17,22 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use sbol_db_postgres::{
-    JobRepository, PgMigrator, PgPool, PgSqlConsole, PgStatsRepository, SbolObjectService,
+    JobRepository, PgClusterStore, PgConfigStore, PgMigrator, PgPageRankStore, PgPool,
+    PgSketchStore, PgSqlConsole, PgStatsRepository, PgTokenStore, PgUserStore, SbolObjectService,
 };
-use sbol_db_rocksdb::{RocksdbJobs, RocksdbMigrator, RocksdbStats, RocksdbStore};
+use sbol_db_rocksdb::{
+    RocksdbClusterStore, RocksdbConfigStore, RocksdbJobs, RocksdbMigrator, RocksdbPageRankStore,
+    RocksdbSketchStore, RocksdbStats, RocksdbStore, RocksdbTokenStore, RocksdbUserStore,
+};
 use sbol_db_sqlite::{
-    SqliteJobRepository, SqliteMigrator, SqlitePool, SqliteSqlConsole, SqliteStats, SqliteStore,
+    SqliteClusterStore, SqliteConfigStore, SqliteJobRepository, SqliteMigrator,
+    SqlitePageRankStore, SqlitePool, SqliteSketchStore, SqliteSqlConsole, SqliteStats, SqliteStore,
+    SqliteTokenStore, SqliteUserStore,
 };
 use sbol_db_storage::{
-    BackendKind, DbStats, JobQueue, LabStore, LsmStats, Migrator, SbolStore, SqlConsole,
-    TripleSource, TripleWriter,
+    AclStore, BackendKind, ClusterStore, ConfigStore, DbStats, JobQueue, LabStore, LsmStats,
+    Migrator, PageRankStore, SbolStore, SketchStore, SqlConsole, TokenStore, TripleSource,
+    TripleWriter, UserStore,
 };
 
 /// A ready-to-use storage backend: the neutral trait objects every consumer
@@ -35,8 +42,24 @@ pub struct Backend {
     pub kind: BackendKind,
     /// The SBOL-aware store: ingest plus every derived-view read surface.
     pub store: Arc<dyn SbolStore>,
+    /// Ownership and sharing reads backing ACL-scoped queries.
+    pub acl: Arc<dyn AclStore>,
+    /// Object PageRank scores backing the native ranked search.
+    pub pagerank: Arc<dyn PageRankStore>,
+    /// Sequence cluster assignments backing `/similar`.
+    pub cluster: Arc<dyn ClusterStore>,
+    /// MinHash/LSH similarity sketch index backing scalable clustering and
+    /// sequence-similarity candidate generation.
+    pub sketch: Arc<dyn SketchStore>,
+    /// Durable instance configuration (registries, remotes, plugins, mail,
+    /// theme).
+    pub config: Arc<dyn ConfigStore>,
     /// The async job queue.
     pub jobs: Arc<dyn JobQueue>,
+    /// Account persistence for the identity layer.
+    pub users: Arc<dyn UserStore>,
+    /// API-token persistence for the identity layer.
+    pub tokens: Arc<dyn TokenStore>,
     /// Synchronous triple-pattern reads for the SPARQL evaluator.
     pub triple_source: Arc<dyn TripleSource>,
     /// Transactional triple writes for SPARQL Update.
@@ -116,9 +139,16 @@ impl Backend {
 
     fn from_sqlite(pool: SqlitePool) -> Self {
         let store = Arc::new(SqliteStore::new(pool.clone()));
+        let acl: Arc<dyn AclStore> = store.clone();
+        let pagerank: Arc<dyn PageRankStore> = Arc::new(SqlitePageRankStore::new(pool.clone()));
+        let cluster: Arc<dyn ClusterStore> = Arc::new(SqliteClusterStore::new(pool.clone()));
+        let sketch: Arc<dyn SketchStore> = Arc::new(SqliteSketchStore::new(pool.clone()));
+        let config: Arc<dyn ConfigStore> = Arc::new(SqliteConfigStore::new(pool.clone()));
         let triple_source = store.triple_source();
         let triple_writer = store.triple_writer();
         let jobs: Arc<dyn JobQueue> = Arc::new(SqliteJobRepository::new(pool.clone()));
+        let users: Arc<dyn UserStore> = Arc::new(SqliteUserStore::new(pool.clone()));
+        let tokens: Arc<dyn TokenStore> = Arc::new(SqliteTokenStore::new(pool.clone()));
         let migrator: Arc<dyn Migrator> = Arc::new(SqliteMigrator::new(pool.clone()));
         let db_stats: Arc<dyn DbStats> = Arc::new(SqliteStats::new(pool.clone()));
         let sql_console: Arc<dyn SqlConsole> = Arc::new(SqliteSqlConsole::new(pool));
@@ -126,7 +156,14 @@ impl Backend {
         Self {
             kind: BackendKind::Sqlite,
             store,
+            acl,
+            pagerank,
+            cluster,
+            sketch,
+            config,
             jobs,
+            users,
+            tokens,
             triple_source,
             triple_writer,
             lab,
@@ -140,16 +177,30 @@ impl Backend {
 
     fn from_rocksdb(db: sbol_db_rocksdb::Db) -> Self {
         let store = Arc::new(RocksdbStore::new(db.clone()));
+        let acl: Arc<dyn AclStore> = store.clone();
+        let pagerank: Arc<dyn PageRankStore> = Arc::new(RocksdbPageRankStore::new(db.clone()));
+        let cluster: Arc<dyn ClusterStore> = Arc::new(RocksdbClusterStore::new(db.clone()));
+        let sketch: Arc<dyn SketchStore> = Arc::new(RocksdbSketchStore::new(db.clone()));
+        let config: Arc<dyn ConfigStore> = Arc::new(RocksdbConfigStore::new(db.clone()));
         let triple_source = store.triple_source();
         let triple_writer = store.triple_writer();
         let jobs: Arc<dyn JobQueue> = Arc::new(RocksdbJobs::new(db.clone()));
+        let users: Arc<dyn UserStore> = Arc::new(RocksdbUserStore::new(db.clone()));
+        let tokens: Arc<dyn TokenStore> = Arc::new(RocksdbTokenStore::new(db.clone()));
         let migrator: Arc<dyn Migrator> = Arc::new(RocksdbMigrator::new(db.clone()));
         let lsm_stats: Arc<dyn LsmStats> = Arc::new(RocksdbStats::new(db));
         let lab: Arc<dyn LabStore> = store.clone();
         Self {
             kind: BackendKind::Rocksdb,
             store,
+            acl,
+            pagerank,
+            cluster,
+            sketch,
+            config,
             jobs,
+            users,
+            tokens,
             triple_source,
             triple_writer,
             lab,
@@ -164,18 +215,32 @@ impl Backend {
 
     fn from_postgres(pool: PgPool) -> Self {
         let service = Arc::new(SbolObjectService::new(pool.clone()));
+        let pagerank: Arc<dyn PageRankStore> = Arc::new(PgPageRankStore::new(pool.clone()));
+        let cluster: Arc<dyn ClusterStore> = Arc::new(PgClusterStore::new(pool.clone()));
+        let sketch: Arc<dyn SketchStore> = Arc::new(PgSketchStore::new(pool.clone()));
+        let config: Arc<dyn ConfigStore> = Arc::new(PgConfigStore::new(pool.clone()));
         let triple_source = service.triple_source();
         let triple_writer = service.triple_writer();
         let jobs: Arc<dyn JobQueue> = Arc::new(JobRepository::new(pool.clone()));
+        let users: Arc<dyn UserStore> = Arc::new(PgUserStore::new(pool.clone()));
+        let tokens: Arc<dyn TokenStore> = Arc::new(PgTokenStore::new(pool.clone()));
         let migrator: Arc<dyn Migrator> = Arc::new(PgMigrator::new(pool.clone()));
         let db_stats: Arc<dyn DbStats> = Arc::new(PgStatsRepository::new(pool.clone()));
         let sql_console: Arc<dyn SqlConsole> = Arc::new(PgSqlConsole::new(pool.clone()));
         let lab: Arc<dyn LabStore> = service.clone();
         let store: Arc<dyn SbolStore> = service.clone();
+        let acl: Arc<dyn AclStore> = service.clone();
         Self {
             kind: BackendKind::Postgres,
             store,
+            acl,
+            pagerank,
+            cluster,
+            sketch,
+            config,
             jobs,
+            users,
+            tokens,
             triple_source,
             triple_writer,
             lab,

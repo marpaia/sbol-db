@@ -1,0 +1,10 @@
+<http://synbiohub.org/public/mini/mini_collection/1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://sbols.org/v2#Collection> <http://synbiohub.org/public> .
+<http://synbiohub.org/public/mini/mini_collection/1> <http://sbols.org/v2#displayId> "mini_collection" <http://synbiohub.org/public> .
+<http://synbiohub.org/public/mini/mini_collection/1> <http://purl.org/dc/terms/title> "Mini Parts Collection" <http://synbiohub.org/public> .
+<http://synbiohub.org/public/mini/mini_collection/1> <http://sbols.org/v2#member> <http://synbiohub.org/public/mini/BBa_J23100/1> <http://synbiohub.org/public> .
+<http://synbiohub.org/public/mini/BBa_J23100/1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://sbols.org/v2#ComponentDefinition> <http://synbiohub.org/public> .
+<http://synbiohub.org/public/mini/BBa_J23100/1> <http://sbols.org/v2#displayId> "BBa_J23100" <http://synbiohub.org/public> .
+<http://synbiohub.org/public/mini/BBa_J23100/1> <http://purl.org/dc/terms/title> "Anderson promoter J23100" <http://synbiohub.org/public> .
+<http://synbiohub.org/user/alice/secret/priv_part/1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://sbols.org/v2#ComponentDefinition> <http://synbiohub.org/user/alice> .
+<http://synbiohub.org/user/alice/secret/priv_part/1> <http://sbols.org/v2#displayId> "priv_part" <http://synbiohub.org/user/alice> .
+<http://synbiohub.org/user/alice/secret/priv_part/1> <http://purl.org/dc/terms/title> "Alice private part" <http://synbiohub.org/user/alice> .

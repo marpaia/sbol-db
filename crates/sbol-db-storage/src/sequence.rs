@@ -23,3 +23,19 @@ pub struct BatchSequenceMatch {
     pub pattern: String,
     pub matches: Vec<SequenceMatch>,
 }
+
+/// One aligned sequence hit, the store-facing result of the banded aligner.
+///
+/// Carries the target's IRI alongside the alignment the
+/// [`align`](sbol_db_search::align) module computes: `percent_match` is the
+/// `iddef=2` fractional identity, `strand` is `'+'`/`'-'`, and `cigar` is the
+/// M/I/D run-length string over the aligned core. Not `Eq` because it carries an
+/// `f64`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SequenceAlignment {
+    pub sequence_iri: String,
+    pub percent_match: f64,
+    pub strand: char,
+    pub cigar: String,
+    pub score: i32,
+}

@@ -1,0 +1,670 @@
+//! SynBioHub v1 read/query routes.
+//!
+//! Every handler resolves the caller's authorized
+//! [`GraphScope`](sbol_db_sparql::GraphScope) from the `X-authorization`
+//! identity ([`CurrentUser`]) and enforces it on the read: free-text relevance
+//! goes through the facade's ranked search over tantivy, and everything else
+//! (facets, counts, members, uses, twins, root/sub collections, metadata) is
+//! SPARQL over the shared engine and its accelerator. The scope is the ceiling,
+//! so a caller never reads a graph they are not entitled to.
+
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::Extension;
+use sbol_db_app::Hit;
+use sbol_db_core::{DomainError, User};
+use sbol_db_sparql::{GraphScope, ResultFormat, SparqlOptions};
+use serde::Deserialize;
+use serde_json::{json, Map, Value};
+
+use super::search::{extract_sequence, has_sequence_facet, parse_search_path};
+use super::{queries, render, sequence, CurrentUser};
+use crate::{ApiError, AppState};
+
+/// The instance base IRI classic SynBioHub mints objects under.
+const BASE: &str = "http://synbiohub.org/";
+
+/// The `?offset=&limit=` paging classic honors on the search family.
+#[derive(Debug, Default, Deserialize)]
+pub struct Paging {
+    pub offset: Option<usize>,
+    pub limit: Option<usize>,
+}
+
+/// A public object path, `/public/<collectionId>/<displayId>/<version>/…`. The
+/// fields are renamed to the camelCase route placeholders (`:collectionId`,
+/// `:displayId`) axum keys path captures by, so the struct deserializes.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicObject {
+    pub collection_id: String,
+    pub display_id: String,
+    pub version: String,
+}
+
+/// A user object path, `/user/<userId>/<collectionId>/<displayId>/<version>/…`.
+/// Renamed to the camelCase route placeholders for the same reason as
+/// [`PublicObject`].
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserObject {
+    pub user_id: String,
+    pub collection_id: String,
+    pub display_id: String,
+    pub version: String,
+}
+
+pub(super) fn public_uri(object: &PublicObject) -> String {
+    format!(
+        "{BASE}public/{}/{}/{}",
+        object.collection_id, object.display_id, object.version
+    )
+}
+
+pub(super) fn user_uri(object: &UserObject) -> String {
+    format!(
+        "{BASE}user/{}/{}/{}/{}",
+        object.user_id, object.collection_id, object.display_id, object.version
+    )
+}
+
+/// A version-less public object path, `/public/<collectionId>/<displayId>`: the
+/// persistent identity, which the caller resolves to the latest version.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicObjectPi {
+    pub collection_id: String,
+    pub display_id: String,
+}
+
+/// A version-less user object path, `/user/<userId>/<collectionId>/<displayId>`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserObjectPi {
+    pub user_id: String,
+    pub collection_id: String,
+    pub display_id: String,
+}
+
+pub(super) fn public_pi_uri(object: &PublicObjectPi) -> String {
+    format!(
+        "{BASE}public/{}/{}",
+        object.collection_id, object.display_id
+    )
+}
+
+pub(super) fn user_pi_uri(object: &UserObjectPi) -> String {
+    format!(
+        "{BASE}user/{}/{}/{}",
+        object.user_id, object.collection_id, object.display_id
+    )
+}
+
+// --- /search and /searchCount ------------------------------------------------
+
+/// The query parameters the bare `GET /search` route accepts. This path is
+/// shared by two surfaces distinguished by the `q` parameter: the native
+/// object-text API (the sbol-db REST client and its Python binding key on `q`),
+/// and the SynBioHub V1 relevance search, which ranks the whole in-scope corpus
+/// when no `q` is given.
+#[derive(Debug, Default, Deserialize)]
+pub struct SearchRootParams {
+    pub q: Option<String>,
+    pub object_type: Option<String>,
+    pub property_uri: Option<String>,
+    pub offset: Option<i64>,
+    pub limit: Option<i64>,
+}
+
+/// `GET /search` with no path grammar. A `q` parameter routes to the native
+/// object-text search; its absence ranks the whole in-scope corpus through the
+/// SynBioHub relevance path.
+pub async fn search_root(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Query(params): Query<SearchRootParams>,
+) -> Result<Response, ApiError> {
+    if let Some(q) = params.q {
+        let native = crate::routes::TextSearchParams {
+            q,
+            object_type: params.object_type,
+            property_uri: params.property_uri,
+            offset: params.offset.unwrap_or(0),
+            limit: params.limit.unwrap_or(crate::routes::SEARCH_DEFAULT_LIMIT),
+        };
+        return Ok(crate::routes::text_search(State(state), Query(native))
+            .await
+            .into_response());
+    }
+    let paging = Paging {
+        offset: params.offset.map(|o| o.max(0) as usize),
+        limit: params.limit.map(|l| l.max(0) as usize),
+    };
+    run_search(state, user, String::new(), paging).await
+}
+
+/// `GET /search/<grammar>`: parse the classic path grammar and answer.
+pub async fn search(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(query): Path<String>,
+    Query(paging): Query<Paging>,
+) -> Result<Response, ApiError> {
+    run_search(state, user, query, paging).await
+}
+
+/// `GET /searchCount` with no query segment.
+pub async fn search_count_root(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> Result<Response, ApiError> {
+    run_search_count(state, user, String::new()).await
+}
+
+/// `GET /searchCount/<grammar>`.
+pub async fn search_count(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(query): Path<String>,
+) -> Result<Response, ApiError> {
+    run_search_count(state, user, query).await
+}
+
+async fn run_search(
+    state: AppState,
+    user: Option<User>,
+    grammar: String,
+    paging: Paging,
+) -> Result<Response, ApiError> {
+    // A `sequence=`/`globalsequence=`/`exactsequence=` facet is a sequence
+    // search: align through the facade rather than the SPARQL/ranked path.
+    if let Some(seq) = extract_sequence(&grammar) {
+        return sequence::run_sequence_search(&state, &user, seq).await;
+    }
+    // A sequence facet with no sequence yet (the UI's initial `globalsequence=`)
+    // has nothing to align, so it matches nothing, as classic answers.
+    if has_sequence_facet(&grammar) {
+        return Ok(render::search_response(&hits_to_solutions(&[])));
+    }
+
+    let mut faceted = parse_search_path(&grammar)?;
+    faceted.offset = paging.offset.unwrap_or(0);
+    faceted.limit = paging.limit;
+    let scope = scope_for(&state, &user).await?;
+
+    // Free text drives the tantivy relevance path; a purely faceted query
+    // falls back to the accelerated SPARQL object list so counts and members
+    // match the engine exactly.
+    if faceted.free_text.is_some() {
+        let (hits, _total) = state.app.ranked_search(&faceted, scope).await?;
+        Ok(render::search_response(&hits_to_solutions(&hits)))
+    } else {
+        let results = run_scoped_value(&state, &queries::faceted(&faceted, false), scope).await?;
+        Ok(render::search_response(&results))
+    }
+}
+
+async fn run_search_count(
+    state: AppState,
+    user: Option<User>,
+    grammar: String,
+) -> Result<Response, ApiError> {
+    // Sequence-search count mirrors run_search: a real sequence counts its
+    // alignment hits; an empty sequence facet counts nothing, as classic does.
+    if let Some(seq) = extract_sequence(&grammar) {
+        return sequence::run_sequence_count(&state, &user, seq).await;
+    }
+    if has_sequence_facet(&grammar) {
+        return Ok(render::count_response(&count_to_solutions(0)));
+    }
+    let faceted = parse_search_path(&grammar)?;
+    let scope = scope_for(&state, &user).await?;
+    if faceted.free_text.is_some() {
+        let count = state.app.ranked_search_count(&faceted, scope).await?;
+        Ok(render::count_response(&count_to_solutions(count)))
+    } else {
+        let results = run_scoped_value(&state, &queries::faceted(&faceted, true), scope).await?;
+        Ok(render::count_response(&results))
+    }
+}
+
+// --- /:type/count ------------------------------------------------------------
+
+/// `GET /:type/count`: the count of top-level objects of one SBOL2 type.
+pub async fn type_count(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(type_name): Path<String>,
+) -> Result<Response, ApiError> {
+    let scope = scope_for(&state, &user).await?;
+    let results = run_scoped_value(&state, &queries::count(&type_name), scope).await?;
+    Ok(render::count_response(&results))
+}
+
+// --- /rootCollections --------------------------------------------------------
+
+/// `GET /rootCollections`: Collections that are not members of any Collection.
+pub async fn root_collections(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> Result<Response, ApiError> {
+    let scope = scope_for(&state, &user).await?;
+    let results = run_scoped_value(&state, &queries::root_collections(), scope).await?;
+    Ok(render::collections_response(&results))
+}
+
+/// `GET /browse`: the same root collections as [`root_collections`], rendered in
+/// classic's `/browse` shape (each entry carries the route `url` and `public`).
+pub async fn browse(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> Result<Response, ApiError> {
+    let scope = scope_for(&state, &user).await?;
+    let results = run_scoped_value(&state, &queries::root_collections(), scope).await?;
+    Ok(render::browse_response(&results))
+}
+
+// --- object-scoped: /uses /twins /subCollections /metadata -------------------
+
+pub async fn public_uses(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObject>,
+) -> Result<Response, ApiError> {
+    uses_impl(state.0, user.0 .0, public_uri(&object), false).await
+}
+
+pub async fn public_uses_count(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObject>,
+) -> Result<Response, ApiError> {
+    uses_impl(state.0, user.0 .0, public_uri(&object), true).await
+}
+
+pub async fn public_twins(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObject>,
+) -> Result<Response, ApiError> {
+    twins_impl(state.0, user.0 .0, public_uri(&object), false).await
+}
+
+pub async fn public_twins_count(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObject>,
+) -> Result<Response, ApiError> {
+    twins_impl(state.0, user.0 .0, public_uri(&object), true).await
+}
+
+pub async fn public_sub_collections(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObject>,
+) -> Result<Response, ApiError> {
+    sub_collections_impl(state.0, user.0 .0, public_uri(&object)).await
+}
+
+pub async fn public_metadata(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObject>,
+) -> Result<Response, ApiError> {
+    metadata_impl(state.0, user.0 .0, public_uri(&object)).await
+}
+
+pub async fn user_uses(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObject>,
+) -> Result<Response, ApiError> {
+    uses_impl(state.0, user.0 .0, user_uri(&object), false).await
+}
+
+pub async fn user_uses_count(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObject>,
+) -> Result<Response, ApiError> {
+    uses_impl(state.0, user.0 .0, user_uri(&object), true).await
+}
+
+pub async fn user_twins(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObject>,
+) -> Result<Response, ApiError> {
+    twins_impl(state.0, user.0 .0, user_uri(&object), false).await
+}
+
+pub async fn user_twins_count(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObject>,
+) -> Result<Response, ApiError> {
+    twins_impl(state.0, user.0 .0, user_uri(&object), true).await
+}
+
+pub async fn user_sub_collections(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObject>,
+) -> Result<Response, ApiError> {
+    sub_collections_impl(state.0, user.0 .0, user_uri(&object)).await
+}
+
+pub async fn user_metadata(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObject>,
+) -> Result<Response, ApiError> {
+    metadata_impl(state.0, user.0 .0, user_uri(&object)).await
+}
+
+// Version-less object-relation routes. The UI fetches an object's relations off
+// its persistent identity (no version), which classic resolves to the latest
+// version; sbol-db resolves the same way, then delegates to the versioned impl.
+
+/// Resolve a version-less object path to its latest-version URI under the
+/// caller's scope, or `404` when no version is visible.
+pub(super) async fn resolve_pi(
+    state: &AppState,
+    user: &Option<User>,
+    pi: String,
+) -> Result<String, ApiError> {
+    let scope = scope_for(state, user).await?;
+    super::download::latest_version_uri(state, scope, &pi)
+        .await?
+        .ok_or(ApiError::NotFound(pi))
+}
+
+pub async fn public_uses_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
+    uses_impl(state.0, user.0 .0, uri, false).await
+}
+
+pub async fn public_uses_count_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
+    uses_impl(state.0, user.0 .0, uri, true).await
+}
+
+pub async fn public_twins_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
+    twins_impl(state.0, user.0 .0, uri, false).await
+}
+
+pub async fn public_twins_count_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
+    twins_impl(state.0, user.0 .0, uri, true).await
+}
+
+pub async fn public_sub_collections_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
+    sub_collections_impl(state.0, user.0 .0, uri).await
+}
+
+pub async fn public_metadata_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<PublicObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
+    metadata_impl(state.0, user.0 .0, uri).await
+}
+
+pub async fn user_uses_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
+    uses_impl(state.0, user.0 .0, uri, false).await
+}
+
+pub async fn user_uses_count_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
+    uses_impl(state.0, user.0 .0, uri, true).await
+}
+
+pub async fn user_twins_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
+    twins_impl(state.0, user.0 .0, uri, false).await
+}
+
+pub async fn user_twins_count_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
+    twins_impl(state.0, user.0 .0, uri, true).await
+}
+
+pub async fn user_sub_collections_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
+    sub_collections_impl(state.0, user.0 .0, uri).await
+}
+
+pub async fn user_metadata_pi(
+    state: State<AppState>,
+    user: Extension<CurrentUser>,
+    Path(object): Path<UserObjectPi>,
+) -> Result<Response, ApiError> {
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
+    metadata_impl(state.0, user.0 .0, uri).await
+}
+
+async fn uses_impl(
+    state: AppState,
+    user: Option<User>,
+    uri: String,
+    count_only: bool,
+) -> Result<Response, ApiError> {
+    let scope = scope_for(&state, &user).await?;
+    let results = run_scoped_value(&state, &queries::uses(&uri, count_only), scope).await?;
+    Ok(relation_response(&results, count_only))
+}
+
+async fn twins_impl(
+    state: AppState,
+    user: Option<User>,
+    uri: String,
+    count_only: bool,
+) -> Result<Response, ApiError> {
+    let scope = scope_for(&state, &user).await?;
+    let results = run_scoped_value(&state, &queries::twins(&uri, count_only), scope).await?;
+    Ok(relation_response(&results, count_only))
+}
+
+/// Render a `/uses` or `/twins` result: the count variant is a plain integer,
+/// the listing variant is the classic search-result array.
+fn relation_response(results: &Value, count_only: bool) -> Response {
+    if count_only {
+        render::count_response(results)
+    } else {
+        render::search_response(results)
+    }
+}
+
+async fn sub_collections_impl(
+    state: AppState,
+    user: Option<User>,
+    uri: String,
+) -> Result<Response, ApiError> {
+    let scope = scope_for(&state, &user).await?;
+    let results = run_scoped_value(&state, &queries::sub_collections(&uri), scope).await?;
+    Ok(render::collections_response(&results))
+}
+
+async fn metadata_impl(
+    state: AppState,
+    user: Option<User>,
+    uri: String,
+) -> Result<Response, ApiError> {
+    let scope = scope_for(&state, &user).await?;
+    let results = run_scoped_value(&state, &queries::metadata(&uri), scope).await?;
+    Ok(render::metadata_response(&results))
+}
+
+// --- /manage and /shared (identity-required) ---------------------------------
+
+/// `GET /manage`: the top-level objects the caller owns (`sbh:ownedBy`).
+/// Anonymous callers are rejected, matching classic's `requireUser`.
+pub async fn manage(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> Result<Response, ApiError> {
+    let Some(user) = user else {
+        return Ok(unauthorized());
+    };
+    let scope = state
+        .app
+        .acl_service
+        .compute_scope(Some(&user.graph_uri))
+        .await?;
+    let results = run_scoped_value(&state, &queries::owned_by(&user.graph_uri), scope).await?;
+    Ok(render::manage_response(&results))
+}
+
+/// `GET /shared`: the objects shared with the caller (`sbh:canView`).
+pub async fn shared(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> Result<Response, ApiError> {
+    let Some(user) = user else {
+        return Ok(unauthorized());
+    };
+    let scope = state
+        .app
+        .acl_service
+        .compute_scope(Some(&user.graph_uri))
+        .await?;
+    let objects = state.app.acl.viewable_objects(&user.graph_uri).await?;
+    let results = run_scoped_value(&state, &queries::metadata_of(&objects), scope).await?;
+    Ok(render::metadata_response(&results))
+}
+
+// --- shared helpers ----------------------------------------------------------
+
+/// The caller's authorized graph scope, from the `X-authorization` identity.
+pub(super) async fn scope_for(
+    state: &AppState,
+    user: &Option<User>,
+) -> Result<GraphScope, ApiError> {
+    let user_graph = user.as_ref().map(|u| u.graph_uri.clone());
+    let scope = state
+        .app
+        .acl_service
+        .compute_scope(user_graph.as_deref())
+        .await?;
+    Ok(scope)
+}
+
+/// Run a SPARQL query under the caller's scope and parse the engine's
+/// SPARQL-results JSON into a value the classic-shape renderers project from.
+pub(super) async fn run_scoped_value(
+    state: &AppState,
+    query: &str,
+    scope: GraphScope,
+) -> Result<Value, ApiError> {
+    let options = SparqlOptions {
+        authorized_graphs: scope,
+        ..SparqlOptions::default()
+    };
+    let outcome = state
+        .app
+        .sparql
+        .execute(query, Some(ResultFormat::Json), None, &options)
+        .await?;
+    serde_json::from_slice(&outcome.payload.body)
+        .map_err(|e| ApiError::Domain(DomainError::Serialization(e.to_string())))
+}
+
+/// A `401` for an endpoint that requires an authenticated caller.
+fn unauthorized() -> Response {
+    (StatusCode::UNAUTHORIZED, "authentication required").into_response()
+}
+
+/// Project ranked hits into the SPARQL-results JSON shape `/search` emits, with
+/// `head.vars` exactly `[subject, displayId, version, name, description, type]`.
+fn hits_to_solutions(hits: &[Hit]) -> Value {
+    let bindings: Vec<Value> = hits
+        .iter()
+        .map(|hit| {
+            let mut binding = Map::new();
+            binding.insert("subject".to_owned(), uri_node(&hit.subject));
+            insert_literal(&mut binding, "displayId", hit.display_id.as_deref());
+            insert_literal(&mut binding, "version", hit.version.as_deref());
+            insert_literal(&mut binding, "name", hit.name.as_deref());
+            insert_literal(&mut binding, "description", hit.description.as_deref());
+            if let Some(type_iri) = &hit.type_iri {
+                binding.insert("type".to_owned(), uri_node(type_iri));
+            }
+            Value::Object(binding)
+        })
+        .collect();
+    json!({
+        "head": { "vars": ["subject", "displayId", "version", "name", "description", "type"] },
+        "results": { "bindings": bindings },
+    })
+}
+
+/// The single-row `[{count}]` SPARQL-results JSON `/searchCount` emits.
+fn count_to_solutions(count: usize) -> Value {
+    json!({
+        "head": { "vars": ["count"] },
+        "results": {
+            "bindings": [{
+                "count": {
+                    "type": "literal",
+                    "value": count.to_string(),
+                    "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+                },
+            }],
+        },
+    })
+}
+
+fn uri_node(value: &str) -> Value {
+    json!({ "type": "uri", "value": value })
+}
+
+fn insert_literal(binding: &mut Map<String, Value>, var: &str, value: Option<&str>) {
+    if let Some(value) = value {
+        binding.insert(var.to_owned(), json!({ "type": "literal", "value": value }));
+    }
+}

@@ -3,7 +3,7 @@
 //! source tree but is the only thing keeping pathological literal content
 //! from corrupting output.
 
-use sbol::{Document, RdfFormat};
+use sbol::v3::{Document, RdfFormat};
 use sbol_db_core::{IriString, ObjectTerm, SerializationFormat, SubjectTerm, Triple};
 use sbol_db_rdf::triples_to_rdf;
 

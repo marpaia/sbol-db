@@ -176,7 +176,7 @@ async fn triples_round_trip_through_export() {
     let turtle =
         sbol_db_rdf::triples_to_rdf(&triples, SerializationFormat::Turtle).expect("serialize");
     // Re-parse to verify the output is valid Turtle the upstream crate accepts.
-    let _ = sbol::Document::read(&turtle, sbol::RdfFormat::Turtle).expect("re-parse");
+    let _ = sbol::v3::Document::read(&turtle, sbol::RdfFormat::Turtle).expect("re-parse");
 }
 
 #[tokio::test]

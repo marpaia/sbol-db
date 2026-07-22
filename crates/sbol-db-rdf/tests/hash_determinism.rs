@@ -2,7 +2,7 @@
 //! order-independent, stable across runs. Change detection downstream depends
 //! on the hash being a pure function of the unordered triple set.
 
-use sbol::{Document, RdfFormat};
+use sbol::v3::{Document, RdfFormat};
 use sbol_db_rdf::content_hash;
 
 const FIXTURE: &str = include_str!("../../sbol-db-postgres/tests/fixtures/simple_component.ttl");

@@ -171,6 +171,86 @@ impl SequenceSearchRepository {
         Ok(out)
     }
 
+    /// Candidate sequences for the banded aligner: every indexed DNA/RNA
+    /// sequence sharing at least one canonical k-mer with `query`. Unlike
+    /// [`candidates_seeded`](Self::candidates_seeded), which seeds only on the
+    /// query's first k-mer, this aggregates over every canonical query k-mer so
+    /// a gapped hit whose head does not match is still admitted. A query shorter
+    /// than `K` has no seed and every nucleotide sequence is a candidate.
+    pub fn align_candidates(&self, query: &str) -> Result<Vec<(String, String)>, DomainError> {
+        let normalised: String = query.chars().filter(|c| !c.is_whitespace()).collect();
+        if normalised.is_empty() {
+            return Ok(Vec::new());
+        }
+        if normalised.len() < KMER_K {
+            return self.all_nucleotide_sequences();
+        }
+        let mut seeds: Vec<u32> = canonical_kmers(&normalised).map(|h| h.canonical).collect();
+        seeds.sort_unstable();
+        seeds.dedup();
+        if seeds.is_empty() {
+            return self.all_nucleotide_sequences();
+        }
+
+        let mut iris: Vec<String> = Vec::new();
+        let mut seen = HashSet::new();
+        for seed in seeds {
+            let prefix = seed.to_be_bytes();
+            self.db.for_each_prefix("seq_kmer", &prefix, |key, _| {
+                let iri = std::str::from_utf8(&key[4..])
+                    .map_err(|_| DomainError::Database("non-utf8 sequence iri".into()))?;
+                if seen.insert(iri.to_owned()) {
+                    iris.push(iri.to_owned());
+                }
+                Ok(true)
+            })?;
+        }
+        self.collect_candidates(iris)
+    }
+
+    /// The `(iri, elements)` for the DNA/RNA sequences among `iris`, dropping any
+    /// that is absent or non-nucleotide. Materializes the sketch candidate set's
+    /// elements for the banded aligner.
+    pub fn sequences_by_iris(&self, iris: &[String]) -> Result<Vec<(String, String)>, DomainError> {
+        let mut out = Vec::new();
+        for iri in iris {
+            let Some(blob) = self.db.get_cf("seq", iri.as_bytes())? else {
+                continue;
+            };
+            let rec: SeqRec = serde_json::from_slice(&blob)
+                .map_err(|e| DomainError::Serialization(e.to_string()))?;
+            let (Some(elements), Some(alpha)) = (rec.elements, rec.alphabet) else {
+                continue;
+            };
+            if alpha != "DNA" && alpha != "RNA" {
+                continue;
+            }
+            out.push((iri.clone(), elements));
+        }
+        Ok(out)
+    }
+
+    /// Every indexed DNA/RNA sequence, the short-query candidate set (no seed)
+    /// and the full set the search-index rebuild sketches.
+    pub fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
+        let mut out = Vec::new();
+        self.db.for_each("seq", |key, blob| {
+            let rec: SeqRec = serde_json::from_slice(blob)
+                .map_err(|e| DomainError::Serialization(e.to_string()))?;
+            let (Some(elements), Some(alpha)) = (rec.elements, rec.alphabet) else {
+                return Ok(true);
+            };
+            if alpha != "DNA" && alpha != "RNA" {
+                return Ok(true);
+            }
+            let iri = String::from_utf8(key.to_vec())
+                .map_err(|_| DomainError::Database("non-utf8 sequence iri".into()))?;
+            out.push((iri, elements));
+            Ok(true)
+        })?;
+        Ok(out)
+    }
+
     /// Long-query path: seed the first k-mer of each strand, gather the
     /// sequences whose seed index contains it.
     fn candidates_seeded(

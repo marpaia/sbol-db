@@ -7,11 +7,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use sbol_db_app::AppServices;
 use sbol_db_backend::Backend;
-use sbol_db_jobs::{default_registry, Worker, WorkerConfig};
+use sbol_db_jobs::{default_registry, SearchIndexHandles, Worker, WorkerConfig};
 use sbol_db_server::{router, AppState, Metrics};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
-use sbol_db_storage::{JobQueue, SbolStore};
+use sbol_db_storage::{ConfigStore, JobQueue, SbolStore};
 use tokio_util::sync::CancellationToken;
 
 use crate::signal::shutdown_signal;
@@ -28,11 +29,15 @@ pub async fn run(
 ) -> Result<()> {
     let engine = Arc::new(SparqlEngine::new(backend.triple_source.clone()));
 
-    let worker_setup = if !no_worker {
+    let mut worker_setup = if !no_worker {
         Some(
             build_worker_setup(
                 database_url,
-                Some((backend.store.clone(), backend.jobs.clone())),
+                Some((
+                    backend.store.clone(),
+                    backend.jobs.clone(),
+                    backend.config.clone(),
+                )),
                 worker_concurrency,
                 worker_queues.as_deref(),
                 worker_id.as_deref(),
@@ -59,10 +64,28 @@ pub async fn run(
         backend.triple_source.clone(),
         backend.triple_writer.clone(),
     ));
+    let app_services = Arc::new(AppServices::from_backend(&backend));
+
+    // The embedded worker shares this process, so it reindexes into the very
+    // same ranked text index the API reads, alongside the backend's durable
+    // cluster and PageRank stores and its triple source. This is what lets the
+    // `rebuild_search_index` job populate the clusters and PageRank that back
+    // `/similar` and the ranked search.
+    if let Some(setup) = worker_setup.as_mut() {
+        setup.search = Some(SearchIndexHandles {
+            cluster: backend.cluster.clone(),
+            pagerank: backend.pagerank.clone(),
+            sketch: backend.sketch.clone(),
+            text_index: app_services.text_search.clone(),
+            triples: backend.triple_source.clone(),
+        });
+    }
+
     let state = AppState {
         service: backend.store.clone(),
         sparql: engine,
         sparql_update,
+        app: app_services,
         metrics,
         jobs: backend.jobs.clone(),
         config: config.clone(),
@@ -118,7 +141,14 @@ pub(crate) struct WorkerSetup {
     pub listener_pool: Option<sbol_db_postgres::PgPool>,
     pub store: Arc<dyn SbolStore>,
     pub jobs: Arc<dyn JobQueue>,
+    pub config_store: Arc<dyn ConfigStore>,
     pub config: WorkerConfig,
+    /// The shared search-index handles the `rebuild_search_index` job needs.
+    /// Present only for the embedded worker, which shares the API's process and
+    /// therefore its in-RAM ranked text index; the standalone `worker`
+    /// subcommand runs in a separate process with no shared index and leaves it
+    /// `None`, so that job kind fails fast there.
+    pub search: Option<SearchIndexHandles>,
 }
 
 impl WorkerSetup {
@@ -126,13 +156,19 @@ impl WorkerSetup {
         let registry = Arc::new(default_registry());
         // `listener_pool` (Postgres only) doubles as the LISTEN/NOTIFY channel
         // for low-latency wakeups; without it the worker falls back to polling.
-        let worker = Worker::new(
+        // The config store lets the `wor_sync` job read the joined Web of
+        // Registries URL and persist the pulled prefix map.
+        let mut worker = Worker::new(
             self.jobs,
             self.store,
             self.listener_pool,
             registry,
             self.config,
-        );
+        )
+        .with_config_store(self.config_store);
+        if let Some(search) = self.search {
+            worker = worker.with_search_index(search);
+        }
         tokio::spawn(async move {
             if let Err(err) = worker.run(cancel).await {
                 tracing::error!(error = %err, "embedded worker exited with error");
@@ -141,6 +177,10 @@ impl WorkerSetup {
     }
 }
 
+/// The already-open handles the API hands the worker to reuse: the SBOL store,
+/// the job queue, and the durable config store.
+type ReusableHandles = (Arc<dyn SbolStore>, Arc<dyn JobQueue>, Arc<dyn ConfigStore>);
+
 /// Build the worker's store, job queue, and config. On Postgres the worker opens
 /// its own right-sized pool so long-running handlers cannot starve inbound HTTP
 /// requests. Other backends reuse the already-open API handle: SQLite avoids a
@@ -148,7 +188,7 @@ impl WorkerSetup {
 /// single open handle per process).
 pub(crate) async fn build_worker_setup(
     database_url: &str,
-    reuse: Option<(Arc<dyn SbolStore>, Arc<dyn JobQueue>)>,
+    reuse: Option<ReusableHandles>,
     concurrency: Option<usize>,
     queues: Option<&str>,
     worker_id: Option<&str>,
@@ -170,7 +210,7 @@ pub(crate) async fn build_worker_setup(
 
     // Postgres opens a dedicated worker pool; every other backend reuses the
     // store and queue the API already opened.
-    let (listener_pool, store, jobs) = if is_postgres(database_url) {
+    let (listener_pool, store, jobs, config_store) = if is_postgres(database_url) {
         let mut worker_pool_cfg = sbol_db_postgres::PoolConfig::from_env();
         let override_max = std::env::var("SBOL_DB_WORKER_POOL_MAX")
             .ok()
@@ -180,18 +220,18 @@ pub(crate) async fn build_worker_setup(
             .await
             .context("opening worker connection pool")?;
         let backend = Backend::from_postgres_pool(pool.clone());
-        (Some(pool), backend.store, backend.jobs)
+        (Some(pool), backend.store, backend.jobs, backend.config)
     } else {
         // Reuse the API's already-open handle when there is one (required for
         // RocksDB, whose lock is exclusive); otherwise open it ourselves.
-        let (store, jobs) = match reuse {
-            Some(pair) => pair,
+        let (store, jobs, config_store) = match reuse {
+            Some(handles) => handles,
             None => {
                 let backend = Backend::open(database_url).await?;
-                (backend.store, backend.jobs)
+                (backend.store, backend.jobs, backend.config)
             }
         };
-        (None, store, jobs)
+        (None, store, jobs, config_store)
     };
 
     let mut config = WorkerConfig {
@@ -207,7 +247,11 @@ pub(crate) async fn build_worker_setup(
         listener_pool,
         store,
         jobs,
+        config_store,
         config,
+        // Wired by the embedded-server path once the shared search index exists;
+        // the standalone worker leaves it unset.
+        search: None,
     })
 }
 

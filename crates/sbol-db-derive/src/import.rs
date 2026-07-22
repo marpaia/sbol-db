@@ -1,7 +1,9 @@
 //! Parse an import body into an `sbol::Document` and derive the full set of
 //! records a backend must persist for it.
 
-use sbol::{Document, Iri, RdfFormat, UpgradeOptions, ValidationReport};
+use sbol::convert::UpgradeOptions;
+use sbol::v3::{Document, ValidationReport};
+use sbol::{Iri, RdfFormat};
 use sbol_db_core::{
     DomainError, GraphId, IriString, NewGraph, ObjectSummary, SerializationFormat, Triple,
     TypedProjections, ValidationStatus,
@@ -178,7 +180,7 @@ pub fn parse_import_document(input: &ImportInput) -> Result<Document, DomainErro
                         })
                     })
                     .transpose()?;
-                Document::upgrade_from_sbol2_with(&input.body, rdf_format, options)
+                sbol::convert::upgrade_from_sbol2_with(&input.body, rdf_format, options)
                     .map(|(document, _report)| document)
                     .map_err(|e| DomainError::Parse(e.to_string()))
             } else {

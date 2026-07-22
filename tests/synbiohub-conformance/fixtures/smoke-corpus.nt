@@ -1,0 +1,21 @@
+<http://synbiohub.org/public/smoke/smoke_collection/1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://sbols.org/v2#Collection> .
+<http://synbiohub.org/public/smoke/smoke_collection/1> <http://sbols.org/v2#displayId> "smoke_collection" .
+<http://synbiohub.org/public/smoke/smoke_collection/1> <http://sbols.org/v2#version> "1" .
+<http://synbiohub.org/public/smoke/smoke_collection/1> <http://sbols.org/v2#persistentIdentity> <http://synbiohub.org/public/smoke/smoke_collection> .
+<http://synbiohub.org/public/smoke/smoke_collection/1> <http://purl.org/dc/terms/title> "Smoke Collection" .
+<http://synbiohub.org/public/smoke/smoke_collection/1> <http://wiki.synbiohub.org/wiki/Terms/synbiohub#topLevel> <http://synbiohub.org/public/smoke/smoke_collection/1> .
+<http://synbiohub.org/public/smoke/smoke_collection/1> <http://sbols.org/v2#member> <http://synbiohub.org/public/smoke/pSmoke/1> .
+<http://synbiohub.org/public/smoke/pSmoke/1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://sbols.org/v2#ComponentDefinition> .
+<http://synbiohub.org/public/smoke/pSmoke/1> <http://sbols.org/v2#displayId> "pSmoke" .
+<http://synbiohub.org/public/smoke/pSmoke/1> <http://sbols.org/v2#version> "1" .
+<http://synbiohub.org/public/smoke/pSmoke/1> <http://sbols.org/v2#persistentIdentity> <http://synbiohub.org/public/smoke/pSmoke> .
+<http://synbiohub.org/public/smoke/pSmoke/1> <http://purl.org/dc/terms/title> "pSmoke promoter" .
+<http://synbiohub.org/public/smoke/pSmoke/1> <http://purl.org/dc/terms/description> "a smoke-test promoter" .
+<http://synbiohub.org/public/smoke/pSmoke/1> <http://wiki.synbiohub.org/wiki/Terms/synbiohub#topLevel> <http://synbiohub.org/public/smoke/pSmoke/1> .
+<http://synbiohub.org/public/smoke/pSmoke/1> <http://sbols.org/v2#type> <http://www.biopax.org/release/biopax-level3.owl#DnaRegion> .
+<http://synbiohub.org/public/smoke/pSmoke/1> <http://sbols.org/v2#role> <http://identifiers.org/so/SO:0000167> .
+<http://synbiohub.org/public/smoke/pSmoke/1> <http://sbols.org/v2#sequence> <http://synbiohub.org/public/smoke/pSmoke_seq/1> .
+<http://synbiohub.org/public/smoke/pSmoke_seq/1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://sbols.org/v2#Sequence> .
+<http://synbiohub.org/public/smoke/pSmoke_seq/1> <http://sbols.org/v2#displayId> "pSmoke_seq" .
+<http://synbiohub.org/public/smoke/pSmoke_seq/1> <http://sbols.org/v2#elements> "ttgacggctagctcagtcctaggtacagtgctagc" .
+<http://synbiohub.org/public/smoke/pSmoke_seq/1> <http://sbols.org/v2#encoding> <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .

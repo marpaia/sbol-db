@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use sbol::{Document, Iri, Resource, SbolClass, Term, Triple};
+use sbol::v3::{Document, Iri, Resource, SbolClass, Term, Triple};
 use sbol_db_core::{IriString, ObjectSummary};
 use serde_json::{json, Value};
 
@@ -50,7 +50,7 @@ fn group_triples_by_subject(doc: &Document) -> BTreeMap<Resource, Vec<Triple>> {
     map
 }
 
-fn build_summary(obj: &sbol::SbolObject, iri: &Iri, triples: &[Triple]) -> ObjectSummary {
+fn build_summary(obj: &sbol::v3::SbolObject, iri: &Iri, triples: &[Triple]) -> ObjectSummary {
     let display_id = identified_field(obj, |o| o.display_id().map(str::to_owned));
     let name = identified_field(obj, |o| o.name().map(str::to_owned));
     let description = identified_field(obj, |o| o.description().map(str::to_owned));
@@ -77,7 +77,7 @@ fn class_to_iri(class: SbolClass) -> String {
 
 /// Read identified-trait fields from `SbolObject` without unwrapping every
 /// variant manually. Uses prelude trait methods.
-fn identified_field<F>(obj: &sbol::SbolObject, f: F) -> Option<String>
+fn identified_field<F>(obj: &sbol::v3::SbolObject, f: F) -> Option<String>
 where
     F: Fn(&dyn IdentifiedView) -> Option<String>,
 {
@@ -86,7 +86,7 @@ where
     macro_rules! by_variant {
         ($($variant:ident),+ $(,)?) => {
             match obj {
-                $(sbol::SbolObject::$variant(o) => f(&IdentifiedAdapter(o as &dyn SbolIdentified)),)+
+                $(sbol::v3::SbolObject::$variant(o) => f(&IdentifiedAdapter(o as &dyn SbolIdentified)),)+
                 _ => None,
             }
         };

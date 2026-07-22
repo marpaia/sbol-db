@@ -9,6 +9,7 @@ use std::sync::{Arc, OnceLock};
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use base64::Engine as _;
+use sbol_db_app::AppServices;
 use sbol_db_postgres::{connect, run_migrations, JobRepository, SbolObjectService};
 use sbol_db_server::{router, AppState, Metrics, ServerConfig};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
@@ -47,6 +48,13 @@ async fn fresh_app() -> axum::Router {
     let metrics = Metrics::install(Some(pool), env!("CARGO_PKG_VERSION"));
     let state = AppState {
         lab: service.clone(),
+        app: Arc::new(AppServices::new(
+            service.clone(),
+            sparql.clone(),
+            sparql_update.clone(),
+            jobs.clone(),
+            service.clone(),
+        )),
         service,
         sparql,
         sparql_update,

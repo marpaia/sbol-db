@@ -4,10 +4,18 @@
 
 use std::sync::Arc;
 
-use sbol_db_postgres::{connect, run_migrations, JobRepository, SbolObjectService};
-use sbol_db_storage::{JobQueue, SbolStore};
+use sbol_db_app::AppServices;
+use sbol_db_postgres::{
+    connect, run_migrations, JobRepository, PgClusterStore, PgConfigStore, PgPageRankStore,
+    PgSketchStore, PgTokenStore, PgUserStore, SbolObjectService,
+};
+use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
+use sbol_db_storage::{
+    AclStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore, SketchStore,
+    TokenStore, UserStore,
+};
 
-async fn fresh_handles() -> (Arc<dyn SbolStore>, Arc<dyn JobQueue>) {
+async fn fresh_app() -> AppServices {
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://sbol:sbol@localhost:5432/sbol".to_owned());
     let pool = connect(&database_url).await.expect("connect");
@@ -18,20 +26,37 @@ async fn fresh_handles() -> (Arc<dyn SbolStore>, Arc<dyn JobQueue>) {
          sbol_sequences, sbol_features, sbol_locations, sbol_constraints, \
          sbol_interactions, sbol_participations, sbol_sequence_kmers, sbol_ontologies, \
          sbol_ontology_terms, sbol_ontology_term_aliases, sbol_ontology_closure, \
-         sbol_jobs, sbol_job_attempts, sbol_job_logs \
+         sbol_jobs, sbol_job_attempts, sbol_job_logs, sbh_user, sbh_api_token, \
+         object_pagerank, sbol_sequence_cluster, sbh_app_config \
          RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
     .await
     .expect("truncate");
 
-    let store: Arc<dyn SbolStore> = Arc::new(SbolObjectService::new(pool.clone()));
-    let jobs: Arc<dyn JobQueue> = Arc::new(JobRepository::new(pool));
-    (store, jobs)
+    let service = Arc::new(SbolObjectService::new(pool.clone()));
+    let sparql = Arc::new(SparqlEngine::new(service.triple_source()));
+    let sparql_update = Arc::new(SparqlUpdateEngine::new(
+        service.triple_source(),
+        service.triple_writer(),
+    ));
+    let jobs: Arc<dyn JobQueue> = Arc::new(JobRepository::new(pool.clone()));
+    let store: Arc<dyn SbolStore> = service.clone();
+    let acl: Arc<dyn AclStore> = service;
+    let users: Arc<dyn UserStore> = Arc::new(PgUserStore::new(pool.clone()));
+    let tokens: Arc<dyn TokenStore> = Arc::new(PgTokenStore::new(pool.clone()));
+    let pagerank: Arc<dyn PageRankStore> = Arc::new(PgPageRankStore::new(pool.clone()));
+    let cluster: Arc<dyn ClusterStore> = Arc::new(PgClusterStore::new(pool.clone()));
+    let sketch: Arc<dyn SketchStore> = Arc::new(PgSketchStore::new(pool.clone()));
+    let config: Arc<dyn ConfigStore> = Arc::new(PgConfigStore::new(pool));
+    AppServices::new(store, sparql, sparql_update, jobs, acl)
+        .with_identity(users, tokens)
+        .with_sequence_stores(pagerank, cluster, sketch)
+        .with_config(config)
 }
 
 #[tokio::test]
 async fn postgres_passes_storage_conformance_suite() {
-    let (store, jobs) = fresh_handles().await;
-    sbol_db_conformance::run_all(store.as_ref(), jobs.as_ref()).await;
+    let app = fresh_app().await;
+    sbol_db_conformance::run_all(&app).await;
 }

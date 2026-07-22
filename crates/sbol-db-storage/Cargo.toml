@@ -9,6 +9,7 @@ description = "Backend-neutral storage contract for sbol-db: traits and request/
 
 [dependencies]
 sbol-db-core.workspace = true
+sbol-db-search.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true

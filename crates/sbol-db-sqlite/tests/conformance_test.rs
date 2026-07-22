@@ -1,7 +1,19 @@
 //! Runs the `sbol-db-conformance` scenarios against the SQLite backend, the
 //! same contract the Postgres and RocksDB backends pass.
 
-use sbol_db_sqlite::{connect_and_migrate, SqliteJobRepository, SqlitePool, SqliteStore};
+use std::sync::Arc;
+
+use sbol_db_app::AppServices;
+use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
+use sbol_db_sqlite::{
+    connect_and_migrate, SqliteClusterStore, SqliteConfigStore, SqliteJobRepository,
+    SqlitePageRankStore, SqlitePool, SqliteSketchStore, SqliteStore, SqliteTokenStore,
+    SqliteUserStore,
+};
+use sbol_db_storage::{
+    AclStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore, SketchStore,
+    TokenStore, UserStore,
+};
 use tempfile::TempDir;
 
 async fn fresh_pool() -> (SqlitePool, TempDir) {
@@ -51,9 +63,24 @@ async fn sqlite_passes_job_queue_lifecycle() {
 #[tokio::test]
 async fn sqlite_passes_full_conformance_suite() {
     let (pool, _dir) = fresh_pool().await;
-    sbol_db_conformance::run_all(
-        &SqliteStore::new(pool.clone()),
-        &SqliteJobRepository::new(pool),
-    )
-    .await;
+    let store = Arc::new(SqliteStore::new(pool.clone()));
+    let sparql = Arc::new(SparqlEngine::new(store.triple_source()));
+    let sparql_update = Arc::new(SparqlUpdateEngine::new(
+        store.triple_source(),
+        store.triple_writer(),
+    ));
+    let jobs: Arc<dyn JobQueue> = Arc::new(SqliteJobRepository::new(pool.clone()));
+    let store_dyn: Arc<dyn SbolStore> = store.clone();
+    let acl: Arc<dyn AclStore> = store;
+    let users: Arc<dyn UserStore> = Arc::new(SqliteUserStore::new(pool.clone()));
+    let tokens: Arc<dyn TokenStore> = Arc::new(SqliteTokenStore::new(pool.clone()));
+    let pagerank: Arc<dyn PageRankStore> = Arc::new(SqlitePageRankStore::new(pool.clone()));
+    let cluster: Arc<dyn ClusterStore> = Arc::new(SqliteClusterStore::new(pool.clone()));
+    let sketch: Arc<dyn SketchStore> = Arc::new(SqliteSketchStore::new(pool.clone()));
+    let config: Arc<dyn ConfigStore> = Arc::new(SqliteConfigStore::new(pool));
+    let app = AppServices::new(store_dyn, sparql, sparql_update, jobs, acl)
+        .with_identity(users, tokens)
+        .with_sequence_stores(pagerank, cluster, sketch)
+        .with_config(config);
+    sbol_db_conformance::run_all(&app).await;
 }

@@ -57,12 +57,25 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     "seq",
     "seq_kmer",
     "seq_kmer_by_iri",
+    // MinHash/LSH similarity sketch index. `seq_sketch` maps iri -> signature
+    // bytes; `seq_lsh_band` keys band_hash(8, BE) ++ iri -> () so a band's
+    // members are one prefix scan; `seq_lsh_band_by_iri` mirrors
+    // iri ++ SEP ++ band_hash(8, BE) -> () so a re-index drops a sequence's old
+    // bands.
+    "seq_sketch",
+    "seq_lsh_band",
+    "seq_lsh_band_by_iri",
     // Job queue.
     "job",
     "job_idem",
     "job_attempt",
     "job_log",
     "job_ready",
+    // Identity: accounts, their username/email lookup indexes, and API tokens.
+    "users",             // user id -> User JSON
+    "users_by_username", // username -> user id
+    "users_by_email",    // email -> user id
+    "api_tokens",        // token hash -> user id
     // SynBioHub query accelerator: derived per-graph indexes (rebuilt lazily
     // when a graph is marked dirty). See `repo::accel`.
     "acc_meta",       // graph + SEP + iri -> MetaRecord JSON
@@ -73,6 +86,15 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     "acc_facet",      // graph + SEP + kind + SEP + value -> ()
     "acc_count",      // graph + SEP + scope -> u64 LE (precomputed counts)
     "acc_dirty",      // graph -> () (presence = indexes stale, rebuild on next read)
+    // Object PageRank scores backing the native ranked search: iri -> f64 LE.
+    "object_pagerank",
+    // Sequence cluster assignments backing /similar. `sequence_cluster` maps
+    // iri -> cluster_id (i64 BE); `sequence_cluster_by_id` keys
+    // cluster_id(BE) + SEP + iri -> () so cluster-mate lookup is a prefix scan.
+    "sequence_cluster",
+    "sequence_cluster_by_id",
+    // Durable instance configuration: key -> ConfigEntry JSON.
+    "app_config",
     // Counters and schema version.
     "meta",
 ];

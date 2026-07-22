@@ -1,7 +1,18 @@
 //! Runs the `sbol-db-conformance` scenarios against the RocksDB backend, the
 //! same contract the SQLite and Postgres backends pass.
 
-use sbol_db_rocksdb::{connect, Db, RocksdbJobs, RocksdbStore};
+use std::sync::Arc;
+
+use sbol_db_app::AppServices;
+use sbol_db_rocksdb::{
+    connect, Db, RocksdbClusterStore, RocksdbConfigStore, RocksdbJobs, RocksdbPageRankStore,
+    RocksdbSketchStore, RocksdbStore, RocksdbTokenStore, RocksdbUserStore,
+};
+use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
+use sbol_db_storage::{
+    AclStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore, SketchStore,
+    TokenStore, UserStore,
+};
 use tempfile::TempDir;
 
 fn fresh_db() -> (Db, TempDir) {
@@ -51,5 +62,24 @@ async fn rocksdb_passes_job_queue_lifecycle() {
 #[tokio::test]
 async fn rocksdb_passes_full_conformance_suite() {
     let (db, _dir) = fresh_db();
-    sbol_db_conformance::run_all(&RocksdbStore::new(db.clone()), &RocksdbJobs::new(db)).await;
+    let store = Arc::new(RocksdbStore::new(db.clone()));
+    let sparql = Arc::new(SparqlEngine::new(store.triple_source()));
+    let sparql_update = Arc::new(SparqlUpdateEngine::new(
+        store.triple_source(),
+        store.triple_writer(),
+    ));
+    let jobs: Arc<dyn JobQueue> = Arc::new(RocksdbJobs::new(db.clone()));
+    let store_dyn: Arc<dyn SbolStore> = store.clone();
+    let acl: Arc<dyn AclStore> = store;
+    let users: Arc<dyn UserStore> = Arc::new(RocksdbUserStore::new(db.clone()));
+    let tokens: Arc<dyn TokenStore> = Arc::new(RocksdbTokenStore::new(db.clone()));
+    let pagerank: Arc<dyn PageRankStore> = Arc::new(RocksdbPageRankStore::new(db.clone()));
+    let cluster: Arc<dyn ClusterStore> = Arc::new(RocksdbClusterStore::new(db.clone()));
+    let sketch: Arc<dyn SketchStore> = Arc::new(RocksdbSketchStore::new(db.clone()));
+    let config: Arc<dyn ConfigStore> = Arc::new(RocksdbConfigStore::new(db));
+    let app = AppServices::new(store_dyn, sparql, sparql_update, jobs, acl)
+        .with_identity(users, tokens)
+        .with_sequence_stores(pagerank, cluster, sketch)
+        .with_config(config);
+    sbol_db_conformance::run_all(&app).await;
 }

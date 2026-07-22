@@ -3,15 +3,21 @@
 //! at compile time so the docs page is fully self-contained (no client-side
 //! generator, no compile-time annotations spread across crates).
 //!
-//! The UI is rendered by [Scalar](https://github.com/scalar/scalar), loaded
-//! from a CDN -- a single `<script>` tag fetches the renderer and points it
-//! at `/openapi.json` on the same origin. The look-and-feel is closest to
-//! FastAPI's auto-generated `/docs` of the modern OpenAPI UIs.
+//! The UI is rendered by [Scalar](https://github.com/scalar/scalar), pinned to
+//! a fixed CDN version. `Scalar.createApiReference` mounts a single reference
+//! carrying three same-origin documents, each a switcher entry: `/openapi.json`
+//! (the original sbol-db native API), `/synbiohub/openapi.json` (the SynBioHub
+//! v1-compatible API), and `/api/v2/openapi.json` (the idiomatic V2 API). The
+//! multi-document `sources` configuration is driven through the explicit
+//! `createApiReference` call; the attribute-based auto-mount does not honor it.
+//! The look-and-feel is closest to FastAPI's auto-generated `/docs` of the
+//! modern OpenAPI UIs.
 
 use axum::http::header::CONTENT_TYPE;
 use axum::response::IntoResponse;
 
 const OPENAPI_JSON: &str = include_str!("openapi.json");
+const SYNBIOHUB_OPENAPI_JSON: &str = include_str!("synbiohub_openapi.json");
 
 const DOCS_HTML: &str = r#"<!doctype html>
 <html lang="en">
@@ -25,23 +31,44 @@ const DOCS_HTML: &str = r#"<!doctype html>
     </style>
   </head>
   <body>
-    <script id="api-reference" data-url="/openapi.json"></script>
+    <div id="app"></div>
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.62.9"></script>
     <script>
-      var configuration = {
+      Scalar.createApiReference(document.getElementById("app"), {
         theme: "purple",
         layout: "modern",
-        hideClientButton: false
-      };
-      document.getElementById("api-reference").dataset.configuration =
-        JSON.stringify(configuration);
+        hideClientButton: false,
+        sources: [
+          {
+            title: "sbol-db native API",
+            slug: "native",
+            url: "/openapi.json",
+            default: true
+          },
+          {
+            title: "SynBioHub v1 API",
+            slug: "synbiohub-v1",
+            url: "/synbiohub/openapi.json"
+          },
+          {
+            title: "SynBioHub v2 API",
+            slug: "synbiohub-v2",
+            url: "/api/v2/openapi.json"
+          }
+        ]
+      });
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
   </body>
 </html>
 "#;
 
 pub async fn openapi_json() -> impl IntoResponse {
     ([(CONTENT_TYPE, "application/json")], OPENAPI_JSON)
+}
+
+/// `GET /synbiohub/openapi.json` — the SynBioHub v1-compatible surface.
+pub async fn synbiohub_openapi_json() -> impl IntoResponse {
+    ([(CONTENT_TYPE, "application/json")], SYNBIOHUB_OPENAPI_JSON)
 }
 
 pub async fn docs_html() -> impl IntoResponse {

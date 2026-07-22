@@ -3,11 +3,15 @@
 mod auth;
 mod docs;
 mod error;
+mod explorer;
 mod export;
 #[cfg(feature = "lab")]
 mod lab;
 pub mod metrics;
 mod routes;
+mod serialize;
+mod synbiohub;
+mod v2;
 
 pub use error::ApiError;
 pub use export::export_subject_rdf;
@@ -16,6 +20,10 @@ pub use lab::SchemaCache;
 pub use metrics::Metrics;
 #[cfg(feature = "lab")]
 pub use sbol_db_storage::{BackendKind, Capabilities, MaintenanceStyle};
+pub use serialize::{
+    serialize_closure, serialize_gff3, serialize_omex, OmexAttachment, OmexAttachmentSource,
+    Serialized,
+};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,6 +33,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use sbol_db_app::AppServices;
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 #[cfg(feature = "lab")]
 use sbol_db_storage::{DbStats, LabStore, LsmStats, SqlConsole};
@@ -38,6 +47,10 @@ pub struct AppState {
     pub service: Arc<dyn SbolStore>,
     pub sparql: Arc<SparqlEngine>,
     pub sparql_update: Arc<SparqlUpdateEngine>,
+    /// The backend-neutral application facade the identity-aware adapters share
+    /// (ACL scoping, and the net-new subsystems added in later phases). Wired
+    /// in alongside the existing raw handles; the current routes are unchanged.
+    pub app: Arc<AppServices>,
     pub metrics: Arc<Metrics>,
     pub jobs: Arc<dyn JobQueue>,
     /// Backend-neutral dashboard / graph-browser reads for the lab UI.
@@ -98,6 +111,14 @@ pub struct ServerConfig {
     pub sparql_auth_user: String,
     pub sparql_auth_password: String,
     pub sparql_auth_disabled: bool,
+    /// Salt the legacy SynBioHub password digest `sha1(salt + sha1(pw))` was
+    /// computed with, used to verify migrated credentials on the V1 auth
+    /// routes. Defaults to classic's `synbiohub_change_me`; a migrated instance
+    /// sets `SBOL_DB_PASSWORD_SALT` to its original `passwordSalt`.
+    pub password_salt: String,
+    /// Whether `POST /register` accepts self-service account creation. When
+    /// false the route returns `403`, matching classic's `allowPublicSignup`.
+    pub allow_public_signup: bool,
 }
 
 impl Default for ServerConfig {
@@ -113,6 +134,8 @@ impl Default for ServerConfig {
             sparql_auth_user: "dba".to_owned(),
             sparql_auth_password: "dba".to_owned(),
             sparql_auth_disabled: false,
+            password_salt: "synbiohub_change_me".to_owned(),
+            allow_public_signup: true,
         }
     }
 }
@@ -150,6 +173,11 @@ impl ServerConfig {
                 .ok()
                 .map(|v| parse_bool(&v))
                 .unwrap_or(defaults.sparql_auth_disabled),
+            password_salt: std::env::var("SBOL_DB_PASSWORD_SALT").unwrap_or(defaults.password_salt),
+            allow_public_signup: std::env::var("SBOL_DB_ALLOW_PUBLIC_SIGNUP")
+                .ok()
+                .map(|v| parse_bool(&v))
+                .unwrap_or(defaults.allow_public_signup),
         }
     }
 }
@@ -244,6 +272,7 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route("/metrics", get(metrics::metrics_handler))
         .route("/docs", get(docs::docs_html))
         .route("/openapi.json", get(docs::openapi_json))
+        .route("/synbiohub/openapi.json", get(docs::synbiohub_openapi_json))
         .route(
             "/graphs",
             post(routes::create_graph).delete(routes::delete_graph_by_document_iri),
@@ -253,7 +282,6 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
             "/graphs/:id",
             get(routes::get_graph).delete(routes::delete_graph),
         )
-        .route("/search", get(routes::text_search))
         .route("/objects", get(routes::get_object_by_iri))
         .route("/objects/list", get(routes::list_objects))
         .route("/objects/lookup", post(routes::lookup_objects))
@@ -277,6 +305,10 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route("/jobs/:id/attempts", get(routes::list_job_attempts))
         .route("/jobs/:id/logs", get(routes::list_job_logs))
         .route("/jobs/:id/cancel", post(routes::cancel_job))
+        // The idiomatic V2 REST surface, a second presentation of the same
+        // facade under a versioned prefix. It carries its own bearer-token
+        // identity layer and inherits the metrics/body-limit/timeout layers.
+        .nest("/api/v2", v2::router(state.clone()))
         .route_layer(axum::middleware::from_fn(metrics::track_metrics));
 
     // SynBioHub/Virtuoso-compatible write surface, behind HTTP Basic auth.
@@ -298,7 +330,12 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
             auth::require_auth,
         ));
 
-    let app = mount_lab(api.merge(authed), &config)
+    // The SynBioHub V1 auth surface (`/login`, `/register`, `/profile`, …),
+    // behind the `X-authorization` middleware. It is independent of the
+    // Basic-auth `/sparql-auth*` write path above.
+    let synbiohub_routes = synbiohub::router(state.clone());
+
+    let app = mount_lab(api.merge(authed).merge(synbiohub_routes), &config)
         .fallback(not_found_handler)
         .with_state(state);
 
@@ -313,6 +350,15 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
             axum::http::StatusCode::REQUEST_TIMEOUT,
             config.request_timeout,
         ))
+        // Permissive CORS so a browser SPA (e.g. the SynBioHub frontend, which
+        // calls this V1 API cross-origin) can drive the API, matching classic
+        // SynBioHub's `app.use(cors())`.
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any),
+        )
 }
 
 /// Catch-all that logs unmatched requests and returns a JSON-shaped

@@ -9,10 +9,11 @@
 //! terminates — so the timeout is "best-effort soft cap" rather than a hard
 //! kill.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use oxrdf::{GraphName, NamedNode};
+use oxrdf::{GraphName, NamedNode, NamedOrBlankNode};
 use sbol_db_core::DomainError;
 use sbol_db_storage::TripleSource;
 use spareval::{QueryEvaluator, QueryResults, QueryableDataset};
@@ -35,11 +36,26 @@ pub struct SparqlOptions {
     /// Reject query strings exceeding this byte length. Cheap shield against
     /// unbounded posts.
     pub max_query_size: usize,
-    /// The SPARQL-protocol `default-graph-uri`: the graph a query treats as
-    /// its default graph when it carries no `FROM` clause of its own. `None`
-    /// preserves sbol-db's native behavior (default graph = union of all named
-    /// graphs). SynBioHub always supplies this, scoping reads to one graph.
-    pub default_graph: Option<String>,
+    /// The set of named graphs the caller is authorized to read. This is the
+    /// server-enforced ceiling: whatever a query names through `FROM` or the
+    /// protocol `default-graph-uri` is intersected with this set, so naming an
+    /// unauthorized graph yields no rows rather than its contents.
+    pub authorized_graphs: GraphScope,
+}
+
+/// The named graphs a caller is authorized to read.
+///
+/// [`GraphScope::Union`] imposes no restriction: the default graph is the
+/// union of all named graphs (sbol-db's native behavior) and any client
+/// `FROM`/`default-graph-uri` is honored as-is. [`GraphScope::Only`] caps the
+/// queryable graphs to the listed set; the engine intersects the query's
+/// requested graphs with it, so a request for a graph outside the set yields
+/// no rows from that graph.
+#[derive(Clone, Debug, Default)]
+pub enum GraphScope {
+    #[default]
+    Union,
+    Only(Vec<String>),
 }
 
 impl Default for SparqlOptions {
@@ -48,7 +64,7 @@ impl Default for SparqlOptions {
             timeout: Duration::from_secs(30),
             max_rows: 100_000,
             max_query_size: 64 * 1024,
-            default_graph: None,
+            authorized_graphs: GraphScope::Union,
         }
     }
 }
@@ -101,10 +117,15 @@ impl SparqlEngine {
     /// SELECT/ASK, Turtle for CONSTRUCT/DESCRIBE). Mismatches between the
     /// requested format and the query form (e.g. CSV for CONSTRUCT) return
     /// [`SparqlError::UnsupportedFormat`].
+    /// `default_graph_uri` is the SPARQL-protocol `default-graph-uri`: the
+    /// graph a query treats as its default graph when it carries no `FROM`
+    /// clause of its own. It is intersected with `options.authorized_graphs`,
+    /// so it can narrow reads but never widen them beyond the caller's scope.
     pub async fn execute(
         &self,
         query_str: &str,
         requested_format: Option<ResultFormat>,
+        default_graph_uri: Option<&str>,
         options: &SparqlOptions,
     ) -> Result<SparqlOutcome, SparqlError> {
         if query_str.len() > options.max_query_size {
@@ -131,16 +152,23 @@ impl SparqlEngine {
         // entirely, forcing generic evaluation for every query — an escape hatch
         // when a query must bypass the indexes.
         if format.is_solution_format() && !accel_disabled() {
-            if let Some(plan) = crate::accel::recognize(&parsed, options.default_graph.as_deref()) {
-                let source = Arc::clone(&self.source);
-                let accel =
-                    tokio::task::spawn_blocking(move || source.run_accelerated(&plan)).await;
-                if let Ok(Ok(Some(solutions))) = accel {
-                    let payload = serialize_accel_solutions(solutions, format, options.max_rows)?;
-                    return Ok(SparqlOutcome {
-                        payload,
-                        query_form,
-                    });
+            if let Some(plan) = crate::accel::recognize(&parsed, default_graph_uri) {
+                // The accelerator answers from one graph's indexes; honor the
+                // authorization ceiling before serving it. An unauthorized
+                // graph falls through to generic evaluation, which yields the
+                // same empty result under the scoped dataset.
+                if graph_authorized(plan.graph(), &options.authorized_graphs) {
+                    let source = Arc::clone(&self.source);
+                    let accel =
+                        tokio::task::spawn_blocking(move || source.run_accelerated(&plan)).await;
+                    if let Ok(Ok(Some(solutions))) = accel {
+                        let payload =
+                            serialize_accel_solutions(solutions, format, options.max_rows)?;
+                        return Ok(SparqlOutcome {
+                            payload,
+                            query_form,
+                        });
+                    }
                 }
             }
         }
@@ -150,17 +178,18 @@ impl SparqlEngine {
         let source = Arc::clone(&self.source);
         let use_ids = source.supports_id_scan();
         let max_rows = options.max_rows;
-        let default_graph = options.default_graph.clone();
+        let default_graph_uri = default_graph_uri.map(str::to_owned);
+        let scope = options.authorized_graphs.clone();
 
         // An id-native backend joins on term ids and materializes terms only at
         // the edges; otherwise fall back to the term-materializing dataset.
         let blocking = tokio::task::spawn_blocking(move || {
             if use_ids {
                 let dataset = IdTripleDataset::new(source);
-                evaluate_blocking(query, &dataset, format, max_rows, default_graph)
+                evaluate_blocking(query, &dataset, format, max_rows, default_graph_uri, scope)
             } else {
                 let dataset = TripleDataset::new(source);
-                evaluate_blocking(query, &dataset, format, max_rows, default_graph)
+                evaluate_blocking(query, &dataset, format, max_rows, default_graph_uri, scope)
             }
         });
 
@@ -242,29 +271,20 @@ fn evaluate_blocking<'a, D>(
     dataset: &'a D,
     format: ResultFormat,
     max_rows: usize,
-    default_graph: Option<String>,
+    default_graph_uri: Option<String>,
+    scope: GraphScope,
 ) -> Result<ResultPayload, SparqlError>
 where
     &'a D: QueryableDataset<'a, Error = DomainError>,
 {
     let evaluator = QueryEvaluator::new();
     let mut prepared = evaluator.prepare(&query);
-    // Dataset selection precedence:
-    //   1. The query's own `FROM`/`FROM NAMED` clause wins (honored by
-    //      `prepare`); we leave it untouched.
-    //   2. Else the protocol `default-graph-uri` scopes the default graph to
-    //      that one graph (SynBioHub/Virtuoso semantics).
-    //   3. Else the default graph is the union of all named graphs. Our writers
-    //      put every triple in a named graph, so without this a plain
-    //      `SELECT ?s WHERE { ?s ?p ?o }` would see nothing.
-    if query.dataset().is_none() {
-        match default_graph {
-            Some(g) => prepared
-                .dataset_mut()
-                .set_default_graph(vec![GraphName::NamedNode(NamedNode::new_unchecked(g))]),
-            None => prepared.dataset_mut().set_default_graph_as_union(),
-        }
-    }
+    scope_dataset(
+        prepared.dataset_mut(),
+        query.dataset().is_some(),
+        default_graph_uri.as_deref(),
+        &scope,
+    );
     let results = prepared
         .execute(dataset)
         .map_err(|e| SparqlError::Evaluation(e.to_string()))?;
@@ -272,5 +292,86 @@ where
         QueryResults::Solutions(iter) => serialize_solutions(iter, format, max_rows),
         QueryResults::Boolean(b) => serialize_boolean(b, format),
         QueryResults::Graph(iter) => serialize_triples(iter.into_iter(), format, max_rows),
+    }
+}
+
+/// Whether a single-graph read of `graph` is permitted under `scope`.
+fn graph_authorized(graph: &str, scope: &GraphScope) -> bool {
+    match scope {
+        GraphScope::Union => true,
+        GraphScope::Only(allowed) => allowed.iter().any(|g| g == graph),
+    }
+}
+
+/// Resolve the prepared query's dataset against the protocol `default-graph-uri`
+/// and the caller's authorization ceiling.
+///
+/// Dataset selection precedence under [`GraphScope::Union`]:
+///   1. The query's own `FROM`/`FROM NAMED` wins (honored by `prepare`); left
+///      untouched.
+///   2. Else the protocol `default-graph-uri` scopes the default graph to that
+///      one graph (SynBioHub/Virtuoso semantics).
+///   3. Else the default graph is the union of all named graphs. Our writers
+///      put every triple in a named graph, so without this a plain
+///      `SELECT ?s WHERE { ?s ?p ?o }` would see nothing.
+///
+/// Under [`GraphScope::Only`] the queryable graphs are intersected with the
+/// authorized set: the default graph and the available named graphs are both
+/// clamped to it, so any graph the query names outside the set contributes no
+/// rows.
+fn scope_dataset(
+    ds: &mut spareval::QueryDatasetSpecification,
+    query_has_from: bool,
+    default_graph_uri: Option<&str>,
+    scope: &GraphScope,
+) {
+    let named = |g: &str| GraphName::NamedNode(NamedNode::new_unchecked(g.to_owned()));
+    match scope {
+        GraphScope::Union => {
+            if !query_has_from {
+                match default_graph_uri {
+                    Some(g) => ds.set_default_graph(vec![named(g)]),
+                    None => ds.set_default_graph_as_union(),
+                }
+            }
+        }
+        GraphScope::Only(allowed) => {
+            let allowed_set: HashSet<&str> = allowed.iter().map(String::as_str).collect();
+            if query_has_from {
+                // Intersect the query's `FROM` default graphs with the set.
+                let filtered: Vec<GraphName> = ds
+                    .default_graph_graphs()
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|g| {
+                        matches!(g, GraphName::NamedNode(n) if allowed_set.contains(n.as_str()))
+                    })
+                    .cloned()
+                    .collect();
+                ds.set_default_graph(filtered);
+            } else {
+                match default_graph_uri {
+                    Some(g) if allowed_set.contains(g) => ds.set_default_graph(vec![named(g)]),
+                    Some(_) => ds.set_default_graph(Vec::new()),
+                    None => ds.set_default_graph(allowed.iter().map(|g| named(g)).collect()),
+                }
+            }
+            // Clamp the available named graphs to the authorized set,
+            // intersecting with any `FROM NAMED` the query supplied.
+            let allowed_named: Vec<NamedOrBlankNode> = match ds.available_named_graphs() {
+                Some(list) => list
+                    .iter()
+                    .filter(|n| {
+                        matches!(n, NamedOrBlankNode::NamedNode(nn) if allowed_set.contains(nn.as_str()))
+                    })
+                    .cloned()
+                    .collect(),
+                None => allowed
+                    .iter()
+                    .map(|g| NamedOrBlankNode::NamedNode(NamedNode::new_unchecked(g.to_owned())))
+                    .collect(),
+            };
+            ds.set_available_named_graphs(allowed_named);
+        }
     }
 }

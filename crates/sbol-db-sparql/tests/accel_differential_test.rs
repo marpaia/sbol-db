@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sbol_db_core::{DomainError, Triple};
-use sbol_db_sparql::{ResultFormat, SparqlEngine, SparqlOptions};
+use sbol_db_sparql::{GraphScope, ResultFormat, SparqlEngine, SparqlOptions};
 use sbol_db_storage::{
     AccelSolutions, AcceleratedQuery, GraphFilter, GraphWriteMode, IdGraphFilter, IdQuad,
     PatternObject, PatternSubject, SbolStore, TermId, TermKey, TermValue, TripleSource,
@@ -123,7 +123,7 @@ fn options() -> SparqlOptions {
         timeout: Duration::from_secs(30),
         max_rows: 100_000,
         max_query_size: 64 * 1024,
-        default_graph: Some(PUBLIC_GRAPH.to_owned()),
+        authorized_graphs: GraphScope::Union,
     }
 }
 
@@ -322,7 +322,12 @@ async fn compare_templates(source: Arc<dyn TripleSource>) {
 
 async fn run(engine: &SparqlEngine, query: &str) -> String {
     let outcome = engine
-        .execute(query, Some(ResultFormat::Json), &options())
+        .execute(
+            query,
+            Some(ResultFormat::Json),
+            Some(PUBLIC_GRAPH),
+            &options(),
+        )
         .await
         .unwrap_or_else(|e| panic!("execute failed:\n{query}\nerror: {e:?}"));
     String::from_utf8(outcome.payload.body).expect("utf8")

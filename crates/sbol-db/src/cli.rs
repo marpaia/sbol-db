@@ -159,6 +159,51 @@ pub enum Command {
         #[command(subcommand)]
         action: UtilAction,
     },
+
+    /// Load a classic SynBioHub instance into this sbol-db.
+    ///
+    /// Reads an unpacked classic instance (or its individual parts) and
+    /// reconstructs the equivalent state: the Virtuoso RDF dump is loaded
+    /// verbatim graph-by-graph, `synbiohub.sqlite` users become accounts with
+    /// their legacy password hash kept intact, the `uploads/` blob tree is
+    /// copied into the blob-store root, each `config.local.json` key is written
+    /// to durable config, and a search-index rebuild is enqueued.
+    ///
+    /// Pending schema migrations run first unless `--skip-migrations`.
+    MigrateSynbiohub {
+        /// Root of an unpacked classic instance. Supplies the default location
+        /// of any part not given its own path.
+        #[arg(long)]
+        source: Option<PathBuf>,
+        /// Virtuoso RDF dump (N-Quads or TriG). Defaults to `<source>/dump.nq`.
+        #[arg(long)]
+        rdf: Option<PathBuf>,
+        /// Classic `synbiohub.sqlite`. Defaults to `<source>/synbiohub.sqlite`.
+        #[arg(long)]
+        sqlite: Option<PathBuf>,
+        /// Classic `uploads/` blob tree. Defaults to `<source>/uploads`.
+        #[arg(long)]
+        uploads: Option<PathBuf>,
+        /// Classic `config.local.json`. Defaults to
+        /// `<source>/config.local.json`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Blob-store root the uploads tree is copied under (as
+        /// `<root>/uploads`), matching the server's configured blob path.
+        #[arg(long)]
+        blob_store: PathBuf,
+        /// Named graph to load default-graph (unnamed) triples into. Unset
+        /// counts and skips them, since a SynBioHub dump keeps everything in
+        /// named graphs.
+        #[arg(long)]
+        default_graph: Option<String>,
+        /// Do not apply pending schema migrations before loading.
+        #[arg(long)]
+        skip_migrations: bool,
+        /// Do not enqueue the search-index rebuild after loading.
+        #[arg(long)]
+        no_reindex: bool,
+    },
 }
 
 // -----------------------------------------------------------------------

@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "sbol-db",
+    "title": "sbol-db native API",
     "version": "0.1.0",
-    "description": "A Postgres-backed data management system for synthetic biology data. It ingests SBOL 3 RDF, upgrades SBOL 2 RDF, and imports GenBank or FASTA into SBOL 3 before projecting designs into a typed relational schema *and* an RDF quad store inside the same Postgres instance. It then exposes the result through five composable query primitives: typed lookup by IRI, bounded graph neighborhood traversal, read-only SPARQL 1.1, nucleotide substring + reverse-complement search, and ontology-aware role expansion.\n\nSee [`docs/crate-guide.md`](https://github.com/marpaia/sbol-db/blob/master/docs/crate-guide.md) for an architectural tour.",
+    "description": "The original sbol-db REST API: graph and object management, SPARQL, sequence search, ontology, jobs, and the data-lab endpoints.",
     "contact": {
       "name": "sbol-db",
       "url": "https://github.com/marpaia/sbol-db"
@@ -19,19 +19,45 @@
     }
   ],
   "tags": [
-    { "name": "Documents",    "description": "Import SBOL documents and inspect what was stored." },
-    { "name": "Objects",      "description": "Resolve typed SBOL objects by IRI and re-emit them as RDF." },
-    { "name": "Neighborhood", "description": "Bounded recursive graph traversal across `sbol_quads`." },
-    { "name": "SPARQL",       "description": "Read-only SPARQL 1.1 evaluator (SELECT / ASK / CONSTRUCT / DESCRIBE)." },
-    { "name": "Sequences",    "description": "Nucleotide substring + reverse-complement search backed by the k-mer seed index." },
-    { "name": "Ontology",     "description": "Load OBO ontologies (SO, SBO, ...) and resolve transitive `is_a` closure." },
-    { "name": "Jobs",         "description": "Background work queue: enqueue, inspect, and cancel async jobs (e.g. document imports). Workers claim with `FOR UPDATE SKIP LOCKED`, leases auto-renew, retries are exponentially backed off." },
-    { "name": "Meta",         "description": "Liveness, readiness, metrics, OpenAPI schema, and this docs page." }
+    {
+      "name": "Graphs",
+      "description": "Import SBOL documents into named graphs and inspect what was stored."
+    },
+    {
+      "name": "Objects",
+      "description": "Resolve typed SBOL objects by IRI and re-emit them as RDF."
+    },
+    {
+      "name": "Neighborhood",
+      "description": "Bounded recursive graph traversal across the triplestore."
+    },
+    {
+      "name": "SPARQL",
+      "description": "Read-only SPARQL 1.1 evaluator (SELECT / ASK / CONSTRUCT / DESCRIBE)."
+    },
+    {
+      "name": "Sequences",
+      "description": "Nucleotide substring + reverse-complement search backed by the k-mer seed index."
+    },
+    {
+      "name": "Ontology",
+      "description": "Load OBO ontologies (SO, SBO, ...) and resolve transitive `is_a` closure."
+    },
+    {
+      "name": "Jobs",
+      "description": "Background work queue: enqueue, inspect, and cancel async jobs (e.g. document imports). Workers claim with `FOR UPDATE SKIP LOCKED`, leases auto-renew, retries are exponentially backed off."
+    },
+    {
+      "name": "Meta",
+      "description": "Liveness, readiness, metrics, OpenAPI schema, and this docs page."
+    }
   ],
   "paths": {
     "/healthz": {
       "get": {
-        "tags": ["Meta"],
+        "tags": [
+          "Meta"
+        ],
         "summary": "Liveness check",
         "description": "Static liveness probe. Returns `ok` if the process is running; does not touch Postgres. Wire this to Kubernetes `livenessProbe`.",
         "operationId": "healthz",
@@ -40,7 +66,9 @@
             "description": "Server is live.",
             "content": {
               "text/plain": {
-                "schema": { "type": "string" },
+                "schema": {
+                  "type": "string"
+                },
                 "example": "ok"
               }
             }
@@ -50,7 +78,9 @@
     },
     "/readyz": {
       "get": {
-        "tags": ["Meta"],
+        "tags": [
+          "Meta"
+        ],
         "summary": "Readiness check",
         "description": "Issues a short-timeout `SELECT 1` against the connection pool. Returns 200 when Postgres is reachable, 503 otherwise. Wire this to Kubernetes `readinessProbe`.",
         "operationId": "readyz",
@@ -61,10 +91,21 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["status"],
-                  "properties": { "status": { "type": "string", "enum": ["ready"] } }
+                  "required": [
+                    "status"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ready"
+                      ]
+                    }
+                  }
                 },
-                "example": { "status": "ready" }
+                "example": {
+                  "status": "ready"
+                }
               }
             }
           },
@@ -74,13 +115,26 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["status", "reason"],
+                  "required": [
+                    "status",
+                    "reason"
+                  ],
                   "properties": {
-                    "status": { "type": "string", "enum": ["not_ready"] },
-                    "reason": { "type": "string" }
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "not_ready"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
                   }
                 },
-                "example": { "status": "not_ready", "reason": "database probe timed out" }
+                "example": {
+                  "status": "not_ready",
+                  "reason": "database probe timed out"
+                }
               }
             }
           }
@@ -89,7 +143,9 @@
     },
     "/metrics": {
       "get": {
-        "tags": ["Meta"],
+        "tags": [
+          "Meta"
+        ],
         "summary": "Prometheus metrics",
         "description": "Prometheus text-format exposition of HTTP request counters/histograms (keyed by templated route), `sbol_db_pool_connections` gauges, and a `sbol_db_build_info` label gauge. Intended for in-cluster scraping; not part of the public query API.",
         "operationId": "metrics",
@@ -98,39 +154,121 @@
             "description": "Prometheus exposition.",
             "content": {
               "text/plain": {
-                "schema": { "type": "string" }
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           }
         }
       }
     },
-
-    "/documents": {
+    "/graphs": {
       "post": {
-        "tags": ["Documents"],
-        "summary": "Import a design document",
-        "description": "Parses the request body as SBOL 3 RDF, SBOL 2 RDF, GenBank, or FASTA in the format derived from the `format` query parameter or the `Content-Type` header. Non-SBOL-3 inputs are converted to SBOL 3, then persisted inside one transaction (objects + quads + typed projections + validation) and returned as an import report.",
-        "operationId": "importDocument",
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Import a design document into a named graph",
+        "description": "Parses the request body as SBOL 3 RDF, SBOL 2 RDF, GenBank, or FASTA in the format derived from the `format` query parameter or the `Content-Type` header. Non-SBOL-3 inputs are converted to SBOL 3, then persisted inside one transaction (objects + triples + typed projections + validation) and returned as an import report.",
+        "operationId": "createGraph",
         "parameters": [
-          { "$ref": "#/components/parameters/SerializationFormat" },
-          { "name": "namespace",    "in": "query", "schema": { "type": "string", "format": "uri" }, "description": "Namespace IRI for formats that need one. SBOL 2 uses it only as an upgrade fallback; GenBank and FASTA use it for emitted SBOL 3 object identities." },
-          { "name": "source_uri",   "in": "query", "schema": { "type": "string" } },
-          { "name": "document_iri", "in": "query", "schema": { "type": "string", "format": "uri" } },
-          { "name": "name",         "in": "query", "schema": { "type": "string" } },
-          { "name": "description",  "in": "query", "schema": { "type": "string" } },
-          { "name": "created_by",   "in": "query", "schema": { "type": "string" } }
+          {
+            "$ref": "#/components/parameters/SerializationFormat"
+          },
+          {
+            "name": "namespace",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "Namespace IRI for formats that need one. SBOL 2 uses it only as an upgrade fallback; GenBank and FASTA use it for emitted SBOL 3 object identities."
+          },
+          {
+            "name": "source_uri",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "document_iri",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "description",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "created_by",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "overwrite",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "enum": [
+                0,
+                1,
+                2
+              ],
+              "default": 0
+            },
+            "description": "0 fails on an existing `document_iri` (default), 1 replaces that graph, 2 merges into it. Replace and merge require `document_iri`."
+          }
         ],
         "requestBody": {
           "required": true,
           "description": "The serialized import body.",
           "content": {
-            "text/turtle":        { "schema": { "type": "string" } },
-            "application/ld+json":{ "schema": { "type": "string" } },
-            "application/rdf+xml":{ "schema": { "type": "string" } },
-            "application/n-triples": { "schema": { "type": "string" } },
-            "chemical/x-genbank": { "schema": { "type": "string" } },
-            "chemical/x-fasta": { "schema": { "type": "string" } }
+            "text/turtle": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "application/ld+json": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "application/rdf+xml": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "application/n-triples": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "chemical/x-genbank": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "chemical/x-fasta": {
+              "schema": {
+                "type": "string"
+              }
+            }
           }
         },
         "responses": {
@@ -138,113 +276,255 @@
             "description": "Document imported.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ImportReport" }
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReport"
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Delete a graph by its document IRI",
+        "description": "Resolves the graph named by `document_iri` and deletes it at graph granularity: its triples, derived objects, and registry row.",
+        "operationId": "deleteGraphByDocumentIri",
+        "parameters": [
+          {
+            "name": "document_iri",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Graph deleted."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       }
     },
-    "/documents/{id}": {
+    "/graphs/{id}": {
       "get": {
-        "tags": ["Documents"],
-        "summary": "Fetch document metadata",
-        "operationId": "getDocument",
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Fetch graph metadata",
+        "operationId": "getGraph",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
         ],
         "responses": {
           "200": {
-            "description": "Document found.",
+            "description": "Graph found.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/DocumentRecord" }
+                "schema": {
+                  "$ref": "#/components/schemas/GraphRecord"
+                }
               }
             }
           },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Delete a graph by its surrogate id",
+        "description": "Deletes one document graph by its surrogate id at graph granularity: its triples, derived objects, and registry row.",
+        "operationId": "deleteGraph",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Graph deleted."
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       }
     },
-
-    "/documents/bulk": {
+    "/graphs/bulk": {
       "post": {
-        "tags": ["Documents"],
+        "tags": [
+          "Graphs"
+        ],
         "summary": "Atomic bulk import",
-        "description": "Imports up to 100 documents inside one Postgres transaction. **Either every document commits or none do** — if any document fails to parse or persist, the entire batch is rolled back and the first error is returned unchanged. Per-document validation runs and projection events are still recorded individually, but they share the outer transaction's atomicity.",
-        "operationId": "createDocumentsBulk",
+        "description": "Imports up to 100 graphs inside one transaction. **Either every graph commits or none do**. If any graph fails to parse or persist, the entire batch is rolled back and the first error is returned unchanged. Per-graph validation runs and projection events are still recorded individually, but they share the outer transaction's atomicity.",
+        "operationId": "createGraphsBulk",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/BulkImportRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/BulkImportRequest"
+              }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "All documents committed.",
+            "description": "All graphs committed.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/BulkImportResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/BulkImportResponse"
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
         }
       }
     },
     "/objects": {
       "get": {
-        "tags": ["Objects"],
+        "tags": [
+          "Objects"
+        ],
         "summary": "Resolve a stored SBOL object by IRI",
         "operationId": "getObjectByIri",
         "parameters": [
-          { "name": "iri", "in": "query", "required": true, "schema": { "type": "string", "format": "uri" } }
+          {
+            "name": "iri",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Object found.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/SbolObjectRecord" }
+                "schema": {
+                  "$ref": "#/components/schemas/SbolObjectRecord"
+                }
               }
             }
           },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       }
     },
     "/objects/list": {
       "get": {
-        "tags": ["Objects"],
+        "tags": [
+          "Objects"
+        ],
         "summary": "Paginated corpus listing",
         "description": "Lists stored objects in lexicographic IRI order with a keyset cursor. Use this for whole-corpus dumps; per-page size capped at 5000. Pass the response's `next_cursor` as `after` on the next call until `next_cursor` is null.",
         "operationId": "listObjects",
         "parameters": [
-          { "name": "sbol_class",  "in": "query", "schema": { "type": "string", "format": "uri" } },
-          { "name": "role",        "in": "query", "schema": { "type": "string", "format": "uri" } },
-          { "name": "document_id", "in": "query", "schema": { "type": "string", "format": "uuid" } },
-          { "name": "after",       "in": "query", "schema": { "type": "string", "format": "uri" }, "description": "Cursor: last `iri` from the prior page." },
-          { "name": "limit",       "in": "query", "schema": { "type": "integer", "default": 1000, "minimum": 1, "maximum": 5000 } }
+          {
+            "name": "sbol_class",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          {
+            "name": "graph_id",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "Cursor: last `iri` from the prior page."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1000,
+              "minimum": 1,
+              "maximum": 5000
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Page of matching objects plus a cursor for the next page (null when exhausted).",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ListObjectsResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/ListObjectsResponse"
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
         }
       }
     },
     "/objects/lookup": {
       "post": {
-        "tags": ["Objects"],
+        "tags": [
+          "Objects"
+        ],
         "summary": "Bulk resolution of objects by IRI",
         "description": "Batched form of `GET /objects?iri=…`. Resolves up to 1000 IRIs in a single round trip via `WHERE iri = ANY(...)`. The response separates the IRIs that resolved (`found`) from those that did not (`missing`).",
         "operationId": "lookupObjects",
@@ -252,7 +532,9 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/LookupObjectsRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/LookupObjectsRequest"
+              }
             }
           }
         },
@@ -261,150 +543,334 @@
             "description": "Lookup results.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/LookupObjectsResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/LookupObjectsResponse"
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
         }
       }
     },
     "/objects/{id}/rdf": {
       "get": {
-        "tags": ["Objects"],
+        "tags": [
+          "Objects"
+        ],
         "summary": "Re-emit an object subgraph as RDF",
         "operationId": "exportObjectRdf",
         "parameters": [
-          { "name": "id",     "in": "path",  "required": true, "schema": { "type": "string", "format": "uuid" } },
-          { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["turtle","jsonld","rdfxml","ntriples"], "default": "turtle" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "turtle",
+                "jsonld",
+                "rdfxml",
+                "ntriples"
+              ],
+              "default": "turtle"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "RDF subgraph for the object.",
             "content": {
-              "text/turtle":          { "schema": { "type": "string" } },
-              "application/ld+json":  { "schema": { "type": "string" } },
-              "application/rdf+xml":  { "schema": { "type": "string" } },
-              "application/n-triples":{ "schema": { "type": "string" } }
+              "text/turtle": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/ld+json": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/rdf+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/n-triples": {
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       }
     },
-
     "/objects/neighborhood": {
       "get": {
-        "tags": ["Neighborhood"],
+        "tags": [
+          "Neighborhood"
+        ],
         "summary": "Bounded graph traversal (JSON)",
         "description": "Walks the graph outward from `iri` under explicit depth, direction, and predicate-allowlist bounds. Returns visited nodes and edges as JSON. See [`docs/neighborhood.md`](https://github.com/marpaia/sbol-db/blob/master/docs/neighborhood.md).",
         "operationId": "neighborhood",
         "parameters": [
-          { "$ref": "#/components/parameters/NeighborhoodIri" },
-          { "$ref": "#/components/parameters/NeighborhoodDepth" },
-          { "$ref": "#/components/parameters/NeighborhoodDirection" },
-          { "$ref": "#/components/parameters/NeighborhoodPredicates" },
-          { "$ref": "#/components/parameters/NeighborhoodMaxNodes" },
-          { "$ref": "#/components/parameters/NeighborhoodLiterals" }
+          {
+            "$ref": "#/components/parameters/NeighborhoodIri"
+          },
+          {
+            "$ref": "#/components/parameters/NeighborhoodDepth"
+          },
+          {
+            "$ref": "#/components/parameters/NeighborhoodDirection"
+          },
+          {
+            "$ref": "#/components/parameters/NeighborhoodPredicates"
+          },
+          {
+            "$ref": "#/components/parameters/NeighborhoodMaxNodes"
+          },
+          {
+            "$ref": "#/components/parameters/NeighborhoodLiterals"
+          }
         ],
         "responses": {
           "200": {
             "description": "Traversal result.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/NeighborhoodResult" }
+                "schema": {
+                  "$ref": "#/components/schemas/NeighborhoodResult"
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
         }
       }
     },
     "/objects/neighborhood.rdf": {
       "get": {
-        "tags": ["Neighborhood"],
+        "tags": [
+          "Neighborhood"
+        ],
         "summary": "Bounded graph traversal (RDF subgraph)",
         "operationId": "neighborhoodRdf",
         "parameters": [
-          { "$ref": "#/components/parameters/NeighborhoodIri" },
-          { "$ref": "#/components/parameters/NeighborhoodDepth" },
-          { "$ref": "#/components/parameters/NeighborhoodDirection" },
-          { "$ref": "#/components/parameters/NeighborhoodPredicates" },
-          { "$ref": "#/components/parameters/NeighborhoodMaxNodes" },
-          { "$ref": "#/components/parameters/NeighborhoodLiterals" },
-          { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["turtle","jsonld","ntriples","rdfxml"], "default": "turtle" } }
+          {
+            "$ref": "#/components/parameters/NeighborhoodIri"
+          },
+          {
+            "$ref": "#/components/parameters/NeighborhoodDepth"
+          },
+          {
+            "$ref": "#/components/parameters/NeighborhoodDirection"
+          },
+          {
+            "$ref": "#/components/parameters/NeighborhoodPredicates"
+          },
+          {
+            "$ref": "#/components/parameters/NeighborhoodMaxNodes"
+          },
+          {
+            "$ref": "#/components/parameters/NeighborhoodLiterals"
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "turtle",
+                "jsonld",
+                "ntriples",
+                "rdfxml"
+              ],
+              "default": "turtle"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Visited subgraph in the chosen format.",
             "content": {
-              "text/turtle":          { "schema": { "type": "string" } },
-              "application/ld+json":  { "schema": { "type": "string" } },
-              "application/n-triples":{ "schema": { "type": "string" } },
-              "application/rdf+xml":  { "schema": { "type": "string" } }
+              "text/turtle": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/ld+json": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/n-triples": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/rdf+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           }
         }
       }
     },
-
     "/sparql": {
       "get": {
-        "tags": ["SPARQL"],
+        "tags": [
+          "SPARQL"
+        ],
         "summary": "Run a SPARQL 1.1 query (URL form)",
         "description": "Read-only SPARQL endpoint. Update queries are rejected. The result format defaults to `application/sparql-results+json` for SELECT / ASK and `text/turtle` for CONSTRUCT / DESCRIBE; override via `Accept` header or the `format` query parameter.",
         "operationId": "sparqlGet",
         "parameters": [
-          { "name": "query",  "in": "query", "required": true, "schema": { "type": "string" }, "example": "PREFIX sbol: <http://sbols.org/v3#> SELECT ?s WHERE { ?s a sbol:Component } LIMIT 10" },
-          { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["json","xml","csv","tsv","turtle","ntriples","jsonld"] } }
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "PREFIX sbol: <http://sbols.org/v3#> SELECT ?s WHERE { ?s a sbol:Component } LIMIT 10"
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "xml",
+                "csv",
+                "tsv",
+                "turtle",
+                "ntriples",
+                "jsonld"
+              ]
+            }
+          }
         ],
         "responses": {
-          "200": { "$ref": "#/components/responses/SparqlResult" },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "504": { "description": "Query exceeded the configured timeout." }
+          "200": {
+            "$ref": "#/components/responses/SparqlResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "504": {
+            "description": "Query exceeded the configured timeout."
+          }
         }
       },
       "post": {
-        "tags": ["SPARQL"],
+        "tags": [
+          "SPARQL"
+        ],
         "summary": "Run a SPARQL 1.1 query (POST body)",
         "operationId": "sparqlPost",
         "requestBody": {
           "required": true,
           "content": {
             "application/sparql-query": {
-              "schema": { "type": "string" },
+              "schema": {
+                "type": "string"
+              },
               "example": "PREFIX sbol: <http://sbols.org/v3#> ASK { ?s sbol:hasFeature ?f }"
             },
             "application/x-www-form-urlencoded": {
               "schema": {
                 "type": "object",
-                "required": ["query"],
+                "required": [
+                  "query"
+                ],
                 "properties": {
-                  "query":  { "type": "string" },
-                  "format": { "type": "string", "enum": ["json","xml","csv","tsv","turtle","ntriples","jsonld"] }
+                  "query": {
+                    "type": "string"
+                  },
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "xml",
+                      "csv",
+                      "tsv",
+                      "turtle",
+                      "ntriples",
+                      "jsonld"
+                    ]
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/SparqlResult" },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "504": { "description": "Query exceeded the configured timeout." }
+          "200": {
+            "$ref": "#/components/responses/SparqlResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "504": {
+            "description": "Query exceeded the configured timeout."
+          }
         }
       }
     },
-
     "/sequences/search": {
       "get": {
-        "tags": ["Sequences"],
+        "tags": [
+          "Sequences"
+        ],
         "summary": "Nucleotide substring search (forward + reverse complement)",
         "description": "Exact-match search over every indexed nucleotide `sbol:Sequence`. The k-mer seed index covers queries ≥ 8 bp; shorter patterns fall back to an `ILIKE` candidate scan. See [`docs/sequences.md`](https://github.com/marpaia/sbol-db/blob/master/docs/sequences.md).",
         "operationId": "sequenceSearch",
         "parameters": [
-          { "name": "pattern",      "in": "query", "required": true, "schema": { "type": "string" }, "example": "GAATTC" },
-          { "name": "max_hits",     "in": "query", "schema": { "type": "integer", "default": 1024, "minimum": 1 } },
-          { "name": "forward_only", "in": "query", "schema": { "type": "boolean", "default": false } }
+          {
+            "name": "pattern",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "GAATTC"
+          },
+          {
+            "name": "max_hits",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1024,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "forward_only",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -413,7 +879,9 @@
               "application/json": {
                 "schema": {
                   "type": "array",
-                  "items": { "$ref": "#/components/schemas/SequenceMatch" }
+                  "items": {
+                    "$ref": "#/components/schemas/SequenceMatch"
+                  }
                 }
               }
             }
@@ -421,7 +889,9 @@
         }
       },
       "post": {
-        "tags": ["Sequences"],
+        "tags": [
+          "Sequences"
+        ],
         "summary": "Bulk nucleotide substring search",
         "description": "Runs the GET form for each pattern in the request body. Capped at 256 patterns per call. The response preserves input order with one `BatchSequenceMatch` entry per pattern.",
         "operationId": "sequenceSearchBatch",
@@ -429,7 +899,9 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/SequenceSearchBatchRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/SequenceSearchBatchRequest"
+              }
             }
           }
         },
@@ -440,19 +912,24 @@
               "application/json": {
                 "schema": {
                   "type": "array",
-                  "items": { "$ref": "#/components/schemas/BatchSequenceMatch" }
+                  "items": {
+                    "$ref": "#/components/schemas/BatchSequenceMatch"
+                  }
                 }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
         }
       }
     },
-
     "/ontology": {
       "get": {
-        "tags": ["Ontology"],
+        "tags": [
+          "Ontology"
+        ],
         "summary": "List loaded ontologies",
         "operationId": "ontologyList",
         "responses": {
@@ -462,7 +939,9 @@
               "application/json": {
                 "schema": {
                   "type": "array",
-                  "items": { "$ref": "#/components/schemas/OntologyRecord" }
+                  "items": {
+                    "$ref": "#/components/schemas/OntologyRecord"
+                  }
                 }
               }
             }
@@ -470,7 +949,9 @@
         }
       },
       "post": {
-        "tags": ["Ontology"],
+        "tags": [
+          "Ontology"
+        ],
         "summary": "Fetch an OBO ontology and load it",
         "description": "Recognised prefixes (`so`, `sbo`) resolve to OBO Foundry defaults; for any other prefix supply `url` (and optionally `name`). The terms, aliases, and transitive `is_a` closure are materialised in one transaction. Reload replaces the previous version atomically.",
         "operationId": "ontologyLoad",
@@ -478,10 +959,14 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/OntologyLoadRequest" },
+              "schema": {
+                "$ref": "#/components/schemas/OntologyLoadRequest"
+              },
               "examples": {
                 "Sequence Ontology": {
-                  "value": { "prefix": "so" }
+                  "value": {
+                    "prefix": "so"
+                  }
                 },
                 "Custom": {
                   "value": {
@@ -499,46 +984,101 @@
             "description": "Load report.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/OntologyLoadReport" }
+                "schema": {
+                  "$ref": "#/components/schemas/OntologyLoadReport"
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
         }
       }
     },
     "/ontology/term": {
       "get": {
-        "tags": ["Ontology"],
+        "tags": [
+          "Ontology"
+        ],
         "summary": "Get an ontology term by IRI or CURIE",
         "operationId": "ontologyTerm",
         "parameters": [
-          { "name": "iri", "in": "query", "required": true, "schema": { "type": "string" }, "example": "SO:0000167" }
+          {
+            "name": "iri",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "SO:0000167"
+          }
         ],
         "responses": {
           "200": {
             "description": "Term metadata.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/OntologyTermRecord" }
+                "schema": {
+                  "$ref": "#/components/schemas/OntologyTermRecord"
+                }
               }
             }
           },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       }
     },
     "/ontology/terms": {
       "get": {
-        "tags": ["Ontology"],
+        "tags": [
+          "Ontology"
+        ],
         "summary": "Page through every term in a loaded ontology",
         "description": "Returns the terms belonging to `prefix`, sorted by curie, optionally filtered by a case-insensitive substring match against either the curie or the name. The response includes the total match count so clients can render pagination without a second round-trip.",
         "operationId": "ontologyTerms",
         "parameters": [
-          { "name": "prefix", "in": "query", "required": true, "schema": { "type": "string" }, "example": "SBO" },
-          { "name": "q",      "in": "query", "required": false, "schema": { "type": "string" }, "example": "binding" },
-          { "name": "limit",  "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 } },
-          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 0, "default": 0 } }
+          {
+            "name": "prefix",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "SBO"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "example": "binding"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -547,15 +1087,34 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["prefix", "total", "limit", "offset", "terms"],
+                  "required": [
+                    "prefix",
+                    "total",
+                    "limit",
+                    "offset",
+                    "terms"
+                  ],
                   "properties": {
-                    "prefix": { "type": "string" },
-                    "total":  { "type": "integer", "minimum": 0 },
-                    "limit":  { "type": "integer", "minimum": 1 },
-                    "offset": { "type": "integer", "minimum": 0 },
-                    "terms":  {
+                    "prefix": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "offset": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "terms": {
                       "type": "array",
-                      "items": { "$ref": "#/components/schemas/OntologyTermRecord" }
+                      "items": {
+                        "$ref": "#/components/schemas/OntologyTermRecord"
+                      }
                     }
                   }
                 }
@@ -567,12 +1126,22 @@
     },
     "/ontology/descendants": {
       "get": {
-        "tags": ["Ontology"],
+        "tags": [
+          "Ontology"
+        ],
         "summary": "Transitive `is_a` closure for a term",
         "description": "Returns the canonical term plus every descendant under it. Accepts the canonical OBO Foundry IRI (`http://purl.obolibrary.org/obo/SO_0000167`), the identifiers.org form, or a bare CURIE (`SO:0000167`).",
         "operationId": "ontologyDescendants",
         "parameters": [
-          { "name": "iri", "in": "query", "required": true, "schema": { "type": "string" }, "example": "SO:0000167" }
+          {
+            "name": "iri",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "SO:0000167"
+          }
         ],
         "responses": {
           "200": {
@@ -583,10 +1152,19 @@
                   "type": "array",
                   "items": {
                     "type": "object",
-                    "required": ["iri", "depth"],
+                    "required": [
+                      "iri",
+                      "depth"
+                    ],
                     "properties": {
-                      "iri":   { "type": "string", "format": "uri" },
-                      "depth": { "type": "integer", "minimum": 0 }
+                      "iri": {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      "depth": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
                     }
                   }
                 }
@@ -596,10 +1174,11 @@
         }
       }
     },
-
     "/jobs": {
       "post": {
-        "tags": ["Jobs"],
+        "tags": [
+          "Jobs"
+        ],
         "summary": "Enqueue a background job",
         "description": "Inserts a row in `sbol_jobs`. If `idempotency_key` is set and a non-terminal or succeeded job already exists for the same `(kind, idempotency_key)` pair, the existing job is returned with `deduplicated: true` rather than re-queued.",
         "operationId": "enqueueJob",
@@ -607,7 +1186,9 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/EnqueueJobRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/EnqueueJobRequest"
+              }
             }
           }
         },
@@ -616,89 +1197,242 @@
             "description": "The job row, plus a flag indicating whether it was deduplicated against an existing entry.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/EnqueueJobResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/EnqueueJobResponse"
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
         }
       },
       "get": {
-        "tags": ["Jobs"],
+        "tags": [
+          "Jobs"
+        ],
         "summary": "List jobs with optional filters",
         "description": "Filters compose with AND. The default `limit` is 100; values above 1000 are clamped. Results are ordered most-recent-first.",
         "operationId": "listJobs",
         "parameters": [
-          { "name": "kind",           "in": "query", "schema": { "type": "string" } },
-          { "name": "status",         "in": "query", "schema": { "type": "string", "enum": ["queued","running","succeeded","failed","cancelled","dead"] } },
-          { "name": "queue",          "in": "query", "schema": { "type": "string" } },
-          { "name": "correlation_id", "in": "query", "schema": { "type": "string", "format": "uuid" } },
-          { "name": "limit",          "in": "query", "schema": { "type": "integer", "default": 100, "minimum": 1, "maximum": 1000 } }
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled",
+                "dead"
+              ]
+            }
+          },
+          {
+            "name": "queue",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "correlation_id",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "minimum": 1,
+              "maximum": 1000
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Matching `sbol_jobs` rows.",
             "content": {
               "application/json": {
-                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/SbolJob" } }
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SbolJob"
+                  }
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
         }
       }
     },
     "/jobs/{id}": {
       "get": {
-        "tags": ["Jobs"],
+        "tags": [
+          "Jobs"
+        ],
         "summary": "Fetch a job by id",
         "operationId": "getJob",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "The job row.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/SbolJob" }
+                "schema": {
+                  "$ref": "#/components/schemas/SbolJob"
+                }
               }
             }
           },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       }
     },
     "/jobs/{id}/attempts": {
       "get": {
-        "tags": ["Jobs"],
+        "tags": [
+          "Jobs"
+        ],
         "summary": "Per-attempt audit log for a job",
         "description": "Returns each row in `sbol_job_attempts` for the given job, newest first. Useful for inspecting a failed job's retry history, including the worker that ran each attempt and its error message. Returns 404 when the job id does not exist; returns 200 with an empty array when the job exists but has not yet been dequeued.",
         "operationId": "jobAttempts",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Attempts ordered by `attempt_no` descending.",
             "content": {
               "application/json": {
-                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/JobAttempt" } }
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JobAttempt"
+                  }
+                }
               }
             }
           },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/jobs/{id}/logs": {
+      "get": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Structured log lines for a job",
+        "description": "Returns the log lines a job's handler emitted, oldest first, keyset-paginated by `after_id`. Returns 404 when the job id does not exist.",
+        "operationId": "jobLogs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "after_id",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "Cursor: last log `id` from the prior page."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 500,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Log lines ordered by `id` ascending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JobLog"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       }
     },
     "/jobs/{id}/cancel": {
       "post": {
-        "tags": ["Jobs"],
+        "tags": [
+          "Jobs"
+        ],
         "summary": "Cancel a queued or running job",
         "description": "Idempotent: transitions `queued` or `running` jobs to `cancelled` and returns `{ cancelled: true }`. Terminal jobs (succeeded / failed / dead / already cancelled) are left alone and return `{ cancelled: false }`.",
         "operationId": "cancelJob",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -707,8 +1441,14 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["cancelled"],
-                  "properties": { "cancelled": { "type": "boolean" } }
+                  "required": [
+                    "cancelled"
+                  ],
+                  "properties": {
+                    "cancelled": {
+                      "type": "boolean"
+                    }
+                  }
                 }
               }
             }
@@ -716,214 +1456,415 @@
         }
       }
     },
-
     "/lab/api/observability/summary": {
       "get": {
-        "tags": ["Lab Observability"],
+        "tags": [
+          "Lab Observability"
+        ],
         "summary": "Compact health + traffic snapshot for the lab observability page",
         "description": "Returns process health, the API + worker pool capacity, job queue depth + oldest-queued age, recent failure counts, and a rolling 10-minute traffic window (request rate, latency quantiles, error counts).",
         "operationId": "labObservabilitySummary",
         "responses": {
           "200": {
             "description": "Snapshot blob.",
-            "content": { "application/json": { "schema": { "type": "object" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         }
       }
     },
     "/lab/api/info": {
       "get": {
-        "tags": ["Lab"],
+        "tags": [
+          "Lab"
+        ],
         "summary": "Active backend and its capabilities",
         "description": "Reports the running engine (`postgres`/`sqlite`/`rocksdb`), its display name, and capability flags (sql_console, relational_schema, maintenance, slow_query_stats, activity_and_locks). The lab UI fetches this once and gates features on it.",
         "operationId": "labInfo",
         "responses": {
           "200": {
             "description": "Backend identity and capability flags.",
-            "content": { "application/json": { "schema": { "type": "object" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         }
       }
     },
     "/lab/api/observability/maintenance/database": {
       "get": {
-        "tags": ["Lab Observability"],
+        "tags": [
+          "Lab Observability"
+        ],
         "summary": "Total database size",
         "description": "Relational engines only (Postgres, SQLite). 501 on a key-value backend.",
         "operationId": "labMaintDatabase",
         "responses": {
           "200": {
             "description": "Total bytes for the database.",
-            "content": { "application/json": { "schema": { "type": "object" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         }
       }
     },
     "/lab/api/observability/maintenance/tables": {
       "get": {
-        "tags": ["Lab Observability"],
+        "tags": [
+          "Lab Observability"
+        ],
         "summary": "Top tables by size",
         "description": "Relational engines only (Postgres, SQLite). 501 on a key-value backend.",
         "operationId": "labMaintTables",
         "parameters": [
-          { "name": "limit",  "in": "query", "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 200 } },
-          { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0,  "minimum": 0 } }
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Per-table stats (rows, total and index bytes, and on Postgres dead-tuple and vacuum metadata).",
-            "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
           }
         }
       }
     },
     "/lab/api/observability/maintenance/indexes": {
       "get": {
-        "tags": ["Lab Observability"],
+        "tags": [
+          "Lab Observability"
+        ],
         "summary": "Top indexes by on-disk size",
         "description": "Relational engines only (Postgres, SQLite). 501 on a key-value backend.",
         "operationId": "labMaintIndexes",
         "parameters": [
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 30, "minimum": 1, "maximum": 200 } }
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 30,
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Index stats; idx_scan is reported on Postgres.",
-            "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
           }
         }
       }
     },
     "/lab/api/observability/maintenance/activity": {
       "get": {
-        "tags": ["Lab Observability"],
+        "tags": [
+          "Lab Observability"
+        ],
         "summary": "Live sessions",
         "description": "Postgres only (from pg_stat_activity). Empty on other backends.",
         "operationId": "labMaintActivity",
         "parameters": [
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50, "minimum": 1, "maximum": 200 } }
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Per-pid live state, excluding the requester's own backend.",
-            "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
           }
         }
       }
     },
     "/lab/api/observability/maintenance/locks": {
       "get": {
-        "tags": ["Lab Observability"],
+        "tags": [
+          "Lab Observability"
+        ],
         "summary": "Blocking lock pairs",
         "description": "Postgres only (from pg_locks). Empty on other backends.",
         "operationId": "labMaintLocks",
         "responses": {
           "200": {
             "description": "Blocker to blocked pairs (read-only).",
-            "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
           }
         }
       }
     },
     "/lab/api/observability/maintenance/tables/{name}/schema": {
       "get": {
-        "tags": ["Lab Observability"],
+        "tags": [
+          "Lab Observability"
+        ],
         "summary": "Schema introspection for a single table",
         "description": "Columns (name, column_type, nullability, default, comment, primary-key flag) plus outgoing and incoming foreign-key references. Relational engines only. Returns 404 when the relation does not exist.",
         "operationId": "labMaintTableSchema",
         "parameters": [
-          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Full schema metadata for the requested table.",
-            "content": { "application/json": { "schema": { "type": "object" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       }
     },
     "/lab/api/observability/maintenance/slow-queries": {
       "get": {
-        "tags": ["Lab Observability"],
+        "tags": [
+          "Lab Observability"
+        ],
         "summary": "Top slow queries (Postgres, if pg_stat_statements is installed)",
         "description": "Returns `{ status: \"not_installed\", setup_hint }` when the extension isn't present; otherwise `{ status: \"installed\", rows }`.",
         "operationId": "labMaintSlowQueries",
         "parameters": [
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 100 } }
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Tagged union: not_installed vs installed.",
-            "content": { "application/json": { "schema": { "type": "object" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         }
       }
     },
     "/lab/api/observability/maintenance/optimize": {
       "post": {
-        "tags": ["Lab Observability"],
+        "tags": [
+          "Lab Observability"
+        ],
         "summary": "Run routine optimize maintenance",
         "description": "Refreshes planner statistics and reclaims space (SQLite VACUUM/ANALYZE, Postgres ANALYZE). Relational engines only.",
         "operationId": "labMaintOptimize",
         "responses": {
           "200": {
             "description": "`{ ok: true }` when the maintenance ran.",
-            "content": { "application/json": { "schema": { "type": "object" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         }
       }
     },
     "/lab/api/observability/maintenance/lsm": {
       "get": {
-        "tags": ["Lab Observability"],
+        "tags": [
+          "Lab Observability"
+        ],
         "summary": "LSM engine internals",
         "description": "RocksDB only. Total size, estimated keys, pending compaction bytes, running compactions, and per-column-family and per-level breakdowns. 501 on other backends.",
         "operationId": "labMaintLsm",
         "responses": {
           "200": {
             "description": "Column families, levels, and compaction state.",
-            "content": { "application/json": { "schema": { "type": "object" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         }
       }
     },
     "/lab/api/observability/maintenance/compact": {
       "post": {
-        "tags": ["Lab Observability"],
+        "tags": [
+          "Lab Observability"
+        ],
         "summary": "Trigger a full manual compaction",
         "description": "RocksDB only. Compacts every column family; can be slow on a large store. 501 on other backends.",
         "operationId": "labMaintCompact",
         "responses": {
           "200": {
             "description": "`{ ok: true }` when compaction completed.",
-            "content": { "application/json": { "schema": { "type": "object" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         }
       }
     },
     "/lab/api/observability/jobs/recent": {
       "get": {
-        "tags": ["Lab Observability"],
+        "tags": [
+          "Lab Observability"
+        ],
         "summary": "Recent job history across all queues",
         "operationId": "labObsJobsRecent",
         "parameters": [
-          { "name": "limit",  "in": "query", "schema": { "type": "integer", "default": 50, "minimum": 1, "maximum": 500 } },
-          { "name": "queue",  "in": "query", "schema": { "type": "string" } },
-          { "name": "status", "in": "query", "schema": { "type": "string", "enum": ["queued","running","succeeded","failed","cancelled","dead"] } }
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          {
+            "name": "queue",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled",
+                "dead"
+              ]
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Most-recent-first sbol_jobs rows.",
-            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/SbolJob" } } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SbolJob"
+                  }
+                }
+              }
+            }
           }
         }
       }
     },
-
     "/openapi.json": {
       "get": {
-        "tags": ["Meta"],
+        "tags": [
+          "Meta"
+        ],
         "summary": "OpenAPI 3.1 schema for this server",
         "operationId": "openApiSchema",
         "responses": {
@@ -931,7 +1872,9 @@
             "description": "The OpenAPI document.",
             "content": {
               "application/json": {
-                "schema": { "type": "object" }
+                "schema": {
+                  "type": "object"
+                }
               }
             }
           }
@@ -940,62 +1883,168 @@
     },
     "/docs": {
       "get": {
-        "tags": ["Meta"],
+        "tags": [
+          "Meta"
+        ],
         "summary": "Interactive API documentation (Scalar)",
         "operationId": "docsUi",
         "responses": {
           "200": {
             "description": "The rendered docs page.",
             "content": {
-              "text/html": { "schema": { "type": "string" } }
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           }
         }
       }
     }
   },
-
   "components": {
     "parameters": {
       "SerializationFormat": {
         "name": "format",
         "in": "query",
         "description": "Override the format inferred from `Content-Type`.",
-        "schema": { "type": "string", "enum": ["turtle","jsonld","rdfxml","ntriples","genbank","fasta"] }
+        "schema": {
+          "type": "string",
+          "enum": [
+            "turtle",
+            "jsonld",
+            "rdfxml",
+            "ntriples",
+            "genbank",
+            "fasta"
+          ]
+        }
       },
       "NeighborhoodIri": {
         "name": "iri",
         "in": "query",
         "required": true,
-        "schema": { "type": "string", "format": "uri" },
+        "schema": {
+          "type": "string",
+          "format": "uri"
+        },
         "description": "Root IRI to expand from."
       },
       "NeighborhoodDepth": {
         "name": "depth",
         "in": "query",
-        "schema": { "type": "integer", "default": 2, "minimum": 0 }
+        "schema": {
+          "type": "integer",
+          "default": 2,
+          "minimum": 0
+        }
       },
       "NeighborhoodDirection": {
         "name": "direction",
         "in": "query",
-        "schema": { "type": "string", "enum": ["forward","backward","both"], "default": "forward" }
+        "schema": {
+          "type": "string",
+          "enum": [
+            "forward",
+            "backward",
+            "both"
+          ],
+          "default": "forward"
+        }
       },
       "NeighborhoodPredicates": {
         "name": "predicates",
         "in": "query",
         "description": "Comma-separated predicate IRIs (axum's default query parser does not support repeated keys).",
-        "schema": { "type": "string" }
+        "schema": {
+          "type": "string"
+        }
       },
       "NeighborhoodMaxNodes": {
         "name": "max_nodes",
         "in": "query",
-        "schema": { "type": "integer", "default": 2048, "minimum": 1 }
+        "schema": {
+          "type": "integer",
+          "default": 2048,
+          "minimum": 1
+        }
       },
       "NeighborhoodLiterals": {
         "name": "literals",
         "in": "query",
         "description": "Include literal-position edges in the result (does not affect the traversal frontier).",
-        "schema": { "type": "boolean", "default": false }
+        "schema": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "XAuthorization": {
+        "name": "X-authorization",
+        "in": "header",
+        "required": false,
+        "description": "SynBioHub session token. Present it to act as the authenticated account; omit it for anonymous access to public objects.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "SbhAccept": {
+        "name": "Accept",
+        "in": "header",
+        "required": false,
+        "description": "When it includes `text/html` the response is the browser flow (redirect plus session cookie); otherwise an API-client body is returned.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "SbhUserId": {
+        "name": "userId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "SbhCollectionId": {
+        "name": "collectionId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "SbhDisplayId": {
+        "name": "displayId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "SbhVersion": {
+        "name": "version",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "SbhField": {
+        "name": "field",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "The property to edit, add to, or remove from."
+      },
+      "SbhUsername": {
+        "name": "username",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
       }
     },
     "responses": {
@@ -1003,7 +2052,9 @@
         "description": "The request was malformed.",
         "content": {
           "application/json": {
-            "schema": { "$ref": "#/components/schemas/ErrorBody" }
+            "schema": {
+              "$ref": "#/components/schemas/ErrorBody"
+            }
           }
         }
       },
@@ -1011,164 +2062,557 @@
         "description": "The requested resource does not exist.",
         "content": {
           "application/json": {
-            "schema": { "$ref": "#/components/schemas/ErrorBody" }
+            "schema": {
+              "$ref": "#/components/schemas/ErrorBody"
+            }
           }
         }
       },
       "SparqlResult": {
         "description": "Serialized SPARQL result. The content type matches the format the engine produced.",
         "content": {
-          "application/sparql-results+json": { "schema": { "type": "object" } },
-          "application/sparql-results+xml":  { "schema": { "type": "string" } },
-          "text/csv":                        { "schema": { "type": "string" } },
-          "text/tab-separated-values":       { "schema": { "type": "string" } },
-          "text/turtle":                     { "schema": { "type": "string" } },
-          "application/n-triples":           { "schema": { "type": "string" } },
-          "application/ld+json":             { "schema": { "type": "object" } }
+          "application/sparql-results+json": {
+            "schema": {
+              "type": "object"
+            }
+          },
+          "application/sparql-results+xml": {
+            "schema": {
+              "type": "string"
+            }
+          },
+          "text/csv": {
+            "schema": {
+              "type": "string"
+            }
+          },
+          "text/tab-separated-values": {
+            "schema": {
+              "type": "string"
+            }
+          },
+          "text/turtle": {
+            "schema": {
+              "type": "string"
+            }
+          },
+          "application/n-triples": {
+            "schema": {
+              "type": "string"
+            }
+          },
+          "application/ld+json": {
+            "schema": {
+              "type": "object"
+            }
+          }
         }
+      },
+      "SparqlResultsJson": {
+        "description": "SPARQL 1.1 Query Results JSON: a `head.vars` list and a `results.bindings` array.",
+        "content": {
+          "application/sparql-results+json": {
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Authentication is required and none was presented, or the credentials were rejected.",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The caller is authenticated but not permitted (e.g. not the owner, or not an administrator).",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "requestBodies": {
+      "SbhFormOrJson": {
+        "required": true,
+        "description": "Form-encoded (classic SynBioHub) or JSON (API clients). The `Content-Type` selects the parser.",
+        "content": {
+          "application/x-www-form-urlencoded": {
+            "schema": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "basicAuth": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "HTTP Basic auth for the Virtuoso-protocol SPARQL endpoints. Defaults to `dba`/`dba` to match Virtuoso; configurable, and skippable behind a trusted proxy."
       }
     },
     "schemas": {
       "ErrorBody": {
         "type": "object",
-        "required": ["error"],
+        "required": [
+          "error"
+        ],
         "properties": {
-          "error":   { "type": "string" },
-          "details": { "type": "object", "additionalProperties": true }
+          "error": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
         }
       },
       "ImportReport": {
         "type": "object",
-        "required": ["document_id", "object_count", "quad_count", "validation_status", "validation_issue_count"],
+        "required": [
+          "document_id",
+          "object_count",
+          "quad_count",
+          "validation_status",
+          "validation_issue_count"
+        ],
         "properties": {
-          "document_id":            { "type": "string", "format": "uuid" },
-          "object_count":           { "type": "integer", "minimum": 0 },
-          "quad_count":             { "type": "integer", "minimum": 0 },
-          "validation_status":      { "type": "string", "enum": ["passed","failed"] },
-          "validation_issue_count": { "type": "integer", "minimum": 0 }
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "object_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "quad_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "validation_status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed"
+            ]
+          },
+          "validation_issue_count": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
       },
-      "DocumentRecord": {
+      "GraphRecord": {
         "type": "object",
+        "required": [
+          "id",
+          "serialization_format",
+          "content_hash",
+          "created_at",
+          "updated_at"
+        ],
         "properties": {
-          "id":                   { "type": "string", "format": "uuid" },
-          "document_iri":         { "type": "string", "format": "uri" },
-          "name":                 { "type": "string" },
-          "description":          { "type": "string" },
-          "serialization_format": { "type": "string" },
-          "source_uri":           { "type": "string" },
-          "created_by":           { "type": "string" },
-          "created_at":           { "type": "string", "format": "date-time" }
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_iri": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "serialization_format": {
+            "type": "string"
+          },
+          "source_uri": {
+            "type": "string",
+            "nullable": true
+          },
+          "content_hash": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "Content hash of the stored serialization, as a byte array."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "JobLog": {
+        "type": "object",
+        "required": [
+          "id",
+          "job_id",
+          "level",
+          "message",
+          "fields",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "job_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "attempt_no": {
+            "type": "integer",
+            "nullable": true
+          },
+          "level": {
+            "type": "string",
+            "description": "Log level, e.g. `info`, `warn`, `error`."
+          },
+          "message": {
+            "type": "string"
+          },
+          "fields": {
+            "description": "Structured context attached to the line."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "SbolObjectRecord": {
         "type": "object",
         "properties": {
-          "id":                  { "type": "string", "format": "uuid" },
-          "iri":                 { "type": "string", "format": "uri" },
-          "sbol_class":          { "type": "string" },
-          "display_id":          { "type": "string" },
-          "name":                { "type": "string" },
-          "persistent_identity": { "type": "string", "format": "uri" },
-          "version":             { "type": "string" },
-          "types":               { "type": "array", "items": { "type": "string" } },
-          "roles":               { "type": "array", "items": { "type": "string" } },
-          "data":                { "type": "object", "additionalProperties": true },
-          "created_at":          { "type": "string", "format": "date-time" }
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "iri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "sbol_class": {
+            "type": "string"
+          },
+          "display_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "persistent_identity": {
+            "type": "string",
+            "format": "uri"
+          },
+          "version": {
+            "type": "string"
+          },
+          "types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "NeighborhoodResult": {
         "type": "object",
-        "required": ["root_iri","nodes","edges","max_depth_reached","truncated"],
+        "required": [
+          "root_iri",
+          "nodes",
+          "edges",
+          "max_depth_reached",
+          "truncated"
+        ],
         "properties": {
-          "root_iri":          { "type": "string", "format": "uri" },
-          "nodes":             { "type": "array", "items": { "$ref": "#/components/schemas/NodeInfo" } },
-          "edges":             { "type": "array", "items": { "$ref": "#/components/schemas/EdgeInfo" } },
-          "max_depth_reached": { "type": "integer", "minimum": 0 },
-          "truncated":         { "type": "boolean" }
+          "root_iri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeInfo"
+            }
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EdgeInfo"
+            }
+          },
+          "max_depth_reached": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean"
+          }
         }
       },
       "NodeInfo": {
         "type": "object",
-        "required": ["id","depth"],
+        "required": [
+          "id",
+          "depth"
+        ],
         "properties": {
-          "id":          { "type": "string" },
-          "depth":       { "type": "integer", "minimum": 0 },
-          "blank_node":  { "type": "boolean", "default": false },
-          "sbol_class":  { "type": "string" },
-          "display_id":  { "type": "string" },
-          "name":        { "type": "string" }
+          "id": {
+            "type": "string"
+          },
+          "depth": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "blank_node": {
+            "type": "boolean",
+            "default": false
+          },
+          "sbol_class": {
+            "type": "string"
+          },
+          "display_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
         }
       },
       "EdgeInfo": {
         "type": "object",
-        "required": ["subject","predicate","object","depth"],
+        "required": [
+          "subject",
+          "predicate",
+          "object",
+          "depth"
+        ],
         "properties": {
-          "subject":   { "type": "string" },
-          "predicate": { "type": "string", "format": "uri" },
-          "depth":     { "type": "integer", "minimum": 0 },
-          "object":    {
+          "subject": {
+            "type": "string"
+          },
+          "predicate": {
+            "type": "string",
+            "format": "uri"
+          },
+          "depth": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "object": {
             "oneOf": [
-              { "type": "object", "properties": { "iri":       { "type": "string", "format": "uri" } }, "required": ["iri"] },
-              { "type": "object", "properties": { "blank":     { "type": "string" } },                  "required": ["blank"] },
-              { "type": "object", "properties": {
-                  "literal":  { "type": "string" },
-                  "datatype": { "type": "string", "format": "uri" },
-                  "language": { "type": "string" }
-                }, "required": ["literal","datatype"] }
+              {
+                "type": "object",
+                "properties": {
+                  "iri": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": [
+                  "iri"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "blank": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "blank"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "literal": {
+                    "type": "string"
+                  },
+                  "datatype": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "language": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "literal",
+                  "datatype"
+                ]
+              }
             ]
           }
         }
       },
       "SequenceMatch": {
         "type": "object",
-        "required": ["sequence_iri","start","length","strand"],
+        "required": [
+          "sequence_iri",
+          "start",
+          "length",
+          "strand"
+        ],
         "properties": {
-          "sequence_iri": { "type": "string", "format": "uri" },
-          "start":        { "type": "integer", "minimum": 0 },
-          "length":       { "type": "integer", "minimum": 1 },
-          "strand":       { "type": "string", "enum": ["+","-"] }
+          "sequence_iri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "start": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "length": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "strand": {
+            "type": "string",
+            "enum": [
+              "+",
+              "-"
+            ]
+          }
         }
       },
       "BatchSequenceMatch": {
         "type": "object",
-        "required": ["pattern","matches"],
+        "required": [
+          "pattern",
+          "matches"
+        ],
         "properties": {
-          "pattern": { "type": "string" },
+          "pattern": {
+            "type": "string"
+          },
           "matches": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/SequenceMatch" }
+            "items": {
+              "$ref": "#/components/schemas/SequenceMatch"
+            }
           }
         }
       },
       "SequenceSearchBatchRequest": {
         "type": "object",
-        "required": ["patterns"],
+        "required": [
+          "patterns"
+        ],
         "properties": {
-          "patterns":     { "type": "array", "items": { "type": "string" }, "maxItems": 256 },
-          "max_hits":     { "type": "integer", "minimum": 1, "default": 1024 },
-          "forward_only": { "type": "boolean", "default": false }
+          "patterns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256
+          },
+          "max_hits": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1024
+          },
+          "forward_only": {
+            "type": "boolean",
+            "default": false
+          }
         }
       },
       "BulkImportRequest": {
         "type": "object",
-        "required": ["documents"],
+        "required": [
+          "graphs"
+        ],
         "properties": {
-          "documents": {
+          "graphs": {
             "type": "array",
             "maxItems": 100,
             "items": {
               "type": "object",
-              "required": ["body","format"],
+              "required": [
+                "body",
+                "format"
+              ],
               "properties": {
-                "body":         { "type": "string", "description": "Payload in the format named by `format`." },
-                "format":       { "type": "string", "enum": ["turtle","jsonld","rdfxml","ntriples","genbank","fasta"] },
-                "namespace":    { "type": "string", "format": "uri" },
-                "source_uri":   { "type": "string" },
-                "document_iri": { "type": "string", "format": "uri" },
-                "name":         { "type": "string" },
-                "description":  { "type": "string" },
-                "created_by":   { "type": "string" }
+                "body": {
+                  "type": "string",
+                  "description": "Payload in the format named by `format`."
+                },
+                "format": {
+                  "type": "string",
+                  "enum": [
+                    "turtle",
+                    "jsonld",
+                    "rdfxml",
+                    "ntriples",
+                    "genbank",
+                    "fasta"
+                  ]
+                },
+                "namespace": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "source_uri": {
+                  "type": "string"
+                },
+                "document_iri": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "created_by": {
+                  "type": "string"
+                }
               }
             }
           }
@@ -1176,143 +2620,409 @@
       },
       "BulkImportResponse": {
         "type": "object",
-        "required": ["imported","reports"],
+        "required": [
+          "imported",
+          "reports"
+        ],
         "properties": {
-          "imported": { "type": "integer", "minimum": 0 },
-          "reports":  { "type": "array", "items": { "$ref": "#/components/schemas/ImportReport" } }
+          "imported": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportReport"
+            }
+          }
         }
       },
       "LookupObjectsRequest": {
         "type": "object",
-        "required": ["iris"],
+        "required": [
+          "iris"
+        ],
         "properties": {
-          "iris": { "type": "array", "items": { "type": "string", "format": "uri" }, "maxItems": 1000 }
+          "iris": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            },
+            "maxItems": 1000
+          }
         }
       },
       "LookupObjectsResponse": {
         "type": "object",
-        "required": ["found","missing"],
+        "required": [
+          "found",
+          "missing"
+        ],
         "properties": {
-          "found":   { "type": "array", "items": { "$ref": "#/components/schemas/SbolObjectRecord" } },
-          "missing": { "type": "array", "items": { "type": "string", "format": "uri" } }
+          "found": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SbolObjectRecord"
+            }
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
         }
       },
       "ListObjectsResponse": {
         "type": "object",
-        "required": ["objects"],
+        "required": [
+          "objects"
+        ],
         "properties": {
-          "objects":     { "type": "array", "items": { "$ref": "#/components/schemas/SbolObjectRecord" } },
-          "next_cursor": { "type": "string", "format": "uri", "nullable": true, "description": "IRI to pass as `after` on the next call; absent or null when the listing is exhausted." }
+          "objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SbolObjectRecord"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true,
+            "description": "IRI to pass as `after` on the next call; absent or null when the listing is exhausted."
+          }
         }
       },
       "OntologyRecord": {
         "type": "object",
-        "required": ["prefix","name","term_count","imported_at"],
+        "required": [
+          "prefix",
+          "name",
+          "term_count",
+          "imported_at"
+        ],
         "properties": {
-          "prefix":     { "type": "string" },
-          "name":       { "type": "string" },
-          "source_url": { "type": "string", "format": "uri" },
-          "version":    { "type": "string" },
-          "term_count": { "type": "integer", "minimum": 0 },
-          "imported_at":{ "type": "string", "format": "date-time" }
+          "prefix": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "version": {
+            "type": "string"
+          },
+          "term_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "imported_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "OntologyTermRecord": {
         "type": "object",
-        "required": ["iri","prefix","curie","name","is_obsolete","synonyms"],
+        "required": [
+          "iri",
+          "prefix",
+          "curie",
+          "name",
+          "is_obsolete",
+          "synonyms"
+        ],
         "properties": {
-          "iri":         { "type": "string", "format": "uri" },
-          "prefix":      { "type": "string" },
-          "curie":       { "type": "string", "example": "SO:0000167" },
-          "name":        { "type": "string" },
-          "definition":  { "type": "string" },
-          "is_obsolete": { "type": "boolean" },
-          "synonyms":    { "type": "array", "items": { "type": "string" } }
+          "iri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "curie": {
+            "type": "string",
+            "example": "SO:0000167"
+          },
+          "name": {
+            "type": "string"
+          },
+          "definition": {
+            "type": "string"
+          },
+          "is_obsolete": {
+            "type": "boolean"
+          },
+          "synonyms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       },
       "OntologyLoadRequest": {
         "type": "object",
-        "required": ["prefix"],
+        "required": [
+          "prefix"
+        ],
         "properties": {
-          "prefix": { "type": "string", "description": "Short prefix used as the row key (e.g. `so`, `sbo`)." },
-          "url":    { "type": "string", "format": "uri", "description": "Required for prefixes without a built-in default." },
-          "name":   { "type": "string", "description": "Display name. Defaults to the prefix when omitted." }
+          "prefix": {
+            "type": "string",
+            "description": "Short prefix used as the row key (e.g. `so`, `sbo`)."
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Required for prefixes without a built-in default."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name. Defaults to the prefix when omitted."
+          }
         }
       },
       "OntologyLoadReport": {
         "type": "object",
-        "required": ["prefix","term_count","closure_count","alias_count"],
+        "required": [
+          "prefix",
+          "term_count",
+          "closure_count",
+          "alias_count"
+        ],
         "properties": {
-          "prefix":        { "type": "string" },
-          "source_url":    { "type": "string", "format": "uri" },
-          "version":       { "type": "string" },
-          "term_count":    { "type": "integer", "minimum": 0 },
-          "closure_count": { "type": "integer", "minimum": 0 },
-          "alias_count":   { "type": "integer", "minimum": 0 }
+          "prefix": {
+            "type": "string"
+          },
+          "source_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "version": {
+            "type": "string"
+          },
+          "term_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "closure_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "alias_count": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
       },
       "JobStatus": {
         "type": "string",
-        "enum": ["queued","running","succeeded","failed","cancelled","dead"]
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled",
+          "dead"
+        ]
       },
       "SbolJob": {
         "type": "object",
-        "required": ["id","kind","status","priority","queue","payload","attempts","max_attempts","available_at","created_at"],
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "priority",
+          "queue",
+          "payload",
+          "attempts",
+          "max_attempts",
+          "available_at",
+          "created_at"
+        ],
         "properties": {
-          "id":               { "type": "string", "format": "uuid" },
-          "kind":             { "type": "string", "description": "Handler name. Built-in handlers include `import_document`, `import_remote_document`, and `import_synbiohub_collection`." },
-          "status":           { "$ref": "#/components/schemas/JobStatus" },
-          "priority":         { "type": "integer", "description": "Higher dequeues first." },
-          "queue":            { "type": "string", "default": "default" },
-          "payload":          { "description": "Handler-specific JSON payload." },
-          "result":           { "description": "Handler-specific JSON result; populated after success.", "nullable": true },
-          "error":            { "type": "string", "nullable": true, "description": "Last error message; populated after failure." },
-          "idempotency_key":  { "type": "string", "nullable": true },
-          "attempts":         { "type": "integer", "minimum": 0 },
-          "max_attempts":     { "type": "integer", "minimum": 1 },
-          "available_at":     { "type": "string", "format": "date-time", "description": "Earliest time the job is eligible for dequeue (used by retry backoff)." },
-          "leased_by":        { "type": "string", "nullable": true, "description": "Worker id holding the lease while `status = running`." },
-          "lease_expires_at": { "type": "string", "format": "date-time", "nullable": true },
-          "parent_job_id":    { "type": "string", "format": "uuid", "nullable": true },
-          "correlation_id":   { "type": "string", "format": "uuid", "nullable": true },
-          "created_at":       { "type": "string", "format": "date-time" },
-          "started_at":       { "type": "string", "format": "date-time", "nullable": true },
-          "finished_at":      { "type": "string", "format": "date-time", "nullable": true }
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "description": "Handler name. Built-in handlers include `import_document`, `import_remote_document`, and `import_synbiohub_collection`."
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "priority": {
+            "type": "integer",
+            "description": "Higher dequeues first."
+          },
+          "queue": {
+            "type": "string",
+            "default": "default"
+          },
+          "payload": {
+            "description": "Handler-specific JSON payload."
+          },
+          "result": {
+            "description": "Handler-specific JSON result; populated after success.",
+            "nullable": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true,
+            "description": "Last error message; populated after failure."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "nullable": true
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_attempts": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Earliest time the job is eligible for dequeue (used by retry backoff)."
+          },
+          "leased_by": {
+            "type": "string",
+            "nullable": true,
+            "description": "Worker id holding the lease while `status = running`."
+          },
+          "lease_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "parent_job_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
         }
       },
       "EnqueueJobRequest": {
         "type": "object",
-        "required": ["kind","payload"],
+        "required": [
+          "kind",
+          "payload"
+        ],
         "properties": {
-          "kind":            { "type": "string" },
-          "payload":         { "description": "Handler-specific JSON payload." },
-          "queue":           { "type": "string" },
-          "priority":        { "type": "integer" },
-          "max_attempts":    { "type": "integer", "minimum": 1 },
-          "idempotency_key": { "type": "string", "description": "When set, deduplicates against any non-terminal or succeeded job with the same `(kind, idempotency_key)`." },
-          "correlation_id":  { "type": "string", "format": "uuid" }
+          "kind": {
+            "type": "string"
+          },
+          "payload": {
+            "description": "Handler-specific JSON payload."
+          },
+          "queue": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "integer"
+          },
+          "max_attempts": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "When set, deduplicates against any non-terminal or succeeded job with the same `(kind, idempotency_key)`."
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          }
         }
       },
       "JobAttempt": {
         "type": "object",
-        "required": ["id","job_id","attempt_no","worker_id","started_at","status"],
+        "required": [
+          "id",
+          "job_id",
+          "attempt_no",
+          "worker_id",
+          "started_at",
+          "status"
+        ],
         "properties": {
-          "id":          { "type": "integer", "format": "int64", "description": "Auto-increment row id in `sbol_job_attempts`." },
-          "job_id":      { "type": "string", "format": "uuid" },
-          "attempt_no":  { "type": "integer", "minimum": 1 },
-          "worker_id":   { "type": "string" },
-          "started_at":  { "type": "string", "format": "date-time" },
-          "finished_at": { "type": "string", "format": "date-time", "nullable": true, "description": "Null while the attempt is still in-flight." },
-          "status":      { "$ref": "#/components/schemas/JobStatus" },
-          "error":       { "type": "string", "nullable": true }
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Auto-increment row id in `sbol_job_attempts`."
+          },
+          "job_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "attempt_no": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "worker_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Null while the attempt is still in-flight."
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          }
         }
       },
       "EnqueueJobResponse": {
         "type": "object",
-        "required": ["job","deduplicated"],
+        "required": [
+          "job",
+          "deduplicated"
+        ],
         "properties": {
-          "job":          { "$ref": "#/components/schemas/SbolJob" },
-          "deduplicated": { "type": "boolean", "description": "True when an existing job was returned instead of inserting a new one." }
+          "job": {
+            "$ref": "#/components/schemas/SbolJob"
+          },
+          "deduplicated": {
+            "type": "boolean",
+            "description": "True when an existing job was returned instead of inserting a new one."
+          }
         }
       }
     }

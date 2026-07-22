@@ -127,6 +127,89 @@ impl SequenceSearchRepository {
         Ok(out)
     }
 
+    /// Candidate sequences for the banded aligner: every indexed DNA/RNA
+    /// sequence sharing at least one canonical k-mer with `query`. Unlike
+    /// [`candidates_seeded`](Self::candidates_seeded), which seeds only on the
+    /// query's first k-mer, this aggregates over every canonical query k-mer so
+    /// a gapped hit whose head does not match is still admitted. A query shorter
+    /// than `K` has no seed and every nucleotide sequence is a candidate.
+    pub async fn align_candidates(
+        &self,
+        query: &str,
+    ) -> Result<Vec<(String, String)>, DomainError> {
+        let normalised: String = query.chars().filter(|c| !c.is_whitespace()).collect();
+        if normalised.is_empty() {
+            return Ok(Vec::new());
+        }
+        if normalised.len() < KMER_K {
+            return self.all_nucleotide_sequences().await;
+        }
+        let mut kmers: Vec<i32> = canonical_kmers(&normalised)
+            .map(|h| h.canonical as i32)
+            .collect();
+        kmers.sort_unstable();
+        kmers.dedup();
+        if kmers.is_empty() {
+            return self.all_nucleotide_sequences().await;
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT s.iri::text AS iri, s.elements AS elements
+            FROM sbol_sequences s
+            WHERE s.elements IS NOT NULL
+              AND s.alphabet IN ('DNA', 'RNA')
+              AND s.object_id IN (
+                SELECT DISTINCT sequence_object_id FROM sbol_sequence_kmers
+                WHERE kmer = ANY($1::int[])
+              )
+            "#,
+        )
+        .bind(&kmers)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        collect_rows(rows)
+    }
+
+    pub async fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT iri::text AS iri, elements
+            FROM sbol_sequences
+            WHERE elements IS NOT NULL
+              AND alphabet IN ('DNA', 'RNA')
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        collect_rows(rows)
+    }
+
+    pub async fn sequences_by_iris(
+        &self,
+        iris: &[String],
+    ) -> Result<Vec<(String, String)>, DomainError> {
+        if iris.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            r#"
+            SELECT iri::text AS iri, elements
+            FROM sbol_sequences
+            WHERE elements IS NOT NULL
+              AND alphabet IN ('DNA', 'RNA')
+              AND iri::text = ANY($1::text[])
+            "#,
+        )
+        .bind(iris)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        collect_rows(rows)
+    }
+
     async fn candidates_seeded(
         &self,
         q_upper: &str,
@@ -213,6 +296,18 @@ impl SequenceSearchRepository {
         }
         Ok(out)
     }
+}
+
+/// Collect `(iri, elements)` from candidate rows selecting `iri` and
+/// `elements` columns.
+fn collect_rows(rows: Vec<sqlx::postgres::PgRow>) -> Result<Vec<(String, String)>, DomainError> {
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let iri: String = row.try_get("iri").map_err(db_err)?;
+        let elements: String = row.try_get("elements").map_err(db_err)?;
+        out.push((iri, elements));
+    }
+    Ok(out)
 }
 
 /// Free-function form of the k-mer reindex, callable from

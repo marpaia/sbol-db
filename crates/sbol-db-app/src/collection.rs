@@ -1,0 +1,1288 @@
+//! Submission minting: SynBioHub-compliant URI re-homing and denormalization.
+//!
+//! [`CollectionService`] takes a submitted SBOL document and produces the triple
+//! set SynBioHub stores for it: a freshly minted root Collection, every
+//! submitted top-level object re-homed under the target namespace, and the
+//! denormalization triples SynBioHub's derived views rely on (`sbh:topLevel`
+//! self-links, `sbol:member` edges from the collection to each object,
+//! `sbh:ownedBy` ownership stamps, `dc:creator`, citations, and a shared
+//! `sbol:persistentIdentity` per object so versions of one object collapse to a
+//! single identity).
+//!
+//! The transform is pure: it parses and validates the document with `sbol-rs`,
+//! rewrites its IRIs at the triple level (the facade owns the rewrite; it does
+//! not depend on an `sbol-rs` re-mint API), and returns the rewritten triples.
+//! Nothing is written to the store here; a submission verb hands the result to
+//! the import path.
+
+use chrono::Utc;
+use sbol_db_core::{DomainError, IriString, ObjectTerm, SerializationFormat, SubjectTerm, Triple};
+use sbol_db_rdf::rdf_graph_to_triples;
+
+use crate::download::DEFAULT_DATABASE_PREFIX;
+
+/// SynBioHub RDF vocabulary. The predicates and classes the minting transform
+/// reads from a submission and stamps onto the result, spelled in full so no
+/// prefix block is needed.
+mod vocab {
+    /// `rdf:type`.
+    pub const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+
+    /// `sbh:topLevel`: the self-link every top-level subject carries so the
+    /// derived views can find a child's owning top level.
+    pub const SBH_TOP_LEVEL: &str = "http://wiki.synbiohub.org/wiki/Terms/synbiohub#topLevel";
+    /// `sbh:ownedBy`: names the user graph that owns a top-level object.
+    pub const SBH_OWNED_BY: &str = "http://wiki.synbiohub.org/wiki/Terms/synbiohub#ownedBy";
+
+    /// `sbol:member`: the collection-to-object membership edge.
+    pub const SBOL2_MEMBER: &str = "http://sbols.org/v2#member";
+    /// `sbol:persistentIdentity`: the version-independent identity shared by
+    /// every version of an object.
+    pub const SBOL2_PERSISTENT_IDENTITY: &str = "http://sbols.org/v2#persistentIdentity";
+    /// `sbol:displayId`: the object's short, path-safe local name.
+    pub const SBOL2_DISPLAY_ID: &str = "http://sbols.org/v2#displayId";
+    /// `sbol:version`: the object's version segment.
+    pub const SBOL2_VERSION: &str = "http://sbols.org/v2#version";
+    /// The SBOL2 `Collection` class, the type of the minted root collection.
+    pub const SBOL2_COLLECTION: &str = "http://sbols.org/v2#Collection";
+
+    /// SBOL3 namespace, recognized when reading a submitted document's
+    /// `displayId` so an SBOL3 submission mints the same way.
+    pub const SBOL3_DISPLAY_ID: &str = "http://sbols.org/v3#displayId";
+
+    /// Dublin Core terms namespace (`dcterms:`).
+    pub const DCTERMS_TITLE: &str = "http://purl.org/dc/terms/title";
+    pub const DCTERMS_DESCRIPTION: &str = "http://purl.org/dc/terms/description";
+    pub const DCTERMS_CREATED: &str = "http://purl.org/dc/terms/created";
+    pub const DCTERMS_MODIFIED: &str = "http://purl.org/dc/terms/modified";
+
+    /// Dublin Core elements `dc:creator`: the submission's creator name.
+    pub const DC_CREATOR: &str = "http://purl.org/dc/elements/1.1/creator";
+
+    /// The OBO citation predicate SynBioHub stamps a collection's PubMed
+    /// citations under.
+    pub const OBI_CITATION: &str = "http://purl.obolibrary.org/obo/OBI_0001617";
+
+    /// `xsd:string`, the datatype of a plain string literal.
+    pub const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    /// `xsd:dateTime`, the datatype of the created/modified timestamps.
+    pub const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+}
+
+/// The SBOL2 and PROV classes SynBioHub treats as top-level objects. A subject
+/// typed as one of these is re-homed to its own minted URI and added to the
+/// root collection; every other subject is a child re-homed by prefix under its
+/// owning top level.
+const TOP_LEVEL_CLASSES: &[&str] = &[
+    "http://sbols.org/v2#Collection",
+    "http://sbols.org/v2#ComponentDefinition",
+    "http://sbols.org/v2#ModuleDefinition",
+    "http://sbols.org/v2#Sequence",
+    "http://sbols.org/v2#Model",
+    "http://sbols.org/v2#Attachment",
+    "http://sbols.org/v2#Implementation",
+    "http://sbols.org/v2#CombinatorialDerivation",
+    "http://sbols.org/v2#Experiment",
+    "http://sbols.org/v2#ExperimentalData",
+    "http://sbols.org/v2#GenericTopLevel",
+    "http://www.w3.org/ns/prov#Activity",
+    "http://www.w3.org/ns/prov#Agent",
+    "http://www.w3.org/ns/prov#Plan",
+];
+
+/// The namespace a submission mints into: a user's private space or the shared
+/// public space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MintScope {
+    /// A user's private space: URIs live under `<prefix>user/<username>/<id>/`.
+    User,
+    /// The shared public space: URIs live under `<prefix>public/<id>/`, with no
+    /// username segment.
+    Public,
+}
+
+/// A document submitted for minting, with the collection-level metadata
+/// SynBioHub stamps onto the root collection.
+#[derive(Clone, Debug)]
+pub struct Submission {
+    /// The serialized SBOL document.
+    pub body: String,
+    /// The serialization the body is expressed in.
+    pub format: SerializationFormat,
+    /// The collection title (`dcterms:title`).
+    pub name: Option<String>,
+    /// The collection description (`dcterms:description`).
+    pub description: Option<String>,
+    /// The creator name (`dc:creator`).
+    pub creator_name: Option<String>,
+    /// PubMed citations, stamped as `obo:OBI_0001617` literals.
+    pub citations: Vec<String>,
+}
+
+/// The result of minting a submission: the root collection's identity plus every
+/// rewritten triple ready to hand to the import path.
+#[derive(Clone, Debug)]
+pub struct MintedSubmission {
+    /// The minted, version-qualified root Collection URI.
+    pub collection_uri: IriString,
+    /// The root Collection's version-independent persistent identity.
+    pub collection_persistent_identity: IriString,
+    /// The minted, version-qualified URI of every submitted top-level object,
+    /// each a `sbol:member` of the root collection.
+    pub members: Vec<IriString>,
+    /// The full rewritten triple set: re-homed document triples plus the root
+    /// collection and every denormalization stamp. Untagged (`graph_iri` is
+    /// `None`); the import path tags them with the target document graph.
+    pub triples: Vec<Triple>,
+}
+
+/// Mints submissions into SynBioHub-compliant URIs and denormalization triples.
+#[derive(Clone)]
+pub struct CollectionService {
+    database_prefix: String,
+}
+
+impl Default for CollectionService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CollectionService {
+    /// Build a service minting under [`DEFAULT_DATABASE_PREFIX`].
+    pub fn new() -> Self {
+        Self {
+            database_prefix: DEFAULT_DATABASE_PREFIX.to_owned(),
+        }
+    }
+
+    /// Mint under a different database prefix. The instance base IRI is
+    /// deployment-specific; a caller wires its configured prefix here.
+    pub fn with_database_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.database_prefix = prefix.into();
+        self
+    }
+
+    /// The user graph IRI for `owner`: `<prefix>user/<owner>`. This is the value
+    /// stamped as `sbh:ownedBy` and the graph a private submission's ownership
+    /// resolves to.
+    pub fn user_graph_iri(&self, owner: &str) -> String {
+        format!("{}user/{}", self.database_prefix, owner)
+    }
+
+    /// The namespace a scope mints its objects under.
+    ///
+    /// - [`MintScope::User`] → `<prefix>user/<owner>/<id>/`
+    /// - [`MintScope::Public`] → `<prefix>public/<id>/`
+    fn base_namespace(&self, owner: &str, id: &str, scope: MintScope) -> String {
+        match scope {
+            MintScope::User => format!("{}user/{}/{}/", self.database_prefix, owner, id),
+            MintScope::Public => format!("{}public/{}/", self.database_prefix, id),
+        }
+    }
+
+    /// Parse and validate a submitted SBOL document, mint its root Collection and
+    /// per-object URIs under the target namespace, rewrite every IRI, and stamp
+    /// the SynBioHub denormalization triples.
+    ///
+    /// The root Collection is minted at
+    /// `<base><id>_collection/<version>` and each submitted top-level object at
+    /// `<base><displayId>/<version>`, where `<base>` is the namespace `scope`
+    /// selects. Child objects are re-homed by prefix under their owning top
+    /// level, so intra-document references stay internally consistent.
+    pub fn mint_uris(
+        &self,
+        submission: &Submission,
+        owner: &str,
+        id: &str,
+        version: &str,
+        scope: MintScope,
+    ) -> Result<MintedSubmission, DomainError> {
+        let rdf_format = rdf_format(submission.format)?;
+
+        // Validate the document as SBOL, rejecting anything malformed. Classic
+        // (libSBOLj) validates against the submitted version's rules, so an SBOL2
+        // body is validated as SBOL2 and an SBOL3 body as SBOL3. Reading an SBOL2
+        // body through the SBOL3 model instead would apply SBOL3-only rules (e.g.
+        // the `hasNamespace` requirement a PROV Activity would trip) that classic
+        // never enforces on an SBOL2 submission. The stored triples are the
+        // verbatim submission, rewritten below.
+        // Surface the actual validation issues (rule + message) the way classic
+        // returns libSBOLj's report to the client, rather than a generic string.
+        let validation_error = match sbol::detect_version(&submission.body, rdf_format) {
+            Some(sbol::SbolVersion::V2) => {
+                let report = sbol::v2::Document::read(&submission.body, rdf_format)
+                    .map_err(|e| DomainError::Parse(e.to_string()))?
+                    .validate();
+                report.has_errors().then(|| report.to_string())
+            }
+            _ => {
+                let report = sbol::v3::Document::read(&submission.body, rdf_format)
+                    .map_err(|e| DomainError::Parse(e.to_string()))?
+                    .validate();
+                report.has_errors().then(|| report.to_string())
+            }
+        };
+        if let Some(detail) = validation_error {
+            return Err(DomainError::Validation(detail));
+        }
+
+        // Rewrite the document verbatim at the triple level, not through the
+        // upgraded model, so the stored triples match what was submitted.
+        let graph = sbol_rdf::Graph::parse(&submission.body, rdf_format)
+            .map_err(|e| DomainError::Parse(e.to_string()))?;
+        let placeholder = IriString::unchecked("");
+        let mut source = rdf_graph_to_triples(&graph, &placeholder);
+        for triple in &mut source {
+            triple.graph_iri = None;
+        }
+
+        Ok(self.assemble(
+            source,
+            owner,
+            id,
+            version,
+            scope,
+            submission.name.as_deref(),
+            submission.description.as_deref(),
+            submission.creator_name.as_deref(),
+            &submission.citations,
+        ))
+    }
+
+    /// Re-mint an already-materialized triple set into SynBioHub-compliant URIs
+    /// and denormalization triples, skipping the SBOL parse and validation step.
+    ///
+    /// This is the makePublic path: the input is the transitive closure of an
+    /// already-minted, already-valid private object, so re-validating it as a
+    /// fresh SBOL document is both redundant and brittle (the closure carries the
+    /// `sbh:` denormalization triples). The re-home and stamping logic is
+    /// identical to [`mint_uris`](Self::mint_uris); only the parse/validate front
+    /// is dropped. The caller passes `MintScope::Public` and the original owner
+    /// so the public URIs are `<prefix>public/<id>/…` while the `sbh:ownedBy`
+    /// stamp still names the originating user graph.
+    #[allow(clippy::too_many_arguments)]
+    pub fn remint_triples(
+        &self,
+        source: Vec<Triple>,
+        owner: &str,
+        id: &str,
+        version: &str,
+        scope: MintScope,
+        name: Option<&str>,
+        description: Option<&str>,
+        creator_name: Option<&str>,
+        citations: &[String],
+    ) -> MintedSubmission {
+        let source: Vec<Triple> = source
+            .into_iter()
+            .map(|mut t| {
+                t.graph_iri = None;
+                t
+            })
+            .collect();
+        self.assemble(
+            source,
+            owner,
+            id,
+            version,
+            scope,
+            name,
+            description,
+            creator_name,
+            citations,
+        )
+    }
+
+    /// Re-home a graphless source triple set onto the target namespace and stamp
+    /// the SynBioHub denormalization triples, returning the minted collection
+    /// identity and the full rewritten triple set. Shared by the submission mint
+    /// (which parses and validates first) and the makePublic re-mint (which does
+    /// not).
+    #[allow(clippy::too_many_arguments)]
+    fn assemble(
+        &self,
+        source: Vec<Triple>,
+        owner: &str,
+        id: &str,
+        version: &str,
+        scope: MintScope,
+        name: Option<&str>,
+        description: Option<&str>,
+        creator_name: Option<&str>,
+        citations: &[String],
+    ) -> MintedSubmission {
+        let base = self.base_namespace(owner, id, scope);
+        let owned_by = self.user_graph_iri(owner);
+
+        // Two rewrite entries per submitted top level. `old_uri -> new_uri`
+        // re-homes the object node itself and any children nested under its
+        // versioned URI onto the addressable minted URI. `old_pi -> new_pi`
+        // re-homes persistent-identity-form references and children nested
+        // under the bare identity. `rewrite_iri` prefers the longest matching
+        // key, so the object node and its versioned children resolve to
+        // `new_uri` while version-less references still re-home. A version-less
+        // top level has `old_uri == old_pi`; adding only the URI mapping keeps
+        // its content on the addressable versioned URI instead of splitting it
+        // between the bare persistent identity and a stamped stub.
+        let mut top_levels = discover_top_levels(&source, &base, version);
+        top_levels.sort_by(|a, b| a.new_uri.cmp(&b.new_uri));
+        let mut rename: Vec<(String, String)> = Vec::new();
+        for top in &top_levels {
+            rename.push((top.old_uri.clone(), top.new_uri.clone()));
+            if top.old_persistent_identity != top.old_uri {
+                rename.push((
+                    top.old_persistent_identity.clone(),
+                    top.new_persistent_identity.clone(),
+                ));
+            }
+        }
+
+        // The set of managed subjects (each minted top level) whose stamped
+        // predicates the transform re-derives rather than carries over.
+        let managed: std::collections::HashSet<String> =
+            top_levels.iter().map(|t| t.new_uri.clone()).collect();
+
+        let now = Utc::now().to_rfc3339();
+
+        let mut out: Vec<Triple> = Vec::new();
+        for triple in &source {
+            let rewritten = rewrite_triple(triple, &rename);
+            if is_managed_stamp(&rewritten, &managed) {
+                // Dropped: re-derived below so the stamp is canonical and never
+                // duplicated across a re-submission.
+                continue;
+            }
+            out.push(rewritten);
+        }
+
+        // Stamp each top level: canonical identity, ownership, and self-link.
+        // SynBioHub stamps `dcterms:created` only on the root Collection (the
+        // submission), not on the imported members, and never stamps
+        // `dcterms:modified` at submission time, so neither is added here.
+        for top in &top_levels {
+            out.push(iri_triple(
+                &top.new_uri,
+                vocab::SBOL2_PERSISTENT_IDENTITY,
+                &top.new_persistent_identity,
+            ));
+            out.push(literal_triple(
+                &top.new_uri,
+                vocab::SBOL2_DISPLAY_ID,
+                &top.display,
+                vocab::XSD_STRING,
+            ));
+            out.push(literal_triple(
+                &top.new_uri,
+                vocab::SBOL2_VERSION,
+                top.version.as_deref().unwrap_or(version),
+                vocab::XSD_STRING,
+            ));
+            out.push(iri_triple(&top.new_uri, vocab::SBH_TOP_LEVEL, &top.new_uri));
+            out.push(iri_triple(&top.new_uri, vocab::SBH_OWNED_BY, &owned_by));
+        }
+
+        // Stamp `sbh:ownedBy` and `sbh:topLevel` on every child object (a subject
+        // re-homed under a top level's identity), mirroring classic which
+        // denormalizes ownership and the owning top level onto every object, not
+        // only the top levels themselves.
+        let top_level_uris: std::collections::HashSet<&str> =
+            top_levels.iter().map(|t| t.new_uri.as_str()).collect();
+        let mut child_subjects: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for triple in &out {
+            if let SubjectTerm::Iri(subject) = &triple.subject {
+                let subject = subject.as_str();
+                if top_level_uris.contains(subject) {
+                    continue;
+                }
+                if seen.insert(subject.to_owned()) {
+                    child_subjects.push(subject.to_owned());
+                }
+            }
+        }
+        for child in &child_subjects {
+            let owning = top_levels
+                .iter()
+                .filter(|t| child.starts_with(&format!("{}/", t.new_persistent_identity)))
+                .max_by_key(|t| t.new_persistent_identity.len());
+            if let Some(top) = owning {
+                out.push(iri_triple(child, vocab::SBH_OWNED_BY, &owned_by));
+                out.push(iri_triple(child, vocab::SBH_TOP_LEVEL, &top.new_uri));
+            }
+        }
+
+        // Mint the root Collection and its membership, ownership, and metadata.
+        let collection_pi = format!("{base}{id}_collection");
+        let collection_uri = format!("{collection_pi}/{version}");
+        let members: Vec<IriString> = top_levels
+            .iter()
+            .map(|t| IriString::unchecked(&t.new_uri))
+            .collect();
+
+        out.push(iri_triple(
+            &collection_uri,
+            vocab::RDF_TYPE,
+            vocab::SBOL2_COLLECTION,
+        ));
+        out.push(literal_triple(
+            &collection_uri,
+            vocab::SBOL2_DISPLAY_ID,
+            &format!("{id}_collection"),
+            vocab::XSD_STRING,
+        ));
+        out.push(iri_triple(
+            &collection_uri,
+            vocab::SBOL2_PERSISTENT_IDENTITY,
+            &collection_pi,
+        ));
+        out.push(literal_triple(
+            &collection_uri,
+            vocab::SBOL2_VERSION,
+            version,
+            vocab::XSD_STRING,
+        ));
+        out.push(iri_triple(
+            &collection_uri,
+            vocab::SBH_TOP_LEVEL,
+            &collection_uri,
+        ));
+        out.push(iri_triple(&collection_uri, vocab::SBH_OWNED_BY, &owned_by));
+        out.push(literal_triple(
+            &collection_uri,
+            vocab::DCTERMS_CREATED,
+            &now,
+            vocab::XSD_DATETIME,
+        ));
+        if let Some(name) = name {
+            out.push(literal_triple(
+                &collection_uri,
+                vocab::DCTERMS_TITLE,
+                name,
+                vocab::XSD_STRING,
+            ));
+        }
+        if let Some(description) = description {
+            out.push(literal_triple(
+                &collection_uri,
+                vocab::DCTERMS_DESCRIPTION,
+                description,
+                vocab::XSD_STRING,
+            ));
+        }
+        if let Some(creator) = creator_name {
+            out.push(literal_triple(
+                &collection_uri,
+                vocab::DC_CREATOR,
+                creator,
+                vocab::XSD_STRING,
+            ));
+        }
+        for citation in citations {
+            out.push(literal_triple(
+                &collection_uri,
+                vocab::OBI_CITATION,
+                citation,
+                vocab::XSD_STRING,
+            ));
+        }
+        for member in &members {
+            out.push(iri_triple(
+                &collection_uri,
+                vocab::SBOL2_MEMBER,
+                member.as_str(),
+            ));
+        }
+
+        MintedSubmission {
+            collection_uri: IriString::unchecked(collection_uri),
+            collection_persistent_identity: IriString::unchecked(collection_pi),
+            members,
+            triples: out,
+        }
+    }
+}
+
+/// Find every submitted top-level object and compute its minted identity. Each
+/// top level re-homes to `<base><displayId>`; its version-qualified URI follows
+/// by re-homing the submitted URI onto that persistent identity.
+fn discover_top_levels(source: &[Triple], base: &str, default_version: &str) -> Vec<TopLevelMint> {
+    let mut mints: Vec<TopLevelMint> = Vec::new();
+    for triple in source {
+        if triple.predicate.as_str() != vocab::RDF_TYPE {
+            continue;
+        }
+        let ObjectTerm::Iri(class) = &triple.object else {
+            continue;
+        };
+        let SubjectTerm::Iri(subject) = &triple.subject else {
+            continue;
+        };
+        if !TOP_LEVEL_CLASSES.contains(&class.as_str())
+            && !is_generic_top_level(class.as_str(), subject.as_str(), source)
+        {
+            continue;
+        }
+        let old_uri = subject.as_str();
+        if mints.iter().any(|m| m.old_uri == old_uri) {
+            continue;
+        }
+
+        let old_pi = old_persistent_identity(old_uri, source);
+        let display = display_id(old_uri, &old_pi, source);
+        let new_pi = format!("{base}{display}");
+        // SynBioHub always addresses a top level at
+        // `<persistentIdentity>/<version>`. A source object may be version-less
+        // (its URI is its persistent identity, legal in SBOL2 where version is
+        // optional), so fall back to the submission version and always append a
+        // version segment; otherwise the minted URI is unaddressable over the V1
+        // routes, which build the lookup IRI as `<displayId>/<version>`.
+        let effective_version =
+            own_version(old_uri, &old_pi, source).unwrap_or_else(|| default_version.to_owned());
+        let rehomed = rewrite_iri(old_uri, &[(old_pi.clone(), new_pi.clone())]);
+        let new_uri = if rehomed == new_pi {
+            format!("{new_pi}/{effective_version}")
+        } else {
+            rehomed
+        };
+
+        mints.push(TopLevelMint {
+            old_uri: old_uri.to_owned(),
+            old_persistent_identity: old_pi,
+            new_persistent_identity: new_pi,
+            new_uri,
+            display,
+            version: Some(effective_version),
+        });
+    }
+    disambiguate_collisions(&mut mints, base);
+    mints
+}
+
+/// The source namespace of a top level: its persistent identity minus the
+/// trailing display-id segment. `http://x.org/cd/BBa_B0015` -> `http://x.org/cd`.
+fn source_namespace(pi: &str) -> &str {
+    pi.rsplit_once('/').map(|(ns, _)| ns).unwrap_or(pi)
+}
+
+/// Resolve re-home collisions the way SynBioHub's libSBOLj compliance pass does.
+///
+/// Two distinct source objects can share a display id under different source
+/// namespaces (`.../cd/BBa_B0015` and `.../seq/BBa_B0015`), so they mint onto the
+/// same target URI and would merge into one object. libSBOLj disambiguates by
+/// folding the source namespace's last segment into the display id (`cd_BBa_B0015`,
+/// `seq_BBa_B0015`), applied across every object of a source namespace involved in
+/// a collision (so a non-colliding sibling like `cd_BBa_F2620` is prefixed too).
+/// Namespaces with no collision are left untouched, so clean corpora keep their
+/// verbatim display ids.
+fn disambiguate_collisions(mints: &mut [TopLevelMint], base: &str) {
+    use std::collections::{HashMap, HashSet};
+
+    // Target persistent identity -> the distinct source namespaces reaching it.
+    let mut sources_by_target: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for mint in mints.iter() {
+        sources_by_target
+            .entry(mint.new_persistent_identity.as_str())
+            .or_default()
+            .insert(source_namespace(&mint.old_persistent_identity));
+    }
+
+    // Source namespaces that collide with another namespace on some target.
+    let colliding: HashSet<String> = sources_by_target
+        .values()
+        .filter(|sources| sources.len() > 1)
+        .flat_map(|sources| sources.iter().map(|ns| (*ns).to_owned()))
+        .collect();
+    if colliding.is_empty() {
+        return;
+    }
+
+    for mint in mints.iter_mut() {
+        let namespace = source_namespace(&mint.old_persistent_identity);
+        if !colliding.contains(namespace) {
+            continue;
+        }
+        let Some(segment) = namespace.rsplit('/').next().filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        mint.display = format!("{segment}_{}", mint.display);
+        mint.new_persistent_identity = format!("{base}{}", mint.display);
+        mint.new_uri = format!(
+            "{}/{}",
+            mint.new_persistent_identity,
+            mint.version.as_deref().unwrap_or("1")
+        );
+    }
+}
+
+/// Whether a custom-typed subject is an SBOL2 `GenericTopLevel`: a top-level with
+/// a foreign `rdf:type` (outside the SBOL namespaces) that still carries SBOL
+/// identity (`sbol:persistentIdentity` and a `displayId`). libSBOLj re-homes such
+/// objects as top-levels, so the submission mint must discover them too;
+/// recognized SBOL and PROV classes are handled by `TOP_LEVEL_CLASSES`.
+fn is_generic_top_level(class: &str, subject: &str, source: &[Triple]) -> bool {
+    if class.starts_with("http://sbols.org/v2#") || class.starts_with("http://sbols.org/v3#") {
+        return false;
+    }
+    object_iri(subject, vocab::SBOL2_PERSISTENT_IDENTITY, source).is_some()
+        && (literal_value(subject, vocab::SBOL2_DISPLAY_ID, source).is_some()
+            || literal_value(subject, vocab::SBOL3_DISPLAY_ID, source).is_some())
+}
+
+/// One submitted top-level object's rewrite: its old identity and the minted
+/// target identity it and its children re-home onto.
+struct TopLevelMint {
+    old_uri: String,
+    old_persistent_identity: String,
+    new_persistent_identity: String,
+    new_uri: String,
+    /// The canonical `sbol:displayId` stamped on the minted object. Normally the
+    /// source display id; a collision (see [`disambiguate_collisions`]) folds the
+    /// source namespace segment into it (`cd_BBa_B0015`) to keep two distinct
+    /// objects from re-homing onto one URI.
+    display: String,
+    /// The object's own `sbol:version`, preserved across the re-home so an
+    /// imported member keeps its version rather than adopting the submission's.
+    version: Option<String>,
+}
+
+/// A top-level's own version: its `sbol:version` literal, else the version
+/// segment of its URI (the path after its persistent identity), else `None`.
+fn own_version(old_uri: &str, old_pi: &str, source: &[Triple]) -> Option<String> {
+    if let Some(version) = literal_value(old_uri, vocab::SBOL2_VERSION, source) {
+        return Some(version);
+    }
+    old_uri
+        .strip_prefix(old_pi)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_owned)
+}
+
+/// The version-independent identity of `subject`: its `sbol:persistentIdentity`
+/// if present, otherwise the URI with a trailing version segment stripped when
+/// one is declared, otherwise the URI itself.
+fn old_persistent_identity(subject: &str, source: &[Triple]) -> String {
+    if let Some(pi) = object_iri(subject, vocab::SBOL2_PERSISTENT_IDENTITY, source) {
+        return pi;
+    }
+    if let Some(version) = literal_value(subject, vocab::SBOL2_VERSION, source) {
+        let suffix = format!("/{version}");
+        if let Some(stripped) = subject.strip_suffix(&suffix) {
+            return stripped.to_owned();
+        }
+    }
+    subject.to_owned()
+}
+
+/// The display id of `subject`: its `sbol:displayId` (SBOL2 or SBOL3) if
+/// present, otherwise the last path segment of its persistent identity.
+fn display_id(subject: &str, persistent_identity: &str, source: &[Triple]) -> String {
+    if let Some(display) = literal_value(subject, vocab::SBOL2_DISPLAY_ID, source) {
+        return display;
+    }
+    if let Some(display) = literal_value(subject, vocab::SBOL3_DISPLAY_ID, source) {
+        return display;
+    }
+    persistent_identity
+        .rsplit('/')
+        .next()
+        .unwrap_or(persistent_identity)
+        .to_owned()
+}
+
+/// The IRI object of the first `(subject, predicate, ?o)` triple, if any.
+fn object_iri(subject: &str, predicate: &str, source: &[Triple]) -> Option<String> {
+    source.iter().find_map(|t| {
+        let SubjectTerm::Iri(s) = &t.subject else {
+            return None;
+        };
+        if s.as_str() != subject || t.predicate.as_str() != predicate {
+            return None;
+        }
+        match &t.object {
+            ObjectTerm::Iri(iri) => Some(iri.as_str().to_owned()),
+            _ => None,
+        }
+    })
+}
+
+/// The literal value of the first `(subject, predicate, ?o)` triple, if any.
+fn literal_value(subject: &str, predicate: &str, source: &[Triple]) -> Option<String> {
+    source.iter().find_map(|t| {
+        let SubjectTerm::Iri(s) = &t.subject else {
+            return None;
+        };
+        if s.as_str() != subject || t.predicate.as_str() != predicate {
+            return None;
+        }
+        match &t.object {
+            ObjectTerm::Literal { value, .. } => Some(value.clone()),
+            _ => None,
+        }
+    })
+}
+
+/// Rewrite both IRI positions of a triple by longest-prefix identity match.
+fn rewrite_triple(triple: &Triple, rename: &[(String, String)]) -> Triple {
+    let subject = match &triple.subject {
+        SubjectTerm::Iri(iri) => {
+            SubjectTerm::Iri(IriString::unchecked(rewrite_iri(iri.as_str(), rename)))
+        }
+        other => other.clone(),
+    };
+    let object = match &triple.object {
+        ObjectTerm::Iri(iri) => {
+            ObjectTerm::Iri(IriString::unchecked(rewrite_iri(iri.as_str(), rename)))
+        }
+        other => other.clone(),
+    };
+    Triple {
+        graph_iri: None,
+        subject,
+        predicate: triple.predicate.clone(),
+        object,
+    }
+}
+
+/// Re-home an IRI onto its minted namespace: find the longest old persistent
+/// identity that is `uri` or a path-prefix of it, and swap in the new one. An
+/// IRI matching no top level (an external or vocabulary URI) is left untouched.
+fn rewrite_iri(uri: &str, rename: &[(String, String)]) -> String {
+    let mut best: Option<&(String, String)> = None;
+    for entry in rename {
+        let old = &entry.0;
+        let matches = uri == old
+            || uri
+                .strip_prefix(old)
+                .is_some_and(|rest| rest.starts_with('/'));
+        if matches && best.is_none_or(|b| old.len() > b.0.len()) {
+            best = Some(entry);
+        }
+    }
+    match best {
+        Some((old, new)) => format!("{new}{}", &uri[old.len()..]),
+        None => uri.to_owned(),
+    }
+}
+
+/// Whether a triple is a top-level stamp the transform re-derives: the stamped
+/// predicates on a managed (minted top-level) subject. Carrying these over from
+/// the submission would duplicate or stale them.
+fn is_managed_stamp(triple: &Triple, managed: &std::collections::HashSet<String>) -> bool {
+    let SubjectTerm::Iri(subject) = &triple.subject else {
+        return false;
+    };
+    if !managed.contains(subject.as_str()) {
+        return false;
+    }
+    matches!(
+        triple.predicate.as_str(),
+        vocab::SBH_TOP_LEVEL
+            | vocab::SBH_OWNED_BY
+            | vocab::SBOL2_PERSISTENT_IDENTITY
+            | vocab::SBOL2_DISPLAY_ID
+            | vocab::SBOL2_VERSION
+            | vocab::DCTERMS_CREATED
+            | vocab::DCTERMS_MODIFIED
+    )
+}
+
+/// Build an untagged IRI-object triple.
+fn iri_triple(subject: &str, predicate: &str, object: &str) -> Triple {
+    Triple {
+        graph_iri: None,
+        subject: SubjectTerm::Iri(IriString::unchecked(subject)),
+        predicate: IriString::unchecked(predicate),
+        object: ObjectTerm::Iri(IriString::unchecked(object)),
+    }
+}
+
+/// Build an untagged literal-object triple.
+fn literal_triple(subject: &str, predicate: &str, value: &str, datatype: &str) -> Triple {
+    Triple {
+        graph_iri: None,
+        subject: SubjectTerm::Iri(IriString::unchecked(subject)),
+        predicate: IriString::unchecked(predicate),
+        object: ObjectTerm::Literal {
+            value: value.to_owned(),
+            datatype: IriString::unchecked(datatype),
+            language: None,
+        },
+    }
+}
+
+/// Map a [`SerializationFormat`] to the RDF reader's format, rejecting the
+/// non-RDF (GenBank/FASTA/JSON) formats a submission is never expressed in.
+fn rdf_format(format: SerializationFormat) -> Result<sbol::RdfFormat, DomainError> {
+    match format {
+        SerializationFormat::Turtle => Ok(sbol::RdfFormat::Turtle),
+        SerializationFormat::JsonLd => Ok(sbol::RdfFormat::JsonLd),
+        SerializationFormat::RdfXml => Ok(sbol::RdfFormat::RdfXml),
+        SerializationFormat::NTriples => Ok(sbol::RdfFormat::NTriples),
+        other => Err(DomainError::InvalidInput(format!(
+            "cannot mint a submission from {other:?}"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OWNER: &str = "alice";
+    const ID: &str = "mysubmission";
+    const VERSION: &str = "1";
+
+    /// A compliant SBOL2 document (Turtle): a ComponentDefinition with a nested
+    /// SequenceAnnotation child, plus a standalone Sequence, both versioned `1`.
+    /// The child's URI is a path-suffix of the ComponentDefinition's persistent
+    /// identity, exercising the by-prefix re-home of children.
+    const FIXTURE: &str = r#"
+@prefix sbol: <http://sbols.org/v2#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<http://example.org/cd/1>
+    a sbol:ComponentDefinition ;
+    sbol:displayId "cd" ;
+    sbol:persistentIdentity <http://example.org/cd> ;
+    sbol:version "1" ;
+    dcterms:title "My Component" ;
+    sbol:type <http://www.biopax.org/release/biopax-level3.owl#DnaRegion> ;
+    sbol:sequenceAnnotation <http://example.org/cd/anno/1> .
+
+<http://example.org/cd/anno/1>
+    a sbol:SequenceAnnotation ;
+    sbol:displayId "anno" ;
+    sbol:persistentIdentity <http://example.org/cd/anno> ;
+    sbol:version "1" ;
+    sbol:location <http://example.org/cd/anno/range/1> .
+
+<http://example.org/cd/anno/range/1>
+    a sbol:Range ;
+    sbol:displayId "range" ;
+    sbol:persistentIdentity <http://example.org/cd/anno/range> ;
+    sbol:version "1" ;
+    sbol:start "1"^^xsd:integer ;
+    sbol:end "4"^^xsd:integer .
+
+<http://example.org/seq/1>
+    a sbol:Sequence ;
+    sbol:displayId "seq" ;
+    sbol:persistentIdentity <http://example.org/seq> ;
+    sbol:version "1" ;
+    sbol:elements "atgc" ;
+    sbol:encoding <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .
+"#;
+
+    fn submission() -> Submission {
+        Submission {
+            body: FIXTURE.to_owned(),
+            format: SerializationFormat::Turtle,
+            name: Some("My Submission".to_owned()),
+            description: Some("A test submission".to_owned()),
+            creator_name: Some("Alice Example".to_owned()),
+            citations: vec!["12345678".to_owned()],
+        }
+    }
+
+    /// A version-less SBOL2 submission: the ComponentDefinition and Sequence URIs
+    /// equal their persistent identities and carry no `sbol:version` (legal in
+    /// SBOL2). This exercises the mint path that previously produced version-less,
+    /// unaddressable top-level URIs.
+    const VERSIONLESS_FIXTURE: &str = r#"
+@prefix sbol: <http://sbols.org/v2#> .
+
+<http://example.org/vlcd>
+    a sbol:ComponentDefinition ;
+    sbol:displayId "vlcd" ;
+    sbol:persistentIdentity <http://example.org/vlcd> ;
+    sbol:type <http://www.biopax.org/release/biopax-level3.owl#DnaRegion> ;
+    sbol:sequence <http://example.org/vlseq> .
+
+<http://example.org/vlseq>
+    a sbol:Sequence ;
+    sbol:displayId "vlseq" ;
+    sbol:persistentIdentity <http://example.org/vlseq> ;
+    sbol:elements "atgc" ;
+    sbol:encoding <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .
+"#;
+
+    #[test]
+    fn version_less_top_level_mints_a_versioned_addressable_uri() {
+        let submission = Submission {
+            body: VERSIONLESS_FIXTURE.to_owned(),
+            format: SerializationFormat::Turtle,
+            name: Some("Version-less".to_owned()),
+            description: None,
+            creator_name: None,
+            citations: vec![],
+        };
+        let minted = CollectionService::new()
+            .mint_uris(&submission, OWNER, ID, VERSION, MintScope::User)
+            .expect("mint");
+        let member_uris: Vec<&str> = minted.members.iter().map(|m| m.as_str()).collect();
+        // The minted top-level URI carries the submission version segment, so the
+        // V1 routes (which address `<displayId>/<version>`) can resolve it.
+        assert!(
+            member_uris.contains(&"http://synbiohub.org/user/alice/mysubmission/vlcd/1"),
+            "version-less source mints a versioned, addressable URI: {member_uris:?}"
+        );
+        assert!(
+            !member_uris.iter().any(|u| u.ends_with("/vlcd")),
+            "no version-less member URI remains: {member_uris:?}"
+        );
+
+        // The object's content re-homes onto the versioned URI, not the bare
+        // persistent identity: type, displayId, and the sequence reference all
+        // sit on `.../vlcd/1`, and the sequence reference points at the versioned
+        // Sequence. The version-less URI is only the persistentIdentity value, so
+        // it never appears as a typed subject (the doubling defect).
+        let versioned = "http://synbiohub.org/user/alice/mysubmission/vlcd/1";
+        let bare_pi = "http://synbiohub.org/user/alice/mysubmission/vlcd";
+        assert!(
+            has_iri(
+                &minted.triples,
+                versioned,
+                vocab::RDF_TYPE,
+                "http://sbols.org/v2#ComponentDefinition"
+            ),
+            "content type is stamped on the versioned URI"
+        );
+        assert!(
+            has_literal(&minted.triples, versioned, vocab::SBOL2_DISPLAY_ID, "vlcd"),
+            "displayId re-homes onto the versioned URI"
+        );
+        assert!(
+            has_iri(
+                &minted.triples,
+                versioned,
+                vocab::SBOL2_PERSISTENT_IDENTITY,
+                bare_pi
+            ),
+            "persistentIdentity of the versioned object is the version-less identity"
+        );
+        assert!(
+            has_iri(
+                &minted.triples,
+                versioned,
+                "http://sbols.org/v2#sequence",
+                "http://synbiohub.org/user/alice/mysubmission/vlseq/1"
+            ),
+            "the sequence reference re-homes onto the versioned Sequence URI"
+        );
+        assert!(
+            !minted.triples.iter().any(|t| matches!(
+                &t.subject,
+                SubjectTerm::Iri(s) if s.as_str() == bare_pi
+            )),
+            "the bare persistent identity never appears as a subject (no doubling)"
+        );
+    }
+
+    /// Two objects sharing a display id under different source namespaces
+    /// (`.../cd/BBa_B0015` and `.../seq/BBa_B0015`), the collision libSBOLj
+    /// disambiguates with `cd_`/`seq_`.
+    const COLLIDING_FIXTURE: &str = r#"
+@prefix sbol: <http://sbols.org/v2#> .
+
+<http://partsregistry.org/cd/BBa_B0015>
+    a sbol:ComponentDefinition ;
+    sbol:displayId "BBa_B0015" ;
+    sbol:persistentIdentity <http://partsregistry.org/cd/BBa_B0015> ;
+    sbol:type <http://www.biopax.org/release/biopax-level3.owl#DnaRegion> ;
+    sbol:sequence <http://partsregistry.org/seq/BBa_B0015> .
+
+<http://partsregistry.org/seq/BBa_B0015>
+    a sbol:Sequence ;
+    sbol:displayId "BBa_B0015" ;
+    sbol:persistentIdentity <http://partsregistry.org/seq/BBa_B0015> ;
+    sbol:elements "atgc" ;
+    sbol:encoding <http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html> .
+"#;
+
+    #[test]
+    fn display_id_collision_disambiguates_by_source_namespace() {
+        let submission = Submission {
+            body: COLLIDING_FIXTURE.to_owned(),
+            format: SerializationFormat::Turtle,
+            name: Some("Collision".to_owned()),
+            description: None,
+            creator_name: None,
+            citations: vec![],
+        };
+        let minted = CollectionService::new()
+            .mint_uris(&submission, OWNER, ID, VERSION, MintScope::User)
+            .expect("mint");
+        let member_uris: Vec<&str> = minted.members.iter().map(|m| m.as_str()).collect();
+        let cd = "http://synbiohub.org/user/alice/mysubmission/cd_BBa_B0015/1";
+        let seq = "http://synbiohub.org/user/alice/mysubmission/seq_BBa_B0015/1";
+        // The two objects re-home onto distinct, source-namespace-prefixed URIs
+        // rather than merging onto one `.../BBa_B0015/1`.
+        assert!(
+            member_uris.contains(&cd),
+            "CD prefixed with cd_: {member_uris:?}"
+        );
+        assert!(
+            member_uris.contains(&seq),
+            "Sequence prefixed with seq_: {member_uris:?}"
+        );
+        assert!(
+            !member_uris.iter().any(|u| u.ends_with("/BBa_B0015/1")),
+            "no unprefixed colliding URI remains: {member_uris:?}"
+        );
+        // Each keeps a single, correct type and a prefixed displayId literal.
+        assert!(has_iri(
+            &minted.triples,
+            cd,
+            vocab::RDF_TYPE,
+            "http://sbols.org/v2#ComponentDefinition"
+        ));
+        assert!(has_iri(
+            &minted.triples,
+            seq,
+            vocab::RDF_TYPE,
+            "http://sbols.org/v2#Sequence"
+        ));
+        assert!(has_literal(
+            &minted.triples,
+            cd,
+            vocab::SBOL2_DISPLAY_ID,
+            "cd_BBa_B0015"
+        ));
+        assert!(has_literal(
+            &minted.triples,
+            seq,
+            vocab::SBOL2_DISPLAY_ID,
+            "seq_BBa_B0015"
+        ));
+        // The CD's sequence reference re-homes onto the prefixed Sequence URI.
+        assert!(has_iri(
+            &minted.triples,
+            cd,
+            "http://sbols.org/v2#sequence",
+            seq
+        ));
+    }
+
+    fn has_iri(triples: &[Triple], subject: &str, predicate: &str, object: &str) -> bool {
+        triples.iter().any(|t| {
+            matches!(&t.subject, SubjectTerm::Iri(s) if s.as_str() == subject)
+                && t.predicate.as_str() == predicate
+                && matches!(&t.object, ObjectTerm::Iri(o) if o.as_str() == object)
+        })
+    }
+
+    fn has_literal(triples: &[Triple], subject: &str, predicate: &str, value: &str) -> bool {
+        triples.iter().any(|t| {
+            matches!(&t.subject, SubjectTerm::Iri(s) if s.as_str() == subject)
+                && t.predicate.as_str() == predicate
+                && matches!(&t.object, ObjectTerm::Literal { value: v, .. } if v == value)
+        })
+    }
+
+    #[test]
+    fn mints_root_collection_at_expected_uri() {
+        let minted = CollectionService::new()
+            .mint_uris(&submission(), OWNER, ID, VERSION, MintScope::User)
+            .expect("mint");
+
+        assert_eq!(
+            minted.collection_uri.as_str(),
+            "http://synbiohub.org/user/alice/mysubmission/mysubmission_collection/1"
+        );
+        assert_eq!(
+            minted.collection_persistent_identity.as_str(),
+            "http://synbiohub.org/user/alice/mysubmission/mysubmission_collection"
+        );
+    }
+
+    #[test]
+    fn mints_members_at_expected_uris() {
+        let minted = CollectionService::new()
+            .mint_uris(&submission(), OWNER, ID, VERSION, MintScope::User)
+            .expect("mint");
+
+        let member_uris: Vec<&str> = minted.members.iter().map(|m| m.as_str()).collect();
+        assert!(
+            member_uris.contains(&"http://synbiohub.org/user/alice/mysubmission/cd/1"),
+            "component minted under the submission namespace: {member_uris:?}"
+        );
+        assert!(
+            member_uris.contains(&"http://synbiohub.org/user/alice/mysubmission/seq/1"),
+            "sequence minted under the submission namespace: {member_uris:?}"
+        );
+        // Two top levels: the component and the sequence (the annotation is a
+        // child, not a top level).
+        assert_eq!(
+            member_uris.len(),
+            2,
+            "exactly the two top levels: {member_uris:?}"
+        );
+    }
+
+    #[test]
+    fn public_scope_drops_username_segment() {
+        let minted = CollectionService::new()
+            .mint_uris(&submission(), OWNER, ID, VERSION, MintScope::Public)
+            .expect("mint");
+
+        assert_eq!(
+            minted.collection_uri.as_str(),
+            "http://synbiohub.org/public/mysubmission/mysubmission_collection/1"
+        );
+        assert!(minted.members.iter().all(|m| m
+            .as_str()
+            .starts_with("http://synbiohub.org/public/mysubmission/")));
+    }
+
+    #[test]
+    fn stamps_membership_ownership_and_self_links() {
+        let minted = CollectionService::new()
+            .mint_uris(&submission(), OWNER, ID, VERSION, MintScope::User)
+            .expect("mint");
+
+        let collection = "http://synbiohub.org/user/alice/mysubmission/mysubmission_collection/1";
+        let component = "http://synbiohub.org/user/alice/mysubmission/cd/1";
+        let user_graph = "http://synbiohub.org/user/alice";
+
+        // Collection -> object membership edge.
+        assert!(
+            has_iri(&minted.triples, collection, vocab::SBOL2_MEMBER, component),
+            "collection members the component"
+        );
+        // Self-referential top-level marker on every top level.
+        assert!(
+            has_iri(&minted.triples, component, vocab::SBH_TOP_LEVEL, component),
+            "component carries its topLevel self-link"
+        );
+        assert!(
+            has_iri(
+                &minted.triples,
+                collection,
+                vocab::SBH_TOP_LEVEL,
+                collection
+            ),
+            "collection carries its topLevel self-link"
+        );
+        // Ownership stamp naming the owner's user graph.
+        assert!(
+            has_iri(&minted.triples, component, vocab::SBH_OWNED_BY, user_graph),
+            "component is owned by the user graph"
+        );
+        assert!(
+            has_iri(&minted.triples, collection, vocab::SBH_OWNED_BY, user_graph),
+            "collection is owned by the user graph"
+        );
+    }
+
+    #[test]
+    fn stamps_shared_persistent_identity_distinct_from_version() {
+        let minted = CollectionService::new()
+            .mint_uris(&submission(), OWNER, ID, VERSION, MintScope::User)
+            .expect("mint");
+
+        let component = "http://synbiohub.org/user/alice/mysubmission/cd/1";
+        let component_pi = "http://synbiohub.org/user/alice/mysubmission/cd";
+        assert!(
+            has_iri(
+                &minted.triples,
+                component,
+                vocab::SBOL2_PERSISTENT_IDENTITY,
+                component_pi
+            ),
+            "component has a persistent identity"
+        );
+        assert_ne!(
+            component, component_pi,
+            "the persistent identity is version-independent, distinct from the versioned URI"
+        );
+    }
+
+    #[test]
+    fn re_homes_children_by_prefix() {
+        let minted = CollectionService::new()
+            .mint_uris(&submission(), OWNER, ID, VERSION, MintScope::User)
+            .expect("mint");
+
+        let component = "http://synbiohub.org/user/alice/mysubmission/cd/1";
+        let child = "http://synbiohub.org/user/alice/mysubmission/cd/anno/1";
+        // The reference from the top level to its child is re-homed onto the new
+        // namespace, and the child's own triples move with it.
+        assert!(
+            has_iri(
+                &minted.triples,
+                component,
+                "http://sbols.org/v2#sequenceAnnotation",
+                child
+            ),
+            "the child reference is re-homed under the minted component"
+        );
+        assert!(
+            has_literal(&minted.triples, child, vocab::SBOL2_DISPLAY_ID, "anno"),
+            "the child's own triples are re-homed onto the new child URI"
+        );
+        // No triple retains the old example.org namespace.
+        assert!(
+            !minted
+                .triples
+                .iter()
+                .any(|t| matches!(&t.subject, SubjectTerm::Iri(s) if s.as_str().starts_with("http://example.org/"))),
+            "no subject retains the submitted namespace"
+        );
+    }
+
+    #[test]
+    fn stamps_collection_metadata_and_citations() {
+        let minted = CollectionService::new()
+            .mint_uris(&submission(), OWNER, ID, VERSION, MintScope::User)
+            .expect("mint");
+
+        let collection = "http://synbiohub.org/user/alice/mysubmission/mysubmission_collection/1";
+        assert!(has_literal(
+            &minted.triples,
+            collection,
+            vocab::DCTERMS_TITLE,
+            "My Submission"
+        ));
+        assert!(has_literal(
+            &minted.triples,
+            collection,
+            vocab::DCTERMS_DESCRIPTION,
+            "A test submission"
+        ));
+        assert!(has_literal(
+            &minted.triples,
+            collection,
+            vocab::DC_CREATOR,
+            "Alice Example"
+        ));
+        assert!(has_literal(
+            &minted.triples,
+            collection,
+            vocab::OBI_CITATION,
+            "12345678"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_rdf_format() {
+        let mut submission = submission();
+        submission.format = SerializationFormat::GenBank;
+        let err = CollectionService::new()
+            .mint_uris(&submission, OWNER, ID, VERSION, MintScope::User)
+            .expect_err("genbank is not an RDF submission format");
+        assert!(matches!(err, DomainError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn rejects_unparseable_document() {
+        let mut submission = submission();
+        submission.body = "this is not turtle {{{".to_owned();
+        let err = CollectionService::new()
+            .mint_uris(&submission, OWNER, ID, VERSION, MintScope::User)
+            .expect_err("garbage does not parse as SBOL");
+        assert!(matches!(err, DomainError::Parse(_)));
+    }
+}

@@ -7,6 +7,7 @@ pub mod db;
 pub mod graph;
 pub mod inspect;
 pub mod jobs;
+pub mod migrate;
 pub mod object;
 pub mod ontology;
 pub mod query;

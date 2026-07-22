@@ -352,7 +352,7 @@ pub async fn list_objects(
     }))
 }
 
-const SEARCH_DEFAULT_LIMIT: i64 = 50;
+pub(crate) const SEARCH_DEFAULT_LIMIT: i64 = 50;
 const SEARCH_MAX_LIMIT: i64 = 1000;
 
 fn default_search_limit() -> i64 {
@@ -656,11 +656,25 @@ async fn run_sparql(
     format: Option<ResultFormat>,
     default_graph: Option<String>,
 ) -> Result<axum::response::Response, ApiError> {
-    let options = SparqlOptions {
-        default_graph,
-        ..SparqlOptions::default()
-    };
-    let outcome = state.sparql.execute(query, format, &options).await?;
+    // SBOLExplorer stand-in: SynBioHub smuggles ranked search, `/similar`, and
+    // sequence search through comment markers and a fixed `search.sparql` body
+    // that a real SPARQL engine would evaluate literally. When the query is one
+    // of these shapes and the result is a JSON solution set, answer it from the
+    // facade's search rather than the triplestore. Every other query, and any
+    // non-JSON result format, falls through to generic evaluation.
+    if format.is_none_or(ResultFormat::is_solution_format) {
+        if let Some(explorer) = sbol_db_sparql::recognize_explorer(query) {
+            return crate::explorer::route(&state, explorer).await;
+        }
+    }
+
+    // The public `/sparql` endpoint imposes no authorization ceiling; the
+    // client's `default-graph-uri` is honored under the union default graph.
+    let options = SparqlOptions::default();
+    let outcome = state
+        .sparql
+        .execute(query, format, default_graph.as_deref(), &options)
+        .await?;
     let mut response =
         axum::response::Response::builder().header(CONTENT_TYPE, outcome.payload.content_type);
     if outcome.payload.truncated {

@@ -1,0 +1,12 @@
+{
+  "name": "synbiohub-ui-diff",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Differential harness: drives the SynBioHub UI against sbol-db and diffs backend responses against classic SynBioHub",
+  "scripts": {
+    "crawl": "node crawl.cjs"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}

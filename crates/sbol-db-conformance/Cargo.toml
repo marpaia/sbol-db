@@ -8,6 +8,18 @@ repository.workspace = true
 description = "Backend-neutral conformance scenarios every sbol-db-storage implementation must pass."
 
 [dependencies]
+async-trait.workspace = true
 sbol-db-core.workspace = true
 sbol-db-storage.workspace = true
+sbol-db-sparql.workspace = true
+sbol-db-app.workspace = true
+sbol-db-server = { workspace = true, default-features = false }
+sbol-db-search = { workspace = true, features = ["text-index", "align"] }
+sbol.workspace = true
+sbol-genbank.workspace = true
+sbol-fasta.workspace = true
+zip.workspace = true
 serde_json.workspace = true
+sha1.workspace = true
+hex.workspace = true
+tempfile = "3"

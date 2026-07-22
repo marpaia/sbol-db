@@ -17,13 +17,14 @@ use sbol_db_core::{
 use sbol_db_derive::{build_import_plan, compose_merged_input, to_rdf_format};
 use sbol_db_rdf::{rdf_graph_to_triples, GRAPH_IRI_PREFIX};
 use sbol_db_storage::{
-    AccelSolutions, AcceleratedQuery, BatchSequenceMatch, ClassCount, CorpusCounts, GraphFilter,
-    GraphOverview, GraphStore, GraphTriplesPage, GraphWriteMode, IdGraphFilter, IdQuad,
-    ImportInput, ImportOverwrite, LabStore, ListGraphsFilter, ListObjectsFilter, NeighborhoodStore,
-    ObjectStore, OntologyLoadReport, OntologyRecord, OntologyStore, OntologyTermRecord,
-    PatternObject, PatternSubject, SbolStore, SequenceMatch, SequenceSearchOptions,
-    SequenceSearchStore, TermId, TermKey, TermValue, TextSearchQuery, TextSearchStore,
-    TripleChange, TripleSource, TripleWriter, UpdateOutcome,
+    distinct_graph_iris, distinct_object_iris, AccelSolutions, AcceleratedQuery, AclStore,
+    BatchSequenceMatch, ClassCount, CorpusCounts, GraphFilter, GraphOverview, GraphStore,
+    GraphTriplesPage, GraphWriteMode, IdGraphFilter, IdQuad, ImportInput, ImportOverwrite,
+    LabStore, ListGraphsFilter, ListObjectsFilter, NeighborhoodStore, ObjectStore,
+    OntologyLoadReport, OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject,
+    PatternSubject, SbolStore, SequenceMatch, SequenceSearchOptions, SequenceSearchStore, TermId,
+    TermKey, TermValue, TextSearchQuery, TextSearchStore, TripleChange, TripleSource, TripleWriter,
+    UpdateOutcome, SBH_CAN_VIEW, SBH_OWNED_BY,
 };
 
 use crate::codec::Term;
@@ -227,10 +228,16 @@ impl RocksdbStore {
 
             let mut batch = WriteBatch::default();
             let mut seen = HashSet::new();
-            if mode == GraphWriteMode::Replace {
-                this.triples.stage_clear_graph(&mut batch, Some(&graph))?;
-            }
-            let inserted = this.triples.stage_insert(&mut batch, &mut seen, &triples)?;
+            let inserted = if mode == GraphWriteMode::Replace {
+                // Replace overwrites the graph atomically: delete only the triples
+                // the new contents drop and insert the rest. A blanket clear plus
+                // insert would lose any triple common to both, whose staged delete
+                // the insert's already-present guard cannot see within one batch.
+                this.triples
+                    .stage_replace_graph(&mut batch, &mut seen, &graph, &triples)?
+            } else {
+                this.triples.stage_insert(&mut batch, &mut seen, &triples)?
+            };
             // The graph's post-write triples: just the posted ones for Replace, or
             // the existing committed triples plus the posted ones for Merge.
             let post = if mode == GraphWriteMode::Replace {
@@ -651,6 +658,26 @@ impl SequenceSearchStore for RocksdbStore {
         let patterns = patterns.to_vec();
         blocking(move || sequences.search_many(&patterns, options)).await
     }
+
+    async fn align_candidates(&self, query: &str) -> Result<Vec<(String, String)>, DomainError> {
+        let sequences = self.sequences.clone();
+        let query = query.to_owned();
+        blocking(move || sequences.align_candidates(&query)).await
+    }
+
+    async fn sequences_by_iris(
+        &self,
+        iris: &[String],
+    ) -> Result<Vec<(String, String)>, DomainError> {
+        let sequences = self.sequences.clone();
+        let iris = iris.to_vec();
+        blocking(move || sequences.sequences_by_iris(&iris)).await
+    }
+
+    async fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
+        let sequences = self.sequences.clone();
+        blocking(move || sequences.all_nucleotide_sequences()).await
+    }
 }
 
 #[async_trait]
@@ -700,6 +727,29 @@ impl LabStore for RocksdbStore {
     ) -> Result<Option<GraphTriplesPage>, DomainError> {
         let lab = self.lab.clone();
         blocking(move || lab.graph_triples(id, limit, offset)).await
+    }
+}
+
+#[async_trait]
+impl AclStore for RocksdbStore {
+    async fn owned_graphs(&self, owner_iri: &str) -> Result<Vec<String>, DomainError> {
+        let triples = self.triples.clone();
+        let object = PatternObject::Iri(owner_iri.to_owned());
+        let scanned = blocking(move || {
+            triples.scan_pattern(None, Some(SBH_OWNED_BY), Some(&object), None, i64::MAX)
+        })
+        .await?;
+        Ok(distinct_graph_iris(scanned))
+    }
+
+    async fn viewable_objects(&self, owner_iri: &str) -> Result<Vec<String>, DomainError> {
+        let triples = self.triples.clone();
+        let subject = PatternSubject::Iri(owner_iri.to_owned());
+        let scanned = blocking(move || {
+            triples.scan_pattern(Some(&subject), Some(SBH_CAN_VIEW), None, None, i64::MAX)
+        })
+        .await?;
+        Ok(distinct_object_iris(scanned))
     }
 }
 

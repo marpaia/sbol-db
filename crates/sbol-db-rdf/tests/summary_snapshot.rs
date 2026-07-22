@@ -2,7 +2,7 @@
 //! `triples_to_json` formatting changes, the snapshot diff makes the change
 //! explicit.
 
-use sbol::{Document, RdfFormat};
+use sbol::v3::{Document, RdfFormat};
 use sbol_db_rdf::document_to_summaries;
 
 const FIXTURE: &str = include_str!("../../sbol-db-postgres/tests/fixtures/simple_component.ttl");

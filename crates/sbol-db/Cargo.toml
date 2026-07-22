@@ -25,6 +25,7 @@ sbol-db-storage.workspace = true
 sbol-db-rdf.workspace = true
 sbol-db-postgres.workspace = true
 sbol-db-backend.workspace = true
+sbol-db-app.workspace = true
 sbol-db-sparql.workspace = true
 sbol-db-server.workspace = true
 sbol-db-jobs.workspace = true
@@ -32,7 +33,9 @@ tokio-util = { version = "0.7", features = ["rt"] }
 chrono.workspace = true
 sbol.workspace = true
 sbol-rdf.workspace = true
-sqlx.workspace = true
+sqlx = { workspace = true, features = ["sqlite"] }
+oxrdf.workspace = true
+oxrdfio.workspace = true
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true
@@ -45,3 +48,5 @@ axum.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
+tempfile = "3"
+sha1.workspace = true

@@ -1,0 +1,11 @@
+{
+  "instanceName": "Synthetic SynBioHub",
+  "instanceUrl": "http://synbiohub.org/",
+  "databasePrefix": "http://synbiohub.org/",
+  "passwordSalt": "synthetic_salt",
+  "allowPublicSignup": true,
+  "triplestore": {
+    "sparqlEndpoint": "http://virtuoso:8890/sparql",
+    "graphStoreEndpoint": "http://virtuoso:8890/sparql-graph-crud-auth/"
+  }
+}

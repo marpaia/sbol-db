@@ -1,0 +1,35 @@
+[package]
+name = "sbol-db-app"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Backend-neutral application facade for sbol-db: composes the storage trait objects and owns the identity-aware subsystems (ACL scoping) shared by every HTTP adapter."
+
+[dependencies]
+sbol-db-core.workspace = true
+sbol-db-storage.workspace = true
+sbol-db-sparql.workspace = true
+sbol-db-backend.workspace = true
+sbol-db-rdf.workspace = true
+sbol-db-search = { workspace = true, features = ["text-index", "align"] }
+sbol = { workspace = true, features = ["v2"] }
+sbol-rdf.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+async-trait.workspace = true
+thiserror.workspace = true
+argon2.workspace = true
+sha1.workspace = true
+sha3.workspace = true
+hex.workspace = true
+uuid.workspace = true
+flate2.workspace = true
+infer.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile = "3"

@@ -11,6 +11,8 @@ members = [
     "crates/sbol-db-backend",
     "crates/sbol-db-conformance",
     "crates/sbol-db-sparql",
+    "crates/sbol-db-search",
+    "crates/sbol-db-app",
     "crates/sbol-db-jobs",
     "crates/sbol-db-ui",
     "crates/sbol-db-server",
@@ -30,6 +32,10 @@ sbol-ontology = "0.2.0"
 sbol-genbank = "0.2.0"
 sbol-fasta = "0.2.0"
 
+# COMBINE (OMEX) archive assembly. `Stored` entries need no compression
+# backend, so default features (which pull flate2/zstd/lzma) are off.
+zip = { version = "4", default-features = false }
+
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio-rustls",
     "postgres",
@@ -40,10 +46,10 @@ sqlx = { version = "0.8", default-features = false, features = [
     "migrate",
 ] }
 
-axum = { version = "0.7", default-features = false, features = ["http1", "json", "query", "tokio", "matched-path"] }
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "query", "tokio", "matched-path", "multipart"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "signal"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "timeout", "limit"] }
+tower-http = { version = "0.6", features = ["trace", "timeout", "limit", "cors"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -61,7 +67,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 sha3 = "0.10"
+sha1 = "0.10"
+argon2 = "0.5"
 hex = "0.4"
+flate2 = "1"
+infer = "0.16"
 base64 = "0.22"
 url = "2"
 
@@ -72,11 +82,18 @@ spareval = "0.2.6"
 spargebra = "0.4.6"
 sparesults = "0.3.3"
 oxrdf = "0.3.3"
+oxrdfio = "0.2.5"
 oxiri = "0.2.11"
 
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
 
 rocksdb = { version = "0.22", default-features = false, features = ["snappy"] }
+
+tantivy = "0.22"
+
+# Pairwise alignment (banded Smith-Waterman) behind sbol-db-search's `align`
+# feature, so rust-bio never enters the storage backends' builds.
+bio = "4"
 
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.16", default-features = false }
@@ -91,6 +108,8 @@ sbol-db-rocksdb = { path = "crates/sbol-db-rocksdb", version = "0.1.1" }
 sbol-db-backend = { path = "crates/sbol-db-backend", version = "0.1.1" }
 sbol-db-conformance = { path = "crates/sbol-db-conformance", version = "0.1.1" }
 sbol-db-sparql = { path = "crates/sbol-db-sparql", version = "0.1.1" }
+sbol-db-search = { path = "crates/sbol-db-search", version = "0.1.1" }
+sbol-db-app = { path = "crates/sbol-db-app", version = "0.1.1" }
 sbol-db-jobs = { path = "crates/sbol-db-jobs", version = "0.1.1" }
 sbol-db-ui = { path = "crates/sbol-db-ui", version = "0.1.1" }
 sbol-db-server = { path = "crates/sbol-db-server", version = "0.1.1", default-features = false }

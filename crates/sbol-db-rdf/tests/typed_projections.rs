@@ -1,4 +1,4 @@
-use sbol::{Document, RdfFormat};
+use sbol::v3::{Document, RdfFormat};
 use sbol_db_core::SequenceAlphabet;
 use sbol_db_rdf::document_to_projections;
 

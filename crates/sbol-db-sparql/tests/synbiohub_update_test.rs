@@ -13,7 +13,7 @@ use std::time::Duration;
 use sbol_db_core::IriString;
 use sbol_db_postgres::{connect, run_migrations, SbolObjectService};
 use sbol_db_rdf::rdf_graph_to_triples;
-use sbol_db_sparql::{ResultFormat, SparqlEngine, SparqlOptions, SparqlUpdateEngine};
+use sbol_db_sparql::{GraphScope, ResultFormat, SparqlEngine, SparqlOptions, SparqlUpdateEngine};
 use tokio::sync::{Mutex, MutexGuard};
 
 const SBOL2: &str = include_str!("synbiohub_sbol2.ttl");
@@ -72,13 +72,13 @@ fn opts() -> SparqlOptions {
         timeout: Duration::from_secs(30),
         max_rows: 100_000,
         max_query_size: 64 * 1024,
-        default_graph: None,
+        authorized_graphs: GraphScope::Union,
     }
 }
 
 async fn select(read: &SparqlEngine, query: &str) -> String {
     let outcome = read
-        .execute(query, Some(ResultFormat::Json), &opts())
+        .execute(query, Some(ResultFormat::Json), None, &opts())
         .await
         .expect("select");
     String::from_utf8(outcome.payload.body).expect("utf8")

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use sbol_db_core::SerializationFormat;
 use sbol_db_postgres::{connect, run_migrations, SbolObjectService};
-use sbol_db_sparql::{ResultFormat, SparqlEngine, SparqlError, SparqlOptions};
+use sbol_db_sparql::{GraphScope, ResultFormat, SparqlEngine, SparqlError, SparqlOptions};
 use sbol_db_storage::ImportInput;
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -67,7 +67,7 @@ fn long_options() -> SparqlOptions {
         timeout: Duration::from_secs(30),
         max_rows: 100_000,
         max_query_size: 64 * 1024,
-        default_graph: None,
+        authorized_graphs: GraphScope::Union,
     }
 }
 
@@ -79,7 +79,7 @@ async fn select_finds_components() {
                  SELECT ?s WHERE { ?s a sbol:Component }";
     let outcome = h
         .engine
-        .execute(query, Some(ResultFormat::Json), &long_options())
+        .execute(query, Some(ResultFormat::Json), None, &long_options())
         .await
         .expect("execute");
     let body = String::from_utf8(outcome.payload.body).expect("utf8");
@@ -97,7 +97,7 @@ async fn select_literal_filter_resolves_subcomponent() {
                  SELECT ?s WHERE { ?s sbol:displayId \"SubComponent1\" }";
     let outcome = h
         .engine
-        .execute(query, Some(ResultFormat::Csv), &long_options())
+        .execute(query, Some(ResultFormat::Csv), None, &long_options())
         .await
         .expect("execute");
     let body = String::from_utf8(outcome.payload.body).expect("utf8");
@@ -115,7 +115,7 @@ async fn ask_true_when_features_exist() {
                  ASK { ?s sbol:hasFeature ?f }";
     let outcome = h
         .engine
-        .execute(query, Some(ResultFormat::Json), &long_options())
+        .execute(query, Some(ResultFormat::Json), None, &long_options())
         .await
         .expect("execute");
     let body = String::from_utf8(outcome.payload.body).expect("utf8");
@@ -134,7 +134,7 @@ async fn construct_round_trips_through_turtle() {
                  WHERE    { ?s sbol:displayId ?d }";
     let outcome = h
         .engine
-        .execute(query, Some(ResultFormat::Turtle), &long_options())
+        .execute(query, Some(ResultFormat::Turtle), None, &long_options())
         .await
         .expect("execute");
     let body = String::from_utf8(outcome.payload.body).expect("utf8");
@@ -153,7 +153,7 @@ async fn describe_i13504_emits_fanout() {
     let query = format!("DESCRIBE <{I13504}>", I13504 = I13504,);
     let outcome = h
         .engine
-        .execute(&query, Some(ResultFormat::NTriples), &long_options())
+        .execute(&query, Some(ResultFormat::NTriples), None, &long_options())
         .await
         .expect("execute");
     let body = String::from_utf8(outcome.payload.body).expect("utf8");
@@ -173,7 +173,7 @@ async fn named_graph_scopes_results_to_one_document() {
     );
     let outcome = h
         .engine
-        .execute(&query, Some(ResultFormat::Json), &long_options())
+        .execute(&query, Some(ResultFormat::Json), None, &long_options())
         .await
         .expect("execute");
     let body = String::from_utf8(outcome.payload.body).expect("utf8");
@@ -192,6 +192,7 @@ async fn update_strings_are_rejected() {
         .execute(
             "INSERT DATA { <http://example.com/a> <http://example.com/b> <http://example.com/c> }",
             Some(ResultFormat::Json),
+            None,
             &long_options(),
         )
         .await;
@@ -207,7 +208,7 @@ async fn unrelated_parse_errors_surface_as_parse() {
     let h = fresh_harness().await;
     let result = h
         .engine
-        .execute("not a valid query at all", None, &long_options())
+        .execute("not a valid query at all", None, None, &long_options())
         .await;
     assert!(
         matches!(result, Err(SparqlError::Parse(_))),
@@ -225,6 +226,7 @@ async fn unsupported_format_for_query_form_is_rejected() {
         .execute(
             "SELECT * WHERE { ?s ?p ?o }",
             Some(ResultFormat::Turtle),
+            None,
             &long_options(),
         )
         .await;
@@ -242,17 +244,17 @@ async fn format_negotiation_changes_body_shape() {
                  SELECT ?s WHERE { ?s a sbol:Component }";
     let json = h
         .engine
-        .execute(query, Some(ResultFormat::Json), &long_options())
+        .execute(query, Some(ResultFormat::Json), None, &long_options())
         .await
         .expect("json");
     let csv = h
         .engine
-        .execute(query, Some(ResultFormat::Csv), &long_options())
+        .execute(query, Some(ResultFormat::Csv), None, &long_options())
         .await
         .expect("csv");
     let tsv = h
         .engine
-        .execute(query, Some(ResultFormat::Tsv), &long_options())
+        .execute(query, Some(ResultFormat::Tsv), None, &long_options())
         .await
         .expect("tsv");
     assert_eq!(json.payload.content_type, "application/sparql-results+json");

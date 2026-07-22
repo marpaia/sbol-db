@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
-use sbol::Document;
+use sbol::v3::Document;
 use sbol_db_core::kmer::{
     canonical_kmers, encode_kmer, reverse_complement_string, KmerStrand, KMER_K,
 };

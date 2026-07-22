@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:sbol="http://sbols.org/v2#" xmlns:dcterms="http://purl.org/dc/terms/">
+  <sbol:ComponentDefinition rdf:about="http://examples.org/pSmoke/1">
+    <sbol:displayId>pSmoke</sbol:displayId><sbol:persistentIdentity rdf:resource="http://examples.org/pSmoke"/><sbol:version>1</sbol:version>
+    <dcterms:title>pSmoke promoter</dcterms:title><dcterms:description>a smoke-test promoter</dcterms:description>
+    <sbol:type rdf:resource="http://www.biopax.org/release/biopax-level3.owl#DnaRegion"/><sbol:role rdf:resource="http://identifiers.org/so/SO:0000167"/>
+    <sbol:sequence rdf:resource="http://examples.org/pSmoke_seq/1"/>
+  </sbol:ComponentDefinition>
+  <sbol:Sequence rdf:about="http://examples.org/pSmoke_seq/1">
+    <sbol:displayId>pSmoke_seq</sbol:displayId><sbol:persistentIdentity rdf:resource="http://examples.org/pSmoke_seq"/><sbol:version>1</sbol:version>
+    <sbol:elements>ttgacggctagctcagtcctaggtacagtgctagc</sbol:elements><sbol:encoding rdf:resource="http://www.chem.qmul.ac.uk/iubmb/misc/naseq.html"/>
+  </sbol:Sequence>
+</rdf:RDF>

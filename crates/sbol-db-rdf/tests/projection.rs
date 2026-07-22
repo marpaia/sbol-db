@@ -1,4 +1,4 @@
-use sbol::{Document, RdfFormat};
+use sbol::v3::{Document, RdfFormat};
 use sbol_db_core::{IriString, ObjectTerm};
 use sbol_db_rdf::{content_hash, document_to_summaries, document_to_triples, GRAPH_IRI_PREFIX};
 

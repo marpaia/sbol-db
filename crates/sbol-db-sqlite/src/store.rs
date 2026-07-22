@@ -14,12 +14,13 @@ use sbol_db_core::{
 use sbol_db_derive::{build_import_plan, compose_merged_input, to_rdf_format};
 use sbol_db_rdf::{rdf_graph_to_triples, GRAPH_IRI_PREFIX};
 use sbol_db_storage::{
-    AccelSolutions, AcceleratedQuery, BatchSequenceMatch, ClassCount, CorpusCounts, GraphFilter,
-    GraphOverview, GraphStore, GraphTriplesPage, GraphWriteMode, ImportInput, ImportOverwrite,
-    LabStore, ListGraphsFilter, ListObjectsFilter, NeighborhoodStore, ObjectStore,
-    OntologyLoadReport, OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject,
-    PatternSubject, SbolStore, SequenceMatch, SequenceSearchOptions, SequenceSearchStore,
-    TextSearchQuery, TextSearchStore, TripleChange, TripleSource, TripleWriter, UpdateOutcome,
+    distinct_graph_iris, distinct_object_iris, AccelSolutions, AcceleratedQuery, AclStore,
+    BatchSequenceMatch, ClassCount, CorpusCounts, GraphFilter, GraphOverview, GraphStore,
+    GraphTriplesPage, GraphWriteMode, ImportInput, ImportOverwrite, LabStore, ListGraphsFilter,
+    ListObjectsFilter, NeighborhoodStore, ObjectStore, OntologyLoadReport, OntologyRecord,
+    OntologyStore, OntologyTermRecord, PatternObject, PatternSubject, SbolStore, SequenceMatch,
+    SequenceSearchOptions, SequenceSearchStore, TextSearchQuery, TextSearchStore, TripleChange,
+    TripleSource, TripleWriter, UpdateOutcome, SBH_CAN_VIEW, SBH_OWNED_BY,
 };
 use tokio::runtime::Handle;
 
@@ -517,6 +518,21 @@ impl SequenceSearchStore for SqliteStore {
     ) -> Result<Vec<BatchSequenceMatch>, DomainError> {
         self.sequences.search_many(patterns, options).await
     }
+
+    async fn align_candidates(&self, query: &str) -> Result<Vec<(String, String)>, DomainError> {
+        self.sequences.align_candidates(query).await
+    }
+
+    async fn sequences_by_iris(
+        &self,
+        iris: &[String],
+    ) -> Result<Vec<(String, String)>, DomainError> {
+        self.sequences.sequences_by_iris(iris).await
+    }
+
+    async fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
+        self.sequences.all_nucleotide_sequences().await
+    }
 }
 
 #[async_trait]
@@ -557,6 +573,27 @@ impl LabStore for SqliteStore {
         offset: i64,
     ) -> Result<Option<GraphTriplesPage>, DomainError> {
         self.lab.graph_triples(id, limit, offset).await
+    }
+}
+
+#[async_trait]
+impl AclStore for SqliteStore {
+    async fn owned_graphs(&self, owner_iri: &str) -> Result<Vec<String>, DomainError> {
+        let object = PatternObject::Iri(owner_iri.to_owned());
+        let triples = self
+            .triples
+            .scan_pattern(None, Some(SBH_OWNED_BY), Some(&object), None, i64::MAX)
+            .await?;
+        Ok(distinct_graph_iris(triples))
+    }
+
+    async fn viewable_objects(&self, owner_iri: &str) -> Result<Vec<String>, DomainError> {
+        let subject = PatternSubject::Iri(owner_iri.to_owned());
+        let triples = self
+            .triples
+            .scan_pattern(Some(&subject), Some(SBH_CAN_VIEW), None, None, i64::MAX)
+            .await?;
+        Ok(distinct_object_iris(triples))
     }
 }
 
