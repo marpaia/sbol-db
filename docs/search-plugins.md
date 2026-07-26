@@ -25,6 +25,7 @@ plugins at startup.
 | --- | --- |
 | `sbol-db-search-sdk` | Stable object-safe contracts and wire-neutral types for strategies, embeddings, candidate stages, scoped services, and vector lifecycle. No storage, model, HTTP, or vector-engine dependencies. |
 | `sbol-db-search` | Runtime validation, exact algorithms, scope-preserving vector router, reference embedding strategy, and index-maintenance coordinator. |
+| `sbol-db-embedding-fastembed` | Local FastEmbed/ONNX provider with immutable profile identity, query/document prefixes, bounded blocking execution, and normalization validation. |
 | `sbol-db-vector-flat` | Deterministic exact in-memory scan. Development backend and recall oracle for approximate indexes. |
 | `sbol-db-vector-qdrant` | Persistent adapter for self-hosted Qdrant and Qdrant Cloud. |
 | `sbol-db-search-eval` | Versioned relevance fixtures, ranking metrics, paired comparisons, and rollout gates. |
@@ -168,6 +169,14 @@ Model download/cache policy, license metadata, text projection revision, and
 query/document prefixes are part of profile configuration and provenance, not
 implicit behavior inside a search strategy.
 
+The included `sbol-db-embedding-fastembed` adapter takes an already initialized
+`fastembed::TextEmbedding`, keeping weight acquisition out of request
+execution. Its default `dynamic-ort` feature avoids a build-time runtime
+download; deployments may instead disable defaults and enable `download-ort`.
+`online-models` enables Hugging Face retrieval through rustls. In every case,
+the profile's `revision` must name the immutable weight commit or digest that
+was loaded; floating `main`/`latest` revisions are rejected.
+
 ## Vector backend selection
 
 The logical index router lets deployment topology choose the engine:
@@ -249,19 +258,18 @@ Implemented:
 - exact-flat backend and Qdrant self-hosted/cloud adapter;
 - ACL-bound logical vector router and authoritative hydration;
 - dense reference embedding strategy;
+- local FastEmbed/ONNX provider adapter;
 - generation rebuild/activation/rollback coordinator; and
 - offline relevance metrics and paired quality gate.
 
 Next:
 
-1. implement a local `fastembed` provider plus deterministic model-cache and
-   revision policy;
-2. project canonical SBOL search documents and enqueue durable incremental or
+1. project canonical SBOL search documents and enqueue durable incremental or
    full rebuild jobs;
-3. expose backend/profile/strategy assembly through typed server
+2. expose backend/profile/strategy assembly through typed server
    configuration;
-4. run live Qdrant lifecycle integration tests in CI;
-5. benchmark Qdrant, pgvector, Qdrant Edge (when stable), and LanceDB against
+3. run live Qdrant lifecycle integration tests in CI;
+4. benchmark Qdrant, pgvector, Qdrant Edge (when stable), and LanceDB against
    exact-flat; and
-6. add hybrid fusion/reranking, then the separately bounded agentic tool
+5. add hybrid fusion/reranking, then the separately bounded agentic tool
    broker and trace model.
