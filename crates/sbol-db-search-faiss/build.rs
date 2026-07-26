@@ -1,3 +1,4 @@
+#[cfg(feature = "native")]
 use std::env;
 #[cfg(feature = "native")]
 use std::fs;
@@ -9,10 +10,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=FAISS_DIR");
     println!("cargo:rerun-if-env-changed=FAISS_INCLUDE_DIR");
     println!("cargo:rerun-if-env-changed=FAISS_LIB_DIR");
-    if env::var_os("CARGO_FEATURE_NATIVE").is_none() {
-        println!("cargo:rustc-env=SBOL_DB_FAISS_VERSION=disabled");
-        return;
-    }
+    #[cfg(not(feature = "native"))]
+    println!("cargo:rustc-env=SBOL_DB_FAISS_VERSION=disabled");
 
     #[cfg(feature = "native")]
     configure_native();
