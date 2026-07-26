@@ -59,7 +59,7 @@ use std::sync::{Arc, OnceLock};
 
 use sbol_db_backend::Backend;
 use sbol_db_search::ranked_text::RankedTextIndex;
-use sbol_db_search::SearchRuntime;
+use sbol_db_search::{SearchRuntime, VectorRouter};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
     AclStore, BlobStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore,
@@ -123,6 +123,9 @@ pub struct AppServices {
     /// the current text index and cluster store; an embedding/vector deployment
     /// can replace it with [`with_search_runtime`](Self::with_search_runtime).
     search_runtime: Arc<OnceLock<Arc<SearchRuntime>>>,
+    /// Optional logical-index router used by embedding and hybrid strategies.
+    /// The request path wraps it in the caller's graph authorization scope.
+    search_vectors: Option<Arc<VectorRouter>>,
     /// The Web of Registries HTTP client backing federation. Defaults to the
     /// SSRF-guarded [`HttpWebOfRegistriesClient`]; a test swaps in a stub with
     /// [`with_federation_client`](Self::with_federation_client). The
@@ -296,6 +299,15 @@ impl AppServices {
         self
     }
 
+    /// Install vector-index bindings for structured strategies. This does not
+    /// alter the compatibility search endpoints or register a strategy by
+    /// itself; deployments explicitly assemble both the strategy runtime and
+    /// this router.
+    pub fn with_vector_router(mut self, router: Arc<VectorRouter>) -> Self {
+        self.search_vectors = Some(router);
+        self
+    }
+
     /// Replace the default temp-directory blob store with a caller-provided one,
     /// typically a filesystem store rooted at a configured durable path.
     pub fn with_blobs(mut self, blobs: Arc<dyn BlobStore>) -> Self {
@@ -349,6 +361,7 @@ impl AppServices {
             auth,
             text_search,
             search_runtime,
+            search_vectors: None,
             federation_client,
             plugin_client,
             expose,

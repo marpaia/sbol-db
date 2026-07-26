@@ -20,13 +20,14 @@ use sbol_db_core::DomainError;
 use sbol_db_search::ranked_text::{cluster_map, GraphFilter, Hit, RankedTextIndex};
 use sbol_db_search::SearchRuntime;
 use sbol_db_search_sdk::{
-    DataEgress, DocumentId, FilterCapability, FilterKind, PaginationCapability, ScoreKind,
-    SearchContext, SearchError, SearchHit, SearchInput, SearchInputKind, SearchPage, SearchRequest,
-    SearchScope, SearchStrategy, StrategyCapabilities, StrategyDescriptor, StrategyRef,
-    StrategyRegistry, StrategyRequirements, Total, TotalCapability,
+    DataEgress, DocumentId, FilterCapability, FilterKind, HydratedDocument, PaginationCapability,
+    ScopedDocumentHydrator, ScoreKind, SearchContext, SearchError, SearchHit, SearchInput,
+    SearchInputKind, SearchPage, SearchRequest, SearchScope, SearchStrategy, StrategyCapabilities,
+    StrategyDescriptor, StrategyRef, StrategyRegistry, StrategyRequirements, Total,
+    TotalCapability,
 };
 use sbol_db_sparql::GraphScope;
-use sbol_db_storage::ClusterStore;
+use sbol_db_storage::{ClusterStore, SbolStore};
 
 use crate::AppServices;
 
@@ -37,6 +38,70 @@ const DEFAULT_LIMIT: usize = 50;
 /// window is taken. Matches the index's own fetch cap so a facet filter never
 /// silently drops in-scope hits below the window.
 const RANKED_FETCH: usize = 10_000;
+
+struct StoreDocumentHydrator {
+    store: Arc<dyn SbolStore>,
+    scope: SearchScope,
+}
+
+#[async_trait]
+impl ScopedDocumentHydrator for StoreDocumentHydrator {
+    async fn hydrate(
+        &self,
+        document_ids: Vec<DocumentId>,
+    ) -> Result<Vec<HydratedDocument>, SearchError> {
+        let iris = document_ids
+            .iter()
+            .map(|document_id| document_id.0.as_str())
+            .collect::<Vec<_>>();
+        let records = self
+            .store
+            .get_objects_by_iris(&iris)
+            .await
+            .map_err(|error| SearchError::Backend(error.to_string()))?;
+        let mut documents = Vec::with_capacity(records.len());
+        for record in records {
+            let graph = match record.graph_id {
+                Some(graph_id) => self
+                    .store
+                    .get_graph(graph_id)
+                    .await
+                    .map_err(|error| SearchError::Backend(error.to_string()))?
+                    .and_then(|graph| graph.document_iri.map(|iri| iri.into_inner())),
+                None => None,
+            };
+            if !scope_contains(&self.scope, graph.as_deref()) {
+                continue;
+            }
+            let mut object_types = Vec::with_capacity(record.types.len() + 1);
+            object_types.push(record.sbol_class);
+            for object_type in record.types {
+                if !object_types.contains(&object_type) {
+                    object_types.push(object_type);
+                }
+            }
+            let uri = record.iri.into_inner();
+            documents.push(HydratedDocument {
+                document_id: DocumentId(uri.clone()),
+                uri,
+                graph,
+                display_id: record.display_id,
+                version: None,
+                name: record.name,
+                description: record.description,
+                object_types,
+            });
+        }
+        Ok(documents)
+    }
+}
+
+fn scope_contains(scope: &SearchScope, graph: Option<&str>) -> bool {
+    match scope {
+        SearchScope::Union => true,
+        SearchScope::Only(graphs) => graph.is_some_and(|graph| graphs.iter().any(|g| g == graph)),
+    }
+}
 
 /// Which timestamp a date-range facet constrains.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -291,9 +356,16 @@ impl AppServices {
             GraphScope::Union => SearchScope::Union,
             GraphScope::Only(graphs) => SearchScope::Only(graphs),
         };
-        self.search_runtime()
-            .search(SearchContext::new(scope, budget), request)
-            .await
+        let mut ctx = SearchContext::new(scope.clone(), budget).with_documents(Arc::new(
+            StoreDocumentHydrator {
+                store: self.store.clone(),
+                scope: scope.clone(),
+            },
+        ));
+        if let Some(router) = &self.search_vectors {
+            ctx = ctx.with_vectors(router.scoped(scope));
+        }
+        self.search_runtime().search(ctx, request).await
     }
 
     /// Rank the in-scope objects matching the free-text term, narrowed by the
