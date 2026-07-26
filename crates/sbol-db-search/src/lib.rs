@@ -22,6 +22,7 @@
 pub mod align;
 pub mod cluster;
 pub mod keywords;
+pub mod maintenance;
 pub mod minhash;
 pub mod pagerank;
 pub mod runtime;
@@ -31,6 +32,7 @@ pub mod ranked_text;
 
 pub use align::{AlignMode, AlignOptions, Alignment};
 pub use cluster::ClusterId;
+pub use maintenance::{IndexBuildReport, VectorDocument, VectorIndexMaintainer, VectorRebuildSpec};
 pub use minhash::{band_hashes, sketch, Signature, SketchParams};
 pub use runtime::SearchRuntime;
 

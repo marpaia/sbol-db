@@ -3652,7 +3652,9 @@ dependencies = [
  "bio",
  "sbol-db-core",
  "sbol-db-search-sdk",
+ "sbol-db-vector-flat",
  "serde",
+ "serde_json",
  "tantivy",
  "tokio",
 ]

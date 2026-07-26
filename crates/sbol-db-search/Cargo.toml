@@ -11,12 +11,14 @@ description = "Pure ranked-search algorithms for sbol-db: PageRank and the top-l
 sbol-db-core.workspace = true
 sbol-db-search-sdk.workspace = true
 serde = { workspace = true }
+serde_json.workspace = true
 tantivy = { workspace = true, optional = true }
 bio = { workspace = true, optional = true }
 
 [dev-dependencies]
 async-trait.workspace = true
 tokio.workspace = true
+sbol-db-vector-flat.workspace = true
 
 [features]
 default = []
