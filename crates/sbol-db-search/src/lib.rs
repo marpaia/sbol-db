@@ -26,6 +26,7 @@ pub mod maintenance;
 pub mod minhash;
 pub mod pagerank;
 pub mod runtime;
+pub mod vector_router;
 
 #[cfg(feature = "text-index")]
 pub mod ranked_text;
@@ -35,6 +36,7 @@ pub use cluster::ClusterId;
 pub use maintenance::{IndexBuildReport, VectorDocument, VectorIndexMaintainer, VectorRebuildSpec};
 pub use minhash::{band_hashes, sketch, Signature, SketchParams};
 pub use runtime::SearchRuntime;
+pub use vector_router::VectorRouter;
 
 #[cfg(feature = "align")]
 pub use align::align_pair;

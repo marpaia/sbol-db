@@ -167,6 +167,27 @@ pub struct SearchHit {
     pub evidence: Vec<Evidence>,
 }
 
+/// Authoritative metadata loaded from the primary graph store after candidate
+/// generation. Vector payload is intentionally not a substitute for this
+/// representation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HydratedDocument {
+    pub document_id: DocumentId,
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_types: Vec<String>,
+}
+
 /// Total-count guarantee returned by a strategy.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]

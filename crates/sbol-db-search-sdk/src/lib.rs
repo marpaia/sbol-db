@@ -31,11 +31,11 @@ pub use registry::{
     EmbeddingRegistry, EmbeddingRegistryBuilder, StrategyRegistry, StrategyRegistryBuilder,
     VectorBackendRegistry, VectorBackendRegistryBuilder,
 };
-pub use strategy::{SearchContext, SearchStrategy};
+pub use strategy::{ScopedDocumentHydrator, SearchContext, SearchStrategy};
 pub use types::{
-    DocumentId, Evidence, ExecutionMetadata, PageRequest, PredicateFilter, ScoreKind, SearchBudget,
-    SearchFilters, SearchHit, SearchInput, SearchOptions, SearchPage, SearchRequest, SearchScope,
-    StrategyRef, Total,
+    DocumentId, Evidence, ExecutionMetadata, HydratedDocument, PageRequest, PredicateFilter,
+    ScoreKind, SearchBudget, SearchFilters, SearchHit, SearchInput, SearchOptions, SearchPage,
+    SearchRequest, SearchScope, StrategyRef, Total,
 };
 pub use vector::{
     ApplyReceipt, DistanceMetric, GenerationHandle, GenerationStatus, IndexGenerationSpec,
