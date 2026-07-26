@@ -51,7 +51,7 @@ pub use plugin::{
 pub use sbol_db_search::ranked_text::Hit;
 pub use sbol_db_search::{AlignMode, AlignOptions};
 pub use sbol_db_storage::SequenceAlignment;
-pub use search::{DateField, FacetedSearch};
+pub use search::{DateField, FacetedSearch, LegacyExplorerStrategy};
 pub use sequence::{SequenceService, SimilarHit};
 pub use submission::{SubmissionService, SubmitOutcome, SubmitRequest};
 

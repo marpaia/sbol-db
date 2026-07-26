@@ -24,6 +24,7 @@ pub mod cluster;
 pub mod keywords;
 pub mod minhash;
 pub mod pagerank;
+pub mod runtime;
 
 #[cfg(feature = "text-index")]
 pub mod ranked_text;
@@ -31,6 +32,7 @@ pub mod ranked_text;
 pub use align::{AlignMode, AlignOptions, Alignment};
 pub use cluster::ClusterId;
 pub use minhash::{band_hashes, sketch, Signature, SketchParams};
+pub use runtime::SearchRuntime;
 
 #[cfg(feature = "align")]
 pub use align::align_pair;

@@ -3480,6 +3480,7 @@ dependencies = [
  "sbol-db-core",
  "sbol-db-rdf",
  "sbol-db-search",
+ "sbol-db-search-sdk",
  "sbol-db-sparql",
  "sbol-db-storage",
  "sbol-rdf",
@@ -3647,10 +3648,13 @@ dependencies = [
 name = "sbol-db-search"
 version = "0.1.1"
 dependencies = [
+ "async-trait",
  "bio",
  "sbol-db-core",
+ "sbol-db-search-sdk",
  "serde",
  "tantivy",
+ "tokio",
 ]
 
 [[package]]
