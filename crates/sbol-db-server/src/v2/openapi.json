@@ -80,6 +80,110 @@
           "limit": { "type": "integer" }
         }
       },
+      "StructuredSearchRequest": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "strategy": { "type": ["string", "null"], "description": "A registered strategy id. Absent selects the configured default." },
+          "query": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": { "type": "string", "enum": ["text", "similar", "sequence"] },
+              "text": { "type": "string" },
+              "uri": { "type": "string" },
+              "sequence": { "type": "string" },
+              "exact": { "type": "boolean", "default": false }
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "graphs": { "type": "array", "items": { "type": "string" } },
+              "object_types": { "type": "array", "items": { "type": "string" } },
+              "predicates": { "type": "array", "items": { "type": "object" } }
+            }
+          },
+          "page": {
+            "type": "object",
+            "properties": {
+              "limit": { "type": "integer", "default": 50, "minimum": 1, "maximum": 1000 },
+              "cursor": { "type": ["string", "null"] }
+            }
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "explain": { "type": "boolean", "default": false },
+              "timeout_ms": { "type": ["integer", "null"] }
+            }
+          }
+        }
+      },
+      "StructuredSearchHit": {
+        "type": "object",
+        "required": ["document_id", "uri", "score", "score_kind", "object_types"],
+        "properties": {
+          "document_id": { "type": "string" },
+          "uri": { "type": "string" },
+          "graph": { "type": ["string", "null"] },
+          "score": { "type": "number" },
+          "score_kind": {},
+          "display_id": { "type": ["string", "null"] },
+          "version": { "type": ["string", "null"] },
+          "name": { "type": ["string", "null"] },
+          "description": { "type": ["string", "null"] },
+          "object_types": { "type": "array", "items": { "type": "string" } },
+          "evidence": { "type": "array", "items": { "type": "object" } }
+        }
+      },
+      "StructuredSearchPage": {
+        "type": "object",
+        "required": ["strategy", "items", "total", "execution"],
+        "properties": {
+          "strategy": {
+            "type": "object",
+            "required": ["id", "version"],
+            "properties": {
+              "id": { "type": "string" },
+              "version": { "type": "string" }
+            }
+          },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/StructuredSearchHit" } },
+          "total": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": { "type": "string", "enum": ["exact", "lower_bound", "unknown"] },
+              "value": { "type": "integer" }
+            }
+          },
+          "next_cursor": { "type": ["string", "null"] },
+          "execution": { "type": "object" }
+        }
+      },
+      "SearchStrategiesResponse": {
+        "type": "object",
+        "required": ["default_strategy", "items"],
+        "properties": {
+          "default_strategy": { "type": "string" },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "version", "display_name", "description", "capabilities", "requirements"],
+              "properties": {
+                "id": { "type": "string" },
+                "version": { "type": "string" },
+                "display_name": { "type": "string" },
+                "description": { "type": "string" },
+                "capabilities": { "type": "object" },
+                "requirements": { "type": "object" }
+              }
+            }
+          }
+        }
+      },
       "SbolObjectRecord": {
         "type": "object",
         "description": "The derived object record: idiomatic JSON metadata for one SBOL object.",
@@ -434,6 +538,43 @@
             "description": "A page of ranked hits with a total.",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/SearchResponse" } }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Search"],
+        "summary": "Execute a pluggable search strategy",
+        "description": "Executes a structured request against a registered strategy under the caller's ACL graph scope. This is additive to the compatibility GET operation.",
+        "operationId": "v2StructuredSearch",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/StructuredSearchRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A strategy-labelled page whose total explicitly declares its guarantee.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/StructuredSearchPage" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "503": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/search/strategies": {
+      "get": {
+        "tags": ["Search"],
+        "summary": "Discover registered search strategies",
+        "operationId": "v2SearchStrategies",
+        "responses": {
+          "200": {
+            "description": "The immutable startup registry and configured default.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SearchStrategiesResponse" } }
             }
           }
         }

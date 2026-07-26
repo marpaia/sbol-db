@@ -18,11 +18,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use sbol_db_core::DomainError;
 use sbol_db_search::ranked_text::{cluster_map, GraphFilter, Hit, RankedTextIndex};
+use sbol_db_search::SearchRuntime;
 use sbol_db_search_sdk::{
     DataEgress, DocumentId, FilterCapability, FilterKind, PaginationCapability, ScoreKind,
     SearchContext, SearchError, SearchHit, SearchInput, SearchInputKind, SearchPage, SearchRequest,
     SearchScope, SearchStrategy, StrategyCapabilities, StrategyDescriptor, StrategyRef,
-    StrategyRequirements, Total, TotalCapability,
+    StrategyRegistry, StrategyRequirements, Total, TotalCapability,
 };
 use sbol_db_sparql::GraphScope;
 use sbol_db_storage::ClusterStore;
@@ -253,6 +254,48 @@ fn structured_hit(hit: Hit) -> SearchHit {
 }
 
 impl AppServices {
+    /// The configured structured-search runtime. By default this is assembled
+    /// lazily from the current text index and cluster store and contains only
+    /// [`LegacyExplorerStrategy`]. Deployments can install a richer immutable
+    /// runtime with [`AppServices::with_search_runtime`].
+    pub fn search_runtime(&self) -> Arc<SearchRuntime> {
+        self.search_runtime
+            .get_or_init(|| {
+                let strategies = StrategyRegistry::builder()
+                    .register(LegacyExplorerStrategy::new(
+                        self.text_search.clone(),
+                        self.cluster.clone(),
+                    ))
+                    .expect("the built-in legacy strategy has a unique non-empty id")
+                    .build();
+                Arc::new(
+                    SearchRuntime::new(strategies, LegacyExplorerStrategy::ID)
+                        .expect("the built-in default strategy is registered"),
+                )
+            })
+            .clone()
+    }
+
+    /// Execute the structured search surface under the same graph scope the
+    /// identity layer computes for all other application reads.
+    pub async fn structured_search(
+        &self,
+        request: SearchRequest,
+        scope: GraphScope,
+    ) -> Result<SearchPage, SearchError> {
+        let budget = sbol_db_search_sdk::SearchBudget {
+            timeout_ms: request.options.timeout_ms,
+            ..sbol_db_search_sdk::SearchBudget::default()
+        };
+        let scope = match scope {
+            GraphScope::Union => SearchScope::Union,
+            GraphScope::Only(graphs) => SearchScope::Only(graphs),
+        };
+        self.search_runtime()
+            .search(SearchContext::new(scope, budget), request)
+            .await
+    }
+
     /// Rank the in-scope objects matching the free-text term, narrowed by the
     /// `objectType` facet, and return the requested window plus the total
     /// number of matches. The cluster-duplicate map is built from the persisted

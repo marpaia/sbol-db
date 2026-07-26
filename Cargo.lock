@@ -3689,6 +3689,7 @@ dependencies = [
  "sbol-db-postgres",
  "sbol-db-rdf",
  "sbol-db-search",
+ "sbol-db-search-sdk",
  "sbol-db-sparql",
  "sbol-db-storage",
  "sbol-db-ui",

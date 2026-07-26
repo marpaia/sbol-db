@@ -23,6 +23,7 @@ sbol-db-postgres.workspace = true
 sbol-db-sparql.workspace = true
 sbol-db-app.workspace = true
 sbol-db-jobs.workspace = true
+sbol-db-search-sdk.workspace = true
 sbol-db-ui = { workspace = true, optional = true }
 spargebra = { workspace = true }
 sbol.workspace = true

@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use sbol_db_app::MutationError;
 use sbol_db_core::DomainError;
+use sbol_db_search_sdk::SearchError;
 use sbol_db_sparql::SparqlError;
 use serde_json::json;
 
@@ -51,6 +52,25 @@ impl From<SparqlError> for V2Error {
 impl From<MutationError> for V2Error {
     fn from(err: MutationError) -> Self {
         ApiError::from(err).into()
+    }
+}
+
+impl From<SearchError> for V2Error {
+    fn from(err: SearchError) -> Self {
+        let (status, code) = match &err {
+            SearchError::InvalidRequest(_) => (StatusCode::BAD_REQUEST, "search_invalid_request"),
+            SearchError::Unsupported(_) => (StatusCode::BAD_REQUEST, "search_unsupported"),
+            SearchError::Configuration(_) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "search_unavailable")
+            }
+            SearchError::Backend(_) => (StatusCode::INTERNAL_SERVER_ERROR, "search_backend_error"),
+            SearchError::Cancelled => (StatusCode::SERVICE_UNAVAILABLE, "search_cancelled"),
+        };
+        Self {
+            status,
+            code,
+            message: err.to_string(),
+        }
     }
 }
 
@@ -119,5 +139,13 @@ mod tests {
         let err: V2Error = SparqlError::Domain(DomainError::Iri(IriValidationError::Empty)).into();
         let (status, _body) = envelope(err).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn invalid_structured_search_is_400() {
+        let err: V2Error = SearchError::InvalidRequest("bad cursor".to_owned()).into();
+        let (status, body) = envelope(err).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "search_invalid_request");
     }
 }

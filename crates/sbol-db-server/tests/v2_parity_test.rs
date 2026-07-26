@@ -248,6 +248,29 @@ async fn get(app: &axum::Router, uri: &str, bearer: Option<&str>) -> (StatusCode
     (status, body_string(res).await)
 }
 
+/// POST a JSON body with an optional bearer token, returning status and body.
+async fn post_json(
+    app: &axum::Router,
+    uri: &str,
+    body: Value,
+    bearer: Option<&str>,
+) -> (StatusCode, String) {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json");
+    if let Some(token) = bearer {
+        builder = builder.header("authorization", format!("Bearer {token}"));
+    }
+    let res = app
+        .clone()
+        .oneshot(builder.body(Body::from(body.to_string())).unwrap())
+        .await
+        .expect("POST JSON");
+    let status = res.status();
+    (status, body_string(res).await)
+}
+
 /// GET a V1 path with an optional `X-authorization` identity.
 async fn get_v1(app: &axum::Router, uri: &str, token: Option<&str>) -> (StatusCode, String) {
     let mut builder = Request::builder().method("GET").uri(uri);
@@ -453,4 +476,59 @@ async fn same_query_returns_the_same_object_set_on_both_surfaces() {
         ]),
         "the two matching objects, not the terminator"
     );
+
+    // The new POST surface selects the registered compatibility strategy and
+    // uses an explicit total-kind contract plus cursor paging. The existing GET
+    // response above remains unchanged.
+    let (discovery_status, discovery_body) = get(&app, "/api/v2/search/strategies", None).await;
+    assert_eq!(discovery_status, StatusCode::OK);
+    let discovery: Value = serde_json::from_str(&discovery_body).expect("discovery JSON");
+    assert_eq!(discovery["default_strategy"], "legacy.explorer.v1");
+    assert_eq!(discovery["items"][0]["id"], "legacy.explorer.v1");
+
+    let (first_status, first_body) = post_json(
+        &app,
+        "/api/v2/search",
+        serde_json::json!({
+            "strategy": "legacy.explorer.v1",
+            "query": { "kind": "text", "text": "promoter" },
+            "page": { "limit": 1 }
+        }),
+        None,
+    )
+    .await;
+    assert_eq!(
+        first_status,
+        StatusCode::OK,
+        "structured search: {first_body}"
+    );
+    let first: Value = serde_json::from_str(&first_body).expect("first page JSON");
+    assert_eq!(first["strategy"]["id"], "legacy.explorer.v1");
+    assert_eq!(
+        first["total"],
+        serde_json::json!({"kind": "exact", "value": 2})
+    );
+    assert_eq!(first["items"].as_array().expect("items").len(), 1);
+    assert_eq!(first["next_cursor"], "1");
+
+    let (second_status, second_body) = post_json(
+        &app,
+        "/api/v2/search",
+        serde_json::json!({
+            "query": { "kind": "text", "text": "promoter" },
+            "page": { "limit": 1, "cursor": "1" }
+        }),
+        None,
+    )
+    .await;
+    assert_eq!(second_status, StatusCode::OK);
+    let second: Value = serde_json::from_str(&second_body).expect("second page JSON");
+    let via_structured: BTreeSet<String> = first["items"]
+        .as_array()
+        .expect("first items")
+        .iter()
+        .chain(second["items"].as_array().expect("second items"))
+        .filter_map(|item| item["uri"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(via_structured, via_v1);
 }
