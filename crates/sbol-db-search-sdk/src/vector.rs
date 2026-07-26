@@ -77,6 +77,8 @@ pub struct VectorQuery {
     pub filter: Option<VectorFilter>,
     pub limit: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub score_threshold: Option<f32>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: BTreeMap<String, Value>,

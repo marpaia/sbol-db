@@ -1,0 +1,16 @@
+[package]
+name = "sbol-db-vector-flat"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Deterministic exact vector-search backend for sbol-db development and evaluation."
+
+[dependencies]
+async-trait.workspace = true
+serde_json.workspace = true
+sbol-db-search-sdk.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
