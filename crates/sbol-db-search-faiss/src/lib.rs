@@ -4,8 +4,16 @@
 //! sbol-db remains responsible for document identity, authorization payloads,
 //! durable generations, activation, and maintenance.
 
-#[cfg(test)]
+mod backend;
+mod config;
+mod engine;
+mod filter;
+mod model;
+mod persistence;
 mod search_parameters;
+
+pub use backend::FaissVectorBackend;
+pub use config::FaissBackendConfig;
 
 #[cfg(test)]
 mod tests {

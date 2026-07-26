@@ -1405,6 +1405,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "fs4"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3701,6 +3711,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "roaring"
+version = "0.11.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1dedc5658c6ecb3bdb5ef5f3295bb9253f42dcf3fd1402c03f6b1f7659c3c4a9"
+dependencies = [
+ "bytemuck",
+ "byteorder",
+]
+
+[[package]]
 name = "rocksdb"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4236,8 +4256,18 @@ dependencies = [
 name = "sbol-db-search-faiss"
 version = "0.1.1"
 dependencies = [
+ "async-trait",
  "faiss-next",
  "faiss-next-sys",
+ "fs2",
+ "hex",
+ "roaring",
+ "sbol-db-search-sdk",
+ "serde",
+ "serde_json",
+ "sha3",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

@@ -4,6 +4,44 @@ use std::ptr::{self, NonNull};
 use faiss_next::{Error, IDSelector, IDSelectorBatch, SearchParams};
 use faiss_next_sys::{FaissSearchParameters, FaissSearchParametersIVF};
 
+pub(crate) struct FilteredSearchParameters {
+    parameters: NonNull<FaissSearchParameters>,
+    _selector: IDSelectorBatch,
+}
+
+impl FilteredSearchParameters {
+    pub(crate) fn new(ids: &[i64]) -> faiss_next::Result<Self> {
+        let selector = IDSelectorBatch::new(ids)?;
+        let mut parameters = ptr::null_mut();
+        let code = unsafe {
+            faiss_next_sys::faiss_SearchParameters_new(
+                &mut parameters,
+                selector.as_ptr().cast_mut(),
+            )
+        };
+        check_return_code(code)?;
+        let parameters = NonNull::new(parameters).ok_or(Error::NullPointer)?;
+        Ok(Self {
+            parameters,
+            _selector: selector,
+        })
+    }
+}
+
+impl SearchParams for FilteredSearchParameters {
+    fn as_ptr(&self) -> *const FaissSearchParameters {
+        self.parameters.as_ptr()
+    }
+}
+
+impl Drop for FilteredSearchParameters {
+    fn drop(&mut self) {
+        unsafe {
+            faiss_next_sys::faiss_SearchParameters_free(self.parameters.as_ptr());
+        }
+    }
+}
+
 /// IVF query parameters that own the native ID selector referenced by FAISS.
 ///
 /// `faiss-next` exposes both pieces but does not currently connect a selector
@@ -49,7 +87,7 @@ impl Drop for FilteredSearchParametersIvf {
     }
 }
 
-fn check_return_code(code: i32) -> faiss_next::Result<()> {
+pub(crate) fn check_return_code(code: i32) -> faiss_next::Result<()> {
     if code == faiss_next_sys::FAISS_OK {
         return Ok(());
     }
