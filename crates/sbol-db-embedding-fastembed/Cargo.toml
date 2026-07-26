@@ -10,7 +10,9 @@ description = "Local FastEmbed/ONNX embedding provider for the sbol-db search SD
 [dependencies]
 async-trait.workspace = true
 fastembed.workspace = true
+hex.workspace = true
 serde.workspace = true
+sha3.workspace = true
 sbol-db-search-sdk.workspace = true
 tokio.workspace = true
 
@@ -26,4 +28,5 @@ download-ort = ["fastembed/ort-download-binaries-rustls-tls"]
 online-models = ["fastembed/hf-hub-rustls-tls"]
 
 [dev-dependencies]
+tempfile = "3"
 tokio.workspace = true

@@ -6,6 +6,7 @@
 //! online model support. The sbol-db profile always carries the immutable
 //! revision that was actually loaded.
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -14,10 +15,43 @@ use sbol_db_search_sdk::{
     EmbeddingProvider, EmbeddingVector, Normalization, SearchError,
 };
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Sha3_256};
 
 pub use fastembed;
 
 const DEFAULT_BATCH_SIZE: usize = 64;
+
+/// Pooling applied when loading a bring-your-own ONNX model bundle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FastEmbedPooling {
+    #[default]
+    Cls,
+    Mean,
+}
+
+/// Files and inference limits for an immutable local FastEmbed model bundle.
+/// Tokenizer filenames follow the Hugging Face convention used by FastEmbed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalFastEmbedBundleConfig {
+    pub directory: PathBuf,
+    #[serde(default = "default_onnx_file")]
+    pub onnx_file: String,
+    #[serde(default)]
+    pub pooling: FastEmbedPooling,
+    #[serde(default = "default_max_length")]
+    pub max_length: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intra_threads: Option<usize>,
+}
+
+fn default_onnx_file() -> String {
+    "model.onnx".to_owned()
+}
+
+const fn default_max_length() -> usize {
+    512
+}
 
 /// Reproducible profile metadata plus text-role prefixes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +110,47 @@ impl FastEmbedProvider {
         Self::with_engine(config, Box::new(model))
     }
 
+    /// Load a local ONNX/tokenizer bundle and verify that its content digest is
+    /// exactly the immutable revision declared by the profile.
+    pub fn from_local_bundle(
+        config: FastEmbedProviderConfig,
+        bundle: &LocalFastEmbedBundleConfig,
+    ) -> Result<Self, SearchError> {
+        validate_config(&config)?;
+        validate_bundle_config(bundle)?;
+        let files = LocalBundleFiles::read(bundle)?;
+        let revision = files.revision();
+        if config.revision != revision {
+            return Err(SearchError::Configuration(format!(
+                "FastEmbed profile {:?} declares revision {:?}, but local bundle hashes to {:?}",
+                config.id, config.revision, revision
+            )));
+        }
+
+        let model = fastembed::UserDefinedEmbeddingModel::new(
+            files.onnx,
+            fastembed::TokenizerFiles {
+                tokenizer_file: files.tokenizer,
+                config_file: files.config,
+                special_tokens_map_file: files.special_tokens_map,
+                tokenizer_config_file: files.tokenizer_config,
+            },
+        )
+        .with_pooling(match bundle.pooling {
+            FastEmbedPooling::Cls => fastembed::Pooling::Cls,
+            FastEmbedPooling::Mean => fastembed::Pooling::Mean,
+        });
+        let mut options =
+            fastembed::InitOptionsUserDefined::new().with_max_length(bundle.max_length);
+        if let Some(threads) = bundle.intra_threads {
+            options = options.with_intra_threads(threads);
+        }
+        let model = fastembed::TextEmbedding::try_new_from_user_defined(model, options).map_err(
+            |error| SearchError::Configuration(format!("loading local FastEmbed bundle: {error}")),
+        )?;
+        Self::new(config, model)
+    }
+
     fn with_engine(
         config: FastEmbedProviderConfig,
         engine: Box<dyn DenseEngine>,
@@ -96,6 +171,77 @@ impl FastEmbedProvider {
             engine: Arc::new(Mutex::new(engine)),
         })
     }
+}
+
+/// Calculate the revision operators place in [`FastEmbedProviderConfig`]
+/// before loading the ONNX session.
+pub fn local_bundle_revision(bundle: &LocalFastEmbedBundleConfig) -> Result<String, SearchError> {
+    validate_bundle_config(bundle)?;
+    Ok(LocalBundleFiles::read(bundle)?.revision())
+}
+
+struct LocalBundleFiles {
+    onnx: Vec<u8>,
+    tokenizer: Vec<u8>,
+    config: Vec<u8>,
+    special_tokens_map: Vec<u8>,
+    tokenizer_config: Vec<u8>,
+}
+
+impl LocalBundleFiles {
+    fn read(bundle: &LocalFastEmbedBundleConfig) -> Result<Self, SearchError> {
+        Ok(Self {
+            onnx: read_model_file(&bundle.directory, &bundle.onnx_file)?,
+            tokenizer: read_model_file(&bundle.directory, "tokenizer.json")?,
+            config: read_model_file(&bundle.directory, "config.json")?,
+            special_tokens_map: read_model_file(&bundle.directory, "special_tokens_map.json")?,
+            tokenizer_config: read_model_file(&bundle.directory, "tokenizer_config.json")?,
+        })
+    }
+
+    fn revision(&self) -> String {
+        let mut hasher = Sha3_256::new();
+        hash_artifact(&mut hasher, "onnx", &self.onnx);
+        hash_artifact(&mut hasher, "tokenizer.json", &self.tokenizer);
+        hash_artifact(&mut hasher, "config.json", &self.config);
+        hash_artifact(
+            &mut hasher,
+            "special_tokens_map.json",
+            &self.special_tokens_map,
+        );
+        hash_artifact(&mut hasher, "tokenizer_config.json", &self.tokenizer_config);
+        format!("sha3-256:{}", hex::encode(hasher.finalize()))
+    }
+}
+
+fn hash_artifact(hasher: &mut Sha3_256, label: &str, bytes: &[u8]) {
+    hasher.update((label.len() as u64).to_be_bytes());
+    hasher.update(label.as_bytes());
+    hasher.update((bytes.len() as u64).to_be_bytes());
+    hasher.update(bytes);
+}
+
+fn read_model_file(directory: &Path, name: &str) -> Result<Vec<u8>, SearchError> {
+    std::fs::read(directory.join(name)).map_err(|error| {
+        SearchError::Configuration(format!(
+            "reading FastEmbed model file {:?}: {error}",
+            directory.join(name)
+        ))
+    })
+}
+
+fn validate_bundle_config(bundle: &LocalFastEmbedBundleConfig) -> Result<(), SearchError> {
+    if bundle.onnx_file.trim().is_empty() || bundle.max_length == 0 {
+        return Err(SearchError::Configuration(
+            "FastEmbed local bundle onnx_file and max_length must be non-empty/non-zero".to_owned(),
+        ));
+    }
+    if bundle.intra_threads == Some(0) {
+        return Err(SearchError::Configuration(
+            "FastEmbed local bundle intra_threads must be greater than zero".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -253,6 +399,33 @@ mod tests {
             document_prefix: Some("passage: ".to_owned()),
             batch_size: 8,
         }
+    }
+
+    #[test]
+    fn local_bundle_revision_covers_every_required_artifact() {
+        let directory = tempfile::tempdir().unwrap();
+        for (name, bytes) in [
+            ("weights.onnx", b"onnx".as_slice()),
+            ("tokenizer.json", b"tokenizer".as_slice()),
+            ("config.json", b"config".as_slice()),
+            ("special_tokens_map.json", b"special".as_slice()),
+            ("tokenizer_config.json", b"tokenizer-config".as_slice()),
+        ] {
+            std::fs::write(directory.path().join(name), bytes).unwrap();
+        }
+        let bundle = LocalFastEmbedBundleConfig {
+            directory: directory.path().to_path_buf(),
+            onnx_file: "weights.onnx".to_owned(),
+            pooling: FastEmbedPooling::Mean,
+            max_length: 512,
+            intra_threads: Some(2),
+        };
+
+        let first = local_bundle_revision(&bundle).unwrap();
+        assert!(first.starts_with("sha3-256:"));
+        std::fs::write(directory.path().join("tokenizer.json"), b"changed").unwrap();
+        let second = local_bundle_revision(&bundle).unwrap();
+        assert_ne!(first, second);
     }
 
     #[tokio::test]

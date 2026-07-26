@@ -4088,8 +4088,11 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "fastembed",
+ "hex",
  "sbol-db-search-sdk",
  "serde",
+ "sha3",
+ "tempfile",
  "tokio",
 ]
 

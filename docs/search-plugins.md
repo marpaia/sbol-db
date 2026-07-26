@@ -205,6 +205,13 @@ download; deployments may instead disable defaults and enable `download-ort`.
 the profile's `revision` must name the immutable weight commit or digest that
 was loaded; floating `main`/`latest` revisions are rejected.
 
+For local production bundles, `FastEmbedProvider::from_local_bundle` reads the
+ONNX model plus the four required tokenizer/config files and verifies their
+combined SHA3-256 content revision before creating the ONNX session.
+`local_bundle_revision` calculates the exact `sha3-256:...` value to place in
+`FastEmbedProviderConfig`. This makes a model-file change a startup error until
+the profile and its derived vector generation are deliberately revised.
+
 ## Vector backend selection
 
 The logical index router lets deployment topology choose the engine:
