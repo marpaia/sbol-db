@@ -4104,6 +4104,7 @@ dependencies = [
  "sbol-db-core",
  "sbol-db-postgres",
  "sbol-db-search",
+ "sbol-db-search-sdk",
  "sbol-db-sqlite",
  "sbol-db-storage",
  "serde",

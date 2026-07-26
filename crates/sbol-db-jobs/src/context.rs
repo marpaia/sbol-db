@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use sbol_db_core::JobId;
-use sbol_db_search::ranked_text::RankedTextIndex;
+use sbol_db_search::{ranked_text::RankedTextIndex, VectorIndexMaintainer};
 use sbol_db_storage::{
     ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore, SketchStore, TripleSource,
 };
@@ -57,6 +57,10 @@ pub struct JobContext {
     /// `rebuild_search_index` handler requires it; every other handler ignores
     /// it.
     pub search: Option<SearchIndexHandles>,
+    /// Present only on a worker configured with an embedding provider and
+    /// vector backend. The `rebuild_vector_index` handler uses this coordinator
+    /// to stage and atomically activate a complete vector generation.
+    pub vector_index: Option<Arc<VectorIndexMaintainer>>,
     /// The durable instance-configuration store. Present only on a worker
     /// configured with it; the `wor_sync` handler requires it to read the joined
     /// Web of Registries URL and persist the pulled prefix map, and every other

@@ -223,9 +223,33 @@ spec in collection metadata, and changes the logical artifact using one atomic
 multi-action alias request. Rollback is another alias activation, not a
 re-embedding job.
 
-The next maintenance slice should connect import/update/delete projection
-events to durable jobs, add idempotency keys and retry policy, and persist
-`IndexBuildReport` plus snapshot references in an artifact catalog.
+The built-in `rebuild_vector_index` durable job supplies the first maintenance
+path. It keyset-pages the primary store's complete derived SBOL object view,
+resolves graph IRIs, creates deterministic labeled embedding text, and returns
+the maintainer's `IndexBuildReport` as the durable job result. Deployment code
+injects the selected provider/backend pair with
+`Worker::with_vector_index(Arc<VectorIndexMaintainer>)`; a worker without that
+configuration fails this job kind clearly while continuing to serve other job
+kinds.
+
+```json
+{
+  "artifact_id": "components",
+  "generation": "2026-07-26-model-rev-1",
+  "vector_name": "content",
+  "embedding_profile": "fastembed.bge-small-en-v1.5.rev1",
+  "distance": "cosine",
+  "batch_size": 64,
+  "backend_parameters": { "on_disk": true }
+}
+```
+
+Callers should enqueue that payload under kind `rebuild_vector_index` with an
+idempotency key derived from artifact, generation, and corpus revision. The next
+maintenance slice is an event-fed incremental projector for
+import/update/delete, plus explicit retry policy and an artifact catalog for
+reports and snapshot references. Full rebuild remains the reconciliation and
+model-migration path.
 
 ## Evaluation and rollout
 
@@ -259,13 +283,14 @@ Implemented:
 - ACL-bound logical vector router and authoritative hydration;
 - dense reference embedding strategy;
 - local FastEmbed/ONNX provider adapter;
-- generation rebuild/activation/rollback coordinator; and
+- generation rebuild/activation/rollback coordinator;
+- durable full-corpus vector rebuild job and canonical SBOL projection; and
 - offline relevance metrics and paired quality gate.
 
 Next:
 
-1. project canonical SBOL search documents and enqueue durable incremental or
-   full rebuild jobs;
+1. feed import/update/delete events into idempotent incremental vector jobs and
+   persist artifact/snapshot provenance;
 2. expose backend/profile/strategy assembly through typed server
    configuration;
 3. run live Qdrant lifecycle integration tests in CI;

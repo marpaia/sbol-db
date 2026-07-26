@@ -11,6 +11,7 @@ description = "Async job queue and worker runtime for sbol-db."
 sbol-db-core.workspace = true
 sbol-db-storage.workspace = true
 sbol-db-search = { workspace = true, features = ["text-index", "align"] }
+sbol-db-search-sdk.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }

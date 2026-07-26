@@ -29,5 +29,6 @@ pub fn default_registry() -> JobRegistry {
         .register(handlers::ImportRemoteDocumentHandler)
         .register(handlers::ImportSynBioHubCollectionHandler)
         .register(handlers::RebuildSearchIndexHandler)
+        .register(handlers::RebuildVectorIndexHandler)
         .register(handlers::WorSyncHandler)
 }
