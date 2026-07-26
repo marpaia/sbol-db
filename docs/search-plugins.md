@@ -226,8 +226,10 @@ For a small in-process deployment, replace the vector backend entry with
 Exact-flat state belongs to that process and is not suitable for a separate
 maintenance-worker/API topology.
 
-For an embedded production deployment, build the binary with `--features
-faiss` and configure a persistent local store:
+For an embedded production deployment, source builds enable the backend with
+`--features faiss`. The published `ghcr.io/marpaia/sbol-db` container already
+includes that feature and the native FAISS runtime. Configure a persistent
+local store:
 
 ```json
 {
@@ -243,13 +245,21 @@ faiss` and configure a persistent local store:
 }
 ```
 
-`sbol-db-search-faiss` uses the current FAISS 1.14 C ABI through
-`faiss-next`. On macOS, `brew install faiss` provides the development and
-runtime libraries. Linux deployments should install or build FAISS 1.14 with
-`FAISS_ENABLE_C_API=ON` and `BUILD_SHARED_LIBS=ON`, then expose it through
-`FAISS_DIR` or the platform library search path. The feature is opt-in so a
-deployment that selects Qdrant, pgvector, or exact-flat does not acquire a
-native FAISS dependency accidentally.
+In the container, place `path` under the pre-owned `/var/lib/sbol-db`
+directory and mount that directory as a named volume or persistent volume.
+See [Running embedded FAISS](deployment.md#running-embedded-faiss) for a
+complete invocation. One running process exclusively owns a local FAISS store;
+use the embedded worker for maintenance and a service backend such as Qdrant
+when query or worker processes must scale independently.
+
+`sbol-db-search-faiss` generates target-native Rust bindings from the FAISS
+1.14 C headers at build time. On macOS, `brew install faiss` provides the
+development and runtime libraries. Linux source builds need Clang/libclang and
+should install or build FAISS 1.14 with `FAISS_ENABLE_C_API=ON` and
+`BUILD_SHARED_LIBS=ON`, then expose it through `FAISS_DIR` or the platform
+library search path. The feature is opt-in so a deployment that selects
+Qdrant, pgvector, or exact-flat does not acquire a native FAISS dependency
+accidentally.
 
 FAISS generation parameters support `nlist`, `nprobe`, and
 `flat_search_cutoff`. Query parameters support `nprobe` and `max_codes`.

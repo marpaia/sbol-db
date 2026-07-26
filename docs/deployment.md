@@ -230,7 +230,7 @@ most one lease duration of stalled work per affected job.
 |---|---|
 | Registry | `ghcr.io/marpaia/sbol-db` |
 | Source | [`Dockerfile`](../Dockerfile) at the repo root |
-| Base | `gcr.io/distroless/static-debian12:nonroot` |
+| Base | `gcr.io/distroless/cc-debian12:nonroot` |
 | Build | `make container` (locally) or [`.github/workflows/container.yml`](../.github/workflows/container.yml) (CI) |
 
 ### Tag scheme
@@ -242,17 +242,21 @@ Mirrors the `Makefile`:
   tree has uncommitted changes (only seen on local builds; CI checkouts
   are clean).
 
-The CI workflow (`container.yml`) runs on `v*` tag pushes and on manual
-dispatch. It does **not** run on every push to `master`; uncomment the
-`branches: [master]` line in the workflow when you want that.
+The CI workflow (`container.yml`) runs on `master`, `v*` tag pushes, and manual
+dispatch. It runs the native FAISS tests against the container-built library
+before publishing.
 
 ### Image properties
 
-- Statically linked `sbol-db` binary at `/usr/local/bin/sbol-db`, built
-  with musl libc. Zero shared-library surface.
+- Glibc-linked `sbol-db` binary at `/usr/local/bin/sbol-db`. The image includes
+  the `faiss` feature, checksum-pinned FAISS 1.14.3 C API, OpenBLAS, OpenMP,
+  and their required runtime libraries. Choosing FAISS is still explicit in
+  `SBOL_DB_SEARCH_CONFIG`; merely using the image does not create an index.
 - Runs as `nonroot:nonroot` (UID/GID 65532). Compatible with strict
   pod security: `runAsNonRoot: true`, `readOnlyRootFilesystem: true`,
   `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`.
+- `/var/lib/sbol-db` is owned by the nonroot user so a new Docker named volume
+  mounted there is writable without an entrypoint or permission workaround.
 - `ENTRYPOINT ["/usr/local/bin/sbol-db"]`, default `CMD ["server",
   "--bind", "0.0.0.0:8080"]`. Subcommands are passed via Kubernetes
   `args:`.
@@ -263,14 +267,47 @@ dispatch. It does **not** run on every push to `master`; uncomment the
 ```sh
 make container          # builds ghcr.io/marpaia/sbol-db:<version>, --load to local docker
 docker run --rm -it ghcr.io/marpaia/sbol-db:<version> --help
+make container/test-faiss # native tests + final-image FAISS startup/store smoke test
 ```
+
+### Running embedded FAISS
+
+The standard image already contains FAISS. Put a `faiss` backend in the JSON
+composition root described in [Search plugins](search-plugins.md), keep its
+`config.path` under `/var/lib/sbol-db`, and mount that directory persistently:
+
+```sh
+docker volume create sbol-db-data
+docker run --rm \
+  -e DATABASE_URL=sqlite:///var/lib/sbol-db/sbol.db \
+  -v sbol-db-data:/var/lib/sbol-db \
+  ghcr.io/marpaia/sbol-db:<version> db migrate
+
+docker run --name sbol-db --rm \
+  -p 8080:8080 \
+  -e DATABASE_URL=sqlite:///var/lib/sbol-db/sbol.db \
+  -e SBOL_DB_SEARCH_CONFIG=/etc/sbol-db/search.json \
+  -v sbol-db-data:/var/lib/sbol-db \
+  -v "$PWD/search.json:/etc/sbol-db/search.json:ro" \
+  ghcr.io/marpaia/sbol-db:<version>
+```
+
+Run the migration once for a new database and again when upgrading sbol-db. Add
+a model mount only when the composition root registers a local FastEmbed
+provider. Both the database and immutable FAISS generations survive container
+replacement in `sbol-db-data`.
+
+A FAISS store is owned by exactly one running sbol-db process and guarded by
+`backend.lock`. Use the server's embedded worker when query and maintenance
+share a local store. Do not mount one FAISS directory into multiple replicas
+or a separate worker; use Qdrant or another service backend for that topology.
 
 ## CI workflows
 
 | File | Trigger | Purpose |
 |---|---|---|
-| [`ci.yml`](../.github/workflows/ci.yml) | push, PR | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --workspace`, `helm lint` + `helm template` against three value profiles |
-| [`container.yml`](../.github/workflows/container.yml) | `v*` tag push, `workflow_dispatch` | Build and push the container image to GHCR |
+| [`ci.yml`](../.github/workflows/ci.yml) | push, PR | Workspace checks, native FAISS tests, feature-enabled server check, and final-image FAISS persistence smoke test |
+| [`container.yml`](../.github/workflows/container.yml) | `master`, `v*` tag push, `workflow_dispatch` | Run container-native FAISS tests, then build and push the image to GHCR |
 
 There is no chart-publish workflow yet; the chart is installed from the
 working tree (`helm install … ./charts/sbol-db`).
