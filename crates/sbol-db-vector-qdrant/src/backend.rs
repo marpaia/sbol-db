@@ -261,6 +261,27 @@ impl VectorSearcher for QdrantRemoteBackend {
         };
         validate_dense(&vector, "query")?;
         let collection = self.alias_name(&query.index)?;
+        let (spec, _) = self.load_spec(&collection).await?;
+        if query.vector_name != spec.vector_name {
+            return Err(VectorError::InvalidRequest(format!(
+                "query vector {:?} does not match generation vector {:?}",
+                query.vector_name, spec.vector_name
+            )));
+        }
+        if vector.len() != spec.dimension {
+            return Err(VectorError::InvalidRequest(format!(
+                "query vector dimension {} does not match index dimension {}",
+                vector.len(),
+                spec.dimension
+            )));
+        }
+        if spec.distance == DistanceMetric::Cosine
+            && vector.iter().map(|value| value * value).sum::<f32>() == 0.0
+        {
+            return Err(VectorError::InvalidRequest(
+                "query cosine vector cannot have zero magnitude".to_owned(),
+            ));
+        }
         let offset = query
             .cursor
             .as_deref()
@@ -284,7 +305,7 @@ impl VectorSearcher for QdrantRemoteBackend {
             request = request.filter(filter::translate(filter)?);
         }
         if let Some(threshold) = query.score_threshold {
-            request = request.score_threshold(threshold);
+            request = request.score_threshold(qdrant_score_threshold(threshold, spec.distance));
         }
 
         let response = self.client.query(request).await.map_err(backend_error)?;
@@ -304,7 +325,7 @@ impl VectorSearcher for QdrantRemoteBackend {
                     })?;
                 Ok(VectorSearchHit {
                     document_id: DocumentId(document_id),
-                    score: point.score,
+                    score: portable_score(point.score, spec.distance),
                 })
             })
             .collect::<Result<Vec<_>, VectorError>>()?;
@@ -760,6 +781,26 @@ fn qdrant_distance(distance: DistanceMetric) -> Distance {
     }
 }
 
+fn portable_score(score: f32, distance: DistanceMetric) -> f32 {
+    match distance {
+        DistanceMetric::Cosine | DistanceMetric::Dot => score,
+        DistanceMetric::Euclidean | DistanceMetric::Manhattan => -score,
+        DistanceMetric::Hamming | DistanceMetric::Jaccard => {
+            unreachable!("unsupported distances are rejected before querying")
+        }
+    }
+}
+
+fn qdrant_score_threshold(threshold: f32, distance: DistanceMetric) -> f32 {
+    match distance {
+        DistanceMetric::Cosine | DistanceMetric::Dot => threshold,
+        DistanceMetric::Euclidean | DistanceMetric::Manhattan => -threshold,
+        DistanceMetric::Hamming | DistanceMetric::Jaccard => {
+            unreachable!("unsupported distances are rejected before querying")
+        }
+    }
+}
+
 fn configuration_error(error: impl fmt::Display) -> VectorError {
     VectorError::Configuration(error.to_string())
 }
@@ -831,5 +872,13 @@ mod tests {
             validate_spec(&spec, &descriptor),
             Err(VectorError::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn normalizes_distance_scores_to_higher_is_better() {
+        assert_eq!(portable_score(2.5, DistanceMetric::Euclidean), -2.5);
+        assert_eq!(portable_score(3.0, DistanceMetric::Manhattan), -3.0);
+        assert_eq!(portable_score(0.75, DistanceMetric::Cosine), 0.75);
+        assert_eq!(qdrant_score_threshold(-2.5, DistanceMetric::Euclidean), 2.5);
     }
 }
