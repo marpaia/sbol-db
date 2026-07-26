@@ -159,6 +159,72 @@ embedding profile, named vector, and graph payload field. This keeps the Rust
 SDK usable in an embedded application without forcing that application to use
 sbol-db's CLI or a particular configuration-file format.
 
+The shipped binary provides one JSON composition root through
+`--search-config` / `SBOL_DB_SEARCH_CONFIG`. `server` installs both query and
+maintenance planes; `worker` installs only maintenance. A Qdrant deployment
+with a verified local FastEmbed model looks like:
+
+```json
+{
+  "topology": {
+    "default_strategy": "legacy.explorer.v1",
+    "indexes": [{
+      "index": "components",
+      "backend": "qdrant-primary",
+      "embedding_profile": "local.bge-small-en-v1.5.rev1",
+      "vector_name": "content",
+      "graph_payload_field": "graph"
+    }],
+    "embedding_strategies": [{
+      "id": "semantic.components.v1",
+      "version": "1",
+      "display_name": "Semantic components",
+      "description": "Dense retrieval over canonical SBOL metadata",
+      "embedding_profile": "local.bge-small-en-v1.5.rev1",
+      "vector_index": "components",
+      "vector_name": "content",
+      "graph_payload_field": "graph",
+      "distance": "cosine"
+    }]
+  },
+  "embeddings": [{
+    "kind": "fastembed_local",
+    "profile": {
+      "id": "local.bge-small-en-v1.5.rev1",
+      "model": "BAAI/bge-small-en-v1.5",
+      "revision": "sha3-256:<digest from local_bundle_revision>",
+      "dimension": 384,
+      "normalization": "l2",
+      "query_prefix": "Represent this sentence for searching relevant passages: ",
+      "batch_size": 64
+    },
+    "bundle": {
+      "directory": "/opt/sbol-db/models/bge-small-en-v1.5",
+      "onnx_file": "model.onnx",
+      "pooling": "cls",
+      "max_length": 512,
+      "intra_threads": 4
+    }
+  }],
+  "vector_backends": [{
+    "kind": "qdrant",
+    "config": {
+      "id": "qdrant-primary",
+      "grpc_url": "https://cluster.example:6334",
+      "rest_url": "https://cluster.example:6333",
+      "collection_prefix": "sbol",
+      "timeout_seconds": 30
+    },
+    "api_key_env": "QDRANT_API_KEY"
+  }]
+}
+```
+
+For a small in-process deployment, replace the vector backend entry with
+`{"kind":"exact_flat","id":"flat"}` and reference `flat` from the index.
+Exact-flat state belongs to that process and is not suitable for a separate
+maintenance-worker/API topology.
+
 ## Writing an embedding provider
 
 Embedding identity includes provider, model, immutable revision, dimension,

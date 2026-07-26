@@ -4,10 +4,11 @@
 //! backends open through the factory.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use sbol_db_app::AppServices;
+use sbol_db_app::{AppServices, LegacyExplorerStrategy};
 use sbol_db_backend::Backend;
 use sbol_db_jobs::{default_registry, SearchIndexHandles, Worker, WorkerConfig};
 use sbol_db_search::VectorIndexMaintainerRegistry;
@@ -27,6 +28,7 @@ pub async fn run(
     worker_concurrency: Option<usize>,
     worker_queues: Option<String>,
     worker_id: Option<String>,
+    search_config: Option<PathBuf>,
 ) -> Result<()> {
     let engine = Arc::new(SparqlEngine::new(backend.triple_source.clone()));
 
@@ -65,7 +67,28 @@ pub async fn run(
         backend.triple_source.clone(),
         backend.triple_writer.clone(),
     ));
-    let app_services = Arc::new(AppServices::from_backend(&backend));
+    let mut app_services = AppServices::from_backend(&backend);
+
+    if let Some(path) = search_config {
+        let deployment = crate::search_config::load_builder(&path)
+            .await?
+            .register_strategy(Arc::new(LegacyExplorerStrategy::new(
+                app_services.text_search.clone(),
+                app_services.cluster.clone(),
+            )))?
+            .build()?;
+        if let Some(setup) = worker_setup.as_mut() {
+            setup.vector_indexes = Some(deployment.maintainers());
+        }
+        app_services = app_services.with_search_deployment(&deployment);
+        tracing::info!(
+            path = %path.display(),
+            strategies = app_services.search_runtime().descriptors().len(),
+            vector_indexes = deployment.maintainers().len(),
+            "search plugin deployment configured",
+        );
+    }
+    let app_services = Arc::new(app_services);
 
     // The embedded worker shares this process, so it reindexes into the very
     // same ranked text index the API reads, alongside the backend's durable

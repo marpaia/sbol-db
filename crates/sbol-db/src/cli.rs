@@ -93,6 +93,9 @@ pub enum Command {
         /// `<hostname>-<pid>-<random>`.
         #[arg(long, env = "SBOL_DB_WORKER_ID")]
         worker_id: Option<String>,
+        /// JSON search-plugin topology and concrete provider/backend config.
+        #[arg(long, env = "SBOL_DB_SEARCH_CONFIG")]
+        search_config: Option<PathBuf>,
     },
 
     /// Run a standalone async-job worker (no HTTP listener).
@@ -106,6 +109,9 @@ pub enum Command {
         queues: Option<String>,
         #[arg(long, env = "SBOL_DB_WORKER_ID")]
         worker_id: Option<String>,
+        /// JSON search-plugin config used to construct vector maintainers.
+        #[arg(long, env = "SBOL_DB_SEARCH_CONFIG")]
+        search_config: Option<PathBuf>,
     },
 
     /// Named graphs (the import corpus and any RDF graphs).

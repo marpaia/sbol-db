@@ -101,6 +101,12 @@ pub struct SearchDeploymentBuilder {
     strategies: Vec<Arc<dyn SearchStrategy>>,
 }
 
+struct VectorPlane {
+    router: VectorRouter,
+    maintainers: Arc<VectorIndexMaintainerRegistry>,
+    bindings: HashMap<String, VectorIndexBindingConfig>,
+}
+
 impl SearchDeploymentBuilder {
     pub fn new(config: SearchTopologyConfig) -> Self {
         Self {
@@ -162,18 +168,62 @@ impl SearchDeploymentBuilder {
     }
 
     pub fn build(self) -> Result<SearchDeployment, SearchError> {
+        let VectorPlane {
+            router,
+            maintainers,
+            bindings,
+        } = self.assemble_vector_plane()?;
         let SearchTopologyConfig {
             default_strategy,
-            indexes,
+            indexes: _,
             embedding_strategies,
         } = self.config;
+
+        let mut strategy_builder = StrategyRegistry::builder();
+        for strategy in self.strategies {
+            validate_strategy_requirements(strategy.as_ref(), &self.embeddings, &bindings)?;
+            strategy_builder = strategy_builder
+                .register_arc(strategy)
+                .map_err(|error| configuration(error.to_string()))?;
+        }
+        for strategy_config in embedding_strategies {
+            let embedding = self
+                .embeddings
+                .get(&strategy_config.embedding_profile)
+                .expect("validated binding embedding must remain registered")
+                .clone();
+            let strategy = EmbeddingSearchStrategy::new(strategy_config, embedding)?;
+            strategy_builder = strategy_builder
+                .register(strategy)
+                .map_err(|error| configuration(error.to_string()))?;
+        }
+
+        let runtime = SearchRuntime::new(strategy_builder.build(), default_strategy)?;
+        Ok(SearchDeployment {
+            runtime: Arc::new(runtime),
+            router: Arc::new(router),
+            maintainers,
+        })
+    }
+
+    /// Assemble only index maintenance. Standalone workers use this path when
+    /// they do not own query-time strategy dependencies such as the in-process
+    /// legacy text index.
+    pub fn build_maintenance(self) -> Result<Arc<VectorIndexMaintainerRegistry>, SearchError> {
+        Ok(self.assemble_vector_plane()?.maintainers)
+    }
+
+    fn assemble_vector_plane(&self) -> Result<VectorPlane, SearchError> {
         let mut router = VectorRouter::new();
         let mut maintainers = HashMap::new();
         let mut bindings = HashMap::new();
 
-        for binding in &indexes {
+        for binding in &self.config.indexes {
             validate_binding(binding)?;
-            if bindings.insert(binding.index.clone(), binding).is_some() {
+            if bindings
+                .insert(binding.index.clone(), binding.clone())
+                .is_some()
+            {
                 return Err(configuration(format!(
                     "duplicate logical vector index {:?}",
                     binding.index
@@ -220,77 +270,22 @@ impl SearchDeploymentBuilder {
             );
         }
 
-        let mut strategy_builder = StrategyRegistry::builder();
-        for strategy in self.strategies {
-            validate_strategy_requirements(strategy.as_ref(), &self.embeddings, &bindings)?;
-            strategy_builder = strategy_builder
-                .register_arc(strategy)
-                .map_err(|error| configuration(error.to_string()))?;
-        }
-        for strategy_config in embedding_strategies {
-            let binding = bindings.get(&strategy_config.vector_index).ok_or_else(|| {
+        for strategy in &self.config.embedding_strategies {
+            let binding = bindings.get(&strategy.vector_index).ok_or_else(|| {
                 configuration(format!(
                     "embedding strategy {:?} references unknown logical index {:?}",
-                    strategy_config.id, strategy_config.vector_index
+                    strategy.id, strategy.vector_index
                 ))
             })?;
-            if binding.embedding_profile != strategy_config.embedding_profile {
-                return Err(configuration(format!(
-                    "embedding strategy {:?} uses profile {:?}, but index {:?} is maintained with {:?}",
-                    strategy_config.id,
-                    strategy_config.embedding_profile,
-                    binding.index,
-                    binding.embedding_profile
-                )));
-            }
-            if binding.vector_name != strategy_config.vector_name {
-                return Err(configuration(format!(
-                    "embedding strategy {:?} queries vector {:?}, but index {:?} is configured with {:?}",
-                    strategy_config.id,
-                    strategy_config.vector_name,
-                    binding.index,
-                    binding.vector_name
-                )));
-            }
-            if binding.graph_payload_field != strategy_config.graph_payload_field {
-                return Err(configuration(format!(
-                    "embedding strategy {:?} and index {:?} disagree on graph payload field",
-                    strategy_config.id, binding.index
-                )));
-            }
-            let backend = self
-                .backends
-                .get(&binding.backend)
-                .expect("validated binding backend must remain registered");
-            if !backend
-                .descriptor()
-                .capabilities
-                .distances
-                .contains(&strategy_config.distance)
-            {
-                return Err(configuration(format!(
-                    "embedding strategy {:?} requests {:?}, but backend {:?} does not support it",
-                    strategy_config.id, strategy_config.distance, binding.backend
-                )));
-            }
-            let embedding = self
-                .embeddings
-                .get(&strategy_config.embedding_profile)
-                .expect("validated binding embedding must remain registered")
-                .clone();
-            let strategy = EmbeddingSearchStrategy::new(strategy_config, embedding)?;
-            strategy_builder = strategy_builder
-                .register(strategy)
-                .map_err(|error| configuration(error.to_string()))?;
+            validate_embedding_strategy_binding(strategy, binding, &self.backends)?;
         }
 
-        let runtime = SearchRuntime::new(strategy_builder.build(), default_strategy)?;
-        Ok(SearchDeployment {
-            runtime: Arc::new(runtime),
-            router: Arc::new(router),
+        Ok(VectorPlane {
+            router,
             maintainers: Arc::new(VectorIndexMaintainerRegistry {
                 entries: maintainers,
             }),
+            bindings,
         })
     }
 }
@@ -312,10 +307,50 @@ fn validate_binding(binding: &VectorIndexBindingConfig) -> Result<(), SearchErro
     Ok(())
 }
 
+fn validate_embedding_strategy_binding(
+    strategy: &EmbeddingStrategyConfig,
+    binding: &VectorIndexBindingConfig,
+    backends: &HashMap<String, Arc<dyn VectorBackend>>,
+) -> Result<(), SearchError> {
+    if binding.embedding_profile != strategy.embedding_profile {
+        return Err(configuration(format!(
+            "embedding strategy {:?} uses profile {:?}, but index {:?} is maintained with {:?}",
+            strategy.id, strategy.embedding_profile, binding.index, binding.embedding_profile
+        )));
+    }
+    if binding.vector_name != strategy.vector_name {
+        return Err(configuration(format!(
+            "embedding strategy {:?} queries vector {:?}, but index {:?} is configured with {:?}",
+            strategy.id, strategy.vector_name, binding.index, binding.vector_name
+        )));
+    }
+    if binding.graph_payload_field != strategy.graph_payload_field {
+        return Err(configuration(format!(
+            "embedding strategy {:?} and index {:?} disagree on graph payload field",
+            strategy.id, binding.index
+        )));
+    }
+    let backend = backends
+        .get(&binding.backend)
+        .expect("validated binding backend must remain registered");
+    if !backend
+        .descriptor()
+        .capabilities
+        .distances
+        .contains(&strategy.distance)
+    {
+        return Err(configuration(format!(
+            "embedding strategy {:?} requests {:?}, but backend {:?} does not support it",
+            strategy.id, strategy.distance, binding.backend
+        )));
+    }
+    Ok(())
+}
+
 fn validate_strategy_requirements(
     strategy: &dyn SearchStrategy,
     embeddings: &HashMap<String, Arc<dyn EmbeddingProvider>>,
-    bindings: &HashMap<String, &VectorIndexBindingConfig>,
+    bindings: &HashMap<String, VectorIndexBindingConfig>,
 ) -> Result<(), SearchError> {
     let descriptor = strategy.descriptor();
     for profile in &descriptor.requirements.embedding_profiles {
@@ -424,6 +459,21 @@ mod tests {
         assert_eq!(deployment.runtime().default_strategy(), "semantic.v1");
         assert_eq!(deployment.runtime().descriptors().len(), 1);
         assert_eq!(deployment.maintainers().indexes(), vec!["components"]);
+    }
+
+    #[test]
+    fn maintenance_only_build_does_not_require_query_strategy_dependencies() {
+        let mut topology = topology();
+        topology.default_strategy = "legacy.explorer.v1".to_owned();
+        let maintainers = SearchDeploymentBuilder::new(topology)
+            .register_embedding(provider())
+            .unwrap()
+            .register_vector_backend(Arc::new(ExactFlatVectorBackend::new("flat")))
+            .unwrap()
+            .build_maintenance()
+            .unwrap();
+
+        assert_eq!(maintainers.indexes(), vec!["components"]);
     }
 
     #[test]
