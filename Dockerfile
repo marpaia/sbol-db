@@ -45,6 +45,7 @@ RUN FAISS_VERSION="$FAISS_VERSION" \
 # and their non-base dependencies) under one loader path.
 RUN set -eux; \
     mkdir -p /opt/faiss-runtime/lib; \
+    mkdir -p /opt/sbol-db-data; \
     cp -a /opt/faiss/lib/libfaiss*.so* /opt/faiss-runtime/lib/; \
     ldd /opt/faiss/lib/libfaiss.so /opt/faiss/lib/libfaiss_c.so \
         | awk '$2 == "=>" && $3 ~ /^\// { print $3 }' \
@@ -88,7 +89,7 @@ FROM chef AS builder
 # rustfmt are used by pg_query's and RocksDB's build scripts.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        build-essential clang libclang-dev protobuf-compiler \
+        build-essential clang libclang-dev libopenblas-dev protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 RUN rustup component add rustfmt
 
@@ -122,6 +123,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=builder /usr/local/bin/sbol-db /usr/local/bin/sbol-db
 COPY --from=faiss-builder /opt/faiss-runtime/lib/ /usr/local/lib/
+COPY --chown=65532:65532 --from=faiss-builder /opt/sbol-db-data/ /var/lib/sbol-db/
 ENV LD_LIBRARY_PATH=/usr/local/lib
 EXPOSE 8080
 USER nonroot:nonroot

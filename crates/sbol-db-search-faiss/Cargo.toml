@@ -13,8 +13,7 @@ build = "build.rs"
 default = []
 native = [
     "dep:async-trait",
-    "dep:faiss-next",
-    "dep:faiss-next-sys",
+    "dep:bindgen",
     "dep:fs2",
     "dep:hex",
     "dep:roaring",
@@ -22,13 +21,12 @@ native = [
     "dep:sha3",
     "dep:sbol-db-search-sdk",
     "dep:tempfile",
+    "dep:thiserror",
     "dep:tokio",
 ]
 
 [dependencies]
 async-trait = { workspace = true, optional = true }
-faiss-next = { workspace = true, optional = true }
-faiss-next-sys = { workspace = true, optional = true }
 fs2 = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 roaring = { workspace = true, optional = true }
@@ -37,7 +35,11 @@ serde_json = { workspace = true, optional = true }
 sha3 = { workspace = true, optional = true }
 sbol-db-search-sdk = { workspace = true, optional = true }
 tempfile = { version = "3", optional = true }
+thiserror = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
+
+[build-dependencies]
+bindgen = { version = "0.70", optional = true }
 
 [dev-dependencies]
 sbol-db-vector-flat.workspace = true

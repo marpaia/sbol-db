@@ -344,6 +344,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "bindgen"
+version = "0.70.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f49d8fed880d473ea71efb9bf597651e77201bdd4893efe54c9e5d65ae04ce6f"
+dependencies = [
+ "bitflags",
+ "cexpr",
+ "clang-sys",
+ "itertools 0.10.5",
+ "log",
+ "prettyplease",
+ "proc-macro2 1.0.106",
+ "quote 1.0.45",
+ "regex",
+ "rustc-hash 1.1.0",
+ "shlex",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "bio"
 version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1292,23 +1312,6 @@ dependencies = [
  "parking",
  "pin-project-lite",
 ]
-
-[[package]]
-name = "faiss-next"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f61e6568f6d821e423df6d4582d47ce3a9991b361181c6cc8a1b8e9c50a5f967"
-dependencies = [
- "faiss-next-sys",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
-name = "faiss-next-sys"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3480ec84b75044836aa16a1cffb8e55620d176dff3dd08c060ad851dbd97ac4c"
 
 [[package]]
 name = "fastdivide"
@@ -4258,8 +4261,7 @@ name = "sbol-db-search-faiss"
 version = "0.1.1"
 dependencies = [
  "async-trait",
- "faiss-next",
- "faiss-next-sys",
+ "bindgen 0.70.1",
  "fs2",
  "hex",
  "roaring",
@@ -4269,6 +4271,7 @@ dependencies = [
  "serde_json",
  "sha3",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
 ]
 

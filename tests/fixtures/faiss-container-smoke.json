@@ -9,7 +9,7 @@
       "kind": "faiss",
       "config": {
         "id": "faiss-container-smoke",
-        "path": "/data/faiss"
+        "path": "/var/lib/sbol-db/faiss"
       }
     }
   ]

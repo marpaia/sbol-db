@@ -10,9 +10,13 @@ mod config;
 #[cfg(feature = "native")]
 mod engine;
 #[cfg(feature = "native")]
+mod ffi;
+#[cfg(feature = "native")]
 mod filter;
 #[cfg(feature = "native")]
 mod model;
+#[cfg(feature = "native")]
+mod native;
 #[cfg(feature = "native")]
 mod persistence;
 #[cfg(feature = "native")]
@@ -24,8 +28,7 @@ pub use config::FaissBackendConfig;
 
 #[cfg(all(test, feature = "native"))]
 mod tests {
-    use faiss_next::{index_factory, Idx, Index, MetricType};
-
+    use crate::native::{index_factory, MetricType};
     use crate::search_parameters::FilteredSearchParametersIvf;
 
     #[test]
@@ -41,7 +44,7 @@ mod tests {
         let mut index =
             index_factory(DIMENSION as u32, "IVF4,Flat", MetricType::L2).expect("create IVF index");
         index.train(&vectors).expect("train IVF index");
-        let ids = (0..COUNT).map(|id| Idx::new(id as u64)).collect::<Vec<_>>();
+        let ids = (0..COUNT).map(|id| id as i64).collect::<Vec<_>>();
         index
             .add_with_ids(&vectors, &ids)
             .expect("populate IVF index");
@@ -55,6 +58,6 @@ mod tests {
             .search_with_params(&[0.0, 1.0, 0.0, 0.0], 1, &parameters)
             .expect("search IVF index");
 
-        assert_eq!(result.labels, vec![Idx::new(80)]);
+        assert_eq!(result.labels, vec![80]);
     }
 }

@@ -94,8 +94,6 @@ oxiri = "0.2.11"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
 qdrant-client = { version = "1.18", default-features = false, features = ["serde", "uuid"] }
 fastembed = { version = "5.17.3", default-features = false }
-faiss-next = { version = "0.6.0", default-features = false }
-faiss-next-sys = { version = "0.6.0", default-features = false }
 fs2 = "0.4"
 roaring = "0.11"
 

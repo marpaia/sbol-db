@@ -1,25 +1,23 @@
 use std::fs::{self, File};
 use std::path::Path;
 
-use faiss_next::{
-    index_factory, read_index, write_index, Idx, Index, IndexImpl, MetricType, SearchParameters,
-    SearchParametersIvf,
-};
 use sbol_db_search_sdk::{DistanceMetric, VectorError, VectorFilter};
 
 use crate::config::FaissBackendConfig;
 use crate::filter::PayloadIndex;
 use crate::model::{GenerationManifest, IndexProfile, StoredRecord, FORMAT_VERSION};
-use crate::persistence::{checksum_file, io_error, sync_directory};
-use crate::search_parameters::{
-    check_return_code, FilteredSearchParameters, FilteredSearchParametersIvf,
+use crate::native::{
+    index_factory, read_index, write_index, Error as FaissError, Index, MetricType,
+    SearchParameters, SearchParametersIvf, SearchParams, SearchResult,
 };
+use crate::persistence::{checksum_file, io_error, sync_directory};
+use crate::search_parameters::{FilteredSearchParameters, FilteredSearchParametersIvf};
 
 pub(crate) struct LoadedGeneration {
     pub(crate) manifest: GenerationManifest,
     pub(crate) records: Vec<StoredRecord>,
     payload_index: PayloadIndex,
-    index: IndexImpl,
+    index: Index,
 }
 
 impl LoadedGeneration {
@@ -120,7 +118,7 @@ impl LoadedGeneration {
             .labels
             .into_iter()
             .zip(result.distances)
-            .filter_map(|(label, distance)| label.get().map(|label| (label, distance)))
+            .filter(|(label, _)| *label >= 0)
             .map(|(label, distance)| {
                 let id = usize::try_from(label).map_err(|_| {
                     VectorError::Backend(format!("FAISS returned out-of-range id {label}"))
@@ -203,9 +201,7 @@ pub(crate) fn build_index(
         index.train(&vectors).map_err(faiss_error)?;
     }
     if !records.is_empty() {
-        let ids = (0..records.len())
-            .map(|id| Idx::new(id as u64))
-            .collect::<Vec<_>>();
+        let ids = (0..records.len()).map(|id| id as i64).collect::<Vec<_>>();
         index.add_with_ids(&vectors, &ids).map_err(faiss_error)?;
     }
 
@@ -235,27 +231,15 @@ pub(crate) fn build_index(
     })
 }
 
-fn search_read_only<P: faiss_next::SearchParams>(
-    index: &IndexImpl,
+fn search_read_only<P: SearchParams>(
+    index: &Index,
     query: &[f32],
     k: usize,
     parameters: &P,
-) -> Result<faiss_next::SearchResult, VectorError> {
-    let mut distances = vec![0.0_f32; k];
-    let mut labels = vec![Idx::NONE; k];
-    let code = unsafe {
-        faiss_next_sys::faiss_Index_search_with_params(
-            index.inner_ptr(),
-            1,
-            query.as_ptr(),
-            k as i64,
-            parameters.as_ptr(),
-            distances.as_mut_ptr(),
-            labels.as_mut_ptr().cast(),
-        )
-    };
-    check_return_code(code).map_err(faiss_error)?;
-    Ok(faiss_next::SearchResult::new(distances, labels))
+) -> Result<SearchResult, VectorError> {
+    index
+        .search_with_params(query, k, parameters)
+        .map_err(faiss_error)
 }
 
 fn optional_usize(
@@ -302,6 +286,6 @@ fn utf8_path(path: &Path) -> Result<&str, VectorError> {
     })
 }
 
-fn faiss_error(error: faiss_next::Error) -> VectorError {
+fn faiss_error(error: FaissError) -> VectorError {
     VectorError::Backend(error.to_string())
 }
