@@ -215,9 +215,12 @@ table list:
 | `GET`  | `/metrics`                        | Prometheus metrics exposition          |
 | `GET`  | `/docs`                           | Interactive API docs (Scalar UI)       |
 | `GET`  | `/openapi.json`                   | OpenAPI 3.1 schema                     |
+| `POST` | `/api/v2/search`                  | Structured pluggable search strategy   |
+| `GET`  | `/api/v2/search/strategies`       | Search strategy capability discovery   |
 
 See [`docs/sparql.md`](docs/sparql.md) for the SPARQL Protocol shape,
 [`docs/neighborhood.md`](docs/neighborhood.md) for traversal parameters,
+[`docs/search-plugins.md`](docs/search-plugins.md) for pluggable search,
 [`docs/sequences.md`](docs/sequences.md) for the k-mer search, and
 [`docs/ontology.md`](docs/ontology.md) for ontology loading.
 

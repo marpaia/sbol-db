@@ -360,11 +360,11 @@ gate; it's clean on `main`.
   worker (Oxigraph sidecar, materialized view refresh, search index)
   would tail this log, but the v1 query surface is fully synchronous.
 - **DBTL / lab / workflow tables.** See [Scope](#scope).
-- **Sequence alignment, embeddings.** Out of scope for the v1
-  surface. Exact-match sequence search with reverse-complement
-  awareness ships via the k-mer index — see
-  [`sequences.md`](sequences.md). Approximate alignment, embeddings,
-  and richer full-text search are deferred.
+- **Embeddings on the v1 surface.** Out of scope for the compatibility
+  routes. Exact-match sequence search with reverse-complement awareness ships
+  via the k-mer index — see [`sequences.md`](sequences.md). Experimental
+  embedding, hybrid, and other strategies are additive under structured
+  `POST /api/v2/search`; see [`search-plugins.md`](search-plugins.md).
 - **SBOL 1 ingest.** SBOL 2 RDF, GenBank, and FASTA enter through the
   normal document import path. SBOL 1 remains deferred until there is
   an explicit converter and test corpus.
