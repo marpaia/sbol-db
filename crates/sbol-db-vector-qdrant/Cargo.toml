@@ -1,0 +1,21 @@
+[package]
+name = "sbol-db-vector-qdrant"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Qdrant self-hosted and cloud vector-search backend for sbol-db."
+
+[dependencies]
+async-trait.workspace = true
+qdrant-client.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+serde.workspace = true
+serde_json.workspace = true
+sha3.workspace = true
+sbol-db-search-sdk.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
