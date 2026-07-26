@@ -149,6 +149,18 @@ pub struct GenerationHandle {
     pub locator: String,
 }
 
+/// Observable state for one immutable index generation. Implementations may
+/// accept incremental writes while a generation is inactive, but activation
+/// is the only operation that changes which generation serves queries for an
+/// artifact.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GenerationStatus {
+    pub handle: GenerationHandle,
+    pub spec: IndexGenerationSpec,
+    pub active: bool,
+    pub vector_count: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum VectorChange {
@@ -188,6 +200,19 @@ pub trait VectorIndexAdmin: Send + Sync + 'static {
     async fn flush(&self, generation: &GenerationHandle) -> Result<(), VectorError>;
     async fn optimize(&self, generation: &GenerationHandle) -> Result<(), VectorError>;
     async fn snapshot(&self, generation: &GenerationHandle) -> Result<SnapshotRef, VectorError>;
+
+    /// Atomically make this generation serve queries addressed to its
+    /// `artifact_id`. The prior generation remains intact until explicitly
+    /// deleted, which makes rollback an activation rather than a rebuild.
+    async fn activate(&self, generation: &GenerationHandle) -> Result<(), VectorError>;
+
+    /// Enumerate generations so maintenance jobs can reconcile desired and
+    /// actual state after a restart or partial failure.
+    async fn generations(&self, artifact_id: &str) -> Result<Vec<GenerationStatus>, VectorError>;
+
+    /// Retire one inactive generation. Backends must reject deletion of the
+    /// active generation instead of implicitly changing query behavior.
+    async fn delete_generation(&self, generation: &GenerationHandle) -> Result<(), VectorError>;
 }
 
 /// Complete backend plugin used by the runtime and index maintenance jobs.

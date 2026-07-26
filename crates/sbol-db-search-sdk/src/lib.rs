@@ -38,8 +38,8 @@ pub use types::{
     StrategyRef, Total,
 };
 pub use vector::{
-    ApplyReceipt, DistanceMetric, GenerationHandle, IndexGenerationSpec, ScopedVectorSearch,
-    SnapshotRef, SparseVector, VectorBackend, VectorBackendDescriptor, VectorCapabilities,
-    VectorChange, VectorFilter, VectorIndexAdmin, VectorQuery, VectorSearchHit, VectorSearchPage,
-    VectorSearcher, VectorValue,
+    ApplyReceipt, DistanceMetric, GenerationHandle, GenerationStatus, IndexGenerationSpec,
+    ScopedVectorSearch, SnapshotRef, SparseVector, VectorBackend, VectorBackendDescriptor,
+    VectorCapabilities, VectorChange, VectorFilter, VectorIndexAdmin, VectorQuery, VectorSearchHit,
+    VectorSearchPage, VectorSearcher, VectorValue,
 };
