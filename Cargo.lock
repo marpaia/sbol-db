@@ -3660,6 +3660,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sbol-db-search-eval"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "sbol-db-search-sdk",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "sbol-db-search-sdk"
 version = "0.1.1"
 dependencies = [

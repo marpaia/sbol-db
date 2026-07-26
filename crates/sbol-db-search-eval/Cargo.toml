@@ -1,0 +1,16 @@
+[package]
+name = "sbol-db-search-eval"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Offline relevance evaluation and rollout gates for sbol-db search strategies."
+
+[dependencies]
+serde.workspace = true
+sbol-db-search-sdk.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tokio.workspace = true

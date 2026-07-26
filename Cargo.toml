@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/sbol-db-core",
     "crates/sbol-db-search-sdk",
+    "crates/sbol-db-search-eval",
     "crates/sbol-db-vector-flat",
     "crates/sbol-db-storage",
     "crates/sbol-db-rdf",
@@ -102,6 +103,7 @@ metrics-exporter-prometheus = { version = "0.16", default-features = false }
 
 sbol-db-core = { path = "crates/sbol-db-core", version = "0.1.1" }
 sbol-db-search-sdk = { path = "crates/sbol-db-search-sdk", version = "0.1.1" }
+sbol-db-search-eval = { path = "crates/sbol-db-search-eval", version = "0.1.1" }
 sbol-db-vector-flat = { path = "crates/sbol-db-vector-flat", version = "0.1.1" }
 sbol-db-storage = { path = "crates/sbol-db-storage", version = "0.1.1" }
 sbol-db-rdf = { path = "crates/sbol-db-rdf", version = "0.1.1" }
