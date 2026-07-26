@@ -4,25 +4,32 @@
 //! sbol-db remains responsible for document identity, authorization payloads,
 //! durable generations, activation, and maintenance.
 
+#[cfg(feature = "native")]
 mod backend;
 mod config;
+#[cfg(feature = "native")]
 mod engine;
+#[cfg(feature = "native")]
 mod filter;
+#[cfg(feature = "native")]
 mod model;
+#[cfg(feature = "native")]
 mod persistence;
+#[cfg(feature = "native")]
 mod search_parameters;
 
+#[cfg(feature = "native")]
 pub use backend::FaissVectorBackend;
 pub use config::FaissBackendConfig;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native"))]
 mod tests {
     use faiss_next::{index_factory, Idx, Index, MetricType};
 
     use crate::search_parameters::FilteredSearchParametersIvf;
 
     #[test]
-    fn ivf_search_applies_an_id_bitmap_before_ranking() {
+    fn ivf_search_applies_an_id_selector_before_ranking() {
         const DIMENSION: usize = 4;
         const COUNT: usize = 160;
 

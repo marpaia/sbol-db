@@ -8,6 +8,8 @@ use sbol_db_embedding_fastembed::{
     FastEmbedProvider, FastEmbedProviderConfig, LocalFastEmbedBundleConfig,
 };
 use sbol_db_search::{SearchDeploymentBuilder, SearchTopologyConfig};
+#[cfg(feature = "faiss")]
+use sbol_db_search_faiss::{FaissBackendConfig, FaissVectorBackend};
 use sbol_db_vector_flat::ExactFlatVectorBackend;
 use sbol_db_vector_qdrant::{QdrantRemoteBackend, QdrantRemoteConfig};
 use serde::Deserialize;
@@ -43,6 +45,10 @@ enum VectorBackendPluginConfig {
         /// of the JSON file is the recommended deployment shape.
         #[serde(default)]
         api_key_env: Option<String>,
+    },
+    #[cfg(feature = "faiss")]
+    Faiss {
+        config: FaissBackendConfig,
     },
 }
 
@@ -91,6 +97,11 @@ pub async fn load_builder(path: &Path) -> Result<SearchDeploymentBuilder> {
                 builder =
                     builder.register_vector_backend(Arc::new(QdrantRemoteBackend::new(config)?))?;
             }
+            #[cfg(feature = "faiss")]
+            VectorBackendPluginConfig::Faiss { config } => {
+                builder =
+                    builder.register_vector_backend(Arc::new(FaissVectorBackend::open(config)?))?;
+            }
         }
     }
 
@@ -131,6 +142,32 @@ mod tests {
 
         assert_eq!(config.topology.indexes[0].graph_payload_field, "graph");
         assert_eq!(config.embeddings.len(), 1);
+        assert_eq!(config.vector_backends.len(), 1);
+    }
+
+    #[cfg(feature = "faiss")]
+    #[test]
+    fn parses_faiss_backend_configuration() {
+        let config: SearchProcessConfig = serde_json::from_value(serde_json::json!({
+            "topology": {
+                "default_strategy": "legacy.explorer.v1",
+                "indexes": [],
+                "embedding_strategies": []
+            },
+            "vector_backends": [{
+                "kind": "faiss",
+                "config": {
+                    "id": "faiss-local",
+                    "path": "/var/lib/sbol-db/faiss",
+                    "default_nlist": 512,
+                    "default_nprobe": 32,
+                    "flat_search_cutoff": 1000,
+                    "max_query_k": 5000
+                }
+            }]
+        }))
+        .unwrap();
+
         assert_eq!(config.vector_backends.len(), 1);
     }
 }

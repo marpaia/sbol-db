@@ -37,10 +37,6 @@ impl PayloadIndex {
         Ok(index)
     }
 
-    pub(crate) fn all_ids(&self) -> Vec<i64> {
-        self.universe.iter().map(i64::from).collect()
-    }
-
     pub(crate) fn allowed(&self, filter: &VectorFilter) -> Result<Vec<i64>, VectorError> {
         Ok(self.evaluate(filter)?.iter().map(i64::from).collect())
     }

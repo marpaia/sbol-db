@@ -1,7 +1,10 @@
 use std::fs::{self, File};
 use std::path::Path;
 
-use faiss_next::{index_factory, read_index, write_index, Idx, Index, IndexImpl, MetricType};
+use faiss_next::{
+    index_factory, read_index, write_index, Idx, Index, IndexImpl, MetricType, SearchParameters,
+    SearchParametersIvf,
+};
 use sbol_db_search_sdk::{DistanceMetric, VectorError, VectorFilter};
 
 use crate::config::FaissBackendConfig;
@@ -87,21 +90,29 @@ impl LoadedGeneration {
         if self.manifest.spec.distance == DistanceMetric::Cosine {
             normalize(&mut query)?;
         }
-        let allowed = match filter {
-            Some(filter) => self.payload_index.allowed(filter)?,
-            None => self.payload_index.all_ids(),
-        };
-        if allowed.is_empty() {
+        let allowed = filter
+            .map(|filter| self.payload_index.allowed(filter))
+            .transpose()?;
+        if allowed.as_ref().is_some_and(Vec::is_empty) {
             return Ok(Vec::new());
         }
-        let result = match self.manifest.profile {
-            IndexProfile::Flat => {
-                let parameters = FilteredSearchParameters::new(&allowed).map_err(faiss_error)?;
+        let result = match (self.manifest.profile, allowed.as_deref()) {
+            (IndexProfile::Flat, Some(allowed)) => {
+                let parameters = FilteredSearchParameters::new(allowed).map_err(faiss_error)?;
                 search_read_only(&self.index, &query, k, &parameters)?
             }
-            IndexProfile::IvfFlat => {
-                let parameters = FilteredSearchParametersIvf::new(&allowed, nprobe, max_codes)
+            (IndexProfile::Flat, None) => {
+                let parameters = SearchParameters::new().map_err(faiss_error)?;
+                search_read_only(&self.index, &query, k, &parameters)?
+            }
+            (IndexProfile::IvfFlat, Some(allowed)) => {
+                let parameters = FilteredSearchParametersIvf::new(allowed, nprobe, max_codes)
                     .map_err(faiss_error)?;
+                search_read_only(&self.index, &query, k, &parameters)?
+            }
+            (IndexProfile::IvfFlat, None) => {
+                let parameters =
+                    SearchParametersIvf::with_params(nprobe, max_codes).map_err(faiss_error)?;
                 search_read_only(&self.index, &query, k, &parameters)?
             }
         };
@@ -218,7 +229,7 @@ pub(crate) fn build_index(
         vector_count: records.len(),
         nlist,
         default_nprobe,
-        faiss_version: option_env!("FAISS_VERSION").unwrap_or("unknown").to_owned(),
+        faiss_version: env!("SBOL_DB_FAISS_VERSION").to_owned(),
         records_sha3_256: records_checksum,
         index_sha3_256: index_checksum,
     })

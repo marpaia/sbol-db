@@ -28,6 +28,7 @@ plugins at startup.
 | `sbol-db-embedding-fastembed` | Local FastEmbed/ONNX provider with immutable profile identity, query/document prefixes, bounded blocking execution, and normalization validation. |
 | `sbol-db-vector-flat` | Deterministic exact in-memory scan. Development backend and recall oracle for approximate indexes. |
 | `sbol-db-vector-qdrant` | Persistent adapter for self-hosted Qdrant and Qdrant Cloud. |
+| `sbol-db-search-faiss` | Persistent embedded FAISS backend with sbol-db-owned payload indexes, checksummed generations, snapshots, and atomic activation. |
 | `sbol-db-search-eval` | Versioned relevance fixtures, ranking metrics, paired comparisons, and rollout gates. |
 | `sbol-db-app` | Computes the caller's graph scope, binds scoped vector and primary-store hydration services, and owns compatibility behavior. |
 
@@ -48,7 +49,7 @@ POST /api/v2/search
                                            |
                                   logical index binding
                                   /        |          \
-                            exact-flat   Qdrant   future pgvector/FAISS
+                            exact-flat   FAISS   Qdrant / future pgvector
 ```
 
 ## Writing a strategy
@@ -225,6 +226,37 @@ For a small in-process deployment, replace the vector backend entry with
 Exact-flat state belongs to that process and is not suitable for a separate
 maintenance-worker/API topology.
 
+For an embedded production deployment, build the binary with `--features
+faiss` and configure a persistent local store:
+
+```json
+{
+  "kind": "faiss",
+  "config": {
+    "id": "faiss-local",
+    "path": "/var/lib/sbol-db/search/faiss",
+    "default_nlist": 256,
+    "default_nprobe": 16,
+    "flat_search_cutoff": 256,
+    "max_query_k": 10000
+  }
+}
+```
+
+`sbol-db-search-faiss` uses the current FAISS 1.14 C ABI through
+`faiss-next`. On macOS, `brew install faiss` provides the development and
+runtime libraries. Linux deployments should install or build FAISS 1.14 with
+`FAISS_ENABLE_C_API=ON` and `BUILD_SHARED_LIBS=ON`, then expose it through
+`FAISS_DIR` or the platform library search path. The feature is opt-in so a
+deployment that selects Qdrant, pgvector, or exact-flat does not acquire a
+native FAISS dependency accidentally.
+
+FAISS generation parameters support `nlist`, `nprobe`, and
+`flat_search_cutoff`. Query parameters support `nprobe` and `max_codes`.
+Unknown parameters are rejected. Small generations use exact `IDMap2,Flat`;
+larger generations use `IndexIVFFlat`, with training-centroid limits validated
+before FAISS is called.
+
 ## Writing an embedding provider
 
 Embedding identity includes provider, model, immutable revision, dimension,
@@ -285,7 +317,7 @@ The logical index router lets deployment topology choose the engine:
 | sbol-db role | Initial recommendation | Alternatives to evaluate |
 | --- | --- | --- |
 | Library, tests, small corpus | `sbol-db-vector-flat` | Qdrant Edge once stable-toolchain-compatible |
-| Embedded SQLite or RocksDB application | exact-flat for small data; Qdrant server when ANN scale is needed | Qdrant Edge, LanceDB, USearch/FAISS adapter |
+| Embedded SQLite or RocksDB application | `sbol-db-search-faiss` for ANN scale; exact-flat for small data | Qdrant Edge, LanceDB, USearch |
 | Postgres service | Qdrant self-hosted or Cloud | pgvector to reduce operational components |
 | Search service in a larger stack | Qdrant self-hosted or Cloud | deployment's existing vector service |
 
@@ -297,8 +329,9 @@ Qdrant Edge remains a desired embedded adapter. The current `qdrant-edge`
 0.7.2 crate was compile-tested against this workspace's stable Rust 1.93 toolchain
 and currently reaches unstable Rust APIs. The project will not set
 `RUSTC_BOOTSTRAP` or silently require nightly to ship it. Keep the adapter
-boundary, add Edge when it builds on supported stable Rust, and retain LanceDB
-as a mature embedded alternative to benchmark. See the
+boundary and add Edge when it builds on supported stable Rust. FAISS is the
+shipping local ANN adapter; retain LanceDB and USearch as embedded alternatives
+to benchmark. See the
 [Qdrant Edge quickstart](https://qdrant.tech/documentation/edge/edge-quickstart/)
 and [LanceDB embedded quickstart](https://docs.lancedb.com/quickstart).
 
@@ -323,6 +356,14 @@ stores each generation in a physical collection, persists the full generation
 spec in collection metadata, and changes the logical artifact using one atomic
 multi-action alias request. Rollback is another alias activation, not a
 re-embedding job.
+
+The FAISS adapter persists the canonical generation spec and sorted sbol-db
+document records separately from `index.faiss`. It verifies SHA3-256 checksums
+before calling FAISS deserialization, compiles graph and caller filters into
+native ID selectors before ranking, and records the exact index factory,
+effective `nlist`/`nprobe`, vector count, and FAISS version in the immutable
+manifest. The active pointer includes the manifest checksum, so a crash or
+partial build cannot make an unready generation queryable.
 
 The built-in `rebuild_vector_index` durable job supplies the first maintenance
 path. It keyset-pages the primary store's complete derived SBOL object view,

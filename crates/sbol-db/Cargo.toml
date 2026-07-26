@@ -18,6 +18,7 @@ default = ["lab"]
 # than enabling it implicitly so `cargo build --no-default-features -p sbol-db`
 # still strips the embedded UI.
 lab = ["sbol-db-server/lab"]
+faiss = ["dep:sbol-db-search-faiss", "sbol-db-search-faiss/native"]
 
 [dependencies]
 sbol-db-core.workspace = true
@@ -30,6 +31,7 @@ sbol-db-search.workspace = true
 sbol-db-embedding-fastembed.workspace = true
 sbol-db-vector-flat.workspace = true
 sbol-db-vector-qdrant.workspace = true
+sbol-db-search-faiss = { workspace = true, optional = true }
 sbol-db-sparql.workspace = true
 sbol-db-server.workspace = true
 sbol-db-jobs.workspace = true

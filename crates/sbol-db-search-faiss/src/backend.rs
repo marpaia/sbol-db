@@ -963,6 +963,7 @@ fn join_error(error: tokio::task::JoinError) -> VectorError {
 mod tests {
     use super::*;
     use sbol_db_search_sdk::VectorFilter;
+    use sbol_db_vector_flat::ExactFlatVectorBackend;
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -1037,6 +1038,9 @@ mod tests {
         .await;
         let snapshot = backend.snapshot(&first).await.unwrap();
         assert!(Path::new(&snapshot.locator).join("index.faiss").exists());
+        let manifest: GenerationManifest =
+            read_json(&Path::new(&first.locator).join("manifest.json")).unwrap();
+        assert!(manifest.faiss_version.starts_with("1.14."));
         backend.activate(&first).await.unwrap();
 
         let authorized = VectorFilter::And {
@@ -1130,5 +1134,93 @@ mod tests {
             FaissVectorBackend::open(FaissBackendConfig::new("local", directory.path())),
             Err(VectorError::Backend(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn flat_profile_matches_exact_backend_scores_and_filters() {
+        let directory = TempDir::new().unwrap();
+        let faiss = open_backend(&directory);
+        let exact = ExactFlatVectorBackend::new("exact");
+        let mut euclidean = spec("g1");
+        euclidean.distance = DistanceMetric::Euclidean;
+        let changes = vec![
+            upsert("near", [0.5, 0.0], "public", 2026),
+            upsert("far", [3.0, 0.0], "public", 2026),
+            upsert("secret", [0.1, 0.0], "private", 2026),
+        ];
+
+        let faiss_generation = faiss.create_generation(euclidean.clone()).await.unwrap();
+        faiss
+            .apply(&faiss_generation, changes.clone())
+            .await
+            .unwrap();
+        faiss.optimize(&faiss_generation).await.unwrap();
+        faiss.activate(&faiss_generation).await.unwrap();
+        let exact_generation = exact.create_generation(euclidean).await.unwrap();
+        exact.apply(&exact_generation, changes).await.unwrap();
+        exact.activate(&exact_generation).await.unwrap();
+
+        let public = Some(VectorFilter::Match {
+            field: "graph".to_owned(),
+            value: json!("public"),
+        });
+        let mut request = query(public, 10);
+        request.vector = VectorValue::Dense(vec![0.0, 0.0]);
+        let faiss_page = faiss.query(request.clone()).await.unwrap();
+        let exact_page = exact.query(request).await.unwrap();
+        assert_eq!(
+            faiss_page
+                .items
+                .iter()
+                .map(|hit| &hit.document_id)
+                .collect::<Vec<_>>(),
+            exact_page
+                .items
+                .iter()
+                .map(|hit| &hit.document_id)
+                .collect::<Vec<_>>()
+        );
+        for (faiss_hit, exact_hit) in faiss_page.items.iter().zip(exact_page.items) {
+            assert!((faiss_hit.score - exact_hit.score).abs() < 1.0e-6);
+        }
+    }
+
+    #[tokio::test]
+    async fn ivf_profile_filters_candidates_inside_faiss() {
+        let directory = TempDir::new().unwrap();
+        let backend = open_backend(&directory);
+        let mut ann_spec = spec("g1");
+        ann_spec.distance = DistanceMetric::Euclidean;
+        ann_spec.parameters = BTreeMap::from([
+            ("flat_search_cutoff".to_owned(), json!(0)),
+            ("nlist".to_owned(), json!(4)),
+            ("nprobe".to_owned(), json!(4)),
+        ]);
+        let handle = backend.create_generation(ann_spec).await.unwrap();
+        let changes = (0..160)
+            .map(|id| {
+                upsert(
+                    &format!("doc-{id:03}"),
+                    [id as f32, 0.0],
+                    if id >= 80 { "allowed" } else { "denied" },
+                    2026,
+                )
+            })
+            .collect();
+        backend.apply(&handle, changes).await.unwrap();
+        backend.optimize(&handle).await.unwrap();
+        backend.activate(&handle).await.unwrap();
+
+        let mut request = query(
+            Some(VectorFilter::Match {
+                field: "graph".to_owned(),
+                value: json!("allowed"),
+            }),
+            1,
+        );
+        request.vector = VectorValue::Dense(vec![0.0, 0.0]);
+        request.parameters.insert("nprobe".to_owned(), json!(4));
+        let page = backend.query(request).await.unwrap();
+        assert_eq!(page.items[0].document_id, DocumentId("doc-080".to_owned()));
     }
 }

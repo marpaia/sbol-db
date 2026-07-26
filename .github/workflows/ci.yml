@@ -36,6 +36,45 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --all-targets
 
+  faiss-native:
+    runs-on: ubuntu-latest
+    env:
+      FAISS_DIR: ${{ runner.temp }}/faiss-install
+      LD_LIBRARY_PATH: ${{ runner.temp }}/faiss-install/lib
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build pinned FAISS C API
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/faiss-v1.14.3.tar.gz"
+          source="$RUNNER_TEMP/faiss-source"
+          curl -fsSL -o "$archive" \
+            https://github.com/facebookresearch/faiss/archive/refs/tags/v1.14.3.tar.gz
+          echo "7f3c4ed9aec3bd7524382862f5fcbd4d8984e2a8979ff3bdb2c0bcea5144149e  $archive" \
+            | sha256sum --check --strict
+          mkdir -p "$source"
+          tar -xzf "$archive" --strip-components=1 -C "$source"
+          cmake -S "$source" -B "$source/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$FAISS_DIR" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_TESTING=OFF \
+            -DFAISS_ENABLE_C_API=ON \
+            -DFAISS_ENABLE_CUVS=OFF \
+            -DFAISS_ENABLE_GPU=OFF \
+            -DFAISS_ENABLE_PYTHON=OFF \
+            -DFAISS_OPT_LEVEL=generic
+          cmake --build "$source/build" --parallel 2
+          cmake --install "$source/build"
+      - run: cargo clippy -p sbol-db-search-faiss --all-targets --features native -- -D warnings
+      - run: cargo test -p sbol-db-search-faiss --features native
+      - run: cargo check -p sbol-db --no-default-features --features faiss
+
   python-client:
     runs-on: ubuntu-latest
     services:

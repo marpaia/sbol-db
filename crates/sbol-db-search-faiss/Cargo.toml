@@ -6,17 +6,38 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Persistent embedded FAISS vector-search backend for sbol-db."
+readme = "README.md"
+build = "build.rs"
+
+[features]
+default = []
+native = [
+    "dep:async-trait",
+    "dep:faiss-next",
+    "dep:faiss-next-sys",
+    "dep:fs2",
+    "dep:hex",
+    "dep:roaring",
+    "dep:serde_json",
+    "dep:sha3",
+    "dep:sbol-db-search-sdk",
+    "dep:tempfile",
+    "dep:tokio",
+]
 
 [dependencies]
-async-trait.workspace = true
-faiss-next.workspace = true
-faiss-next-sys.workspace = true
-fs2.workspace = true
-hex.workspace = true
-roaring.workspace = true
+async-trait = { workspace = true, optional = true }
+faiss-next = { workspace = true, optional = true }
+faiss-next-sys = { workspace = true, optional = true }
+fs2 = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+roaring = { workspace = true, optional = true }
 serde.workspace = true
-serde_json.workspace = true
-sha3.workspace = true
-sbol-db-search-sdk.workspace = true
-tempfile = "3"
-tokio.workspace = true
+serde_json = { workspace = true, optional = true }
+sha3 = { workspace = true, optional = true }
+sbol-db-search-sdk = { workspace = true, optional = true }
+tempfile = { version = "3", optional = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+sbol-db-vector-flat.workspace = true
