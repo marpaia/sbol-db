@@ -21,6 +21,7 @@
 
 pub mod align;
 pub mod cluster;
+pub mod deployment;
 pub mod embedding_strategy;
 pub mod keywords;
 pub mod maintenance;
@@ -34,6 +35,10 @@ pub mod ranked_text;
 
 pub use align::{AlignMode, AlignOptions, Alignment};
 pub use cluster::ClusterId;
+pub use deployment::{
+    SearchDeployment, SearchDeploymentBuilder, SearchTopologyConfig, VectorIndexBindingConfig,
+    VectorIndexMaintainerRegistry,
+};
 pub use embedding_strategy::{EmbeddingSearchStrategy, EmbeddingStrategyConfig};
 pub use maintenance::{IndexBuildReport, VectorDocument, VectorIndexMaintainer, VectorRebuildSpec};
 pub use minhash::{band_hashes, sketch, Signature, SketchParams};

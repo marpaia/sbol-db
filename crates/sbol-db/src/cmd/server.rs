@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use sbol_db_app::AppServices;
 use sbol_db_backend::Backend;
 use sbol_db_jobs::{default_registry, SearchIndexHandles, Worker, WorkerConfig};
+use sbol_db_search::VectorIndexMaintainerRegistry;
 use sbol_db_server::{router, AppState, Metrics};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{ConfigStore, JobQueue, SbolStore};
@@ -149,6 +150,10 @@ pub(crate) struct WorkerSetup {
     /// subcommand runs in a separate process with no shared index and leaves it
     /// `None`, so that job kind fails fast there.
     pub search: Option<SearchIndexHandles>,
+    /// Maintenance coordinators keyed by logical vector index. A deployment
+    /// that assembles search plugins installs the same validated registry used
+    /// by its query router.
+    pub vector_indexes: Option<Arc<VectorIndexMaintainerRegistry>>,
 }
 
 impl WorkerSetup {
@@ -168,6 +173,9 @@ impl WorkerSetup {
         .with_config_store(self.config_store);
         if let Some(search) = self.search {
             worker = worker.with_search_index(search);
+        }
+        if let Some(vector_indexes) = self.vector_indexes {
+            worker = worker.with_vector_indexes(vector_indexes);
         }
         tokio::spawn(async move {
             if let Err(err) = worker.run(cancel).await {
@@ -252,6 +260,8 @@ pub(crate) async fn build_worker_setup(
         // Wired by the embedded-server path once the shared search index exists;
         // the standalone worker leaves it unset.
         search: None,
+        // Installed by a configured search deployment.
+        vector_indexes: None,
     })
 }
 

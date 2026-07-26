@@ -38,12 +38,19 @@ impl JobHandler for RebuildVectorIndexHandler {
         ctx: JobContext,
         payload: VectorRebuildSpec,
     ) -> Result<JobOutcome, HandlerError> {
-        let maintainer = ctx.vector_index.as_ref().ok_or_else(|| {
+        let maintainers = ctx.vector_indexes.as_ref().ok_or_else(|| {
             HandlerError::Other(
-                "rebuild_vector_index requires a vector index maintainer on the job context; \
+                "rebuild_vector_index requires vector index maintainers on the job context; \
                  this worker was built without one"
                     .to_owned(),
             )
+        })?;
+        let maintainer = maintainers.get(&payload.artifact_id).ok_or_else(|| {
+            HandlerError::Other(format!(
+                "rebuild_vector_index has no maintainer for artifact {:?}; configured indexes: {:?}",
+                payload.artifact_id,
+                maintainers.indexes()
+            ))
         })?;
         ensure_not_cancelled(&ctx)?;
         ctx.log(

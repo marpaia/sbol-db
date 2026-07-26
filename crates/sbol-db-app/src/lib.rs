@@ -59,7 +59,7 @@ use std::sync::{Arc, OnceLock};
 
 use sbol_db_backend::Backend;
 use sbol_db_search::ranked_text::RankedTextIndex;
-use sbol_db_search::{SearchRuntime, VectorRouter};
+use sbol_db_search::{SearchDeployment, SearchRuntime, VectorRouter};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
     AclStore, BlobStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore,
@@ -306,6 +306,14 @@ impl AppServices {
     pub fn with_vector_router(mut self, router: Arc<VectorRouter>) -> Self {
         self.search_vectors = Some(router);
         self
+    }
+
+    /// Install a topology that was validated once by the shared search
+    /// deployment builder. Query dispatch and logical vector routing therefore
+    /// cannot be assembled from different plugin configurations.
+    pub fn with_search_deployment(self, deployment: &SearchDeployment) -> Self {
+        self.with_search_runtime(deployment.runtime())
+            .with_vector_router(deployment.router())
     }
 
     /// Replace the default temp-directory blob store with a caller-provided one,

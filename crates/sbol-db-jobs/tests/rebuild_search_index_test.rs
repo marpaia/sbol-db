@@ -124,7 +124,7 @@ async fn rebuild_populates_ranks_and_index() {
             text_index: text_index.clone(),
             triples,
         }),
-        vector_index: None,
+        vector_indexes: None,
         config: None,
     };
 
@@ -241,7 +241,7 @@ async fn rebuild_without_search_handle_fails_clearly() {
         jobs,
         cancel: CancellationToken::new(),
         search: None,
-        vector_index: None,
+        vector_indexes: None,
         config: None,
     };
 

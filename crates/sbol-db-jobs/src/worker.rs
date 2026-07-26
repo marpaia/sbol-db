@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use sbol_db_core::{DomainError, JobId};
-use sbol_db_search::VectorIndexMaintainer;
+use sbol_db_search::VectorIndexMaintainerRegistry;
 use sbol_db_storage::{ConfigStore, JobQueue, JobStatus, SbolJob, SbolStore, DEFAULT_QUEUE};
 use sqlx::postgres::PgListener;
 use sqlx::PgPool;
@@ -105,7 +105,7 @@ pub struct Worker {
     registry: Arc<JobRegistry>,
     config: WorkerConfig,
     search: Option<SearchIndexHandles>,
-    vector_index: Option<Arc<VectorIndexMaintainer>>,
+    vector_indexes: Option<Arc<VectorIndexMaintainerRegistry>>,
     config_store: Option<Arc<dyn ConfigStore>>,
 }
 
@@ -124,7 +124,7 @@ impl Worker {
             registry,
             config,
             search: None,
-            vector_index: None,
+            vector_indexes: None,
             config_store: None,
         }
     }
@@ -140,8 +140,11 @@ impl Worker {
     /// Give this worker the embedding/backend coordinator required by the
     /// `rebuild_vector_index` job. Deployment code chooses the concrete
     /// plugins; the worker and handler remain backend-neutral.
-    pub fn with_vector_index(mut self, vector_index: Arc<VectorIndexMaintainer>) -> Self {
-        self.vector_index = Some(vector_index);
+    pub fn with_vector_indexes(
+        mut self,
+        vector_indexes: Arc<VectorIndexMaintainerRegistry>,
+    ) -> Self {
+        self.vector_indexes = Some(vector_indexes);
         self
     }
 
@@ -302,7 +305,7 @@ impl Worker {
                 jobs: self.repo.clone(),
                 cancel: cancel.clone(),
                 search: self.search.clone(),
-                vector_index: self.vector_index.clone(),
+                vector_indexes: self.vector_indexes.clone(),
                 config: self.config_store.clone(),
             };
             let repo = self.repo.clone();

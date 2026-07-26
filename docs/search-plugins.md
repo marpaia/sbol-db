@@ -131,6 +131,34 @@ let semantic = EmbeddingSearchStrategy::new(
 )?;
 ```
 
+For a complete deployment, one typed topology drives query routing and index
+maintenance. Concrete crates construct the plugin objects; the shared builder
+resolves their stable IDs and rejects missing providers, duplicate logical
+indexes, vector-name/profile drift, unsupported distances, non-dense backends,
+or backends that cannot enforce graph filters natively:
+
+```rust,ignore
+let topology: SearchTopologyConfig = serde_json::from_slice(config_bytes)?;
+let deployment = SearchDeploymentBuilder::new(topology)
+    .register_embedding(fastembed_provider)?
+    .register_vector_backend(qdrant_backend)?
+    .register_strategy(Arc::new(LegacyExplorerStrategy::new(
+        text_index,
+        clusters,
+    )))?
+    .build()?;
+
+let app = AppServices::from_backend(&backend)
+    .with_search_deployment(&deployment);
+let worker = Worker::new(/* existing storage/job arguments */)
+    .with_vector_indexes(deployment.maintainers());
+```
+
+`VectorIndexBindingConfig` names the logical index, backend instance,
+embedding profile, named vector, and graph payload field. This keeps the Rust
+SDK usable in an embedded application without forcing that application to use
+sbol-db's CLI or a particular configuration-file format.
+
 ## Writing an embedding provider
 
 Embedding identity includes provider, model, immutable revision, dimension,
@@ -227,8 +255,8 @@ The built-in `rebuild_vector_index` durable job supplies the first maintenance
 path. It keyset-pages the primary store's complete derived SBOL object view,
 resolves graph IRIs, creates deterministic labeled embedding text, and returns
 the maintainer's `IndexBuildReport` as the durable job result. Deployment code
-injects the selected provider/backend pair with
-`Worker::with_vector_index(Arc<VectorIndexMaintainer>)`; a worker without that
+injects the validated provider/backend registry with
+`Worker::with_vector_indexes(Arc<VectorIndexMaintainerRegistry>)`; a worker without that
 configuration fails this job kind clearly while continuing to serve other job
 kinds.
 
