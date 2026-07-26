@@ -3654,6 +3654,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sbol-db-search-sdk"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "sbol-db-server"
 version = "0.1.1"
 dependencies = [
