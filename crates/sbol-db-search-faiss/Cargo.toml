@@ -1,0 +1,12 @@
+[package]
+name = "sbol-db-search-faiss"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Persistent embedded FAISS vector-search backend for sbol-db."
+
+[dependencies]
+faiss-next.workspace = true
+faiss-next-sys.workspace = true
