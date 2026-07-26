@@ -12,10 +12,15 @@ VERSION   := $(or $(GIT_TAG),$(GIT_HASH)$(GIT_DIRTY))
 
 IMAGE ?= $(REGISTRY):$(VERSION)
 
-.PHONY: psql container
+.PHONY: psql container container/test-faiss
 
 psql:
 	docker compose exec -e PGPASSWORD=sbol postgres psql -U sbol -d sbol
 
 container:
 	docker buildx build --load --tag $(IMAGE) .
+
+container/test-faiss:
+	docker buildx build --load --target faiss-test --tag $(IMAGE)-faiss-test .
+	docker buildx build --load --tag $(IMAGE) .
+	docker/test-faiss-container.sh $(IMAGE)

@@ -1,0 +1,16 @@
+{
+  "topology": {
+    "default_strategy": "legacy.explorer.v1",
+    "indexes": [],
+    "embedding_strategies": []
+  },
+  "vector_backends": [
+    {
+      "kind": "faiss",
+      "config": {
+        "id": "faiss-container-smoke",
+        "path": "/data/faiss"
+      }
+    }
+  ]
+}

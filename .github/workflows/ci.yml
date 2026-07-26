@@ -48,32 +48,30 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Install FAISS build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev ninja-build
       - name: Build pinned FAISS C API
-        run: |
-          set -euo pipefail
-          archive="$RUNNER_TEMP/faiss-v1.14.3.tar.gz"
-          source="$RUNNER_TEMP/faiss-source"
-          curl -fsSL -o "$archive" \
-            https://github.com/facebookresearch/faiss/archive/refs/tags/v1.14.3.tar.gz
-          echo "7f3c4ed9aec3bd7524382862f5fcbd4d8984e2a8979ff3bdb2c0bcea5144149e  $archive" \
-            | sha256sum --check --strict
-          mkdir -p "$source"
-          tar -xzf "$archive" --strip-components=1 -C "$source"
-          cmake -S "$source" -B "$source/build" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$FAISS_DIR" \
-            -DBUILD_SHARED_LIBS=ON \
-            -DBUILD_TESTING=OFF \
-            -DFAISS_ENABLE_C_API=ON \
-            -DFAISS_ENABLE_CUVS=OFF \
-            -DFAISS_ENABLE_GPU=OFF \
-            -DFAISS_ENABLE_PYTHON=OFF \
-            -DFAISS_OPT_LEVEL=generic
-          cmake --build "$source/build" --parallel 2
-          cmake --install "$source/build"
+        env:
+          FAISS_PREFIX: ${{ env.FAISS_DIR }}
+          FAISS_BUILD_JOBS: "2"
+        run: docker/install-faiss.sh
       - run: cargo clippy -p sbol-db-search-faiss --all-targets --features native -- -D warnings
       - run: cargo test -p sbol-db-search-faiss --features native
       - run: cargo check -p sbol-db --no-default-features --features faiss
+
+  faiss-container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Test FAISS against the container-native toolchain
+        run: >-
+          docker buildx build --load --target faiss-test
+          --tag sbol-db:faiss-test .
+      - name: Build FAISS-enabled production image
+        run: docker buildx build --load --tag sbol-db:faiss-ci .
+      - name: Verify FAISS loads and opens a persistent store
+        run: docker/test-faiss-container.sh sbol-db:faiss-ci
 
   python-client:
     runs-on: ubuntu-latest
