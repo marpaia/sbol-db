@@ -138,6 +138,7 @@ pub trait VectorSearcher: Send + Sync + 'static {
 pub struct IndexGenerationSpec {
     pub artifact_id: String,
     pub generation: String,
+    pub vector_name: String,
     pub dimension: usize,
     pub distance: DistanceMetric,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

@@ -105,6 +105,7 @@ impl VectorIndexMaintainer {
             .create_generation(IndexGenerationSpec {
                 artifact_id: spec.artifact_id.clone(),
                 generation: spec.generation.clone(),
+                vector_name: spec.vector_name.clone(),
                 dimension: embedding.dimension,
                 distance: spec.distance,
                 parameters: spec.backend_parameters.clone(),

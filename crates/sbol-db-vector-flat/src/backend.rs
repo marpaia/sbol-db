@@ -116,6 +116,12 @@ impl VectorSearcher for ExactFlatVectorBackend {
 
         validate_dense_vector(query_vector, generation.spec.dimension, "query")?;
         validate_metric_vector(query_vector, generation.spec.distance, "query")?;
+        if query.vector_name != generation.spec.vector_name {
+            return Err(VectorError::InvalidRequest(format!(
+                "query vector {:?} does not match generation vector {:?}",
+                query.vector_name, generation.spec.vector_name
+            )));
+        }
 
         let mut hits = Vec::new();
         for (document_id, point) in &generation.points {
@@ -211,6 +217,14 @@ impl VectorIndexAdmin for ExactFlatVectorBackend {
                         return Err(VectorError::InvalidRequest(format!(
                             "document {:?} has no vectors",
                             document_id.0
+                        )));
+                    }
+                    if vectors.len() != 1
+                        || !vectors.contains_key(&stored_generation.spec.vector_name)
+                    {
+                        return Err(VectorError::InvalidRequest(format!(
+                            "generation expects exactly the named vector {:?}",
+                            stored_generation.spec.vector_name
                         )));
                     }
                     let mut dense_vectors = BTreeMap::new();
@@ -314,9 +328,12 @@ fn validate_spec(
     spec: &IndexGenerationSpec,
     descriptor: &VectorBackendDescriptor,
 ) -> Result<(), VectorError> {
-    if spec.artifact_id.trim().is_empty() || spec.generation.trim().is_empty() {
+    if spec.artifact_id.trim().is_empty()
+        || spec.generation.trim().is_empty()
+        || spec.vector_name.trim().is_empty()
+    {
         return Err(VectorError::InvalidRequest(
-            "artifact_id and generation cannot be empty".to_owned(),
+            "artifact_id, generation, and vector_name cannot be empty".to_owned(),
         ));
     }
     if spec.dimension == 0 {
@@ -495,6 +512,7 @@ mod tests {
         IndexGenerationSpec {
             artifact_id: "parts".to_owned(),
             generation: generation.to_owned(),
+            vector_name: "content".to_owned(),
             dimension: 2,
             distance,
             parameters: BTreeMap::new(),
