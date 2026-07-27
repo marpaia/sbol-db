@@ -39,8 +39,8 @@ jobs:
   faiss-native:
     runs-on: ubuntu-latest
     env:
-      FAISS_DIR: ${{ runner.temp }}/faiss-install
-      LD_LIBRARY_PATH: ${{ runner.temp }}/faiss-install/lib
+      FAISS_DIR: /tmp/sbol-db-faiss
+      LD_LIBRARY_PATH: /tmp/sbol-db-faiss/lib
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
