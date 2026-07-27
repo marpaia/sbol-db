@@ -35,6 +35,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --all-targets
+      - name: Run public search contributor example and quality gate
+        run: cargo run -p sbol-db-search-eval --example contributor_strategy
 
   faiss-native:
     runs-on: ubuntu-latest

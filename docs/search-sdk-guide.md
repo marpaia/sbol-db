@@ -53,69 +53,17 @@ pub trait SearchStrategy: Send + Sync + 'static {
 }
 ```
 
-Use the built-in
-[`LegacyExplorerStrategy`](../crates/sbol-db-app/src/search.rs) as the smallest
-complete reference. A new implementation has this shape:
+Copy the runnable
+[`contributor_strategy.rs`](../crates/sbol-db-search-eval/examples/contributor_strategy.rs)
+example. It is a complete public-API implementation, baseline comparison, and
+quality gate—not pseudocode:
 
-```rust,ignore
-pub struct MyStrategy {
-    descriptor: StrategyDescriptor,
-    // Add only the dependencies your algorithm needs.
-}
-
-impl MyStrategy {
-    pub fn new() -> Self {
-        Self {
-            descriptor: StrategyDescriptor {
-                id: "contrib.my-idea.v1".into(),
-                version: "1".into(),
-                display_name: "My search idea".into(),
-                description: "The testable behavior this strategy adds".into(),
-                capabilities: StrategyCapabilities {
-                    inputs: vec![SearchInputKind::Text],
-                    filters: vec![],
-                    filter_execution: FilterCapability::None,
-                    pagination: PaginationCapability::FirstPageOnly,
-                    totals: TotalCapability::Unknown,
-                    deterministic: true,
-                    explanations: false,
-                    data_egress: DataEgress::None,
-                },
-                requirements: StrategyRequirements::default(),
-            },
-        }
-    }
-}
-
-#[async_trait]
-impl SearchStrategy for MyStrategy {
-    fn descriptor(&self) -> &StrategyDescriptor {
-        &self.descriptor
-    }
-
-    async fn search(
-        &self,
-        ctx: SearchContext,
-        request: SearchRequest,
-    ) -> Result<SearchPage, SearchError> {
-        let items = run_my_idea(&ctx, &request).await?;
-
-        Ok(SearchPage {
-            strategy: StrategyRef {
-                id: self.descriptor.id.clone(),
-                version: self.descriptor.version.clone(),
-            },
-            items,
-            total: Total::Unknown,
-            next_cursor: None,
-            execution: ExecutionMetadata::default(),
-        })
-    }
-}
+```console
+cargo run -p sbol-db-search-eval --example contributor_strategy
 ```
 
-`run_my_idea` is where your contribution lives. Keep three rules visible while
-implementing it:
+Replace its `score` method with your idea and give the strategy a stable ID.
+Keep three rules visible while implementing it:
 
 - use `ctx.scope()` as the authorization ceiling;
 - respect `ctx.budget()` when retrieving candidates or calling tools (the
