@@ -61,6 +61,7 @@ tower-http = { version = "0.6", features = ["trace", "timeout", "limit", "cors"]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_urlencoded = "0.7"
+sha2 = "0.10"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 

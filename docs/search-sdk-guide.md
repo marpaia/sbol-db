@@ -165,7 +165,11 @@ easy to compare.
 
 Add versioned cases to an `EvaluationSuite`, then call `evaluate_strategy` for
 both the current baseline and your candidate using the same suite, scope, and
-cutoffs. Pass both reports to `compare` with an explicit `QualityGate`.
+cutoffs. Pass the suite and both reports to `compare` with an explicit
+`QualityGate`. Start from
+[`contributor-smoke-v1.json`](../crates/sbol-db-search-eval/fixtures/contributor-smoke-v1.json)
+to exercise the plumbing, then replace its synthetic cases with evidence that
+represents your intended users.
 
 Your pull request should report:
 
@@ -175,9 +179,10 @@ Your pull request should report:
 - mean latency for both strategies; and
 - any known corpus, model, or deployment limitations.
 
-The goal is not merely a positive average. The paired report shows which
-queries improved and prevents a benchmark revision from masquerading as a
-strategy improvement.
+The goal is not merely a positive average. Reports fingerprint the complete
+suite and comparison reconstructs metrics from returned IDs and judgments.
+The paired report shows which queries improved, while `min_cases` and the
+regression limit keep a tiny or uneven result from passing accidentally.
 
 ## A useful first pull request
 

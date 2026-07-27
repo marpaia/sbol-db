@@ -409,12 +409,17 @@ model-migration path.
 `sbol-db-search-eval` runs any strategy against a versioned
 `EvaluationSuite`. Each case carries a normal `SearchRequest` and graded
 document judgments. Reports include precision, recall, reciprocal rank, and
-nDCG at configured cutoffs plus per-case latency.
+nDCG at configured cutoffs plus per-case latency. Each suite records corpus and
+judgment provenance, and each report is bound to the full suite with a SHA-256
+fingerprint. Persisted reports can be verified by reconstructing their case and
+aggregate metrics from the returned document IDs.
 
 Promotion is a paired comparison against the same suite revision. A
-`QualityGate` requires both a minimum mean nDCG delta and a maximum fraction of
-queries that regress beyond tolerance. This prevents a large gain on a few
-queries from concealing broad regressions.
+`QualityGate` requires a minimum case count, a minimum mean nDCG delta, and a
+maximum fraction of queries that regress beyond tolerance. Comparison uses the
+suite judgments rather than trusting cached report aggregates and includes
+every per-query delta. This prevents a large gain on a few queries from
+concealing broad regressions.
 
 A production rollout should add, in order:
 

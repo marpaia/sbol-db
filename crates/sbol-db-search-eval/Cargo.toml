@@ -9,6 +9,8 @@ description = "Offline relevance evaluation and rollout gates for sbol-db search
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 sbol-db-search-sdk.workspace = true
 
 [dev-dependencies]

@@ -5,12 +5,28 @@
 //! paired gate before changing a deployment's default strategy.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt::Write;
 use std::time::Instant;
 
 use sbol_db_search_sdk::{
     DocumentId, SearchContext, SearchError, SearchRequest, SearchStrategy, StrategyRef,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+pub const EVALUATION_SUITE_SCHEMA_VERSION: u32 = 1;
+
+/// Human-auditable sources for the corpus and relevance labels used by a
+/// suite. Revisions and content hashes make fixture changes explicit in code
+/// review; the suite fingerprint below binds this provenance to every report.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvaluationProvenance {
+    pub corpus_source: String,
+    pub corpus_revision: String,
+    pub corpus_sha256: String,
+    pub judgments_source: String,
+    pub judgments_method: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelevanceJudgment {
@@ -28,8 +44,10 @@ pub struct EvaluationCase {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvaluationSuite {
+    pub schema_version: u32,
     pub id: String,
     pub revision: String,
+    pub provenance: EvaluationProvenance,
     pub cases: Vec<EvaluationCase>,
 }
 
@@ -74,10 +92,27 @@ pub struct AggregateMetrics {
 pub struct EvaluationReport {
     pub suite_id: String,
     pub suite_revision: String,
+    /// SHA-256 of the complete serialized suite, including provenance and
+    /// judgments. This detects fixture edits that forgot to bump a revision.
+    pub suite_sha256: String,
     pub strategy: StrategyRef,
+    pub cutoffs: Vec<usize>,
     pub cases: Vec<CaseReport>,
     pub aggregate: BTreeMap<usize, AggregateMetrics>,
     pub mean_elapsed_ms: f64,
+}
+
+/// Return the stable SHA-256 identity used to bind reports to an exact suite.
+pub fn suite_sha256(suite: &EvaluationSuite) -> Result<String, SearchError> {
+    let encoded = serde_json::to_vec(suite).map_err(|error| {
+        SearchError::InvalidRequest(format!("evaluation suite cannot be serialized: {error}"))
+    })?;
+    let digest = Sha256::digest(encoded);
+    let mut encoded_digest = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut encoded_digest, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    Ok(encoded_digest)
 }
 
 /// Execute one strategy against a suite. Every case is requested at the
@@ -90,13 +125,18 @@ pub async fn evaluate_strategy(
     config: &EvaluationConfig,
 ) -> Result<EvaluationReport, SearchError> {
     validate_suite(suite, config)?;
+    let mut cutoffs = config.cutoffs.clone();
+    cutoffs.sort_unstable();
     let max_cutoff = *config
         .cutoffs
         .iter()
         .max()
         .expect("validation rejects empty cutoffs");
     let mut cases = Vec::with_capacity(suite.cases.len());
-    let mut observed_strategy = None;
+    let expected_strategy = StrategyRef {
+        id: strategy.descriptor().id.clone(),
+        version: strategy.descriptor().version.clone(),
+    };
 
     for case in &suite.cases {
         let mut request = case.request.clone();
@@ -106,14 +146,14 @@ pub async fn evaluate_strategy(
         let started = Instant::now();
         let page = strategy.search(context.clone(), request).await?;
         let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
-        if let Some(observed) = &observed_strategy {
-            if observed != &page.strategy {
-                return Err(SearchError::Backend(
-                    "strategy identity changed during evaluation".to_owned(),
-                ));
-            }
-        } else {
-            observed_strategy = Some(page.strategy.clone());
+        if page.strategy != expected_strategy {
+            return Err(SearchError::Backend(format!(
+                "strategy returned identity {:?}@{:?}, expected {:?}@{:?}",
+                page.strategy.id,
+                page.strategy.version,
+                expected_strategy.id,
+                expected_strategy.version
+            )));
         }
 
         let returned: Vec<_> = page.items.into_iter().map(|hit| hit.document_id).collect();
@@ -126,15 +166,13 @@ pub async fn evaluate_strategy(
         });
     }
 
-    let strategy = observed_strategy.unwrap_or_else(|| StrategyRef {
-        id: strategy.descriptor().id.clone(),
-        version: strategy.descriptor().version.clone(),
-    });
     Ok(EvaluationReport {
         suite_id: suite.id.clone(),
         suite_revision: suite.revision.clone(),
-        strategy,
-        aggregate: aggregate(&cases, &config.cutoffs),
+        suite_sha256: suite_sha256(suite)?,
+        strategy: expected_strategy,
+        cutoffs: cutoffs.clone(),
+        aggregate: aggregate(&cases, &cutoffs),
         mean_elapsed_ms: mean(cases.iter().map(|case| case.elapsed_ms)),
         cases,
     })
@@ -240,6 +278,8 @@ fn mean(values: impl Iterator<Item = f64>) -> f64 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QualityGate {
     pub cutoff: usize,
+    /// Reject evidence sets that are too small for the intended rollout.
+    pub min_cases: usize,
     /// Minimum required candidate minus baseline mean nDCG.
     pub min_mean_ndcg_delta: f64,
     /// Per-query nDCG drops at or below this tolerance count as ties.
@@ -250,6 +290,7 @@ pub struct QualityGate {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ComparisonReport {
+    pub suite_sha256: String,
     pub cutoff: usize,
     pub baseline_strategy: StrategyRef,
     pub candidate_strategy: StrategyRef,
@@ -261,34 +302,138 @@ pub struct ComparisonReport {
     pub ties: usize,
     pub regressions: usize,
     pub regressed_fraction: f64,
+    pub cases: Vec<CaseComparison>,
     pub accepted: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CaseComparison {
+    pub case_id: String,
+    pub precision_delta: f64,
+    pub recall_delta: f64,
+    pub reciprocal_rank_delta: f64,
+    pub ndcg_delta: f64,
+}
+
+/// Verify a persisted report from its primary evidence: exact suite,
+/// per-query returned IDs, judgments, and timings. Cached case and aggregate
+/// metrics are rejected when they do not reproduce.
+pub fn verify_report(
+    suite: &EvaluationSuite,
+    report: &EvaluationReport,
+) -> Result<(), SearchError> {
+    let config = EvaluationConfig {
+        cutoffs: report.cutoffs.clone(),
+    };
+    validate_suite(suite, &config)?;
+    if report.suite_id != suite.id || report.suite_revision != suite.revision {
+        return Err(SearchError::InvalidRequest(
+            "evaluation report does not identify the supplied suite".to_owned(),
+        ));
+    }
+    if report.strategy.id.trim().is_empty() || report.strategy.version.trim().is_empty() {
+        return Err(SearchError::InvalidRequest(
+            "evaluation report strategy identity cannot be empty".to_owned(),
+        ));
+    }
+    let expected_sha256 = suite_sha256(suite)?;
+    if report.suite_sha256 != expected_sha256 {
+        return Err(SearchError::InvalidRequest(format!(
+            "evaluation report suite fingerprint does not match {expected_sha256}"
+        )));
+    }
+
+    let report_cases = report_case_map(report)?;
+    if report_cases.len() != suite.cases.len() {
+        return Err(SearchError::InvalidRequest(
+            "evaluation report contains a different case set".to_owned(),
+        ));
+    }
+
+    let mut recomputed_cases = Vec::with_capacity(suite.cases.len());
+    for case in &suite.cases {
+        let observed = report_cases.get(case.id.as_str()).ok_or_else(|| {
+            SearchError::InvalidRequest(format!("evaluation report is missing case {:?}", case.id))
+        })?;
+        reject_duplicate_results(&case.id, &observed.returned)?;
+        if !observed.elapsed_ms.is_finite() || observed.elapsed_ms < 0.0 {
+            return Err(SearchError::InvalidRequest(format!(
+                "evaluation case {:?} has an invalid elapsed time",
+                case.id
+            )));
+        }
+        let metrics = metrics_at_cutoffs(&observed.returned, &case.judgments, &report.cutoffs);
+        if observed.metrics != metrics {
+            return Err(SearchError::InvalidRequest(format!(
+                "evaluation case {:?} metrics do not reproduce from returned IDs",
+                case.id
+            )));
+        }
+        recomputed_cases.push(CaseReport {
+            case_id: case.id.clone(),
+            returned: observed.returned.clone(),
+            metrics,
+            elapsed_ms: observed.elapsed_ms,
+        });
+    }
+
+    if report.aggregate != aggregate(&recomputed_cases, &report.cutoffs) {
+        return Err(SearchError::InvalidRequest(
+            "evaluation aggregate metrics do not reproduce from cases".to_owned(),
+        ));
+    }
+    if report.mean_elapsed_ms != mean(recomputed_cases.iter().map(|case| case.elapsed_ms)) {
+        return Err(SearchError::InvalidRequest(
+            "evaluation mean latency does not reproduce from cases".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Compare the same cases pairwise. Reports from different fixture revisions
 /// are rejected so a changed benchmark cannot masquerade as a strategy gain.
 pub fn compare(
+    suite: &EvaluationSuite,
     baseline: &EvaluationReport,
     candidate: &EvaluationReport,
     gate: &QualityGate,
 ) -> Result<ComparisonReport, SearchError> {
+    verify_report(suite, baseline)?;
+    verify_report(suite, candidate)?;
     if baseline.suite_id != candidate.suite_id
         || baseline.suite_revision != candidate.suite_revision
+        || baseline.suite_sha256 != candidate.suite_sha256
     {
         return Err(SearchError::InvalidRequest(
             "evaluation reports use different suite identities or revisions".to_owned(),
         ));
     }
-    if !(0.0..=1.0).contains(&gate.max_regressed_fraction) || gate.regression_tolerance < 0.0 {
+    if gate.cutoff == 0
+        || gate.min_cases == 0
+        || !gate.max_regressed_fraction.is_finite()
+        || !(0.0..=1.0).contains(&gate.max_regressed_fraction)
+        || !gate.regression_tolerance.is_finite()
+        || gate.regression_tolerance < 0.0
+        || !gate.min_mean_ndcg_delta.is_finite()
+    {
         return Err(SearchError::InvalidRequest(
             "quality gate regression bounds are invalid".to_owned(),
         ));
     }
-    let baseline_aggregate = baseline.aggregate.get(&gate.cutoff).ok_or_else(|| {
-        SearchError::InvalidRequest(format!("baseline has no cutoff {}", gate.cutoff))
-    })?;
-    let candidate_aggregate = candidate.aggregate.get(&gate.cutoff).ok_or_else(|| {
-        SearchError::InvalidRequest(format!("candidate has no cutoff {}", gate.cutoff))
-    })?;
+    if suite.cases.len() < gate.min_cases {
+        return Err(SearchError::InvalidRequest(format!(
+            "quality gate requires at least {} cases but suite has {}",
+            gate.min_cases,
+            suite.cases.len()
+        )));
+    }
+    if !baseline.cutoffs.contains(&gate.cutoff) || !candidate.cutoffs.contains(&gate.cutoff) {
+        return Err(SearchError::InvalidRequest(format!(
+            "evaluation reports do not both contain cutoff {}",
+            gate.cutoff
+        )));
+    }
+    let baseline_cases = report_case_map(baseline)?;
     let candidate_cases: HashMap<_, _> = candidate
         .cases
         .iter()
@@ -303,69 +448,117 @@ pub fn compare(
     let mut wins = 0;
     let mut ties = 0;
     let mut regressions = 0;
-    for baseline_case in &baseline.cases {
+    let mut case_comparisons = Vec::with_capacity(suite.cases.len());
+    for suite_case in &suite.cases {
+        let baseline_case = baseline_cases
+            .get(suite_case.id.as_str())
+            .expect("verified report contains every suite case");
         let candidate_case = candidate_cases
-            .get(baseline_case.case_id.as_str())
-            .ok_or_else(|| {
-                SearchError::InvalidRequest(format!(
-                    "candidate report is missing case {:?}",
-                    baseline_case.case_id
-                ))
-            })?;
-        let baseline_ndcg = baseline_case
-            .metrics
-            .get(&gate.cutoff)
-            .ok_or_else(|| missing_case_cutoff(&baseline_case.case_id, gate.cutoff))?
-            .ndcg;
-        let candidate_ndcg = candidate_case
-            .metrics
-            .get(&gate.cutoff)
-            .ok_or_else(|| missing_case_cutoff(&candidate_case.case_id, gate.cutoff))?
-            .ndcg;
-        let delta = candidate_ndcg - baseline_ndcg;
-        if delta > gate.regression_tolerance {
+            .get(suite_case.id.as_str())
+            .expect("verified report contains every suite case");
+        let baseline_metrics = metrics_at_cutoffs(
+            &baseline_case.returned,
+            &suite_case.judgments,
+            &[gate.cutoff],
+        )[&gate.cutoff]
+            .clone();
+        let candidate_metrics = metrics_at_cutoffs(
+            &candidate_case.returned,
+            &suite_case.judgments,
+            &[gate.cutoff],
+        )[&gate.cutoff]
+            .clone();
+        let comparison = CaseComparison {
+            case_id: suite_case.id.clone(),
+            precision_delta: candidate_metrics.precision - baseline_metrics.precision,
+            recall_delta: candidate_metrics.recall - baseline_metrics.recall,
+            reciprocal_rank_delta: candidate_metrics.reciprocal_rank
+                - baseline_metrics.reciprocal_rank,
+            ndcg_delta: candidate_metrics.ndcg - baseline_metrics.ndcg,
+        };
+        if comparison.ndcg_delta > gate.regression_tolerance {
             wins += 1;
-        } else if delta < -gate.regression_tolerance {
+        } else if comparison.ndcg_delta < -gate.regression_tolerance {
             regressions += 1;
         } else {
             ties += 1;
         }
+        case_comparisons.push(comparison);
     }
     let regressed_fraction = if baseline.cases.is_empty() {
         0.0
     } else {
         regressions as f64 / baseline.cases.len() as f64
     };
-    let mean_ndcg_delta = candidate_aggregate.mean_ndcg - baseline_aggregate.mean_ndcg;
+    let mean_precision_delta = mean(case_comparisons.iter().map(|case| case.precision_delta));
+    let mean_recall_delta = mean(case_comparisons.iter().map(|case| case.recall_delta));
+    let mean_reciprocal_rank_delta = mean(
+        case_comparisons
+            .iter()
+            .map(|case| case.reciprocal_rank_delta),
+    );
+    let mean_ndcg_delta = mean(case_comparisons.iter().map(|case| case.ndcg_delta));
 
     Ok(ComparisonReport {
+        suite_sha256: baseline.suite_sha256.clone(),
         cutoff: gate.cutoff,
         baseline_strategy: baseline.strategy.clone(),
         candidate_strategy: candidate.strategy.clone(),
-        mean_precision_delta: candidate_aggregate.mean_precision
-            - baseline_aggregate.mean_precision,
-        mean_recall_delta: candidate_aggregate.mean_recall - baseline_aggregate.mean_recall,
-        mean_reciprocal_rank_delta: candidate_aggregate.mean_reciprocal_rank
-            - baseline_aggregate.mean_reciprocal_rank,
+        mean_precision_delta,
+        mean_recall_delta,
+        mean_reciprocal_rank_delta,
         mean_ndcg_delta,
         wins,
         ties,
         regressions,
         regressed_fraction,
+        cases: case_comparisons,
         accepted: mean_ndcg_delta >= gate.min_mean_ndcg_delta
             && regressed_fraction <= gate.max_regressed_fraction,
     })
 }
 
-fn validate_suite(suite: &EvaluationSuite, config: &EvaluationConfig) -> Result<(), SearchError> {
-    if suite.id.trim().is_empty() || suite.revision.trim().is_empty() {
+/// Validate fixture schema, provenance, case identities, judgments, and metric
+/// cutoffs before executing a strategy or accepting a persisted report.
+pub fn validate_suite(
+    suite: &EvaluationSuite,
+    config: &EvaluationConfig,
+) -> Result<(), SearchError> {
+    if suite.schema_version != EVALUATION_SUITE_SCHEMA_VERSION {
+        return Err(SearchError::InvalidRequest(format!(
+            "unsupported evaluation suite schema version {}",
+            suite.schema_version
+        )));
+    }
+    if suite.id.trim().is_empty() || suite.revision.trim().is_empty() || suite.cases.is_empty() {
         return Err(SearchError::InvalidRequest(
-            "evaluation suite id and revision cannot be empty".to_owned(),
+            "evaluation suite id, revision, and cases cannot be empty".to_owned(),
+        ));
+    }
+    let provenance = &suite.provenance;
+    if provenance.corpus_source.trim().is_empty()
+        || provenance.corpus_revision.trim().is_empty()
+        || provenance.judgments_source.trim().is_empty()
+        || provenance.judgments_method.trim().is_empty()
+        || provenance.corpus_sha256.len() != 64
+        || !provenance
+            .corpus_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(SearchError::InvalidRequest(
+            "evaluation suite provenance is incomplete or invalid".to_owned(),
         ));
     }
     if config.cutoffs.is_empty() || config.cutoffs.contains(&0) {
         return Err(SearchError::InvalidRequest(
             "evaluation cutoffs must be non-empty and greater than zero".to_owned(),
+        ));
+    }
+    let mut cutoffs = HashSet::new();
+    if config.cutoffs.iter().any(|cutoff| !cutoffs.insert(cutoff)) {
+        return Err(SearchError::InvalidRequest(
+            "evaluation cutoffs cannot contain duplicates".to_owned(),
         ));
     }
     let mut case_ids = HashSet::new();
@@ -387,8 +580,26 @@ fn validate_suite(suite: &EvaluationSuite, config: &EvaluationConfig) -> Result<
                 case.id
             )));
         }
+        if !case.judgments.iter().any(|judgment| judgment.relevance > 0) {
+            return Err(SearchError::InvalidRequest(format!(
+                "evaluation case {:?} has no relevant judgment",
+                case.id
+            )));
+        }
     }
     Ok(())
+}
+
+fn report_case_map(report: &EvaluationReport) -> Result<HashMap<&str, &CaseReport>, SearchError> {
+    let mut cases = HashMap::with_capacity(report.cases.len());
+    for case in &report.cases {
+        if case.case_id.trim().is_empty() || cases.insert(case.case_id.as_str(), case).is_some() {
+            return Err(SearchError::InvalidRequest(
+                "evaluation report contains an empty or duplicate case id".to_owned(),
+            ));
+        }
+    }
+    Ok(cases)
 }
 
 fn reject_duplicate_results(case_id: &str, returned: &[DocumentId]) -> Result<(), SearchError> {
@@ -399,12 +610,6 @@ fn reject_duplicate_results(case_id: &str, returned: &[DocumentId]) -> Result<()
         )));
     }
     Ok(())
-}
-
-fn missing_case_cutoff(case_id: &str, cutoff: usize) -> SearchError {
-    SearchError::InvalidRequest(format!(
-        "evaluation case {case_id:?} has no cutoff {cutoff}"
-    ))
 }
 
 #[cfg(test)]
@@ -449,21 +654,61 @@ mod tests {
         assert!(ideal[&3].ndcg > reversed[&3].ndcg);
     }
 
-    fn report(strategy: &str, metrics: BTreeMap<usize, RankingMetrics>) -> EvaluationReport {
+    fn suite() -> EvaluationSuite {
+        EvaluationSuite {
+            schema_version: EVALUATION_SUITE_SCHEMA_VERSION,
+            id: "suite".to_owned(),
+            revision: "r1".to_owned(),
+            provenance: EvaluationProvenance {
+                corpus_source: "fixture://unit-test".to_owned(),
+                corpus_revision: "1".to_owned(),
+                corpus_sha256: "0".repeat(64),
+                judgments_source: "unit test".to_owned(),
+                judgments_method: "Explicit graded labels for deterministic rankings".to_owned(),
+            },
+            cases: vec![EvaluationCase {
+                id: "q1".to_owned(),
+                request: SearchRequest {
+                    strategy: None,
+                    query: SearchInput::Text {
+                        text: "promoter".to_owned(),
+                    },
+                    filters: Default::default(),
+                    page: Default::default(),
+                    options: Default::default(),
+                },
+                judgments: vec![
+                    RelevanceJudgment {
+                        document_id: id("best"),
+                        relevance: 3,
+                    },
+                    RelevanceJudgment {
+                        document_id: id("good"),
+                        relevance: 1,
+                    },
+                ],
+            }],
+        }
+    }
+
+    fn report(suite: &EvaluationSuite, strategy: &str, order: &[&str]) -> EvaluationReport {
+        let returned = order.iter().map(|value| id(value)).collect::<Vec<_>>();
         let case = CaseReport {
             case_id: "q1".to_owned(),
-            returned: Vec::new(),
-            metrics,
+            metrics: metrics_at_cutoffs(&returned, &suite.cases[0].judgments, &[1, 3]),
+            returned,
             elapsed_ms: 1.0,
         };
-        let aggregate = aggregate(std::slice::from_ref(&case), &[3]);
+        let aggregate = aggregate(std::slice::from_ref(&case), &[1, 3]);
         EvaluationReport {
             suite_id: "suite".to_owned(),
             suite_revision: "r1".to_owned(),
+            suite_sha256: suite_sha256(suite).unwrap(),
             strategy: StrategyRef {
                 id: strategy.to_owned(),
                 version: "1".to_owned(),
             },
+            cutoffs: vec![1, 3],
             cases: vec![case],
             aggregate,
             mean_elapsed_ms: 1.0,
@@ -472,13 +717,16 @@ mod tests {
 
     #[test]
     fn paired_gate_accepts_a_material_improvement() {
-        let baseline = report("baseline", metrics_for(&["noise", "good", "best"]));
-        let candidate = report("candidate", metrics_for(&["best", "good", "noise"]));
+        let suite = suite();
+        let baseline = report(&suite, "baseline", &["noise", "good", "best"]);
+        let candidate = report(&suite, "candidate", &["best", "good", "noise"]);
         let comparison = compare(
+            &suite,
             &baseline,
             &candidate,
             &QualityGate {
                 cutoff: 3,
+                min_cases: 1,
                 min_mean_ndcg_delta: 0.05,
                 regression_tolerance: 0.001,
                 max_regressed_fraction: 0.0,
@@ -488,6 +736,30 @@ mod tests {
         assert!(comparison.accepted);
         assert_eq!(comparison.wins, 1);
         assert!(comparison.mean_ndcg_delta > 0.05);
+    }
+
+    #[test]
+    fn report_verification_rejects_cached_metric_edits() {
+        let suite = suite();
+        let mut report = report(&suite, "candidate", &["best", "good", "noise"]);
+        report.aggregate.get_mut(&3).unwrap().mean_ndcg = 0.0;
+
+        let error = verify_report(&suite, &report).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("aggregate metrics do not reproduce"));
+    }
+
+    #[test]
+    fn suite_fingerprint_binds_judgments_even_without_revision_change() {
+        let suite = suite();
+        let mut changed = suite.clone();
+        changed.cases[0].judgments[0].relevance = 2;
+
+        assert_ne!(
+            suite_sha256(&suite).unwrap(),
+            suite_sha256(&changed).unwrap()
+        );
     }
 
     struct FixedStrategy {
@@ -510,7 +782,7 @@ mod tests {
                     id: self.descriptor.id.clone(),
                     version: self.descriptor.version.clone(),
                 },
-                items: ["best", "noise", "good"]
+                items: ["best", "good", "noise"]
                     .into_iter()
                     .map(|value| SearchHit {
                         document_id: id(value),
@@ -554,26 +826,7 @@ mod tests {
                 requirements: StrategyRequirements::default(),
             },
         };
-        let suite = EvaluationSuite {
-            id: "parts".to_owned(),
-            revision: "fixture-sha".to_owned(),
-            cases: vec![EvaluationCase {
-                id: "q1".to_owned(),
-                request: SearchRequest {
-                    strategy: None,
-                    query: SearchInput::Text {
-                        text: "promoter".to_owned(),
-                    },
-                    filters: Default::default(),
-                    page: Default::default(),
-                    options: Default::default(),
-                },
-                judgments: vec![RelevanceJudgment {
-                    document_id: id("best"),
-                    relevance: 3,
-                }],
-            }],
-        };
+        let suite = suite();
         let report = evaluate_strategy(
             &strategy,
             SearchContext::new(sbol_db_search_sdk::SearchScope::Union, Default::default()),
