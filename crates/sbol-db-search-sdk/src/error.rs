@@ -11,6 +11,8 @@ pub enum SearchError {
     Configuration(String),
     #[error("search backend failed: {0}")]
     Backend(String),
+    #[error("search exceeded its {timeout_ms} ms execution budget")]
+    Timeout { timeout_ms: u64 },
     #[error("search was cancelled")]
     Cancelled,
 }

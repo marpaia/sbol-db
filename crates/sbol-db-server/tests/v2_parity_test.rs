@@ -532,3 +532,60 @@ async fn same_query_returns_the_same_object_set_on_both_surfaces() {
         .collect();
     assert_eq!(via_structured, via_v1);
 }
+
+#[tokio::test]
+async fn structured_search_uses_the_bearer_identity_graph_scope() {
+    let (app, index, _dir) = app().await;
+    let token = register_and_login(&app, "alice", "alice-search@example.org").await;
+    let private_uri = v2_create(&app, &token, "private-search").await;
+    let component = "http://sbols.org/v2#ComponentDefinition";
+    index
+        .rebuild([
+            IndexedPart {
+                subject: "http://synbiohub.org/public/shared/1".to_owned(),
+                graph: PUBLIC_GRAPH.to_owned(),
+                display_id: Some("shared".to_owned()),
+                name: Some("Shared promoter".to_owned()),
+                description: None,
+                version: Some("1".to_owned()),
+                type_iris: vec![component.to_owned()],
+                keywords: String::new(),
+                pagerank: 1.0,
+            },
+            IndexedPart {
+                subject: private_uri.clone(),
+                graph: private_uri.clone(),
+                display_id: Some("private".to_owned()),
+                name: Some("Private promoter".to_owned()),
+                description: None,
+                version: Some("1".to_owned()),
+                type_iris: vec![component.to_owned()],
+                keywords: String::new(),
+                pagerank: 1.0,
+            },
+        ])
+        .expect("seed public and private search records");
+    let request = serde_json::json!({
+        "strategy": "legacy.explorer.v1",
+        "query": {"kind": "text", "text": "promoter"},
+        "page": {"limit": 10}
+    });
+
+    let (anonymous_status, anonymous_body) =
+        post_json(&app, "/api/v2/search", request.clone(), None).await;
+    assert_eq!(anonymous_status, StatusCode::OK, "{anonymous_body}");
+    assert_eq!(
+        v2_uris(&anonymous_body),
+        BTreeSet::from(["http://synbiohub.org/public/shared/1".to_owned()])
+    );
+
+    let (alice_status, alice_body) = post_json(&app, "/api/v2/search", request, Some(&token)).await;
+    assert_eq!(alice_status, StatusCode::OK, "{alice_body}");
+    assert_eq!(
+        v2_uris(&alice_body),
+        BTreeSet::from([
+            "http://synbiohub.org/public/shared/1".to_owned(),
+            private_uri,
+        ])
+    );
+}

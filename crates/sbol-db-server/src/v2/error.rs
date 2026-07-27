@@ -64,6 +64,7 @@ impl From<SearchError> for V2Error {
                 (StatusCode::SERVICE_UNAVAILABLE, "search_unavailable")
             }
             SearchError::Backend(_) => (StatusCode::INTERNAL_SERVER_ERROR, "search_backend_error"),
+            SearchError::Timeout { .. } => (StatusCode::GATEWAY_TIMEOUT, "search_timeout"),
             SearchError::Cancelled => (StatusCode::SERVICE_UNAVAILABLE, "search_cancelled"),
         };
         Self {
@@ -147,5 +148,14 @@ mod tests {
         let (status, body) = envelope(err).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"]["code"], "search_invalid_request");
+    }
+
+    #[tokio::test]
+    async fn structured_search_timeout_is_504() {
+        let err: V2Error = SearchError::Timeout { timeout_ms: 25 }.into();
+        let (status, body) = envelope(err).await;
+        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(body["error"]["code"], "search_timeout");
+        assert_eq!(body["error"]["status"], 504);
     }
 }

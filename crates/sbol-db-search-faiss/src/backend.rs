@@ -966,6 +966,7 @@ mod tests {
     use sbol_db_vector_flat::ExactFlatVectorBackend;
     use serde_json::json;
     use tempfile::TempDir;
+    use tokio::sync::Barrier;
 
     fn open_backend(directory: &TempDir) -> FaissVectorBackend {
         FaissVectorBackend::open(FaissBackendConfig::new("local", directory.path())).unwrap()
@@ -1134,6 +1135,60 @@ mod tests {
             FaissVectorBackend::open(FaissBackendConfig::new("local", directory.path())),
             Err(VectorError::Backend(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn concurrent_queries_observe_complete_generations_during_activation() {
+        const READERS: usize = 8;
+        let directory = TempDir::new().unwrap();
+        let backend = Arc::new(open_backend(&directory));
+        let first = build_generation(
+            backend.as_ref(),
+            "g1",
+            vec![upsert("old", [1.0, 0.0], "public", 2025)],
+        )
+        .await;
+        let second = build_generation(
+            backend.as_ref(),
+            "g2",
+            vec![upsert("new", [1.0, 0.0], "public", 2026)],
+        )
+        .await;
+        backend.activate(&first).await.unwrap();
+
+        let barrier = Arc::new(Barrier::new(READERS + 1));
+        let mut readers = Vec::new();
+        for _ in 0..READERS {
+            let backend = Arc::clone(&backend);
+            let barrier = Arc::clone(&barrier);
+            readers.push(tokio::spawn(async move {
+                barrier.wait().await;
+                for _ in 0..40 {
+                    let page = backend.query(query(None, 1)).await.unwrap();
+                    assert_eq!(page.items.len(), 1);
+                    assert!(matches!(
+                        page.items[0].document_id.0.as_str(),
+                        "old" | "new"
+                    ));
+                    tokio::task::yield_now().await;
+                }
+            }));
+        }
+
+        barrier.wait().await;
+        for iteration in 0..12 {
+            let generation = if iteration % 2 == 0 { &second } else { &first };
+            backend.activate(generation).await.unwrap();
+            tokio::task::yield_now().await;
+        }
+        backend.activate(&second).await.unwrap();
+        for reader in readers {
+            reader.await.unwrap();
+        }
+        assert_eq!(
+            backend.query(query(None, 1)).await.unwrap().items[0].document_id,
+            DocumentId("new".to_owned())
+        );
     }
 
     #[tokio::test]

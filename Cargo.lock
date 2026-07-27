@@ -4265,6 +4265,7 @@ dependencies = [
  "fs2",
  "hex",
  "roaring",
+ "sbol-db-search",
  "sbol-db-search-sdk",
  "sbol-db-vector-conformance",
  "sbol-db-vector-flat",

@@ -36,11 +36,12 @@ sha3 = { workspace = true, optional = true }
 sbol-db-search-sdk = { workspace = true, optional = true }
 tempfile = { version = "3", optional = true }
 thiserror = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["sync"] }
 
 [build-dependencies]
 bindgen = { version = "0.70", optional = true }
 
 [dev-dependencies]
+sbol-db-search.workspace = true
 sbol-db-vector-conformance.workspace = true
 sbol-db-vector-flat.workspace = true

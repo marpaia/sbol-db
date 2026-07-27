@@ -97,8 +97,9 @@ Classic algorithms can implement `SearchStrategy` directly. Hybrid and neural
 strategies can compose the smaller `CandidateSource`, `Fusion`, and `Reranker`
 traits. An agentic strategy also implements `SearchStrategy`, but production
 agentic execution still needs the planned allow-listed tool broker and durable
-trace contract; `SearchBudget::max_tool_calls` is already reserved for its
-hard request limit.
+trace contract. The runtime enforces `SearchBudget::timeout_ms` around the
+complete strategy future; `max_tool_calls` is reserved for the strategy's hard
+tool limit.
 
 Register strategies in an immutable registry and choose an explicit default:
 

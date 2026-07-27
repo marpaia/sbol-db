@@ -118,7 +118,9 @@ impl SearchStrategy for MyStrategy {
 implementing it:
 
 - use `ctx.scope()` as the authorization ceiling;
-- respect `ctx.budget()` when retrieving candidates or calling tools; and
+- respect `ctx.budget()` when retrieving candidates or calling tools (the
+  runtime enforces `timeout_ms`; the strategy must enforce candidate and tool
+  limits); and
 - if retrieval starts from IDs, use `ctx.documents()` for authoritative result
   metadata rather than trusting an index payload.
 

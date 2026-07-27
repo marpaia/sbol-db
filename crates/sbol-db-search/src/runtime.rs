@@ -5,6 +5,8 @@
 //! delegates execution. Concrete strategies and scoped services are assembled
 //! by the application crate.
 
+use std::time::Duration;
+
 use sbol_db_search_sdk::{
     FilterKind, PaginationCapability, SearchContext, SearchError, SearchInput, SearchInputKind,
     SearchPage, SearchRequest, StrategyDescriptor, StrategyRegistry,
@@ -58,7 +60,15 @@ impl SearchRuntime {
             SearchError::InvalidRequest(format!("unknown search strategy `{strategy_id}`"))
         })?;
         validate_request(strategy.descriptor(), &request)?;
-        strategy.search(ctx, request).await
+        let Some(timeout_ms) = ctx.budget().timeout_ms else {
+            return strategy.search(ctx, request).await;
+        };
+        tokio::time::timeout(
+            Duration::from_millis(timeout_ms),
+            strategy.search(ctx, request),
+        )
+        .await
+        .map_err(|_| SearchError::Timeout { timeout_ms })?
     }
 }
 
@@ -70,6 +80,11 @@ fn validate_request(
         return Err(SearchError::InvalidRequest(format!(
             "page limit must be between 1 and {MAX_PAGE_SIZE}"
         )));
+    }
+    if request.options.timeout_ms == Some(0) {
+        return Err(SearchError::InvalidRequest(
+            "search timeout_ms must be greater than zero".to_owned(),
+        ));
     }
 
     let input = match &request.query {
@@ -134,6 +149,7 @@ mod tests {
 
     struct Stub {
         descriptor: StrategyDescriptor,
+        pending: bool,
     }
 
     #[async_trait]
@@ -147,6 +163,9 @@ mod tests {
             _ctx: SearchContext,
             _request: SearchRequest,
         ) -> Result<SearchPage, SearchError> {
+            if self.pending {
+                std::future::pending::<()>().await;
+            }
             Ok(SearchPage {
                 strategy: StrategyRef {
                     id: self.descriptor.id.clone(),
@@ -179,6 +198,7 @@ mod tests {
                 },
                 requirements: StrategyRequirements::default(),
             },
+            pending: false,
         };
         let registry = StrategyRegistry::builder()
             .register(strategy)
@@ -238,5 +258,45 @@ mod tests {
                 .await,
             Err(SearchError::Unsupported(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn enforces_the_context_execution_budget() {
+        let mut runtime = runtime();
+        runtime.strategies = StrategyRegistry::builder()
+            .register(Stub {
+                descriptor: runtime.descriptors().remove(0),
+                pending: true,
+            })
+            .expect("register")
+            .build();
+        let mut request = request();
+        request.options.timeout_ms = Some(5);
+        let result = runtime
+            .search(
+                SearchContext::new(
+                    SearchScope::Union,
+                    SearchBudget {
+                        timeout_ms: Some(5),
+                        ..SearchBudget::default()
+                    },
+                ),
+                request,
+            )
+            .await;
+        assert_eq!(result, Err(SearchError::Timeout { timeout_ms: 5 }));
+    }
+
+    #[tokio::test]
+    async fn rejects_a_zero_timeout() {
+        let mut request = request();
+        request.options.timeout_ms = Some(0);
+        let result = runtime()
+            .search(
+                SearchContext::new(SearchScope::Union, SearchBudget::default()),
+                request,
+            )
+            .await;
+        assert!(matches!(result, Err(SearchError::InvalidRequest(_))));
     }
 }
