@@ -30,9 +30,13 @@ Entry points to the project's documentation, organized by topic.
 - **Object lookup**: typed resolution by IRI through
   `SbolObjectRepository::get_by_iri` / `GET /objects?iri=…`. Covered
   in the [crate guide](crate-guide.md).
-- **[Pluggable search](search-plugins.md)**: compatibility-preserving
-  strategy SDK, embedding providers, vector backends, generation-based index
-  maintenance, Qdrant deployment choices, and relevance evaluation gates.
+- **[Search strategy SDK guide](search-sdk-guide.md)**: a shareable,
+  idea-to-evaluation tutorial for implementing classic, embedding, neural,
+  hybrid, agentic, or vector-engine search plugins in Rust.
+- **[Pluggable search reference](search-plugins.md)**:
+  compatibility-preserving strategy contracts, embedding providers, vector
+  backends, generation-based index maintenance, deployment choices, and
+  relevance evaluation gates.
 
 ## Storage
 
