@@ -4266,6 +4266,7 @@ dependencies = [
  "hex",
  "roaring",
  "sbol-db-search-sdk",
+ "sbol-db-vector-conformance",
  "sbol-db-vector-flat",
  "serde",
  "serde_json",
@@ -4410,11 +4411,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sbol-db-vector-conformance"
+version = "0.1.1"
+dependencies = [
+ "sbol-db-search-sdk",
+ "serde_json",
+]
+
+[[package]]
 name = "sbol-db-vector-flat"
 version = "0.1.1"
 dependencies = [
  "async-trait",
  "sbol-db-search-sdk",
+ "sbol-db-vector-conformance",
  "serde_json",
  "tokio",
 ]

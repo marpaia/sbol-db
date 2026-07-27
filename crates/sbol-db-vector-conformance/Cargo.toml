@@ -1,0 +1,12 @@
+[package]
+name = "sbol-db-vector-conformance"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Backend-neutral conformance scenarios for sbol-db vector indexes."
+
+[dependencies]
+serde_json.workspace = true
+sbol-db-search-sdk.workspace = true

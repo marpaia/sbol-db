@@ -42,4 +42,5 @@ tokio = { workspace = true, optional = true }
 bindgen = { version = "0.70", optional = true }
 
 [dev-dependencies]
+sbol-db-vector-conformance.workspace = true
 sbol-db-vector-flat.workspace = true

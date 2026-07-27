@@ -13,4 +13,5 @@ serde_json.workspace = true
 sbol-db-search-sdk.workspace = true
 
 [dev-dependencies]
+sbol-db-vector-conformance.workspace = true
 tokio.workspace = true
