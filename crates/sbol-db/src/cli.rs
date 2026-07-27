@@ -590,6 +590,16 @@ pub enum UtilAction {
         #[arg(long)]
         format: Option<String>,
     },
+    /// Calculate the immutable content revision of a local FastEmbed bundle.
+    ///
+    /// Use the returned value as the embedding profile's `revision` so startup
+    /// verifies the exact ONNX model and tokenizer metadata being loaded.
+    FastembedRevision {
+        directory: PathBuf,
+        /// ONNX filename relative to the bundle directory.
+        #[arg(long, default_value = "model.onnx")]
+        onnx_file: String,
+    },
     /// Encode an 8-character DNA sequence as a 32-bit integer.
     KmerEncode { sequence: String },
     /// Emit canonical k-mers for a sequence as JSONL.

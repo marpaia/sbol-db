@@ -6,6 +6,8 @@
 #   OpenBLAS, and OpenMP enabled. The production binary always includes the
 #   `faiss` feature; selecting the backend remains an explicit search-config
 #   choice at runtime.
+# - The CPU-only ONNX Runtime used by local FastEmbed profiles is copied from
+#   checksum-pinned Microsoft release archives for Linux x86-64 and ARM64.
 # - cargo-chef caches workspace dependency builds in their own layer.
 # - The binary links glibc dynamically. The RocksDB backend compiles a C++
 #   library (librocksdb-sys), which a static musl target cannot link without a
@@ -18,6 +20,9 @@
 ARG RUST_VERSION=1.93
 ARG FAISS_VERSION=1.14.3
 ARG FAISS_SHA256=7f3c4ed9aec3bd7524382862f5fcbd4d8984e2a8979ff3bdb2c0bcea5144149e
+ARG ONNXRUNTIME_VERSION=1.24.2
+ARG ONNXRUNTIME_SHA256_AMD64=43725474ba5663642e17684717946693850e2005efbd724ac72da278fead25e6
+ARG ONNXRUNTIME_SHA256_ARM64=6715b3d19965a2a6981e78ed4ba24f17a8c30d2d26420dbed10aac7ceca0085e
 
 ############################
 # Stage 0 — pinned FAISS C API and runtime library bundle
@@ -60,7 +65,36 @@ RUN set -eux; \
     test -e /opt/faiss-runtime/lib/libfaiss_c.so
 
 ############################
-# Stage 1 — chef base
+# Stage 1 — pinned ONNX Runtime CPU library
+############################
+FROM debian:bookworm-slim AS onnxruntime-builder
+ARG TARGETARCH
+ARG ONNXRUNTIME_VERSION
+ARG ONNXRUNTIME_SHA256_AMD64
+ARG ONNXRUNTIME_SHA256_ARM64
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    case "$TARGETARCH" in \
+        amd64) archive_arch=x64; expected="$ONNXRUNTIME_SHA256_AMD64" ;; \
+        arm64) archive_arch=aarch64; expected="$ONNXRUNTIME_SHA256_ARM64" ;; \
+        *) echo "unsupported ONNX Runtime architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    archive="onnxruntime-linux-${archive_arch}-${ONNXRUNTIME_VERSION}.tgz"; \
+    curl --fail --location --retry 3 \
+        "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${archive}" \
+        --output "/tmp/${archive}"; \
+    echo "${expected}  /tmp/${archive}" | sha256sum --check --strict; \
+    mkdir -p /opt/onnxruntime/lib; \
+    tar -xzf "/tmp/${archive}" -C /tmp; \
+    cp -a "/tmp/onnxruntime-linux-${archive_arch}-${ONNXRUNTIME_VERSION}/lib/"libonnxruntime.so* \
+        /opt/onnxruntime/lib/; \
+    test -e /opt/onnxruntime/lib/libonnxruntime.so
+
+############################
+# Stage 2 — chef base
 ############################
 FROM rust:${RUST_VERSION}-bookworm AS chef
 # Node.js 20 is required by `sbol-db-ui`'s build.rs, which drives the
@@ -74,14 +108,14 @@ RUN cargo install cargo-chef --locked --version ^0.1
 WORKDIR /work
 
 ############################
-# Stage 2 — planner: produce the dependency recipe
+# Stage 3 — planner: produce the dependency recipe
 ############################
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 ############################
-# Stage 3 — builder: cook deps, then build the binary
+# Stage 4 — builder: cook deps, then build the binary
 ############################
 FROM chef AS builder
 # g++ (build-essential) builds the bundled RocksDB C++; clang/libclang drive
@@ -118,13 +152,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo test -p sbol-db-search-faiss --features native
 
 ############################
-# Stage 4 — runtime: distroless cc plus FAISS, nonroot
+# Stage 5 — runtime: distroless cc plus FAISS/ONNX Runtime, nonroot
 ############################
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=builder /usr/local/bin/sbol-db /usr/local/bin/sbol-db
 COPY --from=faiss-builder /opt/faiss-runtime/lib/ /usr/local/lib/
+COPY --from=onnxruntime-builder /opt/onnxruntime/lib/ /usr/local/lib/
 COPY --chown=65532:65532 --from=faiss-builder /opt/sbol-db-data/ /var/lib/sbol-db/
 ENV LD_LIBRARY_PATH=/usr/local/lib
+ENV ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so
 EXPOSE 8080
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/sbol-db"]

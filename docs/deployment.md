@@ -250,8 +250,10 @@ before publishing.
 
 - Glibc-linked `sbol-db` binary at `/usr/local/bin/sbol-db`. The image includes
   the `faiss` feature, checksum-pinned FAISS 1.14.3 C API, OpenBLAS, OpenMP,
-  and their required runtime libraries. Choosing FAISS is still explicit in
-  `SBOL_DB_SEARCH_CONFIG`; merely using the image does not create an index.
+  ONNX Runtime 1.24.2 CPU libraries for Linux x86-64 and ARM64, and their
+  required runtime libraries. Choosing FAISS and a local embedding profile is
+  still explicit in `SBOL_DB_SEARCH_CONFIG`; merely using the image does not
+  create an index.
 - Runs as `nonroot:nonroot` (UID/GID 65532). Compatible with strict
   pod security: `runAsNonRoot: true`, `readOnlyRootFilesystem: true`,
   `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`.
@@ -267,7 +269,7 @@ before publishing.
 ```sh
 make container          # builds ghcr.io/marpaia/sbol-db:<version>, --load to local docker
 docker run --rm -it ghcr.io/marpaia/sbol-db:<version> --help
-make container/test-faiss # native tests + final-image FAISS startup/store smoke test
+make container/test-faiss # native tests + final-image semantic lifecycle test
 ```
 
 ### Running embedded FAISS
@@ -297,6 +299,23 @@ a model mount only when the composition root registers a local FastEmbed
 provider. Both the database and immutable FAISS generations survive container
 replacement in `sbol-db-data`.
 
+The image supplies ONNX Runtime but deliberately does not ship model weights.
+Mount an immutable local bundle containing `model.onnx`, `tokenizer.json`,
+`config.json`, `special_tokens_map.json`, and `tokenizer_config.json`. Calculate
+the content revision required by the embedding profile with the image itself:
+
+```sh
+docker run --rm \
+  -v "$PWD/model:/model:ro" \
+  ghcr.io/marpaia/sbol-db:<version> util fastembed-revision /model
+```
+
+Startup rejects the configuration if any of those model files no longer match
+the declared revision. The CI container test downloads a commit-pinned,
+checksum-verified Apache-2.0 MiniLM bundle and proves model initialization,
+corpus projection, FAISS generation construction, semantic retrieval, and
+active-generation recovery after a container restart.
+
 A FAISS store is owned by exactly one running sbol-db process and guarded by
 `backend.lock`. Use the server's embedded worker when query and maintenance
 share a local store. Do not mount one FAISS directory into multiple replicas
@@ -306,7 +325,7 @@ or a separate worker; use Qdrant or another service backend for that topology.
 
 | File | Trigger | Purpose |
 |---|---|---|
-| [`ci.yml`](../.github/workflows/ci.yml) | push, PR | Workspace checks, native FAISS tests, feature-enabled server check, and final-image FAISS persistence smoke test |
+| [`ci.yml`](../.github/workflows/ci.yml) | push, PR | Workspace checks, native FAISS tests, feature-enabled server check, and final-image semantic-search lifecycle test |
 | [`container.yml`](../.github/workflows/container.yml) | `master`, `v*` tag push, `workflow_dispatch` | Run container-native FAISS tests, then build and push the image to GHCR |
 
 There is no chart-publish workflow yet; the chart is installed from the
