@@ -4437,6 +4437,7 @@ dependencies = [
  "qdrant-client",
  "reqwest",
  "sbol-db-search-sdk",
+ "sbol-db-vector-conformance",
  "serde",
  "serde_json",
  "sha3",

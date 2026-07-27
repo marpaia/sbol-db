@@ -75,6 +75,36 @@ jobs:
       - name: Verify FAISS loads and opens a persistent store
         run: docker/test-faiss-container.sh sbol-db:faiss-ci
 
+  qdrant-live:
+    runs-on: ubuntu-latest
+    services:
+      qdrant:
+        image: qdrant/qdrant:v1.18.2@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c
+        ports:
+          - 6333:6333
+          - 6334:6334
+    env:
+      SBOL_DB_QDRANT_TEST_GRPC_URL: http://127.0.0.1:6334
+      SBOL_DB_QDRANT_TEST_REST_URL: http://127.0.0.1:6333
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Wait for Qdrant
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:6333/readyz; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      - run: cargo clippy -p sbol-db-vector-qdrant --all-targets -- -D warnings
+      - run: cargo test -p sbol-db-vector-qdrant --test conformance
+
   python-client:
     runs-on: ubuntu-latest
     services:
