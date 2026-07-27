@@ -3,7 +3,8 @@
 set -euo pipefail
 
 readonly image="${1:?usage: docker/test-faiss-container.sh IMAGE}"
-readonly repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly repository_root
 readonly corpus="$repository_root/crates/sbol-db-postgres/tests/fixtures/simple_component.ttl"
 readonly container_name="sbol-db-faiss-e2e-$$"
 readonly volume_name="sbol-db-faiss-e2e-$$"
@@ -25,12 +26,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for command in curl docker jq; do
+for command in curl docker jq python3; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "$command is required for the FAISS container test" >&2
     exit 1
   fi
 done
+
+# Prove that the production model-fetch helper survives an interrupted
+# transfer before relying on it for the real checksum-pinned model bundle.
+"$repository_root/docker/test-model-download-retry.sh"
 
 # This probes the final distroless image, not the builder. The model revision
 # command also gives operators a reproducible value for their search config.
