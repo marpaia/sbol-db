@@ -17,23 +17,31 @@ additive and are selected explicitly through `POST /api/v2/search`.
 
 ## The system in one picture
 
-```text
-                                  SearchStrategy
-                                        |
-                  +---------------------+---------------------+
-                  |                     |                     |
-            CandidateSource          Fusion               Reranker
-          lexical / graph /     RRF / weighted /      neural / rules /
-          vector / sequence       learned blend          cross-encoder
-                  |
-          EmbeddingProvider ---- logical vector index ---- VectorBackend
-                                        |
-                             exact-flat / FAISS / Qdrant
+```mermaid
+flowchart LR
+    subgraph query["Query plane"]
+        request["POST /api/v2/search"] --> capabilities["Capability check"]
+        capabilities --> scope["Establish ACL-scoped context"]
+        scope --> strategy["SearchStrategy"]
+        strategy --> source["CandidateSource<br/>lexical · graph · vector · sequence"]
+        source --> fusion["Fusion<br/>RRF · weighted · learned blend"]
+        fusion --> reranker["Reranker<br/>neural · rules · cross-encoder"]
+        reranker --> hydration["Primary-store hydration"]
+        hydration --> page["SearchPage + Evidence"]
+    end
 
- request --> capability check --> ACL-scoped execution --> primary-store hydration
-                                                        --> SearchPage + Evidence
+    subgraph vector["Pluggable vector path"]
+        embedding["EmbeddingProvider"] --> logical["Logical vector index"]
+        logical --> backend["VectorBackend<br/>exact-flat · FAISS · Qdrant"]
+    end
 
- candidate strategy + baseline strategy --> versioned EvaluationSuite --> QualityGate
+    source -. "vector candidates" .-> logical
+
+    subgraph validation["Validation"]
+        candidate["Candidate strategy"] --> suite["Versioned EvaluationSuite"]
+        baseline["Baseline strategy"] --> suite
+        suite --> gate["QualityGate"]
+    end
 ```
 
 There are two deliberately separate planes:
@@ -48,15 +56,19 @@ Qdrant, or another vector engine is an index selected by deployment.
 
 ## Choose the smallest extension point
 
-| Your idea | Implement | Use it when |
-| --- | --- | --- |
-| A complete search behavior | `SearchStrategy` | The idea owns request interpretation, retrieval, reasoning, or final ranking. |
-| A new candidate generator | `CandidateSource` | The idea produces document IDs and scores but should compose with existing fusion or reranking. |
-| A rank-combination algorithm | `Fusion` | The idea combines lexical, vector, graph, or sequence rankings deterministically. |
-| A neural or algorithmic second stage | `Reranker` | The idea reranks a bounded candidate set. |
-| A local or remote embedding model | `EmbeddingProvider` | The idea changes the vector representation, prefixes, normalization, or inference provider. |
-| A vector engine or index format | `VectorBackend` | The idea changes vector retrieval and generation storage. |
-| A new relevance benchmark | `EvaluationSuite` | The idea changes how improvement is measured rather than how results are generated. |
+```mermaid
+flowchart LR
+    complete["Complete search behavior"] --> searchStrategy["SearchStrategy"] --> completeUse["Owns request interpretation, retrieval,<br/>reasoning, or final ranking"]
+    generator["New candidate generator"] --> candidateSource["CandidateSource"] --> generatorUse["Produces IDs and scores that compose<br/>with fusion or reranking"]
+    combination["Rank-combination algorithm"] --> fusionTrait["Fusion"] --> combinationUse["Combines lexical, vector, graph,<br/>or sequence rankings deterministically"]
+    secondStage["Neural or algorithmic second stage"] --> rerankerTrait["Reranker"] --> secondStageUse["Reranks a bounded candidate set"]
+    model["Local or remote embedding model"] --> embeddingProvider["EmbeddingProvider"] --> modelUse["Changes representation, prefixes,<br/>normalization, or inference provider"]
+    engine["Vector engine or index format"] --> vectorBackend["VectorBackend"] --> engineUse["Changes vector retrieval and<br/>generation storage"]
+    benchmark["New relevance benchmark"] --> evaluationSuite["EvaluationSuite"] --> benchmarkUse["Changes how improvement is measured"]
+
+    classDef extension fill:#eef2ff,stroke:#4f46e5,color:#1e1b4b,stroke-width:2px;
+    class searchStrategy,candidateSource,fusionTrait,rerankerTrait,embeddingProvider,vectorBackend,evaluationSuite extension;
+```
 
 Most ideas should not start with `VectorBackend`. A ranking formula, graph
 walk, sequence heuristic, learned reranker, or bounded agent should normally
@@ -474,10 +486,23 @@ impl VectorIndexAdmin for MyBackend {
 
 The important behavior is the state machine, not the method signatures:
 
-```text
-absent --> inactive/building --> flushed --> optimized --> active
-                         |                                  |
-                         +-- failure: delete                +-- rollback: reactivate prior
+```mermaid
+stateDiagram-v2
+    [*] --> Building: create_generation
+    Building --> Flushed: flush
+    Flushed --> Optimized: optimize
+    Optimized --> Active: activate atomically
+    Active --> Inactive: activate replacement
+    Inactive --> Active: rollback / reactivate
+    Building --> Deleted: delete after failure
+    Flushed --> Deleted: delete after failure
+    Optimized --> Deleted: delete before activation
+    Inactive --> Deleted: retire generation
+    Deleted --> [*]
+
+    note right of Active
+        The active generation cannot be deleted.
+    end note
 ```
 
 A backend must:
