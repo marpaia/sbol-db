@@ -106,6 +106,15 @@ fn default_registry_contains_import_synbiohub_collection() {
     assert_eq!(handler.kind(), "import_synbiohub_collection");
 }
 
+#[test]
+fn default_registry_contains_vector_rebuild() {
+    let registry = default_registry();
+    let handler = registry
+        .lookup("rebuild_vector_index")
+        .expect("default_registry must include rebuild_vector_index");
+    assert_eq!(handler.kind(), "rebuild_vector_index");
+}
+
 /// `JobRegistry::register` replaces an existing entry for the same kind.
 /// The duplicate warning is logged; this test pins the post-replacement
 /// state so callers don't accidentally end up with multiple stale handlers.

@@ -1,0 +1,47 @@
+[package]
+name = "sbol-db-search-faiss"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Persistent embedded FAISS vector-search backend for sbol-db."
+readme = "README.md"
+build = "build.rs"
+
+[features]
+default = []
+native = [
+    "dep:async-trait",
+    "dep:bindgen",
+    "dep:fs2",
+    "dep:hex",
+    "dep:roaring",
+    "dep:serde_json",
+    "dep:sha3",
+    "dep:sbol-db-search-sdk",
+    "dep:tempfile",
+    "dep:thiserror",
+    "dep:tokio",
+]
+
+[dependencies]
+async-trait = { workspace = true, optional = true }
+fs2 = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+roaring = { workspace = true, optional = true }
+serde.workspace = true
+serde_json = { workspace = true, optional = true }
+sha3 = { workspace = true, optional = true }
+sbol-db-search-sdk = { workspace = true, optional = true }
+tempfile = { version = "3", optional = true }
+thiserror = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["sync"] }
+
+[build-dependencies]
+bindgen = { version = "0.70", optional = true }
+
+[dev-dependencies]
+sbol-db-search.workspace = true
+sbol-db-vector-conformance.workspace = true
+sbol-db-vector-flat.workspace = true

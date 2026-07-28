@@ -185,6 +185,7 @@ async fn rebuild_and_similar_scale() {
             text_index: text_index.clone(),
             triples,
         }),
+        vector_indexes: None,
         config: None,
     };
 

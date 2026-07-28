@@ -53,6 +53,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Test container-built FAISS before publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: faiss-test
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - uses: docker/build-push-action@v6
         with:
           context: .

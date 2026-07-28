@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "id": "sbol-db-contributor-smoke",
+  "revision": "1",
+  "provenance": {
+    "corpus_source": "fixtures/contributor-smoke-v1-corpus.json",
+    "corpus_revision": "1",
+    "corpus_sha256": "5ff9bd3f02dbb4577c675a87467d7faa0e1d1fd8e97bfe959a0238e68e9e7769",
+    "judgments_source": "fixtures/contributor-smoke-v1.json",
+    "judgments_method": "Synthetic graded labels reviewed with the corpus; intended to test contributor plumbing, not establish production search quality"
+  },
+  "cases": [
+    {
+      "id": "strong-constitutive-promoter",
+      "request": {
+        "query": {"kind": "text", "text": "strong constitutive promoter"},
+        "page": {"limit": 5}
+      },
+      "judgments": [
+        {"document_id": "synthetic/promoter/j23119", "relevance": 3},
+        {"document_id": "synthetic/promoter/ptet", "relevance": 1},
+        {"document_id": "synthetic/plasmid/reporter", "relevance": 1}
+      ]
+    },
+    {
+      "id": "inducible-promoter",
+      "request": {
+        "query": {"kind": "text", "text": "inducible promoter"},
+        "page": {"limit": 5}
+      },
+      "judgments": [
+        {"document_id": "synthetic/promoter/ptet", "relevance": 3},
+        {"document_id": "synthetic/promoter/j23119", "relevance": 1}
+      ]
+    },
+    {
+      "id": "translation-initiation",
+      "request": {
+        "query": {"kind": "text", "text": "ribosome binding translation initiation"},
+        "page": {"limit": 5}
+      },
+      "judgments": [
+        {"document_id": "synthetic/rbs/b0034", "relevance": 3},
+        {"document_id": "synthetic/plasmid/reporter", "relevance": 1}
+      ]
+    },
+    {
+      "id": "transcription-termination",
+      "request": {
+        "query": {"kind": "text", "text": "stop transcription terminator"},
+        "page": {"limit": 5}
+      },
+      "judgments": [
+        {"document_id": "synthetic/terminator/b0015", "relevance": 3},
+        {"document_id": "synthetic/plasmid/reporter", "relevance": 1}
+      ]
+    },
+    {
+      "id": "green-reporter",
+      "request": {
+        "query": {"kind": "text", "text": "green fluorescent reporter"},
+        "page": {"limit": 5}
+      },
+      "judgments": [
+        {"document_id": "synthetic/cds/gfp", "relevance": 3},
+        {"document_id": "synthetic/plasmid/reporter", "relevance": 2}
+      ]
+    },
+    {
+      "id": "circular-vector",
+      "request": {
+        "query": {"kind": "text", "text": "circular expression vector"},
+        "page": {"limit": 5}
+      },
+      "judgments": [
+        {"document_id": "synthetic/plasmid/reporter", "relevance": 3}
+      ]
+    }
+  ]
+}

@@ -49,7 +49,11 @@ pub fn router(state: AppState) -> Router<AppState> {
         )
         .route("/objects/:iri/publish", post(objects::publish_object))
         .route("/objects/:iri/similar", get(sequence::similar))
-        .route("/search", get(search::search))
+        .route(
+            "/search",
+            get(search::search).post(search::structured_search),
+        )
+        .route("/search/strategies", get(search::strategies))
         .route("/sequences/search", get(sequence::search_sequences))
         .route_layer(axum::middleware::from_fn_with_state(
             state,

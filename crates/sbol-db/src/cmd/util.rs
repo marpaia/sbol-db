@@ -9,6 +9,9 @@ use sbol::v3::Document;
 use sbol_db_core::kmer::{
     canonical_kmers, encode_kmer, reverse_complement_string, KmerStrand, KMER_K,
 };
+use sbol_db_embedding_fastembed::{
+    local_bundle_revision, FastEmbedPooling, LocalFastEmbedBundleConfig,
+};
 use sbol_db_rdf::{content_hash, hash_bytes};
 
 use crate::cli::UtilAction;
@@ -22,6 +25,22 @@ pub async fn run(action: UtilAction) -> Result<()> {
             bytes,
             format,
         } => hash(path, bytes, format).await,
+        UtilAction::FastembedRevision {
+            directory,
+            onnx_file,
+        } => {
+            let revision = local_bundle_revision(&LocalFastEmbedBundleConfig {
+                directory: directory.clone(),
+                onnx_file,
+                pooling: FastEmbedPooling::Cls,
+                max_length: 512,
+                intra_threads: None,
+            })?;
+            print_json(&serde_json::json!({
+                "directory": directory.display().to_string(),
+                "revision": revision,
+            }))
+        }
         UtilAction::KmerEncode { sequence } => {
             if sequence.len() != KMER_K {
                 return Err(anyhow!(

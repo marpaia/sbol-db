@@ -21,16 +21,29 @@
 
 pub mod align;
 pub mod cluster;
+pub mod deployment;
+pub mod embedding_strategy;
 pub mod keywords;
+pub mod maintenance;
 pub mod minhash;
 pub mod pagerank;
+pub mod runtime;
+pub mod vector_router;
 
 #[cfg(feature = "text-index")]
 pub mod ranked_text;
 
 pub use align::{AlignMode, AlignOptions, Alignment};
 pub use cluster::ClusterId;
+pub use deployment::{
+    SearchDeployment, SearchDeploymentBuilder, SearchTopologyConfig, VectorIndexBindingConfig,
+    VectorIndexMaintainerRegistry,
+};
+pub use embedding_strategy::{EmbeddingSearchStrategy, EmbeddingStrategyConfig};
+pub use maintenance::{IndexBuildReport, VectorDocument, VectorIndexMaintainer, VectorRebuildSpec};
 pub use minhash::{band_hashes, sketch, Signature, SketchParams};
+pub use runtime::SearchRuntime;
+pub use vector_router::VectorRouter;
 
 #[cfg(feature = "align")]
 pub use align::align_pair;

@@ -16,6 +16,7 @@ mod cli;
 mod cmd;
 mod format;
 mod output;
+mod search_config;
 mod signal;
 
 use crate::cli::{BackendKind, Cli, Command};
@@ -41,6 +42,7 @@ async fn main() -> Result<()> {
             worker_concurrency,
             worker_queues,
             worker_id,
+            search_config,
         } => {
             cmd::server::run(
                 backend,
@@ -50,6 +52,7 @@ async fn main() -> Result<()> {
                 worker_concurrency,
                 worker_queues,
                 worker_id,
+                search_config,
             )
             .await
         }
@@ -57,7 +60,8 @@ async fn main() -> Result<()> {
             concurrency,
             queues,
             worker_id,
-        } => cmd::worker::run(&database_url, concurrency, queues, worker_id).await,
+            search_config,
+        } => cmd::worker::run(&database_url, concurrency, queues, worker_id, search_config).await,
         Command::Graph { action } => cmd::graph::run(backend.store.clone(), action).await,
         Command::Object { action } => cmd::object::run(backend.store.clone(), action).await,
         Command::Query { action } => {

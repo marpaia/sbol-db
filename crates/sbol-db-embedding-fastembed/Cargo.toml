@@ -1,0 +1,32 @@
+[package]
+name = "sbol-db-embedding-fastembed"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Local FastEmbed/ONNX embedding provider for the sbol-db search SDK."
+
+[dependencies]
+async-trait.workspace = true
+fastembed.workspace = true
+hex.workspace = true
+serde.workspace = true
+sha3.workspace = true
+sbol-db-search-sdk.workspace = true
+tokio.workspace = true
+
+[features]
+default = ["dynamic-ort"]
+# Load ONNX Runtime dynamically. Deployments set ORT_DYLIB_PATH or otherwise
+# make a compatible runtime available without a build-time binary download.
+dynamic-ort = ["fastembed/ort-load-dynamic"]
+# Alternatively, bundle the platform runtime during the build.
+download-ort = ["fastembed/ort-download-binaries-rustls-tls"]
+# Enable FastEmbed's Hugging Face model retrieval using rustls. Production
+# profiles should use an immutable weight revision/digest in their descriptor.
+online-models = ["fastembed/hf-hub-rustls-tls"]
+
+[dev-dependencies]
+tempfile = "3"
+tokio.workspace = true

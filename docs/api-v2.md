@@ -223,6 +223,27 @@ Typed query parameters, not the v1 path grammar:
 Returns the paginated envelope. Each hit carries `uri`, `display_id`,
 `version`, `name`, `description`, and `object_type`.
 
+**`POST /api/v2/search`** is the structured strategy surface. It accepts a
+tagged query, typed filters, cursor paging, execution options, and an optional
+strategy id. Omitting `strategy` uses the configured default. This route is
+additive: the compatibility routes and `GET /api/v2/search` retain their
+existing ranking and wire contracts.
+
+```json
+{
+  "strategy": "semantic.components.v1",
+  "query": { "kind": "text", "text": "inducible promoter" },
+  "filters": { "graphs": ["https://example.org/public"] },
+  "page": { "limit": 20 },
+  "options": { "explain": true }
+}
+```
+
+**`GET /api/v2/search/strategies`** returns the default strategy and every
+registered strategy's inputs, filters, pagination, totals, explanation,
+data-egress, and dependency declarations. See
+[Pluggable search](search-plugins.md) for SDK and deployment details.
+
 ### Sequences
 
 **`GET /api/v2/sequences/search`** aligns a query nucleotide string against the

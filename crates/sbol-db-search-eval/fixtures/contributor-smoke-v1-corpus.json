@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "id": "sbol-db-contributor-smoke",
+  "revision": "1",
+  "license": "CC0-1.0",
+  "documents": [
+    {
+      "id": "synthetic/promoter/j23119",
+      "uri": "https://example.org/search-fixture/promoter_j23119",
+      "name": "J23119 promoter",
+      "description": "Strong constitutive promoter for bacterial expression",
+      "object_type": "component"
+    },
+    {
+      "id": "synthetic/promoter/ptet",
+      "uri": "https://example.org/search-fixture/promoter_ptet",
+      "name": "pTet promoter",
+      "description": "Tetracycline-repressible inducible promoter",
+      "object_type": "component"
+    },
+    {
+      "id": "synthetic/rbs/b0034",
+      "uri": "https://example.org/search-fixture/rbs_b0034",
+      "name": "B0034 ribosome binding site",
+      "description": "Strong bacterial translation initiation RBS",
+      "object_type": "component"
+    },
+    {
+      "id": "synthetic/terminator/b0015",
+      "uri": "https://example.org/search-fixture/terminator_b0015",
+      "name": "B0015 double terminator",
+      "description": "Efficient transcription termination element",
+      "object_type": "component"
+    },
+    {
+      "id": "synthetic/cds/gfp",
+      "uri": "https://example.org/search-fixture/cds_gfp",
+      "name": "Green fluorescent protein CDS",
+      "description": "Coding sequence for a green fluorescent reporter",
+      "object_type": "component"
+    },
+    {
+      "id": "synthetic/plasmid/reporter",
+      "uri": "https://example.org/search-fixture/plasmid_reporter",
+      "name": "Constitutive GFP reporter plasmid",
+      "description": "Circular vector containing a constitutive promoter, RBS, GFP CDS, and terminator",
+      "object_type": "component"
+    }
+  ]
+}

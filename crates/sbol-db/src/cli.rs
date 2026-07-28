@@ -93,6 +93,9 @@ pub enum Command {
         /// `<hostname>-<pid>-<random>`.
         #[arg(long, env = "SBOL_DB_WORKER_ID")]
         worker_id: Option<String>,
+        /// JSON search-plugin topology and concrete provider/backend config.
+        #[arg(long, env = "SBOL_DB_SEARCH_CONFIG")]
+        search_config: Option<PathBuf>,
     },
 
     /// Run a standalone async-job worker (no HTTP listener).
@@ -106,6 +109,9 @@ pub enum Command {
         queues: Option<String>,
         #[arg(long, env = "SBOL_DB_WORKER_ID")]
         worker_id: Option<String>,
+        /// JSON search-plugin config used to construct vector maintainers.
+        #[arg(long, env = "SBOL_DB_SEARCH_CONFIG")]
+        search_config: Option<PathBuf>,
     },
 
     /// Named graphs (the import corpus and any RDF graphs).
@@ -583,6 +589,16 @@ pub enum UtilAction {
         /// Override the format inferred from the file extension.
         #[arg(long)]
         format: Option<String>,
+    },
+    /// Calculate the immutable content revision of a local FastEmbed bundle.
+    ///
+    /// Use the returned value as the embedding profile's `revision` so startup
+    /// verifies the exact ONNX model and tokenizer metadata being loaded.
+    FastembedRevision {
+        directory: PathBuf,
+        /// ONNX filename relative to the bundle directory.
+        #[arg(long, default_value = "model.onnx")]
+        onnx_file: String,
     },
     /// Encode an 8-character DNA sequence as a 32-bit integer.
     KmerEncode { sequence: String },

@@ -35,6 +35,82 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --all-targets
+      - name: Run public search contributor example and quality gate
+        run: cargo run -p sbol-db-search-eval --example contributor_strategy
+
+  faiss-native:
+    runs-on: ubuntu-latest
+    env:
+      FAISS_DIR: /tmp/sbol-db-faiss
+      LD_LIBRARY_PATH: /tmp/sbol-db-faiss/lib
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install FAISS build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev libopenblas-dev ninja-build
+      - name: Build pinned FAISS C API
+        env:
+          FAISS_PREFIX: ${{ env.FAISS_DIR }}
+          FAISS_BUILD_JOBS: "2"
+        run: docker/install-faiss.sh
+      - run: cargo clippy -p sbol-db-search-faiss --all-targets --features native -- -D warnings
+      - run: cargo test -p sbol-db-search-faiss --features native
+      - run: cargo check -p sbol-db --no-default-features --features faiss
+
+  faiss-container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Cache pinned semantic-test model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sbol-db/models/all-MiniLM-L6-v2-onnx-5f1b8cd
+          key: fastembed-all-MiniLM-L6-v2-onnx-5f1b8cd
+      - name: Test FAISS against the container-native toolchain
+        run: >-
+          docker buildx build --load --target faiss-test
+          --tag sbol-db:faiss-test .
+      - name: Build FAISS-enabled production image
+        run: docker buildx build --load --tag sbol-db:faiss-ci .
+      - name: Verify model, rebuild, query, and restart lifecycle
+        run: docker/test-faiss-container.sh sbol-db:faiss-ci
+
+  qdrant-live:
+    runs-on: ubuntu-latest
+    services:
+      qdrant:
+        image: qdrant/qdrant:v1.18.2@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c
+        ports:
+          - 6333:6333
+          - 6334:6334
+    env:
+      SBOL_DB_QDRANT_TEST_GRPC_URL: http://127.0.0.1:6334
+      SBOL_DB_QDRANT_TEST_REST_URL: http://127.0.0.1:6333
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Wait for Qdrant
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:6333/readyz; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      - run: cargo clippy -p sbol-db-vector-qdrant --all-targets -- -D warnings
+      - run: cargo test -p sbol-db-vector-qdrant --test conformance
 
   python-client:
     runs-on: ubuntu-latest

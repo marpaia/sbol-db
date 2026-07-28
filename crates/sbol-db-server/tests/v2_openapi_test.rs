@@ -318,6 +318,7 @@ async fn openapi_json_is_served_and_wellformed() {
         "/objects/{iri}/similar",
         "/collections",
         "/search",
+        "/search/strategies",
         "/sequences/search",
     ] {
         assert!(
@@ -379,6 +380,27 @@ async fn search_response_matches_schema() {
     let (status, body) = send(&app, "GET", "/api/v2/objects?limit=5", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_conforms(&spec, "/objects", "get", "200", &body);
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v2/search",
+        None,
+        Some("application/json"),
+        Some(
+            serde_json::json!({
+                "query": { "kind": "text", "text": "component" }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/search", "post", "200", &body);
+
+    let (status, body) = send(&app, "GET", "/api/v2/search/strategies", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/search/strategies", "get", "200", &body);
 }
 
 #[tokio::test]

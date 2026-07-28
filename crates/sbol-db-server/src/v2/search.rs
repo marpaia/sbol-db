@@ -11,6 +11,7 @@
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use sbol_db_app::{FacetedSearch, Hit};
+use sbol_db_search_sdk::{SearchPage as StructuredSearchPage, SearchRequest as StructuredRequest};
 use serde::{Deserialize, Serialize};
 
 use super::auth::{scope_for, Identity};
@@ -74,6 +75,13 @@ pub struct SearchResponse {
     pub limit: usize,
 }
 
+/// Discovery envelope for the immutable runtime assembled at startup.
+#[derive(Debug, Serialize)]
+pub struct StrategiesResponse {
+    pub default_strategy: String,
+    pub items: Vec<sbol_db_search_sdk::StrategyDescriptor>,
+}
+
 /// `GET /api/v2/search` — ranked, ACL-scoped, paginated free-text search.
 pub async fn search(
     State(state): State<AppState>,
@@ -81,6 +89,27 @@ pub async fn search(
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResponse>, V2Error> {
     Ok(Json(run_search(&state, &identity, params).await?))
+}
+
+/// `POST /api/v2/search` — execute an explicitly structured, capability-checked
+/// search strategy without changing the compatibility GET route.
+pub async fn structured_search(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Json(request): Json<StructuredRequest>,
+) -> Result<Json<StructuredSearchPage>, V2Error> {
+    let scope = scope_for(&state, &identity).await?;
+    Ok(Json(state.app.structured_search(request, scope).await?))
+}
+
+/// `GET /api/v2/search/strategies` — discover the default strategy and the
+/// declared capabilities of every registered implementation.
+pub async fn strategies(State(state): State<AppState>) -> Json<StrategiesResponse> {
+    let runtime = state.app.search_runtime();
+    Json(StrategiesResponse {
+        default_strategy: runtime.default_strategy().to_owned(),
+        items: runtime.descriptors(),
+    })
 }
 
 /// Run the ranked, ACL-scoped, paginated query behind both `/search` and the

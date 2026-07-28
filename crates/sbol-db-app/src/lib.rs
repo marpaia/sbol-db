@@ -51,14 +51,15 @@ pub use plugin::{
 pub use sbol_db_search::ranked_text::Hit;
 pub use sbol_db_search::{AlignMode, AlignOptions};
 pub use sbol_db_storage::SequenceAlignment;
-pub use search::{DateField, FacetedSearch};
+pub use search::{DateField, FacetedSearch, LegacyExplorerStrategy};
 pub use sequence::{SequenceService, SimilarHit};
 pub use submission::{SubmissionService, SubmitOutcome, SubmitRequest};
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use sbol_db_backend::Backend;
 use sbol_db_search::ranked_text::RankedTextIndex;
+use sbol_db_search::{SearchDeployment, SearchRuntime, VectorRouter};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
     AclStore, BlobStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore,
@@ -118,6 +119,13 @@ pub struct AppServices {
     /// needs a persistent, filesystem-backed index swaps one in with
     /// [`with_text_search`](Self::with_text_search).
     pub text_search: Arc<RankedTextIndex>,
+    /// Lazily assembled structured-search runtime. The built-in runtime wraps
+    /// the current text index and cluster store; an embedding/vector deployment
+    /// can replace it with [`with_search_runtime`](Self::with_search_runtime).
+    search_runtime: Arc<OnceLock<Arc<SearchRuntime>>>,
+    /// Optional logical-index router used by embedding and hybrid strategies.
+    /// The request path wraps it in the caller's graph authorization scope.
+    search_vectors: Option<Arc<VectorRouter>>,
     /// The Web of Registries HTTP client backing federation. Defaults to the
     /// SSRF-guarded [`HttpWebOfRegistriesClient`]; a test swaps in a stub with
     /// [`with_federation_client`](Self::with_federation_client). The
@@ -198,6 +206,9 @@ impl AppServices {
         self.pagerank = pagerank;
         self.cluster = cluster;
         self.sketch = sketch;
+        // The built-in legacy strategy captures the cluster store. Reset the
+        // lazy runtime so it observes the newly installed durable handle.
+        self.search_runtime = Arc::new(OnceLock::new());
         self
     }
 
@@ -271,7 +282,38 @@ impl AppServices {
     /// corpus.
     pub fn with_text_search(mut self, text_search: Arc<RankedTextIndex>) -> Self {
         self.text_search = text_search;
+        // The built-in legacy strategy captures the text index. Reset the lazy
+        // runtime so it observes the replacement.
+        self.search_runtime = Arc::new(OnceLock::new());
         self
+    }
+
+    /// Replace the built-in structured-search runtime with an explicitly
+    /// assembled registry. Call this after installing low-level text/sequence
+    /// handles so later builder steps do not intentionally reset the default.
+    pub fn with_search_runtime(mut self, runtime: Arc<SearchRuntime>) -> Self {
+        let slot = OnceLock::new();
+        // A fresh slot cannot already be initialized.
+        let _ = slot.set(runtime);
+        self.search_runtime = Arc::new(slot);
+        self
+    }
+
+    /// Install vector-index bindings for structured strategies. This does not
+    /// alter the compatibility search endpoints or register a strategy by
+    /// itself; deployments explicitly assemble both the strategy runtime and
+    /// this router.
+    pub fn with_vector_router(mut self, router: Arc<VectorRouter>) -> Self {
+        self.search_vectors = Some(router);
+        self
+    }
+
+    /// Install a topology that was validated once by the shared search
+    /// deployment builder. Query dispatch and logical vector routing therefore
+    /// cannot be assembled from different plugin configurations.
+    pub fn with_search_deployment(self, deployment: &SearchDeployment) -> Self {
+        self.with_search_runtime(deployment.runtime())
+            .with_vector_router(deployment.router())
     }
 
     /// Replace the default temp-directory blob store with a caller-provided one,
@@ -309,6 +351,7 @@ impl AppServices {
         let plugin_client: Arc<dyn PluginClient> = Arc::new(plugin::HttpPluginClient::new());
         let expose = Arc::new(plugin::ExposeRegistry::new());
         let stream = Arc::new(plugin::StreamRegistry::new());
+        let search_runtime = Arc::new(OnceLock::new());
         Self {
             store,
             sparql,
@@ -325,6 +368,8 @@ impl AppServices {
             tokens,
             auth,
             text_search,
+            search_runtime,
+            search_vectors: None,
             federation_client,
             plugin_client,
             expose,

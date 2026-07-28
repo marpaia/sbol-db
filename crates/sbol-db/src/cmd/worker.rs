@@ -2,6 +2,8 @@
 //! Stops on SIGTERM / Ctrl-C; in-flight handlers get a grace window
 //! before their leases are abandoned.
 
+use std::path::PathBuf;
+
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 
@@ -13,9 +15,10 @@ pub async fn run(
     concurrency: Option<usize>,
     queues: Option<String>,
     worker_id: Option<String>,
+    search_config: Option<PathBuf>,
 ) -> Result<()> {
     let cancel = CancellationToken::new();
-    let setup = build_worker_setup(
+    let mut setup = build_worker_setup(
         database_url,
         None,
         concurrency,
@@ -23,6 +26,14 @@ pub async fn run(
         worker_id.as_deref(),
     )
     .await?;
+    if let Some(path) = search_config {
+        setup.vector_indexes = Some(
+            crate::search_config::load_builder(&path)
+                .await?
+                .build_maintenance()?,
+        );
+        tracing::info!(path = %path.display(), "vector maintenance plugins configured");
+    }
     let handle = setup.spawn(cancel.clone());
     tracing::info!("standalone worker started");
     shutdown_signal().await;
