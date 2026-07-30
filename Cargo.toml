@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/sbol-db-core",
     "crates/sbol-db-search-sdk",
+    "crates/sbol-db-search-python",
     "crates/sbol-db-search-eval",
     "crates/sbol-db-vector-conformance",
     "crates/sbol-db-embedding-fastembed",
@@ -112,6 +113,7 @@ metrics-exporter-prometheus = { version = "0.16", default-features = false }
 
 sbol-db-core = { path = "crates/sbol-db-core", version = "0.1.1" }
 sbol-db-search-sdk = { path = "crates/sbol-db-search-sdk", version = "0.1.1" }
+sbol-db-search-python = { path = "crates/sbol-db-search-python", version = "0.1.1" }
 sbol-db-search-eval = { path = "crates/sbol-db-search-eval", version = "0.1.1" }
 sbol-db-vector-conformance = { path = "crates/sbol-db-vector-conformance", version = "0.1.1" }
 sbol-db-embedding-fastembed = { path = "crates/sbol-db-embedding-fastembed", version = "0.1.1" }

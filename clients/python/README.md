@@ -67,6 +67,22 @@ make e2e     # build the sbol-db server, then run the full suite against it
 make lint    # isort + black + flake8 + mypy
 ```
 
+## Native search plugins
+
+`sbol_db.search` provides editor and type-checker contracts for Python modules
+loaded by an sbol-db binary built with its `python` feature. A plugin can
+implement an ordinary embedding object with `embed(texts, *, kind)` and a
+strategy object with `search(ctx, request)`, then register both through
+`register(search)`. The strategy context provides the bound embedding,
+ACL-scoped vector search, authoritative SBOL hydration, scope, and request
+budget. sbol-db continues to own durable vector-index maintenance and reindex
+publication.
+
+The complete Transformers/BGE-small example is in
+[`examples/python-search-bge`](../../examples/python-search-bge). Heavy model
+libraries such as `torch` and `transformers` are deliberately dependencies of
+the plugin, not dependencies of this client package.
+
 `make e2e` builds a fresh `sbol-db` binary and points the test fixtures at it,
 so the end-to-end tests never run against a stale build. They boot a real
 server on a throwaway SQLite database (no external services). To also run them

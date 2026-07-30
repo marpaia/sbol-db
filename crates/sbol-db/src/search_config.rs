@@ -1,5 +1,7 @@
 //! Process-level construction of built-in search plugins from JSON config.
 
+#[cfg(feature = "python")]
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -13,6 +15,8 @@ use sbol_db_search::{
 };
 #[cfg(feature = "faiss")]
 use sbol_db_search_faiss::{FaissBackendConfig, FaissVectorBackend};
+#[cfg(feature = "python")]
+use sbol_db_search_python::{load_plugin as load_python_plugin, PythonSearchPluginConfig};
 use sbol_db_search_sdk::{DistanceMetric, EmbeddingProvider};
 use sbol_db_vector_flat::ExactFlatVectorBackend;
 use sbol_db_vector_qdrant::{QdrantRemoteBackend, QdrantRemoteConfig};
@@ -26,6 +30,11 @@ struct SearchProcessConfig {
     embeddings: Vec<EmbeddingPluginConfig>,
     #[serde(default)]
     vector_backends: Vec<VectorBackendPluginConfig>,
+    /// Python modules whose `register(search)` function contributes embedding
+    /// providers and native strategy instances to this deployment.
+    #[cfg(feature = "python")]
+    #[serde(default)]
+    python_plugins: Vec<PythonSearchPluginConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -183,6 +192,36 @@ pub async fn load_builder(path: &Path) -> Result<SearchDeploymentBuilder> {
         .with_context(|| format!("parsing search config {}", path.display()))?;
     let mut builder = SearchDeploymentBuilder::new(config.topology);
 
+    #[cfg(feature = "python")]
+    let mut resolved_embeddings: HashMap<String, Arc<dyn EmbeddingProvider>> = HashMap::new();
+    #[cfg(feature = "python")]
+    let mut python_strategies = Vec::new();
+
+    #[cfg(feature = "python")]
+    for mut plugin_config in config.python_plugins {
+        if let Some(plugin_path) = plugin_config.path.as_mut() {
+            if plugin_path.is_relative() {
+                *plugin_path = path
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join(&*plugin_path);
+            }
+        }
+        let module = plugin_config.module.clone();
+        let plugin = tokio::task::spawn_blocking(move || load_python_plugin(&plugin_config))
+            .await
+            .with_context(|| format!("joining Python search plugin {module:?} loader"))??;
+        for embedding in plugin.embeddings {
+            let id = embedding.descriptor().id.clone();
+            builder = builder.register_embedding(embedding.clone())?;
+            resolved_embeddings.insert(id, embedding);
+        }
+        for strategy in plugin.embedding_strategies {
+            builder = builder.register_embedding_strategy(strategy)?;
+        }
+        python_strategies.extend(plugin.strategies);
+    }
+
     for embedding in config.embeddings {
         match embedding {
             EmbeddingPluginConfig::FastembedLocal { profile, bundle } => {
@@ -191,9 +230,21 @@ pub async fn load_builder(path: &Path) -> Result<SearchDeploymentBuilder> {
                 })
                 .await
                 .context("joining FastEmbed model initialization task")??;
-                builder = builder.register_embedding(Arc::new(provider))?;
+                let provider: Arc<dyn EmbeddingProvider> = Arc::new(provider);
+                #[cfg(feature = "python")]
+                resolved_embeddings.insert(provider.descriptor().id.clone(), provider.clone());
+                builder = builder.register_embedding(provider)?;
             }
         }
+    }
+
+    #[cfg(feature = "python")]
+    for strategy in python_strategies {
+        let profile = strategy.embedding_profile().to_owned();
+        let embedding = resolved_embeddings.get(&profile).cloned().ok_or_else(|| {
+            anyhow::anyhow!("Python strategy requires unknown embedding profile {profile:?}")
+        })?;
+        builder = builder.register_strategy(strategy.bind(embedding)?)?;
     }
 
     for backend in config.vector_backends {
@@ -289,6 +340,73 @@ mod tests {
         assert!(config.topology.indexes[0].maintenance.is_some());
         assert_eq!(config.embeddings.len(), 1);
         assert_eq!(config.vector_backends.len(), 1);
+    }
+
+    #[cfg(feature = "python")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn python_plugin_joins_native_deployment_composition() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("composition_fixture.py"),
+            r#"
+class Embedding:
+    def embed(self, texts, *, kind):
+        return [[1.0, 0.0] for _ in texts]
+
+class Strategy:
+    def search(self, ctx, request):
+        return {"items": []}
+
+def register(search):
+    search.add_embedding(
+        Embedding(),
+        id="python.composition.v1",
+        model="fixture/model",
+        revision="abc123",
+        dimension=2,
+    )
+    search.add_strategy(
+        Strategy(),
+        id="python.composition-search.v1",
+        embedding_profile="python.composition.v1",
+        vector_index="python-composition",
+    )
+"#,
+        )
+        .unwrap();
+        let config_path = directory.path().join("search.json");
+        std::fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "topology": {
+                    "default_strategy": "python.composition-search.v1",
+                    "indexes": [{
+                        "index": "python-composition",
+                        "backend": "flat",
+                        "embedding_profile": "python.composition.v1",
+                        "vector_name": "content"
+                    }],
+                    "embedding_strategies": []
+                },
+                "vector_backends": [{"kind": "exact_flat", "id": "flat"}],
+                "python_plugins": [{
+                    "module": "composition_fixture",
+                    "path": "."
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let deployment = load_builder(&config_path).await.unwrap().build().unwrap();
+        assert_eq!(
+            deployment.runtime().default_strategy(),
+            "python.composition-search.v1"
+        );
+        assert_eq!(
+            deployment.maintainers().indexes(),
+            vec!["python-composition"]
+        );
     }
 
     #[tokio::test]

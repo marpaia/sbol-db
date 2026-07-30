@@ -19,6 +19,7 @@ default = ["lab"]
 # still strips the embedded UI.
 lab = ["sbol-db-server/lab"]
 faiss = ["dep:sbol-db-search-faiss", "sbol-db-search-faiss/native"]
+python = ["dep:sbol-db-search-python"]
 
 [dependencies]
 sbol-db-core.workspace = true
@@ -29,6 +30,7 @@ sbol-db-backend.workspace = true
 sbol-db-app.workspace = true
 sbol-db-search.workspace = true
 sbol-db-search-sdk.workspace = true
+sbol-db-search-python = { workspace = true, optional = true }
 sbol-db-embedding-fastembed.workspace = true
 sbol-db-vector-flat.workspace = true
 sbol-db-vector-qdrant.workspace = true
