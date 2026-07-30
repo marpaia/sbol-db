@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use async_trait::async_trait;
 use sbol_db_embedding_fastembed::{
     FastEmbedPooling, FastEmbedProvider, FastEmbedProviderConfig, LocalFastEmbedBundleConfig,
 };
@@ -13,7 +14,10 @@ use sbol_db_search::{
 };
 #[cfg(feature = "faiss")]
 use sbol_db_search_faiss::{FaissBackendConfig, FaissVectorBackend};
-use sbol_db_search_sdk::{DistanceMetric, EmbeddingProvider};
+use sbol_db_search_sdk::{
+    DistanceMetric, EmbeddingProvider, IndexMaintenanceDescriptor, IndexMaintenanceEvent,
+    IndexMaintenancePlugin, IndexMaintenanceTask, SearchError,
+};
 use sbol_db_vector_flat::ExactFlatVectorBackend;
 use sbol_db_vector_qdrant::{QdrantRemoteBackend, QdrantRemoteConfig};
 use serde::Deserialize;
@@ -68,6 +72,45 @@ const BUILTIN_BGE_SMALL_CONTAINER_DIR: &str = "/opt/sbol-db/models/bge-small-en-
 const BUILTIN_BGE_SMALL_ONNX_FILE: &str = "model_optimized.onnx";
 const BUILTIN_BGE_SMALL_INDEX: &str = "builtin.sbol-text-bge-small.v1";
 const BUILTIN_BGE_SMALL_STRATEGY: &str = "builtin.sbol-text-vector.v2";
+const LEGACY_EXPLORER_MAINTENANCE_ID: &str = "legacy.explorer-index-maintenance.v1";
+const LEGACY_EXPLORER_REBUILD_KIND: &str = "rebuild_search_index";
+
+struct LegacyExplorerMaintenance {
+    descriptor: IndexMaintenanceDescriptor,
+}
+
+impl LegacyExplorerMaintenance {
+    fn new() -> Self {
+        Self {
+            descriptor: IndexMaintenanceDescriptor {
+                id: LEGACY_EXPLORER_MAINTENANCE_ID.to_owned(),
+                display_name: "SBOLExplorer compatibility index maintenance".to_owned(),
+                description: "Coalesced rebuilds of the shared ranked text, sequence sketch, cluster, and PageRank indexes".to_owned(),
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl IndexMaintenancePlugin for LegacyExplorerMaintenance {
+    fn descriptor(&self) -> &IndexMaintenanceDescriptor {
+        &self.descriptor
+    }
+
+    async fn plan(
+        &self,
+        _event: &IndexMaintenanceEvent,
+    ) -> Result<Vec<IndexMaintenanceTask>, SearchError> {
+        Ok(vec![IndexMaintenanceTask::new(
+            LEGACY_EXPLORER_REBUILD_KIND,
+            serde_json::json!({}),
+        )])
+    }
+}
+
+fn legacy_explorer_maintenance() -> Arc<dyn IndexMaintenancePlugin> {
+    Arc::new(LegacyExplorerMaintenance::new())
+}
 
 /// The no-configuration search deployment shipped by the server binary.
 ///
@@ -171,6 +214,7 @@ fn build_builtin_text_deployment(
         .register_vector_backend(Arc::new(ExactFlatVectorBackend::new(
             "builtin.exact-flat.v1",
         )))?
+        .register_maintenance_plugin(legacy_explorer_maintenance())?
         .build()
         .map_err(Into::into)
 }
@@ -228,7 +272,9 @@ pub async fn load_builder(path: &Path) -> Result<SearchDeploymentBuilder> {
         }
     }
 
-    Ok(builder)
+    builder
+        .register_maintenance_plugin(legacy_explorer_maintenance())
+        .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -303,17 +349,27 @@ mod tests {
             vec![BUILTIN_BGE_SMALL_INDEX]
         );
         let maintenance = deployment.maintenance().plugins();
-        assert_eq!(maintenance.len(), 1);
-        let task = maintenance[0]
-            .plan(&sbol_db_search_sdk::IndexMaintenanceEvent::corpus(
-                sbol_db_search_sdk::IndexMutationSource::Startup,
-            ))
-            .await
-            .unwrap()
-            .pop()
+        assert_eq!(maintenance.len(), 2);
+        let event = sbol_db_search_sdk::IndexMaintenanceEvent::corpus(
+            sbol_db_search_sdk::IndexMutationSource::Startup,
+        );
+        let mut tasks = Vec::new();
+        for plugin in maintenance {
+            tasks.extend(plugin.plan(&event).await.unwrap());
+        }
+        tasks.sort_by(|left, right| left.kind.cmp(&right.kind));
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|task| task.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["rebuild_search_index", "rebuild_vector_index"]
+        );
+        let vector = tasks
+            .iter()
+            .find(|task| task.kind == "rebuild_vector_index")
             .unwrap();
-        assert_eq!(task.kind, "rebuild_vector_index");
-        assert_eq!(task.payload["artifact_id"], BUILTIN_BGE_SMALL_INDEX);
+        assert_eq!(vector.payload["artifact_id"], BUILTIN_BGE_SMALL_INDEX);
     }
 
     #[tokio::test]
@@ -335,8 +391,8 @@ mod tests {
             .schedule_search_reconciliation(IndexMutationSource::Startup)
             .await
             .unwrap();
-        assert_eq!(receipt.enqueued, 1);
-        let jobs = backend
+        assert_eq!(receipt.enqueued, 2);
+        let vector_jobs = backend
             .jobs
             .list(&ListJobsFilter {
                 kind: Some("rebuild_vector_index".to_owned()),
@@ -345,8 +401,21 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(jobs.len(), 1);
-        assert_eq!(jobs[0].payload["artifact_id"], BUILTIN_BGE_SMALL_INDEX);
+        assert_eq!(vector_jobs.len(), 1);
+        assert_eq!(
+            vector_jobs[0].payload["artifact_id"],
+            BUILTIN_BGE_SMALL_INDEX
+        );
+        let explorer_jobs = backend
+            .jobs
+            .list(&ListJobsFilter {
+                kind: Some("rebuild_search_index".to_owned()),
+                limit: 10,
+                ..ListJobsFilter::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(explorer_jobs.len(), 1);
     }
 
     #[tokio::test]

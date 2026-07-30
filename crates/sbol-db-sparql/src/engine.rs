@@ -51,7 +51,7 @@ pub struct SparqlOptions {
 /// queryable graphs to the listed set; the engine intersects the query's
 /// requested graphs with it, so a request for a graph outside the set yields
 /// no rows from that graph.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum GraphScope {
     #[default]
     Union,

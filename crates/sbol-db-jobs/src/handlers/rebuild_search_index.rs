@@ -22,6 +22,7 @@
 //! aligner, and the ranked-text types never enter the storage traits.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use async_trait::async_trait;
 use sbol_db_core::{ObjectTerm, SubjectTerm, Triple};
@@ -31,7 +32,7 @@ use sbol_db_search::ranked_text::IndexedPart;
 use sbol_db_search::{
     band_hashes, cluster_sequences, sketch, AlignOptions, Signature, SketchParams,
 };
-use sbol_db_storage::RankRow;
+use sbol_db_storage::{JobStatus, ListJobsFilter, RankRow, SbolJob};
 use serde_json::Value;
 
 use crate::context::JobContext;
@@ -62,6 +63,11 @@ const SO_PREFIX: &str = "so";
 
 pub struct RebuildSearchIndexHandler;
 
+/// Full compatibility-index rebuilds share process-local index handles and
+/// must never run concurrently. The lock also gives a burst of queued rebuild
+/// signals a deterministic coalescing point.
+static REBUILD_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
 #[async_trait]
 impl JobHandler for RebuildSearchIndexHandler {
     /// The payload is empty; any JSON body is accepted and ignored so a bare
@@ -73,6 +79,30 @@ impl JobHandler for RebuildSearchIndexHandler {
     }
 
     async fn run(&self, ctx: JobContext, _payload: Value) -> Result<JobOutcome, HandlerError> {
+        let _rebuild_guard = REBUILD_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+
+        // Every committed mutation enqueues a desired-state rebuild signal.
+        // When a burst lands (for example, a full SBOLTestSuite seed), only the
+        // newest queued/running signal performs the full scan. Older leased
+        // jobs wait on the lock, observe the newer signal, and finish as
+        // coalesced. A mutation that arrives during the final rebuild creates a
+        // still-newer job, which runs afterward and therefore cannot be lost.
+        if let Some(newer) = newest_pending_rebuild(&ctx).await? {
+            ctx.log(
+                "info",
+                "search-index rebuild coalesced into newer job",
+                serde_json::json!({ "newerJobId": newer.id }),
+            )
+            .await;
+            return Ok(JobOutcome::with_result(serde_json::json!({
+                "coalesced": true,
+                "newerJobId": newer.id,
+            })));
+        }
+
         let search = ctx.search.as_ref().ok_or_else(|| {
             HandlerError::Other(
                 "rebuild_search_index requires a search index handle on the job context; \
@@ -196,6 +226,36 @@ impl JobHandler for RebuildSearchIndexHandler {
             "sketched_input": sketched_input,
         })))
     }
+}
+
+async fn newest_pending_rebuild(ctx: &JobContext) -> Result<Option<SbolJob>, HandlerError> {
+    let Some(current) = ctx.jobs.get(ctx.job_id).await? else {
+        // Direct handler tests and embedders may invoke the handler without a
+        // persisted queue row. There is then nothing to coalesce.
+        return Ok(None);
+    };
+    let mut candidates = Vec::new();
+    for status in [JobStatus::Queued, JobStatus::Running] {
+        candidates.extend(
+            ctx.jobs
+                .list(&ListJobsFilter {
+                    kind: Some(KIND.to_owned()),
+                    status: Some(status),
+                    limit: 1,
+                    ..ListJobsFilter::default()
+                })
+                .await?,
+        );
+    }
+    let newest = candidates.into_iter().max_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.to_string().cmp(&right.id.to_string()))
+    });
+    Ok(newest.filter(|job| {
+        job.id != current.id
+            && (job.created_at, job.id.to_string()) > (current.created_at, current.id.to_string())
+    }))
 }
 
 /// The projected metadata for one top-level object, gathered from its triples.

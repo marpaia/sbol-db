@@ -20,8 +20,10 @@ use tantivy::collector::TopDocs;
 use tantivy::directory::MmapDirectory;
 use tantivy::query::{AllQuery, BooleanQuery, BoostQuery, FuzzyTermQuery, Occur, Query, TermQuery};
 use tantivy::schema::{
-    Field, IndexRecordOption, Schema, TantivyDocument, Value, FAST, STORED, STRING, TEXT,
+    Field, IndexRecordOption, Schema, TantivyDocument, TextFieldIndexing, TextOptions, Value, FAST,
+    STORED, STRING,
 };
+use tantivy::tokenizer::{LowerCaser, RegexTokenizer, TextAnalyzer};
 use tantivy::{DocId, Index, IndexReader, ReloadPolicy, Score, SegmentReader, Term};
 
 /// The rdf:type IRI whose presence divides a hit's score by 10.
@@ -38,6 +40,13 @@ const FETCH_CAP: usize = 10_000;
 
 /// The heap budget for the single index writer, in bytes.
 const WRITER_HEAP_BYTES: usize = 50_000_000;
+
+/// Analyzer matching Elasticsearch's standard analyzer for SBOL identifiers:
+/// letters, digits, and connector underscores stay in one lower-cased token.
+/// Tantivy's default tokenizer splits on `_`, which turns a precise identifier
+/// such as `col_igem_sbol2_151015212923` into several broad OR terms.
+const SBOL_EXPLORER_TOKENIZER: &str = "sbol_explorer_standard";
+const SBOL_EXPLORER_TOKEN_PATTERN: &str = r"[\p{L}\p{N}_]+";
 
 /// A cluster map from a subject to its cluster mates (the other members of its
 /// cluster). The search combine step reads it to apply the divide-by-2
@@ -154,15 +163,27 @@ fn auto_distance(term_len: usize) -> u8 {
 
 fn build_schema() -> (Schema, Fields) {
     let mut builder = Schema::builder();
-    let subject = builder.add_text_field("subject", TEXT | STORED);
+    let text = TextOptions::default()
+        .set_indexing_options(
+            TextFieldIndexing::default()
+                .set_tokenizer(SBOL_EXPLORER_TOKENIZER)
+                .set_index_option(IndexRecordOption::WithFreqsAndPositions),
+        )
+        .set_stored();
+    let text_unstored = TextOptions::default().set_indexing_options(
+        TextFieldIndexing::default()
+            .set_tokenizer(SBOL_EXPLORER_TOKENIZER)
+            .set_index_option(IndexRecordOption::WithFreqsAndPositions),
+    );
+    let subject = builder.add_text_field("subject", text.clone());
     // The graph is matched exactly for scope enforcement, so it is untokenized.
     let graph = builder.add_text_field("graph", STRING);
-    let display_id = builder.add_text_field("displayId", TEXT | STORED);
-    let name = builder.add_text_field("name", TEXT | STORED);
-    let description = builder.add_text_field("description", TEXT | STORED);
-    let version = builder.add_text_field("version", TEXT | STORED);
-    let type_field = builder.add_text_field("type", TEXT | STORED);
-    let keywords = builder.add_text_field("keywords", TEXT);
+    let display_id = builder.add_text_field("displayId", text.clone());
+    let name = builder.add_text_field("name", text.clone());
+    let description = builder.add_text_field("description", text.clone());
+    let version = builder.add_text_field("version", text.clone());
+    let type_field = builder.add_text_field("type", text);
+    let keywords = builder.add_text_field("keywords", text_unstored);
     let pagerank = builder.add_f64_field("pagerank", FAST | STORED);
     let schema = builder.build();
     let fields = Fields {
@@ -185,6 +206,7 @@ impl RankedTextIndex {
         let (schema, fields) = build_schema();
         let directory = MmapDirectory::open(path)?;
         let index = Index::open_or_create(directory, schema)?;
+        register_tokenizer(&index)?;
         Self::from_index(index, fields)
     }
 
@@ -192,6 +214,7 @@ impl RankedTextIndex {
     pub fn in_ram() -> tantivy::Result<Self> {
         let (schema, fields) = build_schema();
         let index = Index::create_in_ram(schema);
+        register_tokenizer(&index)?;
         Self::from_index(index, fields)
     }
 
@@ -371,7 +394,7 @@ impl RankedTextIndex {
         if query.trim().is_empty() {
             return Vec::new();
         }
-        let Some(mut analyzer) = self.index.tokenizers().get("default") else {
+        let Some(mut analyzer) = self.index.tokenizers().get(SBOL_EXPLORER_TOKENIZER) else {
             return Vec::new();
         };
         let mut tokens = Vec::new();
@@ -387,6 +410,16 @@ impl RankedTextIndex {
             .and_then(|value| value.as_str())
             .map(str::to_owned)
     }
+}
+
+fn register_tokenizer(index: &Index) -> tantivy::Result<()> {
+    let analyzer = TextAnalyzer::builder(RegexTokenizer::new(SBOL_EXPLORER_TOKEN_PATTERN)?)
+        .filter(LowerCaser)
+        .build();
+    index
+        .tokenizers()
+        .register(SBOL_EXPLORER_TOKENIZER, analyzer);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -433,6 +466,25 @@ mod tests {
         let hits = search(&index, "promoter");
         assert_eq!(hits[0].subject, "http://example.org/promoter");
         assert!(hits[0].score > hits[1].score);
+    }
+
+    #[test]
+    fn underscore_identifier_remains_one_elasticsearch_compatible_token() {
+        let exact = "col_igem_sbol2_151015212923";
+        let index = index_with(vec![
+            part("http://example.org/exact", exact, "exact collection", 1.0),
+            part(
+                "http://example.org/common-fragments",
+                "different_part",
+                "col igem sbol2 151015212923",
+                1.0,
+            ),
+        ]);
+
+        let hits = search(&index, exact);
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].subject, "http://example.org/exact");
     }
 
     #[test]

@@ -16,6 +16,8 @@
 
 use serde_json::{json, Value};
 
+use crate::GraphScope;
+
 /// The ordered `head.vars` of a recognized search or sequence-search result,
 /// identical to the projection classic SynBioHub receives from SBOLExplorer.
 pub const SEARCH_VARS: [&str; 9] = [
@@ -45,6 +47,9 @@ pub struct Paging {
 /// A recognized SBOLExplorer request extracted from a SPARQL query.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExplorerQuery {
+    /// The fixed SynBioHub search template with no criteria. SBOLExplorer
+    /// treats this as a PageRank-ordered browse over the allowed graphs.
+    Browse { paging: Paging },
     /// `# SIMILAR:<uri>`: the target's cluster mates, ranked by PageRank alone.
     Similar { uri: String, paging: Paging },
     /// `?seq sbol2:elements "<seq>"` with optional `# flag_*` markers: align
@@ -91,7 +96,110 @@ pub fn recognize(query: &str) -> Option<ExplorerQuery> {
     if !terms.is_empty() {
         return Some(ExplorerQuery::Text { terms, paging });
     }
+    if has_empty_search_criteria(query) {
+        return Some(ExplorerQuery::Browse { paging });
+    }
     None
+}
+
+/// Whether this is SynBioHub's fixed search template with an empty criteria
+/// slot. The closest `WHERE {` before `?subject a ?type` is the inner WHERE in
+/// the count template and the only WHERE in the row template, so this works for
+/// both shapes without confusing arbitrary SPARQL with an Explorer browse.
+fn has_empty_search_criteria(query: &str) -> bool {
+    let lower = query.to_ascii_lowercase();
+
+    // Explorer's own index-maintenance query has the same two required
+    // top-level triples as SynBioHub's search template, but projects `?graph`
+    // and adds `GRAPH ?graph { ... }` so it can retain each object's source
+    // graph. It is ordinary SPARQL and must reach the generic engine rather
+    // than being mistaken for an empty ranked browse.
+    if lower.contains("graph ?graph") {
+        return false;
+    }
+
+    let Some(subject_type) = lower.find("?subject a ?type") else {
+        return false;
+    };
+    if !lower[subject_type..].contains("?subject sbh:toplevel ?subject") {
+        return false;
+    }
+    let before = &lower[..subject_type];
+    let Some(where_start) = before.rfind("where") else {
+        return false;
+    };
+    let Some(open_brace) = before[where_start + "where".len()..].find('{') else {
+        return false;
+    };
+    let criteria = before[where_start + "where".len() + open_brace + 1..].trim();
+    criteria.is_empty() || criteria == "filter ()"
+}
+
+/// Resolve the graph ceiling for an SBOLExplorer-compatible request.
+///
+/// Classic SynBioHub communicates search visibility in the same way the
+/// external SBOLExplorer service expects: authenticated searches carry one or
+/// more `FROM <...>` clauses, while anonymous searches normally carry only a
+/// protocol-level `default-graph-uri`. SBOLExplorer gives explicit `FROM`
+/// clauses precedence over that protocol default, so the compatibility
+/// adapter does the same. If neither is present the result is an empty scope,
+/// deliberately failing closed rather than exposing every indexed graph.
+pub fn graph_scope(query: &str, default_graph_uri: Option<&str>) -> GraphScope {
+    let from_graphs = extract_from_graphs(query);
+    if !from_graphs.is_empty() {
+        GraphScope::Only(from_graphs)
+    } else {
+        GraphScope::Only(
+            default_graph_uri
+                .filter(|graph| !graph.is_empty())
+                .map(|graph| vec![graph.to_owned()])
+                .unwrap_or_default(),
+        )
+    }
+}
+
+/// Extract the IRI from each case-insensitive `FROM <iri>` clause in source
+/// order. The SynBioHub templates emit this deliberately small SPARQL subset;
+/// a `FROM NAMED` clause is not an SBOLExplorer visibility declaration and is
+/// therefore ignored.
+fn extract_from_graphs(query: &str) -> Vec<String> {
+    let lower = query.to_ascii_lowercase();
+    let bytes = query.as_bytes();
+    let mut graphs = Vec::new();
+    let mut from = 0;
+
+    while let Some(relative) = lower[from..].find("from") {
+        let keyword_start = from + relative;
+        let keyword_end = keyword_start + "from".len();
+
+        // Do not treat `from` embedded in an identifier as a dataset clause.
+        let left_boundary = keyword_start == 0
+            || (!bytes[keyword_start - 1].is_ascii_alphanumeric()
+                && bytes[keyword_start - 1] != b'_');
+        let right_boundary = keyword_end == bytes.len()
+            || (!bytes[keyword_end].is_ascii_alphanumeric() && bytes[keyword_end] != b'_');
+        from = keyword_end;
+        if !left_boundary || !right_boundary {
+            continue;
+        }
+
+        let remainder = &query[keyword_end..];
+        let trimmed = remainder.trim_start();
+        if trimmed.to_ascii_lowercase().starts_with("named") {
+            continue;
+        }
+        let Some(after_open) = trimmed.strip_prefix('<') else {
+            continue;
+        };
+        let Some(close) = after_open.find('>') else {
+            continue;
+        };
+        let graph = &after_open[..close];
+        if !graph.is_empty() && !graphs.iter().any(|seen| seen == graph) {
+            graphs.push(graph.to_owned());
+        }
+    }
+    graphs
 }
 
 /// SBOLExplorer's default page size when the query carries no `LIMIT`.
@@ -305,6 +413,36 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_empty_ranked_browse_rows_and_count() {
+        let rows = search_query("", "LIMIT 25", "OFFSET 10");
+        assert_eq!(
+            recognize(&rows),
+            Some(ExplorerQuery::Browse {
+                paging: Paging {
+                    offset: 10,
+                    limit: 25,
+                    count: false,
+                },
+            })
+        );
+
+        let count = "select (sum(?tempcount) as ?count) WHERE { { \
+             SELECT (count(distinct ?subject) as ?tempcount) WHERE { \
+             ?subject a ?type . ?subject sbh:topLevel ?subject . } } }"
+            .to_string();
+        assert_eq!(
+            recognize(&count),
+            Some(ExplorerQuery::Browse {
+                paging: Paging {
+                    offset: 0,
+                    limit: 50,
+                    count: true,
+                },
+            })
+        );
+    }
+
+    #[test]
     fn count_query_sets_count_flag() {
         let inner = format!(
             "SELECT (count(distinct ?subject) as ?tempcount) WHERE {{\n# SIMILAR:{URI}\n?subject a ?type . }}"
@@ -332,7 +470,31 @@ mod tests {
             "OFFSET 0",
         );
         assert_eq!(recognize(&uses), None);
+        let faceted = search_query(
+            "?subject a sbol2:ComponentDefinition .",
+            "LIMIT 50",
+            "OFFSET 0",
+        );
+        assert_eq!(recognize(&faceted), None);
         assert_eq!(recognize("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"), None);
+    }
+
+    #[test]
+    fn declines_explorer_index_maintenance_query() {
+        let indexing = r#"
+            SELECT DISTINCT
+                ?subject ?displayId ?version ?name ?description
+                ?type ?graph ?role ?sboltype
+            WHERE {
+                ?subject a ?type .
+                ?subject sbh:topLevel ?subject .
+                GRAPH ?graph { ?subject ?a ?t } .
+                OPTIONAL { ?subject sbol2:displayId ?displayId . }
+            }
+            LIMIT 10000 OFFSET 0
+        "#;
+
+        assert_eq!(recognize(indexing), None);
     }
 
     #[test]
@@ -357,6 +519,50 @@ mod tests {
         assert_eq!(
             count_results(3)["results"]["bindings"][0]["count"]["value"],
             json!("3")
+        );
+    }
+
+    #[test]
+    fn graph_scope_prefers_from_clauses_and_deduplicates_them() {
+        let query = "SELECT ?subject FROM <http://example/public> \
+                     from <http://example/user/alice> \
+                     FROM <http://example/public> WHERE { ?subject ?p ?o }";
+        assert_eq!(
+            graph_scope(query, Some("http://ignored/default")),
+            GraphScope::Only(vec![
+                "http://example/public".to_owned(),
+                "http://example/user/alice".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn graph_scope_uses_protocol_default_without_from() {
+        assert_eq!(
+            graph_scope(
+                "SELECT ?subject WHERE { ?subject ?p ?o }",
+                Some("http://example/public")
+            ),
+            GraphScope::Only(vec!["http://example/public".to_owned()])
+        );
+    }
+
+    #[test]
+    fn graph_scope_fails_closed_without_a_dataset() {
+        assert_eq!(
+            graph_scope("SELECT ?subject WHERE { ?subject ?p ?o }", None),
+            GraphScope::Only(Vec::new())
+        );
+    }
+
+    #[test]
+    fn graph_scope_ignores_from_named() {
+        assert_eq!(
+            graph_scope(
+                "SELECT ?subject FROM NAMED <http://example/private> WHERE { ?subject ?p ?o }",
+                Some("http://example/public")
+            ),
+            GraphScope::Only(vec!["http://example/public".to_owned()])
         );
     }
 }

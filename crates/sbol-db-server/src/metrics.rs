@@ -270,6 +270,28 @@ pub async fn track_metrics(req: Request, next: Next) -> Response {
     response
 }
 
+/// Dedicated bounded-cardinality counter for the optional SBOLExplorer
+/// listener. The main and compatibility routers share the process-global HTTP
+/// counters, so this additional metric lets integration tests prove a search
+/// actually reached the compatibility listener rather than a fallback route.
+pub async fn track_explorer_metrics(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let route = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|matched| matched.as_str().to_owned())
+        .unwrap_or_else(|| "unmatched".to_owned());
+    let response = next.run(req).await;
+    metrics::counter!(
+        "sbol_db_explorer_requests_total",
+        "method" => method.as_str().to_owned(),
+        "route" => route,
+        "status" => response.status().as_u16().to_string(),
+    )
+    .increment(1);
+    response
+}
+
 // ---------- Rolling in-process traffic stats (powers /lab/api/observability/summary)
 
 /// Width of each rolling bucket, in seconds.

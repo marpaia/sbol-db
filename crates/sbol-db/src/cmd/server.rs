@@ -13,7 +13,7 @@ use sbol_db_backend::Backend;
 use sbol_db_jobs::{default_registry, SearchIndexHandles, Worker, WorkerConfig};
 use sbol_db_search::VectorIndexMaintainerRegistry;
 use sbol_db_search_sdk::IndexMutationSource;
-use sbol_db_server::{router, AppState, Metrics};
+use sbol_db_server::{explorer_router, router, AppState, Metrics};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{ConfigStore, JobQueue, SbolStore};
 use tokio_util::sync::CancellationToken;
@@ -25,6 +25,7 @@ pub async fn run(
     backend: Backend,
     database_url: &str,
     bind: SocketAddr,
+    explorer_bind: Option<SocketAddr>,
     no_worker: bool,
     worker_concurrency: Option<usize>,
     worker_queues: Option<String>,
@@ -145,22 +146,88 @@ pub async fn run(
         #[cfg(feature = "lab")]
         schema_cache: Arc::new(sbol_db_server::SchemaCache::new()),
     };
-    let app = router(state, config);
+    let app = router(state.clone(), config.clone());
+    let explorer_app = explorer_bind.map(|_| explorer_router(state, config));
 
     let cancel = CancellationToken::new();
-    let worker_handle = worker_setup.map(|setup| setup.spawn(cancel.clone()));
-
     let listener = tokio::net::TcpListener::bind(bind).await?;
+    let explorer_listener = match explorer_bind {
+        Some(explorer_bind) => Some((
+            explorer_bind,
+            tokio::net::TcpListener::bind(explorer_bind)
+                .await
+                .with_context(|| format!("bind SBOLExplorer listener at {explorer_bind}"))?,
+        )),
+        None => None,
+    };
+    let worker_handle = worker_setup.map(|setup| setup.spawn(cancel.clone()));
     tracing::info!(%bind, worker = worker_handle.is_some(), "sbol-db serving");
     println!("sbol-db listening on http://{bind}");
+    if let Some((explorer_bind, _)) = explorer_listener.as_ref() {
+        tracing::info!(%explorer_bind, "SBOLExplorer compatibility listener serving");
+        println!("sbol-db Explorer compatibility listening on http://{explorer_bind}");
+    }
 
-    let cancel_for_shutdown = cancel.clone();
-    let serve = axum::serve(listener, app).with_graceful_shutdown(async move {
-        shutdown_signal().await;
-        cancel_for_shutdown.cancel();
+    let main_cancel = cancel.clone();
+    let mut main_server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(main_cancel.cancelled_owned())
+            .await
     });
-    serve.await?;
-    tracing::info!("HTTP listener stopped; waiting for embedded worker to drain");
+    let mut explorer_server = match (explorer_listener, explorer_app) {
+        (Some((_bind, listener)), Some(app)) => {
+            let explorer_cancel = cancel.clone();
+            Some(tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(explorer_cancel.cancelled_owned())
+                    .await
+            }))
+        }
+        _ => None,
+    };
+
+    enum FirstExit {
+        Signal,
+        Main(std::result::Result<std::io::Result<()>, tokio::task::JoinError>),
+        Explorer(std::result::Result<std::io::Result<()>, tokio::task::JoinError>),
+    }
+
+    let first_exit = if let Some(explorer) = explorer_server.as_mut() {
+        tokio::select! {
+            _ = shutdown_signal() => FirstExit::Signal,
+            result = &mut main_server => FirstExit::Main(result),
+            result = explorer => FirstExit::Explorer(result),
+        }
+    } else {
+        tokio::select! {
+            _ = shutdown_signal() => FirstExit::Signal,
+            result = &mut main_server => FirstExit::Main(result),
+        }
+    };
+    cancel.cancel();
+
+    let mut main_completed = false;
+    let mut explorer_completed = false;
+    match first_exit {
+        FirstExit::Signal => {}
+        FirstExit::Main(result) => {
+            main_completed = true;
+            result.context("main HTTP listener task")??;
+        }
+        FirstExit::Explorer(result) => {
+            explorer_completed = true;
+            result.context("SBOLExplorer listener task")??;
+        }
+    }
+    if !main_completed {
+        main_server.await.context("main HTTP listener task")??;
+    }
+    if !explorer_completed {
+        if let Some(explorer) = explorer_server {
+            explorer.await.context("SBOLExplorer listener task")??;
+        }
+    }
+    tracing::info!("HTTP listeners stopped; waiting for embedded worker to drain");
 
     if let Some(handle) = worker_handle {
         if let Err(err) = handle.await {

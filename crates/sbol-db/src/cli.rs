@@ -78,6 +78,11 @@ pub enum Command {
     Server {
         #[arg(long, env = "SBOL_DB_BIND", default_value = "127.0.0.1:8888")]
         bind: SocketAddr,
+        /// Optional network-internal SBOLExplorer-compatible listener. The
+        /// listener shares this server process's application state and search
+        /// index; deployments conventionally bind it to `0.0.0.0:13162`.
+        #[arg(long, env = "SBOL_DB_EXPLORER_BIND")]
+        explorer_bind: Option<SocketAddr>,
         /// Disable the embedded worker.
         #[arg(long, env = "SBOL_DB_WORKER_DISABLED")]
         no_worker: bool,

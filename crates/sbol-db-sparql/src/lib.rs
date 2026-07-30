@@ -27,8 +27,9 @@ pub use engine::{
 };
 pub use error::SparqlError;
 pub use explorer::{
-    count_results as explorer_count_results, recognize as recognize_explorer,
-    search_results as explorer_search_results, ExplorerQuery, Paging, COUNT_VARS, SEARCH_VARS,
+    count_results as explorer_count_results, graph_scope as explorer_graph_scope,
+    recognize as recognize_explorer, search_results as explorer_search_results, ExplorerQuery,
+    Paging, COUNT_VARS, SEARCH_VARS,
 };
 pub use results::{ResultFormat, ResultPayload};
 pub use update::{SparqlUpdateEngine, UpdateOutcome};

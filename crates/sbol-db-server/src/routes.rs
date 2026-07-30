@@ -683,7 +683,8 @@ async fn run_sparql(
     // non-JSON result format, falls through to generic evaluation.
     if format.is_none_or(ResultFormat::is_solution_format) {
         if let Some(explorer) = sbol_db_sparql::recognize_explorer(query) {
-            return crate::explorer::route(&state, explorer).await;
+            let scope = sbol_db_sparql::explorer_graph_scope(query, default_graph.as_deref());
+            return crate::explorer::route(&state, explorer, scope).await;
         }
     }
 
