@@ -42,11 +42,7 @@ pub struct MakePublicForm {
 
 /// Build the [`MutationService`] from the shared facade handles.
 fn service(state: &AppState) -> MutationService {
-    MutationService::new(
-        state.app.store.clone(),
-        state.app.sparql_update.clone(),
-        state.app.acl_service.clone(),
-    )
+    state.app.mutation_service()
 }
 
 /// The authenticated caller, or a `403` for an anonymous mutation attempt.

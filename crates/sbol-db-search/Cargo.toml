@@ -13,7 +13,8 @@ sbol-db-core.workspace = true
 sbol-db-search-sdk.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["sync", "time"] }
+uuid.workspace = true
 tantivy = { workspace = true, optional = true }
 bio = { workspace = true, optional = true }
 

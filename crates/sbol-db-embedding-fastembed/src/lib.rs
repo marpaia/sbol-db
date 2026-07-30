@@ -118,6 +118,7 @@ impl FastEmbedProvider {
     ) -> Result<Self, SearchError> {
         validate_config(&config)?;
         validate_bundle_config(bundle)?;
+        ensure_dynamic_ort_path()?;
         let files = LocalBundleFiles::read(bundle)?;
         let revision = files.revision();
         if config.revision != revision {
@@ -171,6 +172,34 @@ impl FastEmbedProvider {
             engine: Arc::new(Mutex::new(engine)),
         })
     }
+}
+
+// `ort-load-dynamic` otherwise defers this error until ONNX Runtime's global
+// initialization. Some versions of the upstream loader re-enter that global
+// initializer while formatting a load failure, leaving the process blocked
+// when ORT_DYLIB_PATH is absent. Fail before constructing FastEmbed so source
+// deployments receive a direct, actionable configuration error.
+#[cfg(feature = "dynamic-ort")]
+fn ensure_dynamic_ort_path() -> Result<(), SearchError> {
+    let path = std::env::var_os("ORT_DYLIB_PATH").ok_or_else(|| {
+        SearchError::Configuration(
+            "local FastEmbed requires ORT_DYLIB_PATH to name a compatible ONNX Runtime library"
+                .to_owned(),
+        )
+    })?;
+    let path = PathBuf::from(path);
+    if !path.is_file() {
+        return Err(SearchError::Configuration(format!(
+            "ORT_DYLIB_PATH does not name a readable ONNX Runtime library: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "dynamic-ort"))]
+fn ensure_dynamic_ort_path() -> Result<(), SearchError> {
+    Ok(())
 }
 
 /// Calculate the revision operators place in [`FastEmbedProviderConfig`]

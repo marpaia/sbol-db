@@ -25,11 +25,13 @@ use std::sync::Arc;
 
 use sbol_db_core::{DomainError, IriString, ObjectTerm, SerializationFormat, SubjectTerm};
 use sbol_db_rdf::triples_to_rdf;
+use sbol_db_search_sdk::{IndexMaintenanceEvent, IndexMutationSource};
 use sbol_db_sparql::{SparqlError, SparqlOptions, SparqlUpdateEngine};
 use sbol_db_storage::{GraphWriteMode, ImportOverwrite, SbolStore};
 
 use crate::acl::{AclService, PUBLIC_GRAPH};
 use crate::collection::{CollectionService, MintScope};
+use crate::SearchMaintenanceScheduler;
 
 /// SynBioHub vocabulary used to build the delete templates and to recognize a
 /// Collection in a fetched closure.
@@ -103,6 +105,7 @@ pub struct MutationService {
     sparql_update: Arc<SparqlUpdateEngine>,
     acl_service: AclService,
     collection: CollectionService,
+    maintenance: Option<Arc<SearchMaintenanceScheduler>>,
 }
 
 impl MutationService {
@@ -118,7 +121,14 @@ impl MutationService {
             sparql_update,
             acl_service,
             collection: CollectionService::new(),
+            maintenance: None,
         }
+    }
+
+    /// Attach automatic search maintenance to this mutation service.
+    pub fn with_maintenance(mut self, maintenance: Arc<SearchMaintenanceScheduler>) -> Self {
+        self.maintenance = Some(maintenance);
+        self
     }
 
     /// Delete a top-level object and the triples of everything whose
@@ -132,6 +142,7 @@ impl MutationService {
     ) -> Result<(), MutationError> {
         let graph = self.authorize(user_graph, is_admin, object_uri).await?;
         self.run_update(&remove_query(object_uri), &graph).await?;
+        self.schedule_reconciliation().await?;
         Ok(())
     }
 
@@ -150,6 +161,7 @@ impl MutationService {
             .await?;
         self.run_update(&remove_query(collection_uri), &graph)
             .await?;
+        self.schedule_reconciliation().await?;
         Ok(())
     }
 
@@ -269,6 +281,7 @@ impl MutationService {
         // Delete the private original. The submission owns its graph outright, so
         // clearing the graph removes the private closure in full.
         self.store.graph_store_clear(&private_graph).await?;
+        self.schedule_reconciliation().await?;
 
         Ok(MakePublicOutcome {
             collection_uri: minted.collection_uri,
@@ -308,6 +321,19 @@ impl MutationService {
         self.sparql_update
             .execute(update, Some(graph), &SparqlOptions::default())
             .await?;
+        Ok(())
+    }
+
+    /// Removal and publication can affect an arbitrary closure of objects, so
+    /// they deliberately request the plugin's corpus-level reconciliation path.
+    async fn schedule_reconciliation(&self) -> Result<(), MutationError> {
+        if let Some(maintenance) = &self.maintenance {
+            maintenance
+                .schedule(IndexMaintenanceEvent::corpus(
+                    IndexMutationSource::ObjectMutation,
+                ))
+                .await?;
+        }
         Ok(())
     }
 }

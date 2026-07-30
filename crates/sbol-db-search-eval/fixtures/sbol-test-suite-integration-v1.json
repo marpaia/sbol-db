@@ -1,0 +1,66 @@
+{
+  "id": "sbol-test-suite-integration",
+  "revision": "1",
+  "source": {
+    "repository": "https://github.com/SynBioDex/SBOLTestSuite",
+    "commit": "0044284331b2f915a6e4b9d50e1cbf3ea2f62dcd",
+    "selection": "All importable documents from the supported SBOL1, SBOL2, SBOL2_bp, SBOL2_ic, SBOL3, and RDF directories. Known-invalid directories (InvalidFiles and SBOL2_nc) are deliberately excluded from the searchable corpus. The public semantic corpus uses one canonical Turtle serialization for every SBOL3 example to avoid duplicate serializations biasing rankings."
+  },
+  "import_groups": [
+    {
+      "path": "SBOL1",
+      "expected_imported_documents": 27,
+      "expected_parse_failures": 0
+    },
+    {
+      "path": "SBOL2",
+      "expected_imported_documents": 179,
+      "expected_parse_failures": 0
+    },
+    {
+      "path": "SBOL2_bp",
+      "expected_imported_documents": 11,
+      "expected_parse_failures": 0
+    },
+    {
+      "path": "SBOL2_ic",
+      "expected_imported_documents": 71,
+      "expected_parse_failures": 0
+    },
+    {
+      "path": "SBOL3",
+      "expected_imported_documents": 155,
+      "expected_parse_failures": 5
+    },
+    {
+      "path": "RDF",
+      "expected_imported_documents": 4,
+      "expected_parse_failures": 0
+    }
+  ],
+  "expected_imported_documents": 447,
+  "expected_indexed_objects": 8805,
+  "public_semantic_corpus": {
+    "directory": "SBOL3",
+    "extension": "ttl",
+    "expected_documents": 31
+  },
+  "cases": [
+    {
+      "query": "genetic toggle switch",
+      "expected_uri": "https://sbolstandard.org/examples/toggle_switch"
+    },
+    {
+      "query": "LuxR regulator",
+      "expected_uri": "https://synbiohub.org/public/igem/BBa_C0062"
+    },
+    {
+      "query": "multicellular receiver system",
+      "expected_uri": "https://sbolstandard.org/examples/MulticellularSystem"
+    },
+    {
+      "query": "PoPS receiver device",
+      "expected_uri": "https://synbiohub.org/public/igem/BBa_F2620"
+    }
+  ]
+}

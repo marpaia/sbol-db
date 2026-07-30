@@ -289,21 +289,13 @@ pub async fn publish_object(
 /// Build the [`EditService`] from the shared facade handles, the same wiring the
 /// V1 edit routes use.
 fn edit_service(state: &AppState) -> EditService {
-    EditService::new(
-        state.app.store.clone(),
-        state.app.sparql_update.clone(),
-        state.app.acl_service.clone(),
-    )
+    state.app.edit_service()
 }
 
 /// Build the [`MutationService`] from the shared facade handles, the same wiring
 /// the V1 mutate routes use.
 fn mutation_service(state: &AppState) -> MutationService {
-    MutationService::new(
-        state.app.store.clone(),
-        state.app.sparql_update.clone(),
-        state.app.acl_service.clone(),
-    )
+    state.app.mutation_service()
 }
 
 /// A non-disclosing `404` for an absent or out-of-scope object.

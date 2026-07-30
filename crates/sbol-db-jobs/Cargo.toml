@@ -29,5 +29,6 @@ chrono.workspace = true
 [dev-dependencies]
 sbol-db-postgres.workspace = true
 sbol-db-sqlite.workspace = true
+sbol-db-vector-flat.workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

@@ -253,9 +253,8 @@ impl VectorIndexAdmin for ExactFlatVectorBackend {
                     applied += 1;
                 }
                 VectorChange::Delete { document_id } => {
-                    if updated.remove(&document_id).is_some() {
-                        applied += 1;
-                    }
+                    updated.remove(&document_id);
+                    applied += 1;
                 }
             }
         }
@@ -515,6 +514,7 @@ mod tests {
             vector_name: "content".to_owned(),
             dimension: 2,
             distance,
+            embedding: None,
             parameters: BTreeMap::new(),
         }
     }

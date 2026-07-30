@@ -4,8 +4,9 @@
 #
 # - FAISS is built from a checksum-pinned source release with its C API,
 #   OpenBLAS, and OpenMP enabled. The production binary always includes the
-#   `faiss` feature; selecting the backend remains an explicit search-config
-#   choice at runtime.
+#   `faiss` feature. The zero-config server ships a checksum-pinned BGE-small
+#   ONNX semantic index; selecting FAISS remains an explicit search-config
+#   choice.
 # - The CPU-only ONNX Runtime used by local FastEmbed profiles is copied from
 #   checksum-pinned Microsoft release archives for Linux x86-64 and ARM64.
 # - cargo-chef caches workspace dependency builds in their own layer.
@@ -94,7 +95,19 @@ RUN set -eux; \
     test -e /opt/onnxruntime/lib/libonnxruntime.so
 
 ############################
-# Stage 2 — chef base
+# Stage 2 — immutable default BGE-small ONNX model bundle
+############################
+FROM debian:bookworm-slim AS builtin-model
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY docker/model-download.sh docker/fetch-builtin-bge-small-model.sh /usr/local/bin/
+RUN bash /usr/local/bin/fetch-builtin-bge-small-model.sh \
+    /opt/sbol-db/models/bge-small-en-v1.5 \
+    && test -s /opt/sbol-db/models/bge-small-en-v1.5/model_optimized.onnx
+
+############################
+# Stage 3 — chef base
 ############################
 FROM rust:${RUST_VERSION}-bookworm AS chef
 # Node.js 20 is required by `sbol-db-ui`'s build.rs, which drives the
@@ -108,14 +121,14 @@ RUN cargo install cargo-chef --locked --version ^0.1
 WORKDIR /work
 
 ############################
-# Stage 3 — planner: produce the dependency recipe
+# Stage 4 — planner: produce the dependency recipe
 ############################
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 ############################
-# Stage 4 — builder: cook deps, then build the binary
+# Stage 5 — builder: cook deps, then build the binary
 ############################
 FROM chef AS builder
 # g++ (build-essential) builds the bundled RocksDB C++; clang/libclang drive
@@ -147,17 +160,25 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Optional CI target — tests against the exact container-built FAISS
 ############################
 FROM builder AS faiss-test
+COPY --from=onnxruntime-builder /opt/onnxruntime /opt/onnxruntime
+COPY --from=builtin-model /opt/sbol-db/models /opt/sbol-db/models
+ENV LD_LIBRARY_PATH=/opt/faiss/lib:/opt/onnxruntime/lib
+ENV ORT_DYLIB_PATH=/opt/onnxruntime/lib/libonnxruntime.so
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target \
-    cargo test -p sbol-db-search-faiss --features native
+    cargo test -p sbol-db-search-faiss --features native \
+    && SBOL_DB_BGE_SMALL_MODEL_DIR=/opt/sbol-db/models/bge-small-en-v1.5 \
+       cargo run -p sbol-db-search-eval --example bge_small_release_gate \
+    && cp target/debug/examples/bge_small_release_gate /usr/local/bin/sbol-db-bge-release-gate
 
 ############################
-# Stage 5 — runtime: distroless cc plus FAISS/ONNX Runtime, nonroot
+# Stage 6 — runtime: distroless cc plus FAISS/ONNX Runtime, model, nonroot
 ############################
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=builder /usr/local/bin/sbol-db /usr/local/bin/sbol-db
 COPY --from=faiss-builder /opt/faiss-runtime/lib/ /usr/local/lib/
 COPY --from=onnxruntime-builder /opt/onnxruntime/lib/ /usr/local/lib/
+COPY --chown=65532:65532 --from=builtin-model /opt/sbol-db/models/ /opt/sbol-db/models/
 COPY --chown=65532:65532 --from=faiss-builder /opt/sbol-db-data/ /var/lib/sbol-db/
 ENV LD_LIBRARY_PATH=/usr/local/lib
 ENV ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so

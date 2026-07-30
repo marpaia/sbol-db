@@ -132,7 +132,7 @@ async fn project_corpus(ctx: &JobContext) -> Result<Vec<VectorDocument>, Handler
 /// Derived JSON is excluded because its ordering and shape are parser/version
 /// concerns; stable SBOL identity and human-facing metadata carry the initial
 /// semantic-search contract.
-fn project_object(record: SbolObjectRecord, graph: Option<String>) -> VectorDocument {
+pub(super) fn project_object(record: SbolObjectRecord, graph: Option<String>) -> VectorDocument {
     let mut types = record.types;
     types.sort();
     types.dedup();

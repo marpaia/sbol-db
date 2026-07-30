@@ -22,11 +22,13 @@
 use std::sync::Arc;
 
 use sbol_db_core::{DomainError, ObjectTerm, SubjectTerm, Triple};
+use sbol_db_search_sdk::{DocumentId, IndexMaintenanceEvent, IndexMutationSource};
 use sbol_db_sparql::{SparqlError, SparqlOptions, SparqlUpdateEngine};
 use sbol_db_storage::{BlobStore, SbolStore};
 
 use crate::acl::AclService;
 use crate::mutation::MutationError;
+use crate::SearchMaintenanceScheduler;
 
 /// `rdf:type`.
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -94,6 +96,7 @@ pub struct AttachmentService {
     sparql_update: Arc<SparqlUpdateEngine>,
     acl_service: AclService,
     blobs: Arc<dyn BlobStore>,
+    maintenance: Option<Arc<SearchMaintenanceScheduler>>,
 }
 
 impl AttachmentService {
@@ -110,7 +113,14 @@ impl AttachmentService {
             sparql_update,
             acl_service,
             blobs,
+            maintenance: None,
         }
+    }
+
+    /// Attach automatic search maintenance to this attachment service.
+    pub fn with_maintenance(mut self, maintenance: Arc<SearchMaintenanceScheduler>) -> Self {
+        self.maintenance = Some(maintenance);
+        self
     }
 
     /// Store `bytes` in the blob store and attach them to `target_uri` as a
@@ -143,6 +153,8 @@ impl AttachmentService {
             Some(blob.size),
         );
         self.run(&update, &graph).await?;
+        self.schedule_documents(target_uri, &mint.attachment_uri)
+            .await?;
 
         Ok(AttachmentRef {
             uri: mint.attachment_uri,
@@ -183,6 +195,8 @@ impl AttachmentService {
             target_uri, &mint, user_graph, name, url, format_iri, None, None,
         );
         self.run(&update, &graph).await?;
+        self.schedule_documents(target_uri, &mint.attachment_uri)
+            .await?;
 
         Ok(AttachmentRef {
             uri: mint.attachment_uri,
@@ -243,6 +257,25 @@ impl AttachmentService {
         self.sparql_update
             .execute(update, Some(graph), &SparqlOptions::default())
             .await?;
+        Ok(())
+    }
+
+    async fn schedule_documents(
+        &self,
+        target_uri: &str,
+        attachment_uri: &str,
+    ) -> Result<(), MutationError> {
+        if let Some(maintenance) = &self.maintenance {
+            maintenance
+                .schedule(IndexMaintenanceEvent::documents(
+                    IndexMutationSource::Attachment,
+                    [
+                        DocumentId(target_uri.to_owned()),
+                        DocumentId(attachment_uri.to_owned()),
+                    ],
+                ))
+                .await?;
+        }
         Ok(())
     }
 }

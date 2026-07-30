@@ -2,53 +2,15 @@
 
 set -euo pipefail
 
+script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=model-download.sh
+source "$script_directory/model-download.sh"
+
 # Apache-2.0 model used only by the production-container semantic-search test.
 # Every URL names an immutable Hugging Face commit and every file is verified
 # independently so CI never builds an index from moving or corrupted weights.
 readonly model_repository="Qdrant/all-MiniLM-L6-v2-onnx"
 readonly model_revision="5f1b8cd78bc4fb444dd171e59b18f3a3af89a079"
-
-sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | cut -d ' ' -f 1
-  else
-    shasum -a 256 "$1" | cut -d ' ' -f 1
-  fi
-}
-
-download_verified() {
-  local url="$1"
-  local target="$2"
-  local expected="$3"
-  local temporary="$target.partial"
-
-  if [ -f "$target" ] && [ "$(sha256 "$target")" = "$expected" ]; then
-    return
-  fi
-
-  mkdir -p "$(dirname "$target")"
-  curl \
-    --fail \
-    --location \
-    --silent \
-    --show-error \
-    --connect-timeout 30 \
-    --max-time 600 \
-    --retry 8 \
-    --retry-all-errors \
-    --retry-delay "${SBOL_DB_DOWNLOAD_RETRY_DELAY_SECONDS:-2}" \
-    --retry-max-time 300 \
-    --output "$temporary" \
-    "$url"
-  local actual
-  actual="$(sha256 "$temporary")"
-  if [ "$actual" != "$expected" ]; then
-    echo "checksum mismatch for $target: expected $expected, got $actual" >&2
-    rm -f "$temporary"
-    exit 1
-  fi
-  mv "$temporary" "$target"
-}
 
 fetch() {
   local destination="$1"

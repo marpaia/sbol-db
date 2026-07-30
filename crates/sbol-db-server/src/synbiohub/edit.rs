@@ -30,11 +30,7 @@ const PROV_WAS_DERIVED_FROM: &str = "http://www.w3.org/ns/prov#wasDerivedFrom";
 
 /// Build the [`EditService`] from the shared facade handles.
 fn service(state: &AppState) -> EditService {
-    EditService::new(
-        state.app.store.clone(),
-        state.app.sparql_update.clone(),
-        state.app.acl_service.clone(),
-    )
+    state.app.edit_service()
 }
 
 /// The authenticated caller, or a `403` for an anonymous mutation attempt.

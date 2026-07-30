@@ -866,6 +866,7 @@ mod tests {
             vector_name: "content".to_owned(),
             dimension: 3,
             distance: DistanceMetric::Cosine,
+            embedding: None,
             parameters: BTreeMap::from([("mystery".to_owned(), json!(true))]),
         };
         assert!(matches!(

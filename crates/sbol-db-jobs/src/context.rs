@@ -58,8 +58,8 @@ pub struct JobContext {
     /// it.
     pub search: Option<SearchIndexHandles>,
     /// Present only on a worker configured with an embedding provider and
-    /// vector backend. The `rebuild_vector_index` handler uses this coordinator
-    /// to stage and atomically activate a complete vector generation.
+    /// vector backend. Vector rebuild and incremental-update handlers use this
+    /// coordinator to maintain configured generations.
     pub vector_indexes: Option<Arc<VectorIndexMaintainerRegistry>>,
     /// The durable instance-configuration store. Present only on a worker
     /// configured with it; the `wor_sync` handler requires it to read the joined

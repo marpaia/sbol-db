@@ -417,9 +417,8 @@ impl Inner {
                     applied += 1;
                 }
                 VectorChange::Delete { document_id } => {
-                    if records.remove(&document_id).is_some() {
-                        applied += 1;
-                    }
+                    records.remove(&document_id);
+                    applied += 1;
                 }
             }
         }
@@ -979,6 +978,7 @@ mod tests {
             vector_name: "content".to_owned(),
             dimension: 2,
             distance: DistanceMetric::Cosine,
+            embedding: None,
             parameters: BTreeMap::new(),
         }
     }
