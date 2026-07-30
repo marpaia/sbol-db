@@ -38,6 +38,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Server {
             bind,
+            explorer_bind,
             no_worker,
             worker_concurrency,
             worker_queues,
@@ -48,6 +49,7 @@ async fn main() -> Result<()> {
                 backend,
                 &database_url,
                 bind,
+                explorer_bind,
                 no_worker,
                 worker_concurrency,
                 worker_queues,

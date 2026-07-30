@@ -24,6 +24,8 @@ ARG FAISS_SHA256=7f3c4ed9aec3bd7524382862f5fcbd4d8984e2a8979ff3bdb2c0bcea5144149
 ARG ONNXRUNTIME_VERSION=1.24.2
 ARG ONNXRUNTIME_SHA256_AMD64=43725474ba5663642e17684717946693850e2005efbd724ac72da278fead25e6
 ARG ONNXRUNTIME_SHA256_ARM64=6715b3d19965a2a6981e78ed4ba24f17a8c30d2d26420dbed10aac7ceca0085e
+ARG SO_COMMIT=01c33c6d9b6c8dca12e7d3e37b49ee113093c2fa
+ARG SO_SHA256=dde032d4c7cfb89a7013f2f8ab7420a8ef7dc469fbc2b0ffb38bef2a064a1d1f
 
 ############################
 # Stage 0 — pinned FAISS C API and runtime library bundle
@@ -107,6 +109,23 @@ RUN bash /usr/local/bin/fetch-builtin-bge-small-model.sh \
     && test -s /opt/sbol-db/models/bge-small-en-v1.5/model_optimized.onnx
 
 ############################
+# Stage 2a — immutable Sequence Ontology snapshot
+############################
+FROM debian:bookworm-slim AS sequence-ontology
+ARG SO_COMMIT
+ARG SO_SHA256
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    mkdir -p /opt/sbol-db/ontologies; \
+    curl --fail --location --retry 3 \
+        "https://raw.githubusercontent.com/The-Sequence-Ontology/SO-Ontologies/${SO_COMMIT}/Ontology_Files/so.obo" \
+        --output /opt/sbol-db/ontologies/so.obo; \
+    echo "${SO_SHA256}  /opt/sbol-db/ontologies/so.obo" \
+        | sha256sum --check --strict
+
+############################
 # Stage 3 — chef base
 ############################
 FROM rust:${RUST_VERSION}-bookworm AS chef
@@ -179,6 +198,7 @@ COPY --from=builder /usr/local/bin/sbol-db /usr/local/bin/sbol-db
 COPY --from=faiss-builder /opt/faiss-runtime/lib/ /usr/local/lib/
 COPY --from=onnxruntime-builder /opt/onnxruntime/lib/ /usr/local/lib/
 COPY --chown=65532:65532 --from=builtin-model /opt/sbol-db/models/ /opt/sbol-db/models/
+COPY --chown=65532:65532 --from=sequence-ontology /opt/sbol-db/ontologies/ /opt/sbol-db/ontologies/
 COPY --chown=65532:65532 --from=faiss-builder /opt/sbol-db-data/ /var/lib/sbol-db/
 ENV LD_LIBRARY_PATH=/usr/local/lib
 ENV ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so

@@ -19,7 +19,8 @@ use sbol_db_sqlite::{
     SqliteSketchStore, SqliteStore,
 };
 use sbol_db_storage::{
-    ClusterStore, GraphWriteMode, JobQueue, PageRankStore, SbolStore, SketchStore, TripleSource,
+    ClusterStore, GraphWriteMode, JobQueue, NewJob, PageRankStore, SbolStore, SketchStore,
+    TripleSource,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -250,4 +251,45 @@ async fn rebuild_without_search_handle_fails_clearly() {
         .await
         .expect_err("without a search handle the rebuild must fail");
     assert!(err.to_string().contains("search index handle"));
+}
+
+#[tokio::test]
+async fn older_rebuild_signal_coalesces_into_the_newest_pending_job() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let url = format!("sqlite://{}", dir.path().join("coalesce.db").display());
+    let pool = connect_and_migrate(&url).await.expect("connect + migrate");
+
+    let store: Arc<dyn SbolStore> = Arc::new(SqliteStore::new(pool.clone()));
+    let jobs: Arc<dyn JobQueue> = Arc::new(SqliteJobRepository::new(pool));
+    let older = jobs
+        .enqueue(NewJob::new("rebuild_search_index", serde_json::json!({})))
+        .await
+        .expect("enqueue older")
+        .into_job();
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    let newer = jobs
+        .enqueue(NewJob::new("rebuild_search_index", serde_json::json!({})))
+        .await
+        .expect("enqueue newer")
+        .into_job();
+
+    let ctx = JobContext {
+        job_id: older.id,
+        worker_id: Arc::from("test-worker"),
+        attempt: 1,
+        service: store,
+        jobs,
+        cancel: CancellationToken::new(),
+        // Coalescing happens before the expensive handler needs these handles.
+        search: None,
+        vector_indexes: None,
+        config: None,
+    };
+    let outcome = RebuildSearchIndexHandler
+        .run(ctx, serde_json::json!({}))
+        .await
+        .expect("older signal coalesces");
+    let result = outcome.result.expect("coalescing result");
+    assert_eq!(result["coalesced"], true);
+    assert_eq!(result["newerJobId"], newer.id.to_string());
 }

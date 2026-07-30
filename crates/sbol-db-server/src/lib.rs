@@ -361,6 +361,40 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         )
 }
 
+/// The network-internal SBOLExplorer wire-compatibility surface. It shares the
+/// exact [`AppState`] used by [`router`], including the process-local ranked
+/// index, cluster data, and embedded worker queue. Deployments normally bind
+/// this router to port 13162 and alias the service as `explorer`.
+pub fn explorer_router(state: AppState, config: ServerConfig) -> Router {
+    Router::new()
+        .route("/", get(explorer::endpoint))
+        .route(
+            "/config",
+            get(explorer::get_config).post(explorer::set_config),
+        )
+        .route("/update", get(explorer::update))
+        .route("/incrementalupdate", post(explorer::incremental_update))
+        .route("/incrementalremove", get(explorer::incremental_remove))
+        .route(
+            "/incrementalremovecollection",
+            get(explorer::incremental_remove_collection),
+        )
+        .route("/info", get(explorer::info))
+        .route("/indexinginfo", get(explorer::indexing_info))
+        .route("/healthz", get(routes::healthz))
+        .route("/readyz", get(routes::readyz))
+        .route("/metrics", get(metrics::metrics_handler))
+        .route_layer(axum::middleware::from_fn(metrics::track_explorer_metrics))
+        .fallback(not_found_handler)
+        .with_state(state)
+        .layer(DefaultBodyLimit::max(config.max_body_bytes))
+        .layer(RequestBodyLimitLayer::new(config.max_body_bytes))
+        .layer(TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            config.request_timeout,
+        ))
+}
+
 /// Catch-all that logs unmatched requests and returns a JSON-shaped
 /// 404. Axum's default 404 is silent and bodyless, which makes "why is
 /// the UI getting Not Found?" hard to debug. The log line lands at WARN
