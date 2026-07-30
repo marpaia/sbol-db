@@ -1,0 +1,40 @@
+{
+  "topology": {
+    "default_strategy": "python.huggingface.bge-small-search.v1",
+    "indexes": [
+      {
+        "index": "python.huggingface.bge-small-en-v1.5.v1",
+        "backend": "python-bge-faiss",
+        "embedding_profile": "python.huggingface.bge-small-en-v1.5.v1",
+        "vector_name": "content",
+        "graph_payload_field": "graph",
+        "maintenance": {
+          "generation_prefix": "python-bge-small",
+          "distance": "cosine",
+          "batch_size": 64
+        }
+      }
+    ],
+    "embedding_strategies": []
+  },
+  "embeddings": [],
+  "vector_backends": [
+    {
+      "kind": "faiss",
+      "config": {
+        "id": "python-bge-faiss",
+        "path": "./data/python-bge-faiss",
+        "default_nlist": 256,
+        "default_nprobe": 16,
+        "flat_search_cutoff": 256,
+        "max_query_k": 10000
+      }
+    }
+  ],
+  "python_plugins": [
+    {
+      "module": "bge_small",
+      "path": "."
+    }
+  ]
+}

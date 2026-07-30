@@ -333,6 +333,91 @@ Model download/cache policy, license metadata, text projection revision, and
 query/document prefixes are part of profile configuration and provenance, not
 implicit behavior inside a search strategy.
 
+### Python search plugins
+
+Build the `sbol-db` binary with the opt-in `python` feature to load ordinary
+Python modules into the same composition root. A Python strategy receives the
+same authorization-scoped services as a Rust strategy:
+
+```python
+from sbol_db.search import SearchContext, SearchPlugin
+
+class MyEmbedding:
+    def embed(self, texts, *, kind):
+        return model.encode(texts).tolist()
+
+class MyStrategy:
+    def search(self, ctx: SearchContext, request):
+        vector = ctx.embed(request["query"]["text"])[0]
+        candidates = ctx.vectors.query(
+            vector,
+            limit=request["page"]["limit"],
+            cursor=request["page"].get("cursor"),
+        )
+        documents = ctx.documents.hydrate(
+            [item["document_id"] for item in candidates["items"]]
+        )
+        # Join the authorized documents to the candidates and return SearchHit
+        # mappings. See the BGE example for the complete response construction.
+        return make_page(candidates, documents)
+
+def register(search: SearchPlugin):
+    search.add_embedding(
+        MyEmbedding(),
+        id="python.my-model.v1",
+        model="organization/model-name",
+        revision="immutable-model-revision",
+        dimension=384,
+        normalization="l2",
+    )
+    search.add_strategy(
+        MyStrategy(),
+        id="python.my-model-search.v1",
+        embedding_profile="python.my-model.v1",
+        vector_index="my-model-index",
+    )
+```
+
+`ctx.scope` and `ctx.budget` expose the effective request constraints;
+`ctx.embed(...)`, `ctx.vectors.query(...)`, and `ctx.documents.hydrate(...)`
+expose the bound embedding profile, logical vector index, and authoritative
+SBOL store. The vector and document handles already enforce the request's ACL
+scope. Strategies may implement either synchronous or asynchronous `search`.
+Omitting `MyStrategy()` from `add_strategy` selects sbol-db's built-in dense
+strategy instead.
+
+The process calls `embed(texts, kind="document")` while the native maintenance
+worker builds or updates the configured vector backend. Python does not own a
+parallel corpus or index: the logical index binding selects exact-flat, FAISS,
+or Qdrant, and reindex checkpoints, publication, and recovery remain in the
+durable native maintenance plane. Request strategies intentionally receive
+read/query access, not mutable index administration.
+
+Load the module from `--search-config`:
+
+```json
+{
+  "python_plugins": [{
+    "module": "my_search_plugin",
+    "path": "/opt/sbol-db/plugins"
+  }]
+}
+```
+
+Installed modules omit `path`; relative paths resolve from the search config's
+directory. The binary embeds the Python interpreter chosen when PyO3 builds,
+so model packages must be installed for that interpreter.
+Imports and model construction happen at process startup; failures prevent the
+search deployment from activating. Registration metadata is keyword-only and
+unknown fields are rejected. The same Python provider is shared between query
+and maintenance paths, and one provider or strategy implementation may be
+configured under multiple stable profile/strategy IDs when those IDs describe
+distinct model spaces.
+
+See [`examples/python-search-bge`](../examples/python-search-bge) for a complete
+Hugging Face Transformers implementation backed by sbol-db's integrated FAISS
+index.
+
 The included `sbol-db-embedding-fastembed` adapter takes an already initialized
 `fastembed::TextEmbedding`, keeping weight acquisition out of request
 execution. Its default `dynamic-ort` feature avoids a build-time runtime

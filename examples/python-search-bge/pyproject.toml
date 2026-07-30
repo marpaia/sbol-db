@@ -1,0 +1,12 @@
+[project]
+name = "sbol-db-bge-plugin-example"
+version = "0.0.0"
+requires-python = ">=3.10"
+dependencies = [
+    "sbol-db",
+    "torch>=2.3",
+    "transformers>=4.44",
+]
+
+[tool.uv.sources]
+sbol-db = { path = "../../clients/python", editable = true }

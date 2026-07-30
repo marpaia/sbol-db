@@ -207,6 +207,34 @@ impl SearchDeploymentBuilder {
         Ok(self)
     }
 
+    /// Add a configured instance of the native dense embedding strategy.
+    /// Runtime language bridges use this after they have collected plugin
+    /// registrations; the provider itself is still resolved by stable profile
+    /// ID during `build`.
+    pub fn register_embedding_strategy(
+        mut self,
+        strategy: EmbeddingStrategyConfig,
+    ) -> Result<Self, SearchError> {
+        let id = strategy.id.trim();
+        if id.is_empty() {
+            return Err(configuration("strategy id cannot be empty"));
+        }
+        if self
+            .config
+            .embedding_strategies
+            .iter()
+            .any(|registered| registered.id == id)
+            || self
+                .strategies
+                .iter()
+                .any(|registered| registered.descriptor().id == id)
+        {
+            return Err(configuration(format!("duplicate strategy {id:?}")));
+        }
+        self.config.embedding_strategies.push(strategy);
+        Ok(self)
+    }
+
     /// Register a storage-neutral maintenance plugin. The application later
     /// gives its resulting tasks to the durable job queue after a successful
     /// data mutation.
