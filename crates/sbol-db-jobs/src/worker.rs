@@ -137,9 +137,9 @@ impl Worker {
         self
     }
 
-    /// Give this worker the embedding/backend coordinator required by the
-    /// `rebuild_vector_index` job. Deployment code chooses the concrete
-    /// plugins; the worker and handler remain backend-neutral.
+    /// Give this worker the embedding/backend coordinators required by vector
+    /// rebuild and incremental-update jobs. Deployment code chooses the
+    /// concrete plugins; the worker and handlers remain backend-neutral.
     pub fn with_vector_indexes(
         mut self,
         vector_indexes: Arc<VectorIndexMaintainerRegistry>,

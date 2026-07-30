@@ -123,9 +123,14 @@ Built-in handlers ship in `sbol-db-jobs::handlers`. Today:
 |---|---|
 | `import_document` | Async equivalent of `POST /graphs`. Payload is the inline import body, format (`turtle`, `jsonld`, `rdfxml`, `ntriples`, `genbank`, or `fasta`), optional namespace, and metadata; `result` is the `ImportReport`. |
 | `import_remote_document` | Worker-side public HTTPS fetch followed by the same import pipeline. Payload is `{url, format, namespace?, document_iri?, name?, description?, created_by?}`; the worker rejects non-HTTPS, local, and private-address URLs before fetching. |
+| `import_synbiohub_collection` | Enumerate a remote SynBioHub collection and enqueue bounded child import jobs. |
+| `rebuild_search_index` | Reconcile sequence sketches/clusters, PageRank, and the shared ranked-text index from authoritative storage. |
+| `rebuild_vector_index` | Embed the complete derived object view into a new vector generation, then atomically activate it. |
+| `maintain_vector_index` | Resolve the generation active at execution time and synchronize named desired-state documents into it. |
+| `update_vector_index` | Synchronize named object IRIs into an active incremental-capable vector generation; missing objects become deletes. |
+| `wor_sync` | Synchronize Web of Registries prefix mappings into the durable configuration store. |
 
-Future handlers (projection worker, ontology fetch, index rebuild)
-will land here as new modules without schema changes.
+Additional handlers can land as new modules without schema changes.
 
 #### Operator surfaces
 
@@ -250,10 +255,12 @@ before publishing.
 
 - Glibc-linked `sbol-db` binary at `/usr/local/bin/sbol-db`. The image includes
   the `faiss` feature, checksum-pinned FAISS 1.14.3 C API, OpenBLAS, OpenMP,
-  ONNX Runtime 1.24.2 CPU libraries for Linux x86-64 and ARM64, and their
-  required runtime libraries. Choosing FAISS and a local embedding profile is
-  still explicit in `SBOL_DB_SEARCH_CONFIG`; merely using the image does not
-  create an index.
+  ONNX Runtime 1.24.2 CPU libraries for Linux x86-64 and ARM64, their required
+  runtime libraries, and the verified BGE-small ONNX default model. With the
+  normal embedded worker, merely starting the image also enables the built-in
+  in-memory `builtin.sbol-text-bge-small.v1` vector index and queues its
+  startup rebuild. Choosing FAISS and a different local embedding profile
+  remains explicit in `SBOL_DB_SEARCH_CONFIG`.
 - Runs as `nonroot:nonroot` (UID/GID 65532). Compatible with strict
   pod security: `runAsNonRoot: true`, `readOnlyRootFilesystem: true`,
   `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`.
@@ -269,8 +276,29 @@ before publishing.
 ```sh
 make container          # builds ghcr.io/marpaia/sbol-db:<version>, --load to local docker
 docker run --rm -it ghcr.io/marpaia/sbol-db:<version> --help
-make container/test-faiss # native tests + final-image semantic lifecycle test
+make container/test-faiss # native tests + BGE relevance gate + final-image lifecycle test
 ```
+
+### Running the built-in semantic index
+
+No model mount or search configuration is required for the default semantic
+index. The embedded worker initializes the local BGE-small profile, schedules
+the first rebuild, and then maintains the active exact-flat generation after
+committed writes:
+
+```sh
+docker volume create sbol-db-data
+docker run --name sbol-db --rm \
+  -p 8080:8080 \
+  -e DATABASE_URL=sqlite:///var/lib/sbol-db/sbol.db \
+  -v sbol-db-data:/var/lib/sbol-db \
+  ghcr.io/marpaia/sbol-db:<version>
+```
+
+The initial rebuild is asynchronous; use `/api/v2/search/strategies` to
+discover `builtin.sbol-text-vector.v2`, then query `/api/v2/search` after the
+rebuild has produced the first generation. For replicas or a separate worker,
+use an explicit shared backend configuration instead.
 
 ### Running embedded FAISS
 
@@ -299,8 +327,10 @@ a model mount only when the composition root registers a local FastEmbed
 provider. Both the database and immutable FAISS generations survive container
 replacement in `sbol-db-data`.
 
-The image supplies ONNX Runtime but deliberately does not ship model weights.
-Mount an immutable local bundle containing `model.onnx`, `tokenizer.json`,
+The image supplies ONNX Runtime and the immutable default BGE-small bundle.
+Mount an immutable local bundle only for a custom FastEmbed composition root;
+it must contain the configured ONNX file (for example `model.onnx` or
+`model_optimized.onnx`), `tokenizer.json`,
 `config.json`, `special_tokens_map.json`, and `tokenizer_config.json`. Calculate
 the content revision required by the embedding profile with the image itself:
 
@@ -310,11 +340,14 @@ docker run --rm \
   ghcr.io/marpaia/sbol-db:<version> util fastembed-revision /model
 ```
 
+Pass `--onnx-file model_optimized.onnx` when that is the filename declared in
+the composition root.
+
 Startup rejects the configuration if any of those model files no longer match
-the declared revision. The CI container test downloads a commit-pinned,
-checksum-verified Apache-2.0 MiniLM bundle and proves model initialization,
-corpus projection, FAISS generation construction, semantic retrieval, and
-active-generation recovery after a container restart.
+the declared revision. The CI container test verifies the shipped,
+commit-pinned BGE-small bundle, its graded-relevance release gate, default
+startup rebuild, corpus projection, FAISS generation construction, semantic
+retrieval, and active-generation recovery after a container restart.
 
 A FAISS store is owned by exactly one running sbol-db process and guarded by
 `backend.lock`. Use the server's embedded worker when query and maintenance

@@ -12,6 +12,7 @@ use sbol_db_app::{AppServices, LegacyExplorerStrategy};
 use sbol_db_backend::Backend;
 use sbol_db_jobs::{default_registry, SearchIndexHandles, Worker, WorkerConfig};
 use sbol_db_search::VectorIndexMaintainerRegistry;
+use sbol_db_search_sdk::IndexMutationSource;
 use sbol_db_server::{router, AppState, Metrics};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{ConfigStore, JobQueue, SbolStore};
@@ -69,23 +70,37 @@ pub async fn run(
     ));
     let mut app_services = AppServices::from_backend(&backend);
 
-    if let Some(path) = search_config {
-        let deployment = crate::search_config::load_builder(&path)
-            .await?
-            .register_strategy(Arc::new(LegacyExplorerStrategy::new(
-                app_services.text_search.clone(),
-                app_services.cluster.clone(),
-            )))?
-            .build()?;
+    let built_in_search = search_config.is_none();
+    if built_in_search && no_worker {
+        tracing::warn!(
+            "the built-in in-process vector index is disabled with --no-worker; \
+             configure a shared vector backend with --search-config for an external worker"
+        );
+    } else {
+        let deployment = match search_config {
+            Some(path) => crate::search_config::load_builder(&path)
+                .await?
+                .register_strategy(Arc::new(LegacyExplorerStrategy::new(
+                    app_services.text_search.clone(),
+                    app_services.cluster.clone(),
+                )))?
+                .build()?,
+            None => crate::search_config::built_in_text_deployment().await?,
+        };
         if let Some(setup) = worker_setup.as_mut() {
             setup.vector_indexes = Some(deployment.maintainers());
         }
         app_services = app_services.with_search_deployment(&deployment);
+        if built_in_search {
+            app_services
+                .schedule_search_reconciliation(IndexMutationSource::Startup)
+                .await?;
+        }
         tracing::info!(
-            path = %path.display(),
             strategies = app_services.search_runtime().descriptors().len(),
             vector_indexes = deployment.maintainers().len(),
-            "search plugin deployment configured",
+            built_in = built_in_search,
+            "search plugin deployment configured"
         );
     }
     let app_services = Arc::new(app_services);

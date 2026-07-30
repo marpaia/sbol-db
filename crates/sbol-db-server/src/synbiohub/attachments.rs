@@ -29,12 +29,7 @@ const MEDIATYPE_PREFIX: &str = "http://purl.org/NET/mediatypes/";
 
 /// Build the [`AttachmentService`] from the shared facade handles.
 fn service(state: &AppState) -> AttachmentService {
-    AttachmentService::new(
-        state.app.store.clone(),
-        state.app.sparql_update.clone(),
-        state.app.acl_service.clone(),
-        state.app.blobs.clone(),
-    )
+    state.app.attachment_service()
 }
 
 /// The authenticated caller, or a `403` for an anonymous attach attempt.

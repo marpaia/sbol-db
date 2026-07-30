@@ -1,4 +1,5 @@
 REGISTRY ?= ghcr.io/marpaia/sbol-db
+BUILTIN_BGE_SMALL_DIR ?= $(HOME)/.cache/sbol-db/models/bge-small-en-v1.5-onnx-q-5239827
 
 # bindgen / pg_query SDK isysroot is set via .cargo/config.toml using
 # the target-specific BINDGEN_EXTRA_CLANG_ARGS_<triple> hook, so bare
@@ -12,7 +13,7 @@ VERSION   := $(or $(GIT_TAG),$(GIT_HASH)$(GIT_DIRTY))
 
 IMAGE ?= $(REGISTRY):$(VERSION)
 
-.PHONY: psql container container/test-faiss
+.PHONY: psql container container/test-faiss container/test-sbol-test-suite model/bge-small
 
 psql:
 	docker compose exec -e PGPASSWORD=sbol postgres psql -U sbol -d sbol
@@ -24,3 +25,11 @@ container/test-faiss:
 	docker buildx build --load --target faiss-test --tag $(IMAGE)-faiss-test .
 	docker buildx build --load --tag $(IMAGE) .
 	docker/test-faiss-container.sh $(IMAGE)
+
+container/test-sbol-test-suite:
+	@test -n "$(SBOL_TEST_SUITE_ROOT)" || (echo "set SBOL_TEST_SUITE_ROOT to a pinned SBOLTestSuite checkout" >&2; exit 2)
+	SBOL_DB_SBOL_TEST_SUITE_ROOT="$(SBOL_TEST_SUITE_ROOT)" docker/test-sbol-test-suite-container.sh $(IMAGE)
+
+model/bge-small:
+	bash docker/fetch-builtin-bge-small-model.sh $(BUILTIN_BGE_SMALL_DIR)
+	@echo "BGE-small bundle ready at $(BUILTIN_BGE_SMALL_DIR)"

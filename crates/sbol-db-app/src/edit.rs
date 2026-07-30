@@ -17,11 +17,13 @@
 
 use std::sync::Arc;
 
+use sbol_db_search_sdk::{DocumentId, IndexMaintenanceEvent, IndexMutationSource};
 use sbol_db_sparql::{SparqlError, SparqlOptions, SparqlUpdateEngine};
 use sbol_db_storage::SbolStore;
 
 use crate::acl::AclService;
 use crate::mutation::MutationError;
+use crate::SearchMaintenanceScheduler;
 
 /// SynBioHub / SBOL vocabulary the field-edit templates write.
 const DCTERMS_MODIFIED: &str = "http://purl.org/dc/terms/modified";
@@ -59,6 +61,7 @@ impl FieldValue {
 pub struct EditService {
     sparql_update: Arc<SparqlUpdateEngine>,
     acl_service: AclService,
+    maintenance: Option<Arc<SearchMaintenanceScheduler>>,
 }
 
 impl EditService {
@@ -73,7 +76,14 @@ impl EditService {
         Self {
             sparql_update,
             acl_service,
+            maintenance: None,
         }
+    }
+
+    /// Attach automatic search maintenance to this edit service.
+    pub fn with_maintenance(mut self, maintenance: Arc<SearchMaintenanceScheduler>) -> Self {
+        self.maintenance = Some(maintenance);
+        self
     }
 
     /// Replace `sbh:mutableDescription` on `uri` with `value` (dropping the field
@@ -139,6 +149,7 @@ impl EditService {
             now_modified()
         );
         self.run(&update, &graph).await?;
+        self.schedule_document(uri).await?;
         Ok(())
     }
 
@@ -169,6 +180,7 @@ impl EditService {
             modified = now_modified(),
         );
         self.run(&update, &graph).await?;
+        self.schedule_document(uri).await?;
         Ok(())
     }
 
@@ -191,6 +203,7 @@ impl EditService {
             modified = now_modified(),
         );
         self.run(&update, &graph).await?;
+        self.schedule_document(uri).await?;
         Ok(())
     }
 
@@ -213,6 +226,7 @@ impl EditService {
             modified = now_modified(),
         );
         self.run(&update, &graph).await?;
+        self.schedule_document(uri).await?;
         Ok(())
     }
 
@@ -229,6 +243,7 @@ impl EditService {
         let update =
             format!("INSERT DATA {{ <{collection_uri}> <{SBOL2_MEMBER}> <{member_uri}> }}");
         self.run(&update, &graph).await?;
+        self.schedule_document(collection_uri).await?;
         Ok(())
     }
 
@@ -245,6 +260,7 @@ impl EditService {
         let update =
             format!("DELETE WHERE {{ <{collection_uri}> <{SBOL2_MEMBER}> <{member_uri}> }}");
         self.run(&update, &graph).await?;
+        self.schedule_document(collection_uri).await?;
         Ok(())
     }
 
@@ -272,6 +288,7 @@ impl EditService {
             now_modified()
         );
         self.run(&update, &graph).await?;
+        self.schedule_document(uri).await?;
         Ok(())
     }
 
@@ -303,6 +320,18 @@ impl EditService {
         self.sparql_update
             .execute(update, Some(graph), &SparqlOptions::default())
             .await?;
+        Ok(())
+    }
+
+    async fn schedule_document(&self, uri: &str) -> Result<(), MutationError> {
+        if let Some(maintenance) = &self.maintenance {
+            maintenance
+                .schedule(IndexMaintenanceEvent::documents(
+                    IndexMutationSource::ObjectEdit,
+                    [DocumentId(uri.to_owned())],
+                ))
+                .await?;
+        }
         Ok(())
     }
 }

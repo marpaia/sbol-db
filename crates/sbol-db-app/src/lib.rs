@@ -20,6 +20,7 @@ mod config;
 mod download;
 mod edit;
 mod federation;
+mod maintenance;
 pub mod memory;
 mod mutation;
 mod permission;
@@ -42,6 +43,7 @@ pub use federation::{
     FederationError, FederationService, HttpWebOfRegistriesClient, JoinPayload, JoinResponse,
     WebOfRegistriesClient, WorInstance,
 };
+pub use maintenance::{MaintenanceScheduleReceipt, SearchMaintenanceScheduler};
 pub use mutation::{MakePublicOutcome, MakePublicRequest, MutationError, MutationService};
 pub use permission::PermissionService;
 pub use plugin::{
@@ -60,6 +62,7 @@ use std::sync::{Arc, OnceLock};
 use sbol_db_backend::Backend;
 use sbol_db_search::ranked_text::RankedTextIndex;
 use sbol_db_search::{SearchDeployment, SearchRuntime, VectorRouter};
+use sbol_db_search_sdk::{IndexMaintenanceEvent, IndexMaintenanceRegistry, IndexMutationSource};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
     AclStore, BlobStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore,
@@ -126,6 +129,10 @@ pub struct AppServices {
     /// Optional logical-index router used by embedding and hybrid strategies.
     /// The request path wraps it in the caller's graph authorization scope.
     search_vectors: Option<Arc<VectorRouter>>,
+    /// Internal bridge from committed writes to plugin-defined durable search
+    /// maintenance. The default registry is empty until a search deployment
+    /// installs policies that opt an index into automatic maintenance.
+    search_maintenance: Arc<SearchMaintenanceScheduler>,
     /// The Web of Registries HTTP client backing federation. Defaults to the
     /// SSRF-guarded [`HttpWebOfRegistriesClient`]; a test swaps in a stub with
     /// [`with_federation_client`](Self::with_federation_client). The
@@ -312,8 +319,75 @@ impl AppServices {
     /// deployment builder. Query dispatch and logical vector routing therefore
     /// cannot be assembled from different plugin configurations.
     pub fn with_search_deployment(self, deployment: &SearchDeployment) -> Self {
-        self.with_search_runtime(deployment.runtime())
-            .with_vector_router(deployment.router())
+        let mut services = self
+            .with_search_runtime(deployment.runtime())
+            .with_vector_router(deployment.router());
+        services.search_maintenance = Arc::new(SearchMaintenanceScheduler::new(
+            services.jobs.clone(),
+            deployment.maintenance(),
+        ));
+        services
+    }
+
+    /// Schedule plugin-defined maintenance after a committed write. Applications
+    /// using a facade method such as [`Self::submission_service`] get this
+    /// automatically; raw protocol adapters call it after their own commit.
+    pub async fn schedule_search_maintenance(
+        &self,
+        event: IndexMaintenanceEvent,
+    ) -> Result<MaintenanceScheduleReceipt, sbol_db_core::DomainError> {
+        self.search_maintenance.schedule(event).await
+    }
+
+    /// Submit a corpus-level invalidation for an opaque mutation whose complete
+    /// set of affected search documents cannot be known safely.
+    pub async fn schedule_search_reconciliation(
+        &self,
+        source: IndexMutationSource,
+    ) -> Result<MaintenanceScheduleReceipt, sbol_db_core::DomainError> {
+        self.schedule_search_maintenance(IndexMaintenanceEvent::corpus(source))
+            .await
+    }
+
+    /// The submission facade wired to automatic search maintenance, when the
+    /// installed deployment opted any index into it.
+    pub fn submission_service(&self) -> SubmissionService {
+        SubmissionService::with_maintenance(
+            self.store.clone(),
+            CollectionService::new(),
+            self.search_maintenance.clone(),
+        )
+    }
+
+    /// The destructive-mutation facade wired to automatic search maintenance.
+    pub fn mutation_service(&self) -> MutationService {
+        MutationService::new(
+            self.store.clone(),
+            self.sparql_update.clone(),
+            self.acl_service.clone(),
+        )
+        .with_maintenance(self.search_maintenance.clone())
+    }
+
+    /// The in-place edit facade wired to automatic search maintenance.
+    pub fn edit_service(&self) -> EditService {
+        EditService::new(
+            self.store.clone(),
+            self.sparql_update.clone(),
+            self.acl_service.clone(),
+        )
+        .with_maintenance(self.search_maintenance.clone())
+    }
+
+    /// The attachment facade wired to automatic search maintenance.
+    pub fn attachment_service(&self) -> AttachmentService {
+        AttachmentService::new(
+            self.store.clone(),
+            self.sparql_update.clone(),
+            self.acl_service.clone(),
+            self.blobs.clone(),
+        )
+        .with_maintenance(self.search_maintenance.clone())
     }
 
     /// Replace the default temp-directory blob store with a caller-provided one,
@@ -352,6 +426,10 @@ impl AppServices {
         let expose = Arc::new(plugin::ExposeRegistry::new());
         let stream = Arc::new(plugin::StreamRegistry::new());
         let search_runtime = Arc::new(OnceLock::new());
+        let search_maintenance = Arc::new(SearchMaintenanceScheduler::new(
+            jobs.clone(),
+            Arc::new(IndexMaintenanceRegistry::default()),
+        ));
         Self {
             store,
             sparql,
@@ -370,6 +448,7 @@ impl AppServices {
             text_search,
             search_runtime,
             search_vectors: None,
+            search_maintenance,
             federation_client,
             plugin_client,
             expose,

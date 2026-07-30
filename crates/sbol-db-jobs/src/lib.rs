@@ -30,5 +30,7 @@ pub fn default_registry() -> JobRegistry {
         .register(handlers::ImportSynBioHubCollectionHandler)
         .register(handlers::RebuildSearchIndexHandler)
         .register(handlers::RebuildVectorIndexHandler)
+        .register(handlers::MaintainVectorIndexHandler)
+        .register(handlers::UpdateVectorIndexHandler)
         .register(handlers::WorSyncHandler)
 }

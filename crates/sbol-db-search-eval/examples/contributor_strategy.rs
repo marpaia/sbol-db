@@ -187,6 +187,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &QualityGate {
             cutoff: 3,
             min_cases: 6,
+            min_candidate_mean_ndcg: 0.90,
             min_mean_ndcg_delta: 0.05,
             regression_tolerance: 0.001,
             max_regressed_fraction: 0.0,

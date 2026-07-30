@@ -13,7 +13,7 @@
 use axum::extract::{Multipart, State};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
-use sbol_db_app::{SubmissionService, SubmitRequest};
+use sbol_db_app::SubmitRequest;
 use sbol_db_core::{DomainError, SerializationFormat};
 use sbol_db_storage::ImportOverwrite;
 
@@ -93,7 +93,9 @@ pub async fn submit(
         overwrite,
     };
 
-    SubmissionService::new(state.app.store.clone())
+    state
+        .app
+        .submission_service()
         .submit(request)
         .await
         .map_err(submit_error)?;

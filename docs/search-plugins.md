@@ -161,10 +161,29 @@ embedding profile, named vector, and graph payload field. This keeps the Rust
 SDK usable in an embedded application without forcing that application to use
 sbol-db's CLI or a particular configuration-file format.
 
-The shipped binary provides one JSON composition root through
-`--search-config` / `SBOL_DB_SEARCH_CONFIG`. `server` installs both query and
-maintenance planes; `worker` installs only maintenance. A Qdrant deployment
-with a verified local FastEmbed model looks like:
+Without `--search-config`, `sbol-db server` installs a built-in vector index:
+`builtin.sbol-text-bge-small.v1`. It embeds the canonical, labeled SBOL object
+projection (URI, SBOL class, display ID, name, description, types, and roles)
+with a checksum-pinned 384-dimensional BGE-small ONNX bundle and cosine
+similarity. The model is local and has no request-time egress; the production
+image carries its verified weights. Source builds set
+`SBOL_DB_BGE_SMALL_MODEL_DIR` after `make model/bge-small`. There is no silent
+lexical fallback, because the same strategy name must always denote one vector
+space. It is enabled with the normal embedded worker, queues a full rebuild at
+every server startup, and becomes the default structured-search strategy as
+`builtin.sbol-text-vector.v2`. See [the model release contract](builtin-bge-small-model.md)
+for the upstream pin, per-file checksums, and relevance gate.
+
+The built-in backend is exact-flat and intentionally lives in the API/worker
+process, so `--no-worker` disables this default index. Use a configured shared
+backend (such as Qdrant) when API and worker processes are separate or when
+multiple replicas must serve the same vector state. The compatibility search
+routes retain their existing ranked-text behavior.
+
+`--search-config` / `SBOL_DB_SEARCH_CONFIG` replaces this baseline with an
+explicit JSON composition root. `server` installs both query and maintenance
+planes; `worker` installs only maintenance. A Qdrant deployment with a verified
+local FastEmbed model looks like:
 
 ```json
 {
@@ -175,7 +194,13 @@ with a verified local FastEmbed model looks like:
       "backend": "qdrant-primary",
       "embedding_profile": "local.bge-small-en-v1.5.rev1",
       "vector_name": "content",
-      "graph_payload_field": "graph"
+      "graph_payload_field": "graph",
+      "maintenance": {
+        "generation_prefix": "components-auto",
+        "distance": "cosine",
+        "batch_size": 64,
+        "backend_parameters": { "on_disk": true }
+      }
     }],
     "embedding_strategies": [{
       "id": "semantic.components.v1",
@@ -193,19 +218,18 @@ with a verified local FastEmbed model looks like:
     "kind": "fastembed_local",
     "profile": {
       "id": "local.bge-small-en-v1.5.rev1",
-      "model": "BAAI/bge-small-en-v1.5",
-      "revision": "sha3-256:<digest from local_bundle_revision>",
+      "model": "Qdrant/bge-small-en-v1.5-onnx-Q@52398278842ec682c6f32300af41344b1c0b0bb2",
+      "revision": "sha3-256:bf577972c34b37578aa42965fa8401d5538f4b4c007c810332e936548658c7b3",
       "dimension": 384,
       "normalization": "l2",
-      "query_prefix": "Represent this sentence for searching relevant passages: ",
-      "batch_size": 64
+      "batch_size": 32
     },
     "bundle": {
       "directory": "/opt/sbol-db/models/bge-small-en-v1.5",
-      "onnx_file": "model.onnx",
+      "onnx_file": "model_optimized.onnx",
       "pooling": "cls",
       "max_length": 512,
-      "intra_threads": 4
+      "intra_threads": 2
     }
   }],
   "vector_backends": [{
@@ -272,7 +296,10 @@ before FAISS is called.
 
 Embedding identity includes provider, model, immutable revision, dimension,
 normalization, and data-egress behavior. A rebuild refuses a profile mismatch,
-and generated indexes record this provenance in the build report.
+and generated indexes record the vector-space identity in both the generation
+spec and build report. Incremental maintenance refuses generations without
+that provenance, so an older generation must be rebuilt once before accepting
+newly embedded documents.
 
 ```rust,ignore
 #[async_trait]
@@ -348,13 +375,14 @@ and [LanceDB embedded quickstart](https://docs.lancedb.com/quickstart).
 
 ## Generation lifecycle
 
-Indexes are build artifacts, not mutable application truth. Every backend
-implements the same lifecycle:
+Indexes are derived artifacts, not application truth. Every backend implements
+the same lifecycle:
 
 1. `create_generation` creates an inactive generation with dimension,
    distance, named-vector, and backend parameters;
 2. `apply` writes validated batches while the previous generation serves
-   queries;
+   queries, and may also update the active generation when the backend
+   advertises `incremental_updates`;
 3. `flush`, `optimize`, and optional `snapshot` establish the durability
    boundary;
 4. `activate` atomically swaps the logical artifact to the new generation;
@@ -376,11 +404,11 @@ effective `nlist`/`nprobe`, vector count, and FAISS version in the immutable
 manifest. The active pointer includes the manifest checksum, so a crash or
 partial build cannot make an unready generation queryable.
 
-The built-in `rebuild_vector_index` durable job supplies the first maintenance
-path. It keyset-pages the primary store's complete derived SBOL object view,
-resolves graph IRIs, creates deterministic labeled embedding text, and returns
-the maintainer's `IndexBuildReport` as the durable job result. Deployment code
-injects the validated provider/backend registry with
+The built-in `rebuild_vector_index` durable job keyset-pages the primary
+store's complete derived SBOL object view, resolves graph IRIs, creates
+deterministic labeled embedding text, and returns the maintainer's
+`IndexBuildReport` as the durable job result. Deployment code injects the
+validated provider/backend registry with
 `Worker::with_vector_indexes(Arc<VectorIndexMaintainerRegistry>)`; a worker without that
 configuration fails this job kind clearly while continuing to serve other job
 kinds.
@@ -397,12 +425,68 @@ kinds.
 }
 ```
 
-Callers should enqueue that payload under kind `rebuild_vector_index` with an
-idempotency key derived from artifact, generation, and corpus revision. The next
-maintenance slice is an event-fed incremental projector for
-import/update/delete, plus explicit retry policy and an artifact catalog for
-reports and snapshot references. Full rebuild remains the reconciliation and
+Callers may enqueue that payload under kind `rebuild_vector_index` with an
+idempotency key derived from artifact, generation, and corpus revision. The
+optional `maintenance` object in a logical index binding instead opts that
+index into automatic maintenance. It supplies the generation-name prefix,
+distance, batch size, and backend parameters needed to create a replacement
+generation. With it installed, the application invokes SDK-registered
+maintenance plugins after successful writes and enqueues their returned durable
+tasks. A plugin can choose narrow document synchronization or full
+reconciliation without the application knowing a particular vector backend's
+lifecycle.
+
+Enabling `maintenance` changes future committed writes only. For an existing
+corpus under an explicit deployment, enqueue one initial `rebuild_vector_index`
+(or wait for the first mutation, which plans the same full rebuild when no
+generation is active) before relying on the index. The shipped built-in index
+does this startup rebuild automatically. After activation, document-precise
+writes use the incremental path when the selected backend advertises it.
+
+For a document-precise event, the built-in vector plugin enqueues
+`maintain_vector_index` when an incremental-capable generation is active. That
+job resolves the active generation at execution time and synchronizes selected
+identities into it. It therefore follows a concurrent rebuild rather than
+becoming permanently stale. The explicit `update_vector_index` operation
+remains available to callers who want a job pinned to one named active
+generation:
+
+```json
+{
+  "artifact_id": "components",
+  "generation": "2026-07-26-model-rev-1",
+  "document_ids": [
+    "https://example.org/components/pTet",
+    "https://example.org/components/deleted-part"
+  ],
+  "batch_size": 64
+}
+```
+
+The handler reads each identity from the authoritative derived object view at
+execution time: present objects become canonical embedding upserts and absent
+objects become deletes. Repeated delivery therefore converges to the same
+state. The explicit named-generation operation requires that generation to be
+active at both the start and completion of the update, and its stored embedding
+profile, provider, model revision, dimension, and normalization must match the
+configured maintainer.
+
+The backend applies changes in bounded batches and flushes before the job
+succeeds. A transient failure can leave a prefix applied, but retrying the full
+desired-state payload is safe. Exact-flat and Qdrant support incremental
+maintenance. FAISS continues to require a full rebuild because it advertises
+`incremental_updates = false`. Full rebuild also remains the reconciliation and
 model-migration path.
+
+The shipped application emits a document-precise event after SynBioHub and V2
+submission, typed object edits, and attachment writes. It emits a
+corpus-reconciliation event after destructive object mutations, raw SPARQL
+Update, Graph Store writes/deletes, and raw REST imports or graph deletion;
+those routes can alter an arbitrary closure and therefore cannot safely name a
+complete document set. Task planning happens only after the authoritative write
+has succeeded. If durable scheduling then fails, the request reports that
+failure rather than pretending the index will converge; replay or a full
+rebuild repairs the already committed data write.
 
 ## Evaluation and rollout
 
@@ -415,11 +499,12 @@ fingerprint. Persisted reports can be verified by reconstructing their case and
 aggregate metrics from the returned document IDs.
 
 Promotion is a paired comparison against the same suite revision. A
-`QualityGate` requires a minimum case count, a minimum mean nDCG delta, and a
-maximum fraction of queries that regress beyond tolerance. Comparison uses the
-suite judgments rather than trusting cached report aggregates and includes
-every per-query delta. This prevents a large gain on a few queries from
-concealing broad regressions.
+`QualityGate` requires a minimum case count, an absolute minimum candidate
+mean nDCG, a minimum mean nDCG delta, and a maximum fraction of queries that
+regress beyond tolerance. Comparison uses the suite judgments rather than
+trusting cached report aggregates and includes every per-query delta. This
+prevents a large gain on a few queries—or a tiny improvement over a poor
+baseline—from concealing weak overall relevance.
 
 A production rollout should add, in order:
 
@@ -442,13 +527,17 @@ Implemented:
 - dense reference embedding strategy;
 - local FastEmbed/ONNX provider adapter;
 - generation rebuild/activation/rollback coordinator;
-- durable full-corpus vector rebuild job and canonical SBOL projection; and
+- durable full-corpus vector rebuild job and canonical SBOL projection;
+- durable desired-state incremental vector update job with embedding-space
+  validation;
+- SDK maintenance plugins, durable task scheduling, and automatic write-path
+  events for SynBioHub, V2, SPARQL, Graph Store, and REST ingestion; and
 - offline relevance metrics and paired quality gate.
 
 Next:
 
-1. feed import/update/delete events into idempotent incremental vector jobs and
-   persist artifact/snapshot provenance;
+1. persist artifact/snapshot provenance with each scheduled maintenance intent
+   and add an outbox for atomic write-and-schedule delivery;
 2. expose backend/profile/strategy assembly through typed server
    configuration;
 3. run live Qdrant lifecycle integration tests in CI;

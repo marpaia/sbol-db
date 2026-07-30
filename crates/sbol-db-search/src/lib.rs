@@ -23,6 +23,7 @@ pub mod align;
 pub mod cluster;
 pub mod deployment;
 pub mod embedding_strategy;
+pub mod hashing_embedding;
 pub mod keywords;
 pub mod maintenance;
 pub mod minhash;
@@ -37,10 +38,16 @@ pub use align::{AlignMode, AlignOptions, Alignment};
 pub use cluster::ClusterId;
 pub use deployment::{
     SearchDeployment, SearchDeploymentBuilder, SearchTopologyConfig, VectorIndexBindingConfig,
-    VectorIndexMaintainerRegistry,
+    VectorIndexMaintainerRegistry, VectorIndexMaintenanceConfig,
 };
 pub use embedding_strategy::{EmbeddingSearchStrategy, EmbeddingStrategyConfig};
-pub use maintenance::{IndexBuildReport, VectorDocument, VectorIndexMaintainer, VectorRebuildSpec};
+pub use hashing_embedding::{
+    HashingTextEmbeddingProvider, BUILTIN_SBOL_TEXT_DIMENSION, BUILTIN_SBOL_TEXT_PROFILE,
+};
+pub use maintenance::{
+    IndexBuildReport, IndexUpdateReport, VectorDocument, VectorDocumentChange,
+    VectorIndexMaintainer, VectorRebuildSpec, VectorUpdateSpec,
+};
 pub use minhash::{band_hashes, sketch, Signature, SketchParams};
 pub use runtime::SearchRuntime;
 pub use vector_router::VectorRouter;

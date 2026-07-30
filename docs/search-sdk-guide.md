@@ -76,6 +76,58 @@ The descriptor is enforced at runtime. Declare only capabilities you implement;
 the API will reject unsupported filters, cursors, inputs, or explanations before
 your strategy runs.
 
+## Define index maintenance
+
+Search plugins can also define how their artifacts remain current. Implement
+`IndexMaintenancePlugin` when a committed write should turn into a durable
+maintenance task. The SDK sees only the mutation source and either a complete,
+deduplicated set of affected document IDs or a corpus-level invalidation; it
+does not depend on the database or job queue.
+
+```rust,ignore
+use async_trait::async_trait;
+use sbol_db_search_sdk::{
+    IndexMaintenanceDescriptor, IndexMaintenanceEvent, IndexMaintenancePlugin,
+    IndexMaintenanceTask, IndexMutationScope, SearchError,
+};
+
+struct MyIndexMaintenance {
+    descriptor: IndexMaintenanceDescriptor,
+}
+
+#[async_trait]
+impl IndexMaintenancePlugin for MyIndexMaintenance {
+    fn descriptor(&self) -> &IndexMaintenanceDescriptor {
+        &self.descriptor
+    }
+
+    async fn plan(
+        &self,
+        event: &IndexMaintenanceEvent,
+    ) -> Result<Vec<IndexMaintenanceTask>, SearchError> {
+        match &event.scope {
+            IndexMutationScope::Documents { document_ids } => Ok(vec![
+                IndexMaintenanceTask::new(
+                    "my_index_sync",
+                    serde_json::json!({ "document_ids": document_ids }),
+                ),
+            ]),
+            IndexMutationScope::Corpus => Ok(vec![
+                IndexMaintenanceTask::new("my_index_rebuild", serde_json::json!({})),
+            ]),
+        }
+    }
+}
+```
+
+Register it through `SearchDeploymentBuilder::register_maintenance_plugin`.
+After an authoritative application write commits, `AppServices` asks every
+registered plugin to plan and persists the returned tasks in its durable job
+queue. A plugin must make repeated task delivery converge. Typed submission,
+object-edit, and attachment paths provide exact document events; raw SPARQL,
+Graph Store, and import routes provide corpus events. The application reports a
+post-commit scheduling failure rather than claiming an index is current.
+
 ## Register and try it
 
 Register the strategy where the server assembles its search deployment:
@@ -163,4 +215,8 @@ by CI.
 Existing vector implementations include exact-flat for a correctness oracle,
 FAISS for embedded native ANN, and Qdrant for service or edge deployments.
 Treat the vector engine as a replaceable index: sbol-db remains the database
-and source of authoritative SBOL metadata.
+and source of authoritative SBOL metadata. Backends that advertise
+`incremental_updates` must accept idempotent upserts and deletes against the
+active generation; a missing delete still counts as an accepted operation.
+The high-level maintainer verifies stored embedding-space provenance before it
+uses that capability.

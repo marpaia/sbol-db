@@ -115,6 +115,24 @@ fn default_registry_contains_vector_rebuild() {
     assert_eq!(handler.kind(), "rebuild_vector_index");
 }
 
+#[test]
+fn default_registry_contains_vector_update() {
+    let registry = default_registry();
+    let handler = registry
+        .lookup("update_vector_index")
+        .expect("default_registry must include update_vector_index");
+    assert_eq!(handler.kind(), "update_vector_index");
+}
+
+#[test]
+fn default_registry_contains_scheduled_vector_maintenance() {
+    let registry = default_registry();
+    let handler = registry
+        .lookup("maintain_vector_index")
+        .expect("default_registry must include maintain_vector_index");
+    assert_eq!(handler.kind(), "maintain_vector_index");
+}
+
 /// `JobRegistry::register` replaces an existing entry for the same kind.
 /// The duplicate warning is logged; this test pins the post-replacement
 /// state so callers don't accidentally end up with multiple stale handlers.

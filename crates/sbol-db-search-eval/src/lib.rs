@@ -280,6 +280,9 @@ pub struct QualityGate {
     pub cutoff: usize,
     /// Reject evidence sets that are too small for the intended rollout.
     pub min_cases: usize,
+    /// Minimum absolute mean nDCG the candidate must achieve. A relative
+    /// comparison alone is insufficient when both strategies are poor.
+    pub min_candidate_mean_ndcg: f64,
     /// Minimum required candidate minus baseline mean nDCG.
     pub min_mean_ndcg_delta: f64,
     /// Per-query nDCG drops at or below this tolerance count as ties.
@@ -298,6 +301,7 @@ pub struct ComparisonReport {
     pub mean_recall_delta: f64,
     pub mean_reciprocal_rank_delta: f64,
     pub mean_ndcg_delta: f64,
+    pub candidate_mean_ndcg: f64,
     pub wins: usize,
     pub ties: usize,
     pub regressions: usize,
@@ -415,6 +419,8 @@ pub fn compare(
         || !gate.regression_tolerance.is_finite()
         || gate.regression_tolerance < 0.0
         || !gate.min_mean_ndcg_delta.is_finite()
+        || !gate.min_candidate_mean_ndcg.is_finite()
+        || !(0.0..=1.0).contains(&gate.min_candidate_mean_ndcg)
     {
         return Err(SearchError::InvalidRequest(
             "quality gate regression bounds are invalid".to_owned(),
@@ -498,6 +504,7 @@ pub fn compare(
             .map(|case| case.reciprocal_rank_delta),
     );
     let mean_ndcg_delta = mean(case_comparisons.iter().map(|case| case.ndcg_delta));
+    let candidate_mean_ndcg = candidate.aggregate[&gate.cutoff].mean_ndcg;
 
     Ok(ComparisonReport {
         suite_sha256: baseline.suite_sha256.clone(),
@@ -508,12 +515,14 @@ pub fn compare(
         mean_recall_delta,
         mean_reciprocal_rank_delta,
         mean_ndcg_delta,
+        candidate_mean_ndcg,
         wins,
         ties,
         regressions,
         regressed_fraction,
         cases: case_comparisons,
-        accepted: mean_ndcg_delta >= gate.min_mean_ndcg_delta
+        accepted: candidate_mean_ndcg >= gate.min_candidate_mean_ndcg
+            && mean_ndcg_delta >= gate.min_mean_ndcg_delta
             && regressed_fraction <= gate.max_regressed_fraction,
     })
 }
@@ -727,6 +736,7 @@ mod tests {
             &QualityGate {
                 cutoff: 3,
                 min_cases: 1,
+                min_candidate_mean_ndcg: 0.0,
                 min_mean_ndcg_delta: 0.05,
                 regression_tolerance: 0.001,
                 max_regressed_fraction: 0.0,
@@ -736,6 +746,30 @@ mod tests {
         assert!(comparison.accepted);
         assert_eq!(comparison.wins, 1);
         assert!(comparison.mean_ndcg_delta > 0.05);
+    }
+
+    #[test]
+    fn paired_gate_requires_candidate_absolute_relevance() {
+        let suite = suite();
+        let baseline = report(&suite, "baseline", &["noise", "best", "good"]);
+        let candidate = report(&suite, "candidate", &["noise", "best", "good"]);
+        let comparison = compare(
+            &suite,
+            &baseline,
+            &candidate,
+            &QualityGate {
+                cutoff: 3,
+                min_cases: 1,
+                min_candidate_mean_ndcg: 0.95,
+                min_mean_ndcg_delta: 0.0,
+                regression_tolerance: 0.001,
+                max_regressed_fraction: 0.0,
+            },
+        )
+        .unwrap();
+
+        assert!(comparison.candidate_mean_ndcg < 0.95);
+        assert!(!comparison.accepted);
     }
 
     #[test]

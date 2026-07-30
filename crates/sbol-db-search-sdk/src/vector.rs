@@ -141,8 +141,24 @@ pub struct IndexGenerationSpec {
     pub vector_name: String,
     pub dimension: usize,
     pub distance: DistanceMetric,
+    /// Exact embedding implementation used to construct this generation.
+    /// Older or externally managed generations may omit it, but the
+    /// high-level incremental maintainer will refuse to mix new vectors into
+    /// a generation whose embedding space it cannot verify.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<EmbeddingProvenance>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: BTreeMap<String, Value>,
+}
+
+/// Stable identity of the embedding space behind one vector generation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmbeddingProvenance {
+    pub profile: String,
+    pub provider: String,
+    pub model: String,
+    pub revision: String,
+    pub normalization: crate::Normalization,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,10 +168,10 @@ pub struct GenerationHandle {
     pub locator: String,
 }
 
-/// Observable state for one immutable index generation. Implementations may
-/// accept incremental writes while a generation is inactive, but activation
-/// is the only operation that changes which generation serves queries for an
-/// artifact.
+/// Observable state for one index generation. Activation is the only operation
+/// that changes which generation serves queries for an artifact. A backend may
+/// also accept changes to the active generation when it advertises
+/// [`VectorCapabilities::incremental_updates`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GenerationStatus {
     pub handle: GenerationHandle,
@@ -179,6 +195,8 @@ pub enum VectorChange {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApplyReceipt {
+    /// Number of accepted operations. Idempotent no-op deletes count as
+    /// accepted so an at-least-once caller can verify a complete batch.
     pub applied: usize,
 }
 
@@ -194,6 +212,10 @@ pub trait VectorIndexAdmin: Send + Sync + 'static {
         spec: IndexGenerationSpec,
     ) -> Result<GenerationHandle, VectorError>;
 
+    /// Apply an ordered batch to a generation. Implementations validate the
+    /// complete batch before mutation. Applying to an active generation is
+    /// permitted only when `incremental_updates` is advertised; an idempotent
+    /// delete of an absent document still contributes to `ApplyReceipt`.
     async fn apply(
         &self,
         generation: &GenerationHandle,

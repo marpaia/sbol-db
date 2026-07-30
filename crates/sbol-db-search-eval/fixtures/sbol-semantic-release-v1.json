@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "id": "sbol-db-semantic-release",
+  "revision": "1",
+  "provenance": {
+    "corpus_source": "fixtures/sbol-semantic-release-v1-corpus.json",
+    "corpus_revision": "1",
+    "corpus_sha256": "991707854748126e322db26a8e1b8d2222b7b68d908ef9681143644bd77ba2ed",
+    "judgments_source": "fixtures/sbol-semantic-release-v1.json",
+    "judgments_method": "Eight CC0 synthetic SBOL metadata cases with manually reviewed graded relevance. This is a release regression gate for the shipped text strategy, not a claim about live SynBioHub traffic."
+  },
+  "cases": [
+    {
+      "id": "constitutive-bacterial-promoter",
+      "request": {"query": {"kind": "text", "text": "strong promoter for continuous bacterial expression"}, "page": {"limit": 3}},
+      "judgments": [
+        {"document_id": "https://example.org/sbol-search/promoter_j23119", "relevance": 3},
+        {"document_id": "https://example.org/sbol-search/plasmid_reporter", "relevance": 1}
+      ]
+    },
+    {
+      "id": "tetracycline-controlled-promoter",
+      "request": {"query": {"kind": "text", "text": "tetracycline controlled inducible promoter"}, "page": {"limit": 3}},
+      "judgments": [
+        {"document_id": "https://example.org/sbol-search/promoter_ptet", "relevance": 3},
+        {"document_id": "https://example.org/sbol-search/promoter_pbad", "relevance": 1}
+      ]
+    },
+    {
+      "id": "arabinose-controlled-promoter",
+      "request": {"query": {"kind": "text", "text": "arabinose regulated gene expression promoter"}, "page": {"limit": 3}},
+      "judgments": [
+        {"document_id": "https://example.org/sbol-search/promoter_pbad", "relevance": 3},
+        {"document_id": "https://example.org/sbol-search/promoter_ptet", "relevance": 1}
+      ]
+    },
+    {
+      "id": "translation-initiation-element",
+      "request": {"query": {"kind": "text", "text": "sequence that recruits ribosomes to start translation"}, "page": {"limit": 3}},
+      "judgments": [
+        {"document_id": "https://example.org/sbol-search/rbs_b0034", "relevance": 3},
+        {"document_id": "https://example.org/sbol-search/plasmid_reporter", "relevance": 1}
+      ]
+    },
+    {
+      "id": "transcription-stop-element",
+      "request": {"query": {"kind": "text", "text": "DNA element that stops RNA polymerase transcription"}, "page": {"limit": 3}},
+      "judgments": [
+        {"document_id": "https://example.org/sbol-search/terminator_b0015", "relevance": 3},
+        {"document_id": "https://example.org/sbol-search/plasmid_reporter", "relevance": 1}
+      ]
+    },
+    {
+      "id": "green-fluorescent-reporter",
+      "request": {"query": {"kind": "text", "text": "green fluorescent reporter protein coding sequence"}, "page": {"limit": 3}},
+      "judgments": [
+        {"document_id": "https://example.org/sbol-search/cds_gfp", "relevance": 3},
+        {"document_id": "https://example.org/sbol-search/plasmid_reporter", "relevance": 2}
+      ]
+    },
+    {
+      "id": "lactose-responsive-repressor",
+      "request": {"query": {"kind": "text", "text": "lactose responsive transcriptional repressor"}, "page": {"limit": 3}},
+      "judgments": [
+        {"document_id": "https://example.org/sbol-search/cds_laci", "relevance": 3}
+      ]
+    },
+    {
+      "id": "circular-expression-vector",
+      "request": {"query": {"kind": "text", "text": "circular bacterial expression plasmid vector"}, "page": {"limit": 3}},
+      "judgments": [
+        {"document_id": "https://example.org/sbol-search/plasmid_reporter", "relevance": 3}
+      ]
+    }
+  ]
+}

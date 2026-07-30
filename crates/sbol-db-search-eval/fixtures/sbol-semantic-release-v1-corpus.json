@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "id": "sbol-db-semantic-release",
+  "revision": "1",
+  "license": "CC0-1.0",
+  "documents": [
+    {
+      "document_id": "https://example.org/sbol-search/promoter_j23119",
+      "uri": "https://example.org/sbol-search/promoter_j23119",
+      "name": "J23119 promoter",
+      "description": "Strong constitutive promoter for continuous bacterial expression",
+      "object_type": "Component",
+      "text": "URI: https://example.org/sbol-search/promoter_j23119\nSBOL class: Component\nDisplay ID: promoter_j23119\nName: J23119 promoter\nDescription: Strong constitutive promoter for continuous bacterial expression\nType: DNA\nRole: promoter"
+    },
+    {
+      "document_id": "https://example.org/sbol-search/promoter_ptet",
+      "uri": "https://example.org/sbol-search/promoter_ptet",
+      "name": "pTet promoter",
+      "description": "Tetracycline-responsive inducible promoter for regulated bacterial expression",
+      "object_type": "Component",
+      "text": "URI: https://example.org/sbol-search/promoter_ptet\nSBOL class: Component\nDisplay ID: promoter_ptet\nName: pTet promoter\nDescription: Tetracycline-responsive inducible promoter for regulated bacterial expression\nType: DNA\nRole: promoter"
+    },
+    {
+      "document_id": "https://example.org/sbol-search/promoter_pbad",
+      "uri": "https://example.org/sbol-search/promoter_pbad",
+      "name": "pBAD promoter",
+      "description": "Arabinose-inducible promoter for controlled gene expression",
+      "object_type": "Component",
+      "text": "URI: https://example.org/sbol-search/promoter_pbad\nSBOL class: Component\nDisplay ID: promoter_pbad\nName: pBAD promoter\nDescription: Arabinose-inducible promoter for controlled gene expression\nType: DNA\nRole: promoter"
+    },
+    {
+      "document_id": "https://example.org/sbol-search/rbs_b0034",
+      "uri": "https://example.org/sbol-search/rbs_b0034",
+      "name": "B0034 ribosome binding site",
+      "description": "Bacterial ribosome binding site for efficient translation initiation",
+      "object_type": "Component",
+      "text": "URI: https://example.org/sbol-search/rbs_b0034\nSBOL class: Component\nDisplay ID: rbs_b0034\nName: B0034 ribosome binding site\nDescription: Bacterial ribosome binding site for efficient translation initiation\nType: DNA\nRole: ribosome binding site"
+    },
+    {
+      "document_id": "https://example.org/sbol-search/terminator_b0015",
+      "uri": "https://example.org/sbol-search/terminator_b0015",
+      "name": "B0015 double terminator",
+      "description": "Efficient double transcription terminator that stops RNA polymerase",
+      "object_type": "Component",
+      "text": "URI: https://example.org/sbol-search/terminator_b0015\nSBOL class: Component\nDisplay ID: terminator_b0015\nName: B0015 double terminator\nDescription: Efficient double transcription terminator that stops RNA polymerase\nType: DNA\nRole: terminator"
+    },
+    {
+      "document_id": "https://example.org/sbol-search/cds_gfp",
+      "uri": "https://example.org/sbol-search/cds_gfp",
+      "name": "Green fluorescent protein CDS",
+      "description": "Coding sequence for a green fluorescent reporter protein",
+      "object_type": "Component",
+      "text": "URI: https://example.org/sbol-search/cds_gfp\nSBOL class: Component\nDisplay ID: cds_gfp\nName: Green fluorescent protein CDS\nDescription: Coding sequence for a green fluorescent reporter protein\nType: DNA\nRole: coding sequence"
+    },
+    {
+      "document_id": "https://example.org/sbol-search/cds_laci",
+      "uri": "https://example.org/sbol-search/cds_laci",
+      "name": "LacI repressor CDS",
+      "description": "Coding sequence for a lactose-responsive transcriptional repressor",
+      "object_type": "Component",
+      "text": "URI: https://example.org/sbol-search/cds_laci\nSBOL class: Component\nDisplay ID: cds_laci\nName: LacI repressor CDS\nDescription: Coding sequence for a lactose-responsive transcriptional repressor\nType: DNA\nRole: coding sequence"
+    },
+    {
+      "document_id": "https://example.org/sbol-search/plasmid_reporter",
+      "uri": "https://example.org/sbol-search/plasmid_reporter",
+      "name": "Constitutive GFP reporter plasmid",
+      "description": "Circular bacterial expression vector carrying a constitutive promoter, ribosome binding site, GFP reporter, and terminator",
+      "object_type": "Component",
+      "text": "URI: https://example.org/sbol-search/plasmid_reporter\nSBOL class: Component\nDisplay ID: plasmid_reporter\nName: Constitutive GFP reporter plasmid\nDescription: Circular bacterial expression vector carrying a constitutive promoter, ribosome binding site, GFP reporter, and terminator\nType: DNA\nRole: plasmid"
+    }
+  ]
+}

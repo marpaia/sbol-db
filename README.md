@@ -46,6 +46,11 @@ Built on:
   the engine; Postgres is the default. See [storage.md](docs/storage.md).
 - The [Oxigraph](https://github.com/oxigraph/oxigraph) ecosystem
   (`oxrdf`, `spareval`, `spargebra`, `sparesults`) for SPARQL.
+- A zero-configuration, local BGE-small vector-search index over stable SBOL
+  object metadata. Its verified weights ship in the production image; it
+  rebuilds at startup and follows committed writes. See
+  [search-plugins.md](docs/search-plugins.md) and
+  [builtin-bge-small-model.md](docs/builtin-bge-small-model.md).
 
 ## Installation
 

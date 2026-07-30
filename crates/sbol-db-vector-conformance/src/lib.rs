@@ -46,6 +46,7 @@ pub async fn run_all(backend: Arc<dyn VectorBackend>) {
         .expect("activate first generation");
     query_and_filter_contract(backend.as_ref()).await;
     validation_contract(backend.as_ref()).await;
+    incremental_update_contract(backend.as_ref(), &first).await;
 
     let second = build_ready_generation(
         backend.as_ref(),
@@ -129,6 +130,19 @@ async fn rejected_batch_is_atomic(backend: &dyn VectorBackend) {
         .create_generation(spec("rejected"))
         .await
         .expect("create rejection-test generation");
+    let missing_delete = backend
+        .apply(
+            &handle,
+            vec![VectorChange::Delete {
+                document_id: document_id("already-absent"),
+            }],
+        )
+        .await
+        .expect("idempotent missing delete");
+    assert_eq!(
+        missing_delete.applied, 1,
+        "an idempotent missing delete counts as an accepted operation"
+    );
     let result = backend
         .apply(
             &handle,
@@ -331,6 +345,60 @@ async fn validation_contract(backend: &dyn VectorBackend) {
     assert!(backend.create_generation(unsupported).await.is_err());
 }
 
+async fn incremental_update_contract(backend: &dyn VectorBackend, generation: &GenerationHandle) {
+    let changes = vec![
+        upsert("incremental", [1.0, 0.0], "public", 2031, "new"),
+        VectorChange::Delete {
+            document_id: document_id("d"),
+        },
+        VectorChange::Delete {
+            document_id: document_id("already-absent"),
+        },
+    ];
+    if !backend.descriptor().capabilities.incremental_updates {
+        assert!(
+            backend.apply(generation, changes).await.is_err(),
+            "a backend that does not advertise incremental updates must reject active writes"
+        );
+        return;
+    }
+
+    let receipt = backend
+        .apply(generation, changes)
+        .await
+        .expect("apply changes to active generation");
+    assert_eq!(
+        receipt.applied, 3,
+        "idempotent missing deletes count as accepted operations"
+    );
+    backend
+        .flush(generation)
+        .await
+        .expect("flush incremental changes");
+    assert_eq!(
+        ids(&query(backend, None, 10, None).await),
+        ["a", "incremental", "b", "c"]
+    );
+
+    let restore = backend
+        .apply(
+            generation,
+            vec![
+                VectorChange::Delete {
+                    document_id: document_id("incremental"),
+                },
+                upsert("d", [0.0, 1.0], "archive", 2020, "alpha"),
+            ],
+        )
+        .await
+        .expect("restore conformance corpus");
+    assert_eq!(restore.applied, 2);
+    backend
+        .flush(generation)
+        .await
+        .expect("flush restored corpus");
+}
+
 async fn assert_ids<const N: usize>(
     backend: &dyn VectorBackend,
     filter: VectorFilter,
@@ -392,6 +460,7 @@ fn spec(generation: &str) -> IndexGenerationSpec {
         vector_name: VECTOR_NAME.to_owned(),
         dimension: 2,
         distance: DistanceMetric::Cosine,
+        embedding: None,
         parameters: BTreeMap::new(),
     }
 }

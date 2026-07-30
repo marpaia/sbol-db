@@ -133,6 +133,7 @@ mod tests {
                 vector_name: "content".to_owned(),
                 dimension: 2,
                 distance: DistanceMetric::Cosine,
+                embedding: None,
                 parameters: BTreeMap::new(),
             })
             .await

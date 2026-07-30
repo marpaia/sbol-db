@@ -10,6 +10,7 @@ use sbol_db_core::{
     NeighborhoodResult, ObjectId, SbolObjectRecord, SerializationFormat,
 };
 use sbol_db_rdf::triples_to_rdf;
+use sbol_db_search_sdk::IndexMutationSource;
 use sbol_db_sparql::{ResultFormat, SparqlOptions};
 use sbol_db_storage::{
     BatchSequenceMatch, EnqueueOutcome, GraphWriteMode, ImportInput, ImportOverwrite, JobAttempt,
@@ -106,6 +107,10 @@ pub async fn create_graph(
             overwrite,
         })
         .await?;
+    state
+        .app
+        .schedule_search_reconciliation(IndexMutationSource::RestImport)
+        .await?;
     Ok(Json(report))
 }
 
@@ -181,6 +186,12 @@ pub async fn create_graphs_bulk(
         });
     }
     let reports = state.service.import_documents(inputs).await?;
+    if !reports.is_empty() {
+        state
+            .app
+            .schedule_search_reconciliation(IndexMutationSource::RestImport)
+            .await?;
+    }
     Ok(Json(BulkImportResponse {
         imported: reports.len(),
         reports,
@@ -207,6 +218,10 @@ pub async fn delete_graph(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     if state.service.delete_graph(GraphId(id)).await? {
+        state
+            .app
+            .schedule_search_reconciliation(IndexMutationSource::RestGraphDelete)
+            .await?;
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::NotFound(format!("document {id}")))
@@ -233,6 +248,10 @@ pub async fn delete_graph_by_document_iri(
         )));
     };
     state.service.delete_graph(id).await?;
+    state
+        .app
+        .schedule_search_reconciliation(IndexMutationSource::RestGraphDelete)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1192,6 +1211,12 @@ pub async fn sparql_auth(
         .sparql_update
         .execute(&update, default_graph.as_deref(), &options)
         .await?;
+    if outcome.inserted != 0 || outcome.deleted != 0 {
+        state
+            .app
+            .schedule_search_reconciliation(IndexMutationSource::SparqlUpdate)
+            .await?;
+    }
 
     // SynBioHub parses the update response as SPARQL-results-JSON and reads the
     // `callret-0` binding (Virtuoso's update-status convention). Its
@@ -1304,6 +1329,12 @@ async fn graph_store_write(
         .service
         .graph_store_write(&graph, body, format, mode)
         .await?;
+    if inserted != 0 {
+        state
+            .app
+            .schedule_search_reconciliation(IndexMutationSource::GraphStore)
+            .await?;
+    }
     Ok((StatusCode::OK, Json(json!({ "inserted": inserted }))).into_response())
 }
 
@@ -1314,6 +1345,12 @@ pub async fn graph_store_delete(
 ) -> Result<impl IntoResponse, ApiError> {
     let graph = graph_crud_target(&params)?;
     let deleted = state.service.graph_store_clear(&graph).await?;
+    if deleted != 0 {
+        state
+            .app
+            .schedule_search_reconciliation(IndexMutationSource::GraphStore)
+            .await?;
+    }
     Ok((StatusCode::OK, Json(json!({ "deleted": deleted }))))
 }
 

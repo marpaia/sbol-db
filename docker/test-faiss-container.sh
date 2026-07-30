@@ -12,7 +12,8 @@ readonly host_port="${SBOL_DB_FAISS_SMOKE_PORT:-18080}"
 readonly base_url="http://127.0.0.1:${host_port}"
 readonly public_graph="http://synbiohub.org/public"
 readonly expected_uri="https://example.org/sbol-db/test/promoter_j23119"
-readonly model_cache="${SBOL_DB_TEST_MODEL_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/sbol-db/models/all-MiniLM-L6-v2-onnx-5f1b8cd}"
+readonly builtin_model_dir="/opt/sbol-db/models/bge-small-en-v1.5"
+readonly builtin_model_revision="sha3-256:bf577972c34b37578aa42965fa8401d5538f4b4c007c810332e936548658c7b3"
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/sbol-db-faiss-container.XXXXXX")"
 test_completed=false
 
@@ -37,23 +38,26 @@ done
 # transfer before relying on it for the real checksum-pinned model bundle.
 "$repository_root/docker/test-model-download-retry.sh"
 
-# This probes the final distroless image, not the builder. The model revision
-# command also gives operators a reproducible value for their search config.
+# This probes the final distroless image, not the builder. The image must carry
+# the checksum-pinned default BGE bundle, and the revision command gives a
+# reproducible value for a custom FAISS composition root.
 docker run --rm "$image" --version >/dev/null
-"$repository_root/docker/fetch-test-embedding-model.sh" "$model_cache"
 model_revision="$({
-  docker run --rm \
-    --volume "$model_cache:/opt/sbol-db/models/minilm:ro" \
-    "$image" util fastembed-revision /opt/sbol-db/models/minilm
+  docker run --rm "$image" util fastembed-revision "$builtin_model_dir" \
+    --onnx-file model_optimized.onnx
 } | jq -er '.revision')"
+if [ "$model_revision" != "$builtin_model_revision" ]; then
+  echo "production image contains an unexpected BGE bundle revision: $model_revision" >&2
+  exit 1
+fi
 
-jq -n --arg revision "$model_revision" '{
+jq -n --arg revision "$model_revision" --arg model_dir "$builtin_model_dir" '{
   topology: {
     default_strategy: "legacy.explorer.v1",
     indexes: [{
       index: "components",
       backend: "faiss-local",
-      embedding_profile: "local.minilm.container.v1",
+      embedding_profile: "builtin.sbol-text-bge-small.v1",
       vector_name: "content",
       graph_payload_field: "graph"
     }],
@@ -62,7 +66,7 @@ jq -n --arg revision "$model_revision" '{
       version: "1",
       display_name: "Semantic components",
       description: "Container semantic-search lifecycle test",
-      embedding_profile: "local.minilm.container.v1",
+      embedding_profile: "builtin.sbol-text-bge-small.v1",
       vector_index: "components",
       vector_name: "content",
       graph_payload_field: "graph",
@@ -72,17 +76,17 @@ jq -n --arg revision "$model_revision" '{
   embeddings: [{
     kind: "fastembed_local",
     profile: {
-      id: "local.minilm.container.v1",
-      model: "Qdrant/all-MiniLM-L6-v2-onnx",
+      id: "builtin.sbol-text-bge-small.v1",
+      model: "Qdrant/bge-small-en-v1.5-onnx-Q@52398278842ec682c6f32300af41344b1c0b0bb2",
       revision: $revision,
       dimension: 384,
       normalization: "l2",
-      batch_size: 16
+      batch_size: 32
     },
     bundle: {
-      directory: "/opt/sbol-db/models/minilm",
-      onnx_file: "model.onnx",
-      pooling: "mean",
+      directory: $model_dir,
+      onnx_file: "model_optimized.onnx",
+      pooling: "cls",
       max_length: 512,
       intra_threads: 2
     }
@@ -117,10 +121,17 @@ start_container() {
   docker run --detach --name "$container_name" \
     --publish "127.0.0.1:${host_port}:8080" \
     --volume "$volume_name:/var/lib/sbol-db" \
-    --volume "$model_cache:/opt/sbol-db/models/minilm:ro" \
     --volume "$test_root/search.json:/etc/sbol-db/search.json:ro" \
     --env DATABASE_URL=sqlite:///var/lib/sbol-db/sbol.db \
     --env SBOL_DB_SEARCH_CONFIG=/etc/sbol-db/search.json \
+    "$image" >/dev/null
+}
+
+start_builtin_container() {
+  docker run --detach --name "$container_name" \
+    --publish "127.0.0.1:${host_port}:8080" \
+    --volume "$volume_name:/var/lib/sbol-db" \
+    --env DATABASE_URL=sqlite:///var/lib/sbol-db/sbol.db \
     "$image" >/dev/null
 }
 
@@ -149,6 +160,50 @@ query_semantic_index() {
     "$base_url/api/v2/search"
 }
 
+query_builtin_index() {
+  curl -fsS \
+    --header 'content-type: application/json' \
+    --data '{
+      "query": {"kind": "text", "text": "strong constitutive promoter"},
+      "page": {"limit": 5}
+    }' \
+    "$base_url/api/v2/search"
+}
+
+# The zero-configuration image must load its shipped model, register the BGE
+# strategy, queue its startup rebuild, and return the imported object without
+# a model mount or an external search configuration.
+start_builtin_container
+wait_for_health
+
+builtin_strategies="$(curl -fsS "$base_url/api/v2/search/strategies")"
+if ! jq -e '
+  .default_strategy == "builtin.sbol-text-vector.v2"
+  and (.items | any(.id == "builtin.sbol-text-vector.v2" and .version == "2"))
+' <<<"$builtin_strategies" >/dev/null; then
+  echo "built-in BGE strategy was not registered: $builtin_strategies" >&2
+  exit 1
+fi
+
+for attempt in $(seq 1 90); do
+  builtin_search="$(query_builtin_index)"
+  if jq -e --arg uri "$expected_uri" '
+    .strategy.id == "builtin.sbol-text-vector.v2"
+    and .items[0].uri == $uri
+    and .items[0].score_kind == "cosine_similarity"
+  ' <<<"$builtin_search" >/dev/null; then
+    break
+  fi
+  if [ "$attempt" -eq 90 ]; then
+    echo "built-in BGE index did not finish its startup rebuild: $builtin_search" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+docker stop "$container_name" >/dev/null
+docker rm "$container_name" >/dev/null
+
 start_container
 wait_for_health
 
@@ -168,9 +223,9 @@ job_response="$(curl -fsS \
       "artifact_id": "components",
       "generation": "container-e2e-v1",
       "vector_name": "content",
-      "embedding_profile": "local.minilm.container.v1",
+      "embedding_profile": "builtin.sbol-text-bge-small.v1",
       "distance": "cosine",
-      "batch_size": 16,
+      "batch_size": 32,
       "backend_parameters": {}
     },
     "max_attempts": 1

@@ -16,7 +16,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use axum::Json;
-use sbol_db_app::{SubmissionService, SubmitRequest};
+use sbol_db_app::SubmitRequest;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -106,9 +106,7 @@ pub async fn create_collection(
         overwrite,
     };
 
-    let outcome = SubmissionService::new(state.app.store.clone())
-        .submit(request)
-        .await?;
+    let outcome = state.app.submission_service().submit(request).await?;
 
     let members: Vec<&str> = outcome.members.iter().map(|m| m.as_str()).collect();
     let payload = json!({

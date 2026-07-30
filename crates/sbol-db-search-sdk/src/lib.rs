@@ -10,6 +10,7 @@ mod capability;
 mod composition;
 mod embedding;
 mod error;
+mod maintenance;
 mod registry;
 mod strategy;
 mod types;
@@ -27,6 +28,11 @@ pub use embedding::{
     EmbeddingProvider, EmbeddingVector, Normalization,
 };
 pub use error::{RegistrationError, SearchError, VectorError};
+pub use maintenance::{
+    IndexMaintenanceDescriptor, IndexMaintenanceEvent, IndexMaintenancePlugin,
+    IndexMaintenanceRegistry, IndexMaintenanceRegistryBuilder, IndexMaintenanceTask,
+    IndexMutationScope, IndexMutationSource,
+};
 pub use registry::{
     EmbeddingRegistry, EmbeddingRegistryBuilder, StrategyRegistry, StrategyRegistryBuilder,
     VectorBackendRegistry, VectorBackendRegistryBuilder,
@@ -38,8 +44,8 @@ pub use types::{
     SearchRequest, SearchScope, StrategyRef, Total,
 };
 pub use vector::{
-    ApplyReceipt, DistanceMetric, GenerationHandle, GenerationStatus, IndexGenerationSpec,
-    ScopedVectorSearch, SnapshotRef, SparseVector, VectorBackend, VectorBackendDescriptor,
-    VectorCapabilities, VectorChange, VectorFilter, VectorIndexAdmin, VectorQuery, VectorSearchHit,
-    VectorSearchPage, VectorSearcher, VectorValue,
+    ApplyReceipt, DistanceMetric, EmbeddingProvenance, GenerationHandle, GenerationStatus,
+    IndexGenerationSpec, ScopedVectorSearch, SnapshotRef, SparseVector, VectorBackend,
+    VectorBackendDescriptor, VectorCapabilities, VectorChange, VectorFilter, VectorIndexAdmin,
+    VectorQuery, VectorSearchHit, VectorSearchPage, VectorSearcher, VectorValue,
 };

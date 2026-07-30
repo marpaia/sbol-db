@@ -225,9 +225,14 @@ Returns the paginated envelope. Each hit carries `uri`, `display_id`,
 
 **`POST /api/v2/search`** is the structured strategy surface. It accepts a
 tagged query, typed filters, cursor paging, execution options, and an optional
-strategy id. Omitting `strategy` uses the configured default. This route is
-additive: the compatibility routes and `GET /api/v2/search` retain their
-existing ranking and wire contracts.
+strategy id. Omitting `strategy` uses the configured default. With a normal
+zero-configuration server, that is `builtin.sbol-text-vector.v2`: a local,
+checksum-pinned BGE-small vector index over canonical SBOL metadata. The image
+ships the verified weights and the index rebuilds in the background at startup
+then follows committed object writes, so newly started servers can return fewer
+vector hits until the first rebuild finishes.
+This route is additive: the compatibility routes and `GET /api/v2/search`
+retain their existing ranking and wire contracts.
 
 ```json
 {
