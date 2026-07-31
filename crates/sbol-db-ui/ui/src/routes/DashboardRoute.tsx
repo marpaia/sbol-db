@@ -32,6 +32,7 @@ import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { OntologyLoaderDialog } from "@/components/lab/OntologyLoaderDialog";
 import { useOverview } from "@/hooks/useOverview";
 import { type Dialect, useLabStore } from "@/lib/store";
+import { adminPath } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 function greeting(): string {
@@ -49,7 +50,7 @@ export default function DashboardRoute() {
   const launch = useCallback(
     (dialect: Dialect, query: string) => {
       setBuffer(dialect, query);
-      navigate(`/${dialect}`);
+      navigate(adminPath(`/${dialect}`));
     },
     [navigate, setBuffer]
   );
@@ -80,13 +81,13 @@ export default function DashboardRoute() {
             {greeting()}! 👋
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Welcome to the SBOL Data Lab. Query your corpus with SPARQL or SQL,
-            browse the schema, or load ontology packs. The panels below show
-            what's loaded, with a few templates to get you started.
+            Welcome to the SBOL DB admin workspace. Query your corpus with
+            SPARQL or SQL, browse the schema, or load ontology packs. The panels
+            below show what's loaded, with a few templates to get you started.
           </p>
           <p className="mt-2 text-sm text-muted-foreground">
-            This UI is powered by sbol-db, a data management system for
-            synthetic biology data. Check out sbol-db on{" "}
+            SBOL DB is an open data management system for synthetic biology.
+            View the project on{" "}
             <a
               href="https://github.com/marpaia/sbol-db"
               target="_blank"
@@ -251,7 +252,7 @@ export default function DashboardRoute() {
               {data?.recent_graphs.map((d) => (
                 <li key={d.id}>
                   <Link
-                    to={`/graphs/${d.id}`}
+                    to={adminPath(`/graphs/${d.id}`)}
                     className="block py-2 text-sm transition-colors hover:bg-accent/40"
                   >
                     <div className="flex items-center gap-3">

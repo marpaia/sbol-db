@@ -14,7 +14,7 @@
 
 mod assets;
 
-pub use assets::{get_asset, router, EmbeddedAsset};
+pub use assets::{asset_response, get_asset, index_response, router, EmbeddedAsset};
 
 /// Whether the embed contains a built UI. Returns `false` when the
 /// crate was compiled without a successful `npm run build` (cross-compile,

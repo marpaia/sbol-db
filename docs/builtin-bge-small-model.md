@@ -47,17 +47,23 @@ Fetch the exact source-build bundle once:
 
 ```sh
 make model/bge-small
-export SBOL_DB_BGE_SMALL_MODEL_DIR="$HOME/.cache/sbol-db/models/bge-small-en-v1.5-onnx-q-5239827"
-# Point dynamic FastEmbed at a compatible host ONNX Runtime library.
-export ORT_DYLIB_PATH=/absolute/path/to/libonnxruntime.so
-sbol-db server
+cargo build -p sbol-db
+./target/debug/sbol-db server
 ```
 
-On macOS the filename is normally `libonnxruntime.dylib`. The source tree
-does not download a host inference runtime implicitly; install a compatible
-ONNX Runtime and set `ORT_DYLIB_PATH` deliberately. The published Linux image
-already includes the pinned runtime and model bundle, which is the supported
-zero-configuration deployment path.
+The normal source build bundles the checksum-verified ONNX Runtime selected by
+the locked `ort` crate. At runtime it discovers the verified model under the
+same cache path populated by the Make target, so neither
+`SBOL_DB_BGE_SMALL_MODEL_DIR` nor `ORT_DYLIB_PATH` is required. This is a
+build-time download only; starting the server never downloads executable code
+or model weights.
+
+`SBOL_DB_BGE_SMALL_MODEL_DIR` remains available when the verified model lives
+somewhere else. Controlled deployments that provide ONNX Runtime themselves
+can build with `--no-default-features --features lab,dynamic-ort` and set
+`ORT_DYLIB_PATH`; on macOS that file is normally named
+`libonnxruntime.dylib`. The published Linux image uses this explicit dynamic
+mode with its pinned runtime and model bundle.
 
 The published image needs neither that mount nor the environment variable:
 

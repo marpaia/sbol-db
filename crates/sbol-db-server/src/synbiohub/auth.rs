@@ -24,13 +24,8 @@ use serde_json::json;
 
 use super::CurrentUser;
 use crate::error::ApiError;
+use crate::session::{login_cookie, logout_cookie, token_from_cookie};
 use crate::AppState;
-
-/// The cookie a browser login sets; the API path returns the bare token
-/// instead. The middleware reads the `X-authorization` header, so the cookie is
-/// a convenience for the optional browser flow rather than the authenticated
-/// path.
-const SESSION_COOKIE: &str = "sbol-db-token";
 
 #[derive(Deserialize, Default)]
 struct LoginBody {
@@ -75,7 +70,11 @@ pub async fn login(
             .next
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "/".to_owned());
-        Ok(browser_login(&token, &next))
+        Ok(browser_login(
+            &token,
+            &next,
+            state.config.session_cookie_secure,
+        ))
     } else {
         Ok(([(CONTENT_TYPE, "text/plain")], token).into_response())
     }
@@ -92,11 +91,15 @@ pub async fn logout(
         .get("x-authorization")
         .and_then(|v| v.to_str().ok())
         .filter(|t| !t.is_empty())
+        .or_else(|| token_from_cookie(&headers))
     {
         state.app.auth.revoke_token(token).await?;
     }
     if wants_html(&headers) {
-        Ok(clear_session_redirect("/"))
+        Ok(clear_session_redirect(
+            "/",
+            state.config.session_cookie_secure,
+        ))
     } else {
         Ok(StatusCode::OK.into_response())
     }
@@ -132,7 +135,7 @@ pub async fn register(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    if !state.config.allow_public_signup {
+    if !crate::instance::public_signup_allowed(&state).await? {
         return Ok(forbidden("public signup is disabled"));
     }
     let form: RegisterBody = parse_body(&headers, &body)?;
@@ -460,22 +463,20 @@ fn redirect(location: &str) -> Response {
 }
 
 /// A browser login: set the session cookie and 302 to `next`.
-fn browser_login(token: &str, next: &str) -> Response {
-    let cookie = format!("{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax");
+fn browser_login(token: &str, next: &str, secure: bool) -> Response {
     Response::builder()
         .status(StatusCode::FOUND)
-        .header(SET_COOKIE, cookie)
+        .header(SET_COOKIE, login_cookie(token, secure))
         .header(LOCATION, next)
         .body(Body::empty())
         .expect("valid login redirect response")
 }
 
 /// A browser logout: expire the session cookie and 302 to `next`.
-fn clear_session_redirect(next: &str) -> Response {
-    let cookie = format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+fn clear_session_redirect(next: &str, secure: bool) -> Response {
     Response::builder()
         .status(StatusCode::FOUND)
-        .header(SET_COOKIE, cookie)
+        .header(SET_COOKIE, logout_cookie(secure))
         .header(LOCATION, next)
         .body(Body::empty())
         .expect("valid logout redirect response")

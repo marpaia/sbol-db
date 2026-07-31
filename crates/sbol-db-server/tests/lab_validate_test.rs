@@ -22,6 +22,13 @@ fn database_url() -> String {
         .unwrap_or_else(|_| "postgres://sbol:sbol@localhost:5432/sbol".to_owned())
 }
 
+fn test_config() -> ServerConfig {
+    ServerConfig {
+        admin_api_auth_required: false,
+        ..ServerConfig::default()
+    }
+}
+
 async fn state() -> AppState {
     let pool = connect(&database_url()).await.expect("connect");
     run_migrations(&pool).await.expect("migrate");
@@ -47,7 +54,7 @@ async fn state() -> AppState {
         sparql_update,
         metrics,
         jobs,
-        config: ServerConfig::default(),
+        config: test_config(),
         backend_kind: sbol_db_server::BackendKind::Postgres,
         sql_console: Some(Arc::new(sbol_db_postgres::PgSqlConsole::new(pool.clone()))),
         db_stats: Some(Arc::new(sbol_db_postgres::PgStatsRepository::new(pool))),
@@ -57,7 +64,7 @@ async fn state() -> AppState {
 }
 
 async fn post(path: &str, body: Value) -> (StatusCode, Value) {
-    let app = router(state().await, ServerConfig::default());
+    let app = router(state().await, test_config());
     let res = app
         .oneshot(
             Request::builder()

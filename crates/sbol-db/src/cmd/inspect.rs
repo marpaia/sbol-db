@@ -73,6 +73,9 @@ pub async fn run(stats: Arc<dyn DbStats>, action: InspectAction) -> Result<()> {
                 "request_timeout_secs": cfg.request_timeout.as_secs(),
                 "max_body_bytes": cfg.max_body_bytes,
                 "lab_enabled": cfg.lab_enabled,
+                "portal_enabled": cfg.portal_enabled,
+                "session_cookie_secure": cfg.session_cookie_secure,
+                "admin_api_auth_required": cfg.admin_api_auth_required,
                 "lab_sql_timeout_ms_max": cfg.lab_sql_timeout_ms_max,
                 "lab_sql_row_cap_max": cfg.lab_sql_row_cap_max,
             }))

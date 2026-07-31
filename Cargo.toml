@@ -114,7 +114,7 @@ sbol-db-core = { path = "crates/sbol-db-core", version = "0.1.2" }
 sbol-db-search-sdk = { path = "crates/sbol-db-search-sdk", version = "0.1.2" }
 sbol-db-search-eval = { path = "crates/sbol-db-search-eval", version = "0.1.2" }
 sbol-db-vector-conformance = { path = "crates/sbol-db-vector-conformance", version = "0.1.2" }
-sbol-db-embedding-fastembed = { path = "crates/sbol-db-embedding-fastembed", version = "0.1.2" }
+sbol-db-embedding-fastembed = { path = "crates/sbol-db-embedding-fastembed", version = "0.1.2", default-features = false }
 sbol-db-vector-flat = { path = "crates/sbol-db-vector-flat", version = "0.1.2" }
 sbol-db-vector-qdrant = { path = "crates/sbol-db-vector-qdrant", version = "0.1.2" }
 sbol-db-search-faiss = { path = "crates/sbol-db-search-faiss", version = "0.1.2" }

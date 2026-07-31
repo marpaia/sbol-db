@@ -22,6 +22,7 @@ import {
   useJobLogs,
 } from "@/hooks/useObservability";
 import type { JobAttempt, JobLogRecord, RecentJob } from "@/lib/api";
+import { adminPath } from "@/lib/routes";
 import { describeError, formatMs } from "@/lib/utils";
 
 export default function JobDetailRoute() {
@@ -45,7 +46,7 @@ export default function JobDetailRoute() {
     <div className="h-full w-full overflow-y-auto">
       <div className="mx-auto max-w-6xl space-y-6 px-8 py-10">
         <Link
-          to="/observability/jobs"
+          to={adminPath("/observability/jobs")}
           className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           <ChevronLeft size={12} />

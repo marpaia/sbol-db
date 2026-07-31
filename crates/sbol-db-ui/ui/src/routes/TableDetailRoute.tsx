@@ -35,6 +35,7 @@ import type {
   TableStats,
 } from "@/lib/api";
 import { useLabStore } from "@/lib/store";
+import { adminPath } from "@/lib/routes";
 import { cn, describeError, formatBytes, formatRelative } from "@/lib/utils";
 
 export default function TableDetailRoute() {
@@ -64,7 +65,7 @@ export default function TableDetailRoute() {
     const qualified = needsQuoting(name) ? `"${name}"` : name;
     const template = `SELECT *\nFROM ${qualified}\nLIMIT 100;\n`;
     setBuffer("sql", template);
-    navigate("/sql");
+    navigate(adminPath("/sql"));
   };
 
   if (info && !relationalSchema) {
@@ -75,7 +76,7 @@ export default function TableDetailRoute() {
     <div className="h-full w-full overflow-y-auto">
       <div className="mx-auto max-w-6xl space-y-6 px-8 py-10">
         <Link
-          to="/schema"
+          to={adminPath("/schema")}
           className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           <ChevronLeft size={12} />
@@ -326,7 +327,9 @@ function ForeignKeysOutPanel({ rows }: { rows: OutgoingForeignKey[] }) {
               aria-hidden
             />
             <Link
-              to={`/schema/tables/${encodeURIComponent(fk.target_table)}`}
+              to={adminPath(
+                `/schema/tables/${encodeURIComponent(fk.target_table)}`
+              )}
               className="font-mono text-foreground underline-offset-2 hover:underline"
             >
               {fk.target_table}
@@ -360,7 +363,9 @@ function ForeignKeysInPanel({ rows }: { rows: IncomingForeignKey[] }) {
             className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2 text-xs"
           >
             <Link
-              to={`/schema/tables/${encodeURIComponent(fk.source_table)}`}
+              to={adminPath(
+                `/schema/tables/${encodeURIComponent(fk.source_table)}`
+              )}
               className="font-mono text-foreground underline-offset-2 hover:underline"
             >
               {fk.source_table}

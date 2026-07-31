@@ -1,8 +1,7 @@
 # The v2 API
 
-The v2 API is sbol-db's idiomatic REST surface, mounted under `/api/v2`. It is
-a second presentation of the same application facade the SynBioHub-compatible
-v1 surface presents. Every v2 handler calls the same facade verbs the v1
+The v2 API is SBOL DB's native REST surface, mounted under `/api/v2`. Every v2
+handler calls the same application facade verbs the SynBioHub-compatible v1
 adapter calls; the two surfaces read and write one dataset, one identity model,
 and one ACL scope. v2 holds no business logic of its own. It differs from v1
 only in wire shape.
@@ -18,16 +17,17 @@ header, and per-shape response bodies. v2 fixes those:
 - Real pagination: `limit`/`offset` with a `total` in the response.
 - Content negotiation through `Accept`.
 - One consistent JSON error envelope.
-- Bearer-token authentication.
+- Bearer-token authentication for API clients and an HttpOnly same-origin
+  browser session for the embedded portal.
 
 Both surfaces are ACL-scoped and identity-aware through the same graph scope
 and account. An object written through one surface is visible through the
 other, and the same query returns the same object set on both. The conformance
 suite proves this parity on every backend.
 
-## Authentication
+## Authentication and browser sessions
 
-v2 authenticates with a bearer token:
+API clients authenticate with a bearer token:
 
 ```
 Authorization: Bearer <token>
@@ -35,13 +35,31 @@ Authorization: Bearer <token>
 
 The token is the same login token v1 reads from its `X-authorization` header;
 both resolve through the one identity store. Obtain one from the v1 `POST
-/login` route (v2 does not yet mint its own tokens).
+/login` route.
+
+The embedded portal creates an HttpOnly session with `POST /api/v2/session`.
+Its cookie carries the same opaque token but never exposes it to frontend
+JavaScript. `GET /api/v2/session` returns a deliberately safe account
+projection, and `DELETE /api/v2/session` revokes the token and expires the
+cookie. The cookie is `SameSite=Lax`; set `SBOL_DB_SESSION_COOKIE_SECURE=true`
+for every HTTPS deployment so it also carries `Secure`.
+
+When a request presents both transports, an explicit bearer header wins. Even
+a malformed Authorization header does not silently fall through to ambient
+cookie authority. Unsafe cookie-authenticated requests require a same-origin
+`Origin` (or equivalent browser fetch metadata), which protects mutations from
+CSRF. The server's permissive legacy CORS layer does not enable cross-origin
+credentialed requests.
 
 Authentication is tolerant, matching the visibility a v1 client gets. A
 missing, malformed, or unrecognized token is treated as anonymous rather than
-rejected, and an anonymous caller is scoped to the public graph. This surface
-never issues `401`. A read outside the caller's scope is a non-disclosing
-`404`. A mutating verb with no identity is `403`.
+rejected on resource routes, and an anonymous caller is scoped to the public
+graph. A read outside the caller's scope is a non-disclosing `404`. A mutating
+verb with no identity is `403`; invalid credentials sent to the session-create
+endpoint are `401`. If the instance policy sets `require_login`, anonymous
+resource routes also return `401`; the version, instance bootstrap, session,
+OpenAPI, and docs endpoints remain public so a client can discover the policy
+and sign in.
 
 ## Content negotiation
 
@@ -112,8 +130,68 @@ Base path: `/api/v2`.
 The version and health probe. Public; no token required.
 
 ```json
-{ "name": "sbol-db", "api": "v2", "version": "0.1.1" }
+{ "name": "sbol-db", "api": "v2", "version": "0.1.2" }
 ```
+
+### Instance bootstrap
+
+**`GET /api/v2/instance`** is the public bootstrap contract for the SBOL DB
+application. It returns only deployment context, public access policy, setup
+state, and endpoint capabilities; it cannot return legacy visual-theme values,
+mail credentials, plugin settings, or another admin-only configuration section.
+`setup_required` is derived from whether an administrator exists, rather than
+trusting a mutable theme flag.
+
+```json
+{
+  "name": "SBOL DB",
+  "instance_url": "https://parts.example.org",
+  "uri_prefix": "https://parts.example.org/",
+  "front_page_text": "A curated registry",
+  "setup_required": false,
+  "policies": {
+    "allow_public_signup": true,
+    "require_login": false
+  },
+  "capabilities": {
+    "browser_sessions": true,
+    "legacy_api": true,
+    "structured_search": true,
+    "sequence_search": true,
+    "data_lab": true,
+    "sql_console": true
+  }
+}
+```
+
+`front_page_text` is instance-authored content. A client must treat it as
+untrusted input and sanitize it if it chooses to render markup.
+
+### Session
+
+**`POST /api/v2/session`** accepts JSON with an `identifier` (username or
+email) and `password`, establishes the browser cookie, and returns the safe
+session projection. The classic names `email` and `username` are accepted as
+aliases for `identifier`.
+
+```json
+{ "identifier": "alice@example.org", "password": "..." }
+```
+
+**`GET /api/v2/session`** returns `200` for both states, allowing the portal to
+bootstrap without using exceptions for ordinary logged-out state:
+
+```json
+{ "authenticated": false, "user": null }
+```
+
+An authenticated `user` includes the account id, username, display name,
+email, affiliation, owned graph URI, role flags, and timestamps. It never
+includes a password hash, reset link, or plaintext token.
+
+**`DELETE /api/v2/session`** revokes the selected bearer or cookie token,
+expires the cookie, and returns `204`. It is idempotent for anonymous, stale,
+or already-revoked credentials.
 
 ### Objects
 
@@ -277,6 +355,8 @@ equivalent yet; use v1 for those.
 
 | v1 (SynBioHub-compat) | v2 (idiomatic) |
 | --- | --- |
+| `GET /admin/theme` | `GET /api/v2/instance` (public safe subset) |
+| `POST /login`, `POST /logout`, `GET /profile` | `POST`, `DELETE`, `GET /api/v2/session` (browser lifecycle) |
 | `POST /submit` (multipart) | `POST /api/v2/collections` (JSON or multipart) |
 | `GET /.../metadata` | `GET /api/v2/objects/{iri}` (`Accept: application/json`) |
 | `GET /.../sbol`, `/sbolnr`, `/gb`, `/fasta`, `/gff`, `/omex` | `GET /api/v2/objects/{iri}?format=sbol\|sbolnr\|gb\|fasta\|gff\|omex` |
@@ -288,8 +368,6 @@ equivalent yet; use v1 for those.
 | `GET /rootCollections`, `GET /:type/count`, `GET /searchCount/...` | `GET /api/v2/objects` (paginated envelope carries `total`) |
 | `GET /.../similar` | `GET /api/v2/objects/{iri}/similar` |
 | sequence search (SBOLExplorer plugin) | `GET /api/v2/sequences/search` |
-| `X-authorization: <token>` | `Authorization: Bearer <token>` |
+| `X-authorization: <token>` | `Authorization: Bearer <token>` or the HttpOnly browser cookie |
 | per-shape bodies, SPARQL-results JSON | one JSON envelope, `{items, total, offset, limit}` |
 | per-route error handling | `{error: {code, message, status}}` |
-</content>
-</invoke>

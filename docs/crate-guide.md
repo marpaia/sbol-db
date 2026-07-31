@@ -58,7 +58,7 @@ the build state of this design".
 | `sbol-db-backend`  | Backend factory: `Backend::open` routes a connection string to the engine its scheme selects and returns the neutral trait-object bundle. |
 | `sbol-db-conformance` | Backend-neutral conformance scenarios every engine passes through the trait surface alone. |
 | `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over any `TripleSource`).        |
-| `sbol-db-ui`       | Embedded data-lab SPA served at `/lab` (React + Vite, baked in via `rust-embed`).        |
+| `sbol-db-ui`       | Embedded SBOL DB application at `/` with the data/operations workspace at `/admin` (React + Vite, baked in via `rust-embed`). |
 | `sbol-db-server`   | axum HTTP API. Thin layer over the storage + sparql crates.                             |
 | `sbol-db`          | CLI binary. Wires the backend factory + server + sparql crates into clap subcommands.    |
 

@@ -1,11 +1,11 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "sbol-db V2 API",
-    "version": "0.1.1",
-    "description": "The idiomatic REST presentation of sbol-db's SynBioHub-compatible data store, mounted under `/api/v2`.\n\nV2 is a second presentation of the same facade the V1 SynBioHub adapter serves: it holds no business logic of its own and reads and writes the same dataset. It differs only in wire shape. Where V1 mirrors classic SynBioHub's quirks (GET routes that mutate, a `/search/key=value` path grammar, `X-authorization` tokens, ad-hoc error bodies), V2 uses proper HTTP verbs (POST creates, PATCH edits, DELETE deletes, and no GET mutates), JSON request bodies, real pagination with a total, `Accept`-driven content negotiation, a single consistent error envelope, and `Authorization: Bearer` tokens.\n\nAuthentication is tolerant, matching V1: a missing or unrecognized bearer token is anonymous (scoped to the public graph), never a `401`. A mutating verb attempted anonymously is `403`. Reads are ACL-scoped to the caller's authorized graphs; an out-of-scope object is a non-disclosing `404`.",
+    "title": "SBOL DB V2 API",
+    "version": "0.1.2",
+    "description": "The native REST API for SBOL DB, mounted under `/api/v2`.\n\nV2 calls the same application services as the V1 SynBioHub compatibility adapter: both read and write the same dataset, while retaining separate wire contracts. V2 uses proper HTTP verbs (POST creates, PATCH edits, DELETE deletes, and no GET mutates), JSON request bodies, real pagination with a total, `Accept`-driven content negotiation, a single consistent error envelope, and bearer or same-origin browser-session authentication. V1 preserves classic SynBioHub behavior only where compatibility requires it.\n\nWhen public browsing is enabled, a missing or unrecognized resource credential is anonymous and scoped to the public graph. An instance with `requireLogin` rejects anonymous resource requests with `401` while retaining public bootstrap and session routes. A mutating verb attempted anonymously is `403`; invalid login credentials are `401`. Reads are ACL-scoped to the caller's authorized graphs, and an out-of-scope object is a non-disclosing `404`.",
     "contact": {
-      "name": "sbol-db",
+      "name": "SBOL DB",
       "url": "https://github.com/marpaia/sbol-db"
     },
     "license": {
@@ -19,7 +19,8 @@
     }
   ],
   "tags": [
-    { "name": "Meta", "description": "Version and health probe." },
+    { "name": "Meta", "description": "Version, instance bootstrap, and capability discovery." },
+    { "name": "Session", "description": "Same-origin HttpOnly browser-session lifecycle." },
     { "name": "Objects", "description": "The object lifecycle under one idiomatic path: read, edit, delete, and publish." },
     { "name": "Collections", "description": "Mint a submission as a new collection." },
     { "name": "Search", "description": "Ranked free-text search and nucleotide alignment search, paginated with a total." }
@@ -29,7 +30,13 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "An `Authorization: Bearer <token>` credential, the token minted by the V1 `/login` route. Tolerant: a missing or unrecognized token is anonymous, not rejected."
+        "description": "An `Authorization: Bearer <token>` credential. A missing or unrecognized token is anonymous when public browsing is enabled; `requireLogin` instances reject anonymous resource requests."
+      },
+      "cookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "sbol-db-token",
+        "description": "The HttpOnly browser session established by `POST /session`. Bearer credentials take precedence. Unsafe cookie-authenticated requests must be same-origin."
       }
     },
     "schemas": {
@@ -37,9 +44,78 @@
         "type": "object",
         "required": ["name", "api", "version"],
         "properties": {
-          "name": { "type": "string" },
+          "name": { "type": "string", "description": "Optional deployment context shown beneath the fixed SBOL DB product identity." },
           "api": { "type": "string" },
           "version": { "type": "string" }
+        }
+      },
+      "Instance": {
+        "type": "object",
+        "required": ["name", "instance_url", "uri_prefix", "front_page_text", "setup_required", "policies", "capabilities"],
+        "properties": {
+          "name": { "type": "string" },
+          "instance_url": { "type": "string" },
+          "uri_prefix": { "type": "string" },
+          "front_page_text": { "type": "string", "description": "Instance-authored front-page prose. Treat as untrusted content when rendering." },
+          "setup_required": { "type": "boolean", "description": "True until the instance has its first administrator." },
+          "policies": {
+            "type": "object",
+            "required": ["allow_public_signup", "require_login"],
+            "properties": {
+              "allow_public_signup": { "type": "boolean" },
+              "require_login": { "type": "boolean" }
+            }
+          },
+          "capabilities": {
+            "type": "object",
+            "required": ["browser_sessions", "legacy_api", "structured_search", "sequence_search", "data_lab", "sql_console"],
+            "properties": {
+              "browser_sessions": { "type": "boolean" },
+              "legacy_api": { "type": "boolean" },
+              "structured_search": { "type": "boolean" },
+              "sequence_search": { "type": "boolean" },
+              "data_lab": { "type": "boolean" },
+              "sql_console": { "type": "boolean" }
+            }
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": ["identifier", "password"],
+        "properties": {
+          "identifier": { "type": "string", "description": "An account username or email. `email` and `username` are accepted as compatibility aliases." },
+          "password": { "type": "string", "format": "password", "writeOnly": true }
+        }
+      },
+      "SessionUser": {
+        "type": "object",
+        "required": ["id", "username", "name", "email", "graph_uri", "is_admin", "is_curator", "is_member", "created_at", "updated_at"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "username": { "type": "string" },
+          "name": { "type": "string" },
+          "email": { "type": "string", "format": "email" },
+          "affiliation": { "type": ["string", "null"] },
+          "graph_uri": { "type": "string" },
+          "is_admin": { "type": "boolean" },
+          "is_curator": { "type": "boolean" },
+          "is_member": { "type": "boolean" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "required": ["authenticated", "user"],
+        "properties": {
+          "authenticated": { "type": "boolean" },
+          "user": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/SessionUser" },
+              { "type": "null" }
+            ]
+          }
         }
       },
       "Error": {
@@ -325,7 +401,8 @@
     }
   },
   "security": [
-    { "bearerAuth": [] }
+    { "bearerAuth": [] },
+    { "cookieAuth": [] }
   ],
   "paths": {
     "/": {
@@ -341,10 +418,85 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/Version" },
-                "example": { "name": "sbol-db", "api": "v2", "version": "0.1.1" }
+                "example": { "name": "sbol-db", "api": "v2", "version": "0.1.2" }
               }
             }
           }
+        }
+      }
+    },
+    "/instance": {
+      "get": {
+        "tags": ["Meta"],
+        "summary": "Public instance bootstrap",
+        "description": "Safe branding, public access policy, setup state, and feature discovery for the portal. Admin-only configuration and secrets are never included.",
+        "operationId": "v2Instance",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The public instance bootstrap contract.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Instance" } }
+            }
+          }
+        }
+      }
+    },
+    "/session": {
+      "get": {
+        "tags": ["Session"],
+        "summary": "Read the current session",
+        "description": "Returns a safe account projection for the selected bearer or browser credential. Logged-out state is a normal `200` with `authenticated: false`.",
+        "operationId": "v2GetSession",
+        "responses": {
+          "200": {
+            "description": "The authenticated account, or explicit anonymous state.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Session" } }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Session"],
+        "summary": "Create a browser session",
+        "description": "Verifies a username/email and password, then establishes the shared HttpOnly, SameSite=Lax browser cookie. The opaque token is never returned in JSON. Explicitly cross-origin browser requests are rejected.",
+        "operationId": "v2CreateSession",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/LoginRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The session was created.",
+            "headers": {
+              "Set-Cookie": { "description": "The HttpOnly browser session cookie.", "schema": { "type": "string" } }
+            },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Session" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "delete": {
+        "tags": ["Session"],
+        "summary": "End the current session",
+        "description": "Revokes the selected token and expires the browser cookie. Idempotent for anonymous or stale credentials. Cookie-authenticated requests must be same-origin.",
+        "operationId": "v2DeleteSession",
+        "responses": {
+          "204": {
+            "description": "The selected token was revoked when present and the cookie was expired.",
+            "headers": {
+              "Set-Cookie": { "description": "An expired browser session cookie.", "schema": { "type": "string" } }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" }
         }
       }
     },

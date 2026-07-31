@@ -5,19 +5,21 @@
 //! own. Every handler calls the same facade verbs the V1 adapter calls and
 //! differs only in wire shape: proper HTTP verbs, JSON request and response
 //! bodies, real pagination with a total, `Accept`-driven content negotiation, a
-//! single consistent [`V2Error`] envelope, and `Authorization: Bearer` token
-//! auth. It is ACL-scoped and identity-aware through the same
+//! single consistent [`V2Error`] envelope, and bearer or same-origin browser
+//! session auth. It is ACL-scoped and identity-aware through the same
 //! [`GraphScope`](sbol_db_sparql::GraphScope) and account the V1 adapter uses.
 
-mod auth;
+pub(crate) mod auth;
 mod collections;
 mod docs;
 mod download;
 mod error;
+mod instance;
 mod negotiate;
 mod objects;
 mod search;
 mod sequence;
+mod session;
 mod util;
 
 use axum::routing::{get, post};
@@ -33,10 +35,17 @@ use crate::AppState;
 /// Every route delegates to the same `sbol-db-app` facade verbs the V1 adapter
 /// calls; V2 differs only in wire shape (proper HTTP verbs, JSON bodies, real
 /// pagination, `Accept` negotiation, a consistent error envelope, and bearer
-/// auth).
+/// or same-origin browser-session auth).
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/", get(version))
+        .route("/instance", get(instance::get))
+        .route(
+            "/session",
+            get(session::get)
+                .post(session::create)
+                .delete(session::delete),
+        )
         .route("/openapi.json", get(docs::openapi_json))
         .route("/docs", get(docs::docs_html))
         .route("/collections", post(collections::create_collection))

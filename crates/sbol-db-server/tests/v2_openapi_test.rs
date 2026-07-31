@@ -312,6 +312,8 @@ async fn openapi_json_is_served_and_wellformed() {
     // Every documented path is present.
     for path in [
         "/",
+        "/instance",
+        "/session",
         "/objects",
         "/objects/{iri}",
         "/objects/{iri}/publish",
@@ -338,10 +340,15 @@ async fn openapi_json_is_served_and_wellformed() {
         "POST creates a collection"
     );
 
-    // Bearer auth is the declared scheme.
+    // API and browser auth are both declared; bearer is selected first by the
+    // implementation when both are presented.
     assert_eq!(
         spec["components"]["securitySchemes"]["bearerAuth"]["scheme"],
         "bearer"
+    );
+    assert_eq!(
+        spec["components"]["securitySchemes"]["cookieAuth"]["name"],
+        "sbol-db-token"
     );
     // The shared error envelope schema exists.
     assert!(spec["components"]["schemas"]["Error"]["properties"]["error"].is_object());
@@ -365,6 +372,38 @@ async fn version_response_matches_schema() {
     let (status, body) = send(&app, "GET", "/api/v2", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_conforms(&spec, "/", "get", "200", &body);
+}
+
+#[tokio::test]
+async fn portal_bootstrap_responses_match_schema() {
+    let (app, _dir) = app().await;
+    let spec = openapi(&app).await;
+
+    let (status, body) = send(&app, "GET", "/api/v2/instance", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/instance", "get", "200", &body);
+
+    let (status, body) = send(&app, "GET", "/api/v2/session", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/session", "get", "200", &body);
+
+    let _token = register_and_login(&app, "alice", "alice@example.org").await;
+    let login = serde_json::json!({
+        "identifier": "alice@example.org",
+        "password": "s3cret"
+    })
+    .to_string();
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v2/session",
+        None,
+        Some("application/json"),
+        Some(login),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/session", "post", "200", &body);
 }
 
 #[tokio::test]

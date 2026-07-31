@@ -25,6 +25,7 @@ import {
   type SbolObjectRecord,
 } from "@/lib/api";
 import { formatRelative } from "@/lib/utils";
+import { adminPath } from "@/lib/routes";
 
 const PAGE_SIZE = 100;
 
@@ -39,7 +40,7 @@ export default function GraphDetailRoute() {
     <div className="h-full w-full overflow-y-auto">
       <div className="mx-auto max-w-6xl space-y-6 px-8 py-10">
         <Link
-          to="/graphs"
+          to={adminPath("/graphs")}
           className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           <ChevronLeft size={12} />
@@ -59,7 +60,10 @@ export default function GraphDetailRoute() {
           <>
             <Header graph={data} />
             <div className="grid gap-3 sm:grid-cols-3">
-              <KpiTile label="Triples" value={data.triple_count.toLocaleString()} />
+              <KpiTile
+                label="Triples"
+                value={data.triple_count.toLocaleString()}
+              />
               <KpiTile
                 label="Objects"
                 value={data.object_count.toLocaleString()}
@@ -76,7 +80,7 @@ export default function GraphDetailRoute() {
                 <ObjectsForGraph
                   graphId={data.id}
                   onOpen={(iri) =>
-                    navigate(`/objects/${encodeURIComponent(iri)}`)
+                    navigate(adminPath(`/objects/${encodeURIComponent(iri)}`))
                   }
                 />
               </section>
@@ -188,13 +192,15 @@ function ObjectsForGraph({
         </div>
       ),
       sortValue: (o) => o.iri,
-      filterValue: (o) => `${o.display_id ?? ""} ${o.iri} ${o.name ?? ""}`.trim(),
+      filterValue: (o) =>
+        `${o.display_id ?? ""} ${o.iri} ${o.name ?? ""}`.trim(),
     },
     {
       id: "name",
       header: "Name",
       width: 200,
-      cell: (o) => o.name ?? <span className="text-muted-foreground/60">—</span>,
+      cell: (o) =>
+        o.name ?? <span className="text-muted-foreground/60">—</span>,
       sortValue: (o) => o.name?.toLowerCase() ?? "",
     },
     {
@@ -335,7 +341,9 @@ function TriplesForGraph({ graphId }: { graphId: string }) {
         <DataTable
           columns={columns}
           rows={data.triples}
-          rowKey={(q) => `${q.subject.value} ${q.predicate.value} ${q.object.value}`}
+          rowKey={(q) =>
+            `${q.subject.value} ${q.predicate.value} ${q.object.value}`
+          }
           filterable
         />
       </div>

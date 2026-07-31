@@ -27,6 +27,7 @@ import {
   type SequenceMatch,
 } from "@/lib/api";
 import { useLabStore } from "@/lib/store";
+import { adminPath } from "@/lib/routes";
 import { describeError } from "@/lib/utils";
 
 const KMER_SEED_BP = 8;
@@ -92,7 +93,7 @@ export default function SequencesRoute() {
   const shortInBatch = batchPatterns.some((p) => p.length < KMER_SEED_BP);
 
   const onOpenObject = (iri: string) =>
-    navigate(`/objects/${encodeURIComponent(iri)}`);
+    navigate(adminPath(`/objects/${encodeURIComponent(iri)}`));
 
   return (
     <div className="h-full w-full overflow-y-auto">

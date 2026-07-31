@@ -15,6 +15,6 @@ sbol-db-search-sdk.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
-sbol-db-embedding-fastembed.workspace = true
+sbol-db-embedding-fastembed = { workspace = true, features = ["download-ort"] }
 sbol-db-search.workspace = true
 tokio.workspace = true

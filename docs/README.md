@@ -8,6 +8,12 @@ Entry points to the project's documentation, organized by topic.
   workspace layout, the storage model, import pipeline, query
   primitives, and key decision points. **Start here if you're new to
   the codebase.**
+- **[Application architecture and roadmap](portal-architecture.md)**: route
+  ownership, browser/API compatibility, session and admin boundaries,
+  frontend layering, design-system direction, and the phased SynBioHub
+  compatibility migration.
+- **[Application and admin UI guide](ui.md)**: current routes, screenshots,
+  configuration switches, local development, and production-shaped testing.
 
 ## Query primitives
 

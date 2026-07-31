@@ -32,4 +32,4 @@ container/test-sbol-test-suite:
 
 model/bge-small:
 	bash docker/fetch-builtin-bge-small-model.sh $(BUILTIN_BGE_SMALL_DIR)
-	@echo "BGE-small bundle ready at $(BUILTIN_BGE_SMALL_DIR)"
+	@echo "BGE-small bundle ready at $(BUILTIN_BGE_SMALL_DIR) (auto-discovered by source builds)"

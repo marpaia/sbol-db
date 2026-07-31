@@ -61,7 +61,7 @@ jobs:
         run: docker/install-faiss.sh
       - run: cargo clippy -p sbol-db-search-faiss --all-targets --features native -- -D warnings
       - run: cargo test -p sbol-db-search-faiss --features native
-      - run: cargo check -p sbol-db --no-default-features --features faiss
+      - run: cargo check -p sbol-db --no-default-features --features faiss,dynamic-ort
 
   faiss-container:
     runs-on: ubuntu-latest

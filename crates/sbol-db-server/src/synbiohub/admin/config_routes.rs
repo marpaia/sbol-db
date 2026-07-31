@@ -17,14 +17,11 @@ use serde_json::{json, Value};
 
 use super::{config_err, parse_config_value, CurrentUser};
 use crate::error::ApiError;
-use crate::synbiohub::setup::is_first_launch;
 use crate::AppState;
 
 /// The config key holding the outgoing-mail settings (`fromAddress`,
 /// `sendgridApiKey`).
 const MAIL_KEY: &str = "mail";
-/// The config key holding the theme / instance branding.
-const THEME_KEY: &str = "theme";
 /// The config key holding the user-signup policy.
 const USERS_CONFIG_KEY: &str = "usersConfig";
 
@@ -81,37 +78,7 @@ pub async fn set_mail(
 /// true until the instance is provisioned through [`crate::synbiohub::setup`],
 /// which creates the first administrator and records the branding.
 pub async fn get_theme(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let first_launch = is_first_launch(&state).await?;
-    let mut config = json!({
-        "instanceName": "SynBioHub",
-        "frontendURL": "",
-        "instanceUrl": "",
-        "uriPrefix": "http://synbiohub.org/",
-        "frontPageText": "",
-        "firstLaunch": first_launch,
-        "altHome": "",
-        "currentTheme": "",
-        "themeParameters": [{ "name": "Base Color", "variable": "baseColor", "value": "#D25627" }],
-        "showModuleInteractions": false,
-        "removePublicEnabled": false,
-        "allowPublicSignup": state.config.allow_public_signup,
-        "requireLogin": false,
-        "pluginsUseLocalCompose": false,
-        "pluginLocalComposePrefix": "",
-        "suppressInfoLogs": false,
-        "suppressDebugLogs": false,
-        "suppressWarningLogs": false,
-        "suppressErrorLogs": false,
-    });
-    if let (Value::Object(base), Some(Value::Object(stored))) = (
-        &mut config,
-        state.app.config_service().get(THEME_KEY).await?,
-    ) {
-        for (key, value) in stored {
-            base.insert(key, value);
-        }
-    }
-    Ok(Json(config))
+    Ok(Json(crate::instance::legacy_theme(&state).await?))
 }
 
 /// `POST /admin/theme`.
@@ -121,7 +88,7 @@ pub async fn set_theme(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<Value>, ApiError> {
-    set_section(&state, &user, THEME_KEY, &headers, &body).await
+    set_section(&state, &user, crate::instance::THEME_KEY, &headers, &body).await
 }
 
 /// `GET /admin/users`.

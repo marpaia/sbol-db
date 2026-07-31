@@ -12,12 +12,14 @@ name = "sbol-db"
 path = "src/main.rs"
 
 [features]
-default = ["lab"]
+default = ["lab", "bundled-ort"]
 # Mirrors `sbol-db-server`'s `lab` feature so a `#[cfg(feature = "lab")]`
 # in `main.rs` activates correctly. The binary forwards the flag rather
 # than enabling it implicitly so `cargo build --no-default-features -p sbol-db`
 # still strips the embedded UI.
 lab = ["sbol-db-server/lab"]
+bundled-ort = ["sbol-db-embedding-fastembed/download-ort"]
+dynamic-ort = ["sbol-db-embedding-fastembed/dynamic-ort"]
 faiss = ["dep:sbol-db-search-faiss", "sbol-db-search-faiss/native"]
 
 [dependencies]

@@ -30,6 +30,7 @@ import {
   type SerializationFormat,
 } from "@/lib/api";
 import { describeError } from "@/lib/utils";
+import { adminPath } from "@/lib/routes";
 
 const FORMAT_EXTENSION: Record<SerializationFormat, string> = {
   turtle: "ttl",
@@ -48,7 +49,7 @@ export default function ObjectDetailRoute() {
     <div className="h-full w-full overflow-y-auto">
       <div className="mx-auto max-w-5xl space-y-6 px-8 py-10">
         <Link
-          to="/objects"
+          to={adminPath("/objects")}
           className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           <ChevronLeft size={12} />
@@ -70,7 +71,9 @@ export default function ObjectDetailRoute() {
             <Actions
               object={data}
               onNeighborhood={() =>
-                navigate(`/neighborhood?iri=${encodeURIComponent(data.iri)}`)
+                navigate(
+                  adminPath(`/neighborhood?iri=${encodeURIComponent(data.iri)}`)
+                )
               }
             />
             <Properties object={data} />

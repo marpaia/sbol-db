@@ -24,6 +24,8 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { type Dialect, useLabStore } from "@/lib/store";
+import { PRODUCT_NAME } from "@/lib/product";
+import { adminPath } from "@/lib/routes";
 
 export default function LabLayout() {
   const navigate = useNavigate();
@@ -33,16 +35,16 @@ export default function LabLayout() {
   // The command palette acts on whichever dialect the user is in. On
   // the dashboard (no active dialect), default to the last-used one.
   const lastDialect = useLabStore((s) => s.lastDialect);
-  const activeDialect: Dialect = pathname.startsWith("/sql")
+  const activeDialect: Dialect = pathname.startsWith(adminPath("/sql"))
     ? "sql"
-    : pathname.startsWith("/sparql")
+    : pathname.startsWith(adminPath("/sparql"))
       ? "sparql"
       : lastDialect;
 
   const loadQueryFor = useCallback(
     (targetDialect: Dialect, query: string) => {
       setBuffer(targetDialect, query);
-      navigate(`/${targetDialect}`);
+      navigate(adminPath(`/${targetDialect}`));
     },
     [navigate, setBuffer]
   );
@@ -68,7 +70,7 @@ export default function LabLayout() {
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mx-1 h-4" />
-          <Breadcrumb pathname={pathname} />
+          <Breadcrumb pathname={pathname} rootLabel={`${PRODUCT_NAME} Admin`} />
           <button
             type="button"
             onClick={() => setPaletteOpen(true)}
@@ -87,7 +89,7 @@ export default function LabLayout() {
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
         onLoadQuery={loadQueryFor}
-        onSwitchDialect={(d) => navigate(`/${d}`)}
+        onSwitchDialect={(d) => navigate(adminPath(`/${d}`))}
       />
       {/* Suppress lint warning: activeDialect is used by the palette in
           future PRs (filter saved by dialect, etc). */}
@@ -95,8 +97,6 @@ export default function LabLayout() {
     </SidebarProvider>
   );
 }
-
-const ROOT_CRUMB = "SBOL Data Lab";
 
 type Crumb = { label: string; to?: string; mono?: boolean };
 
@@ -111,22 +111,30 @@ const TOP_LEVEL_SECTIONS: Array<{
   section: string;
   page: string;
 }> = [
-  { prefix: "/import", section: "Data", page: "Import" },
-  { prefix: "/graphs", section: "Data", page: "Graphs" },
-  { prefix: "/objects", section: "Data", page: "Objects" },
-  { prefix: "/sequences", section: "Data", page: "Sequences" },
-  { prefix: "/ontologies", section: "Data", page: "Ontologies" },
-  { prefix: "/neighborhood", section: "Data", page: "Neighborhood" },
-  { prefix: "/schema", section: "Query", page: "Schema" },
-  { prefix: "/sparql", section: "Query", page: "SPARQL" },
-  { prefix: "/sql", section: "Query", page: "SQL" },
+  { prefix: adminPath("/import"), section: "Data", page: "Import" },
+  { prefix: adminPath("/graphs"), section: "Data", page: "Graphs" },
+  { prefix: adminPath("/objects"), section: "Data", page: "Objects" },
+  { prefix: adminPath("/sequences"), section: "Data", page: "Sequences" },
+  { prefix: adminPath("/ontologies"), section: "Data", page: "Ontologies" },
+  { prefix: adminPath("/neighborhood"), section: "Data", page: "Neighborhood" },
+  { prefix: adminPath("/schema"), section: "Query", page: "Schema" },
+  { prefix: adminPath("/sparql"), section: "Query", page: "SPARQL" },
+  { prefix: adminPath("/sql"), section: "Query", page: "SQL" },
   {
-    prefix: "/observability/maintenance",
+    prefix: adminPath("/observability/maintenance"),
     section: "Operations",
     page: "Maintenance",
   },
-  { prefix: "/observability/jobs", section: "Operations", page: "Jobs" },
-  { prefix: "/observability", section: "Operations", page: "Metrics" },
+  {
+    prefix: adminPath("/observability/jobs"),
+    section: "Operations",
+    page: "Jobs",
+  },
+  {
+    prefix: adminPath("/observability"),
+    section: "Operations",
+    page: "Metrics",
+  },
 ];
 
 function topLevelFor(
@@ -149,7 +157,7 @@ function buildTrail(pathname: string): Crumb[] {
     { label: top.page, to: top.root },
   ];
 
-  const ontologyMatch = pathname.match(/^\/ontologies\/([^/]+)\/?$/);
+  const ontologyMatch = pathname.match(/^\/admin\/ontologies\/([^/]+)\/?$/);
   if (ontologyMatch) {
     trail.push({
       label: decodeURIComponent(ontologyMatch[1]).toLowerCase(),
@@ -157,12 +165,12 @@ function buildTrail(pathname: string): Crumb[] {
     });
     return trail;
   }
-  const tableMatch = pathname.match(/^\/schema\/tables\/([^/]+)\/?$/);
+  const tableMatch = pathname.match(/^\/admin\/schema\/tables\/([^/]+)\/?$/);
   if (tableMatch) {
     trail.push({ label: decodeURIComponent(tableMatch[1]), mono: true });
     return trail;
   }
-  const graphMatch = pathname.match(/^\/graphs\/([^/]+)\/?$/);
+  const graphMatch = pathname.match(/^\/admin\/graphs\/([^/]+)\/?$/);
   if (graphMatch) {
     trail.push({
       label: shortId(decodeURIComponent(graphMatch[1])),
@@ -170,7 +178,7 @@ function buildTrail(pathname: string): Crumb[] {
     });
     return trail;
   }
-  const jobMatch = pathname.match(/^\/observability\/jobs\/([^/]+)\/?$/);
+  const jobMatch = pathname.match(/^\/admin\/observability\/jobs\/([^/]+)\/?$/);
   if (jobMatch) {
     trail.push({
       label: shortId(decodeURIComponent(jobMatch[1])),
@@ -178,11 +186,11 @@ function buildTrail(pathname: string): Crumb[] {
     });
     return trail;
   }
-  if (pathname === "/objects/lookup") {
+  if (pathname === adminPath("/objects/lookup")) {
     trail.push({ label: "Bulk lookup" });
     return trail;
   }
-  const objectMatch = pathname.match(/^\/objects\/([^/]+)\/?$/);
+  const objectMatch = pathname.match(/^\/admin\/objects\/([^/]+)\/?$/);
   if (objectMatch) {
     trail.push({
       label: shortLabel(decodeURIComponent(objectMatch[1])),
@@ -204,11 +212,17 @@ function shortLabel(iri: string): string {
   return m ? m[1] : iri.length > 32 ? `${iri.slice(0, 32)}…` : iri;
 }
 
-function Breadcrumb({ pathname }: { pathname: string }) {
+function Breadcrumb({
+  pathname,
+  rootLabel,
+}: {
+  pathname: string;
+  rootLabel: string;
+}) {
   const trail = buildTrail(pathname);
   return (
     <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-sm">
-      <span className="text-muted-foreground">{ROOT_CRUMB}</span>
+      <span className="text-muted-foreground">{rootLabel}</span>
       {trail.map((crumb, i) => {
         const isLast = i === trail.length - 1;
         return (

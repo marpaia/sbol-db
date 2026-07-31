@@ -46,6 +46,7 @@ import {
   type SlowQuery,
   type TableStats,
 } from "@/lib/api";
+import { adminPath } from "@/lib/routes";
 import {
   cn,
   describeError,
@@ -286,7 +287,7 @@ function TablesSection() {
           filterable
           defaultSort={{ id: "size", direction: "desc" }}
           onRowClick={(t) =>
-            navigate(`/schema/tables/${encodeURIComponent(t.name)}`)
+            navigate(adminPath(`/schema/tables/${encodeURIComponent(t.name)}`))
           }
         />
       )}

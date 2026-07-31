@@ -166,12 +166,14 @@ ENV LD_LIBRARY_PATH=/opt/faiss/lib
 COPY --from=planner /work/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target \
-    cargo chef cook --release --bin sbol-db --features faiss --recipe-path recipe.json
+    cargo chef cook --release --bin sbol-db --no-default-features \
+        --features lab,faiss,dynamic-ort --recipe-path recipe.json
 
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target \
-    cargo build --release --bin sbol-db --features faiss \
+    cargo build --release --bin sbol-db --no-default-features \
+        --features lab,faiss,dynamic-ort \
     && cp target/release/sbol-db /usr/local/bin/sbol-db \
     && strip /usr/local/bin/sbol-db
 

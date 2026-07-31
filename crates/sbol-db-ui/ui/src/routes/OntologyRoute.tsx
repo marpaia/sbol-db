@@ -36,6 +36,7 @@ import {
 } from "@/hooks/useOntologies";
 import type { OntologyRecord, OntologyTermRecord } from "@/lib/api";
 import { ApiError } from "@/lib/api";
+import { adminPath } from "@/lib/routes";
 
 export default function OntologyRoute() {
   const queryClient = useQueryClient();
@@ -120,7 +121,7 @@ export default function OntologyRoute() {
 function OntologyCard({ ontology }: { ontology: OntologyRecord }) {
   return (
     <Link
-      to={`/ontologies/${ontology.prefix.toLowerCase()}`}
+      to={adminPath(`/ontologies/${ontology.prefix.toLowerCase()}`)}
       className="group block rounded-lg border bg-card p-4 transition-colors hover:bg-accent/40 hover:border-foreground/20"
     >
       <header className="flex items-center gap-2">

@@ -466,6 +466,10 @@ inline comments for every key.
 |---|---|---|---|
 | `config.server.requestTimeoutSecs` | `SBOL_DB_REQUEST_TIMEOUT_SECS` | `60` | Outer wall-clock timeout per HTTP request; returns 408. |
 | `config.server.maxBodyBytes` | `SBOL_DB_MAX_BODY_BYTES` | `33554432` (32 MiB) | Max request body; oversize returns 413. |
+| `extraEnv` | `SBOL_DB_LAB_ENABLED` | `true` | Mount embedded portal/admin assets and `/lab/api`. False leaves non-UI APIs only. |
+| `extraEnv` | `SBOL_DB_PORTAL_ENABLED` | `true` | Serve public browser navigation from `/` while preserving machine route dispatch. False retains the admin/login/setup UI. |
+| `extraEnv` | `SBOL_DB_ADMIN_API_AUTH_REQUIRED` | `true` | Require an administrator session or bearer token for `/lab/api/*`. Do not disable on a public deployment. |
+| `extraEnv` | `SBOL_DB_SESSION_COOKIE_SECURE` | `false` | Add `Secure` to the browser-session cookie. Set true when the public ingress is HTTPS. |
 
 #### Database pool
 
