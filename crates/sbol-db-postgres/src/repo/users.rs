@@ -81,6 +81,16 @@ impl UserStore for PgUserStore {
         row.map(row_to_user).transpose()
     }
 
+    async fn list_users(&self) -> Result<Vec<User>, DomainError> {
+        let rows = sqlx::query(&format!(
+            "SELECT {USER_COLS} FROM sbh_user ORDER BY username"
+        ))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        rows.into_iter().map(row_to_user).collect()
+    }
+
     async fn update_user(&self, user: &User) -> Result<User, DomainError> {
         let row = sqlx::query(&format!(
             "UPDATE sbh_user \

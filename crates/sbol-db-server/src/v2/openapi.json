@@ -21,9 +21,13 @@
   "tags": [
     { "name": "Meta", "description": "Version, instance bootstrap, and capability discovery." },
     { "name": "Session", "description": "Same-origin HttpOnly browser-session lifecycle." },
+    { "name": "Account", "description": "Authenticated account self-service and account-scoped workspaces." },
     { "name": "Objects", "description": "The object lifecycle under one idiomatic path: read, edit, delete, and publish." },
+    { "name": "Collaboration", "description": "Read-only sharing and explicit ownership transfer." },
+    { "name": "Reviews", "description": "Curator review queues, decisions, and immutable object activity." },
     { "name": "Collections", "description": "Mint a submission as a new collection." },
-    { "name": "Search", "description": "Ranked free-text search and nucleotide alignment search, paginated with a total." }
+    { "name": "Search", "description": "Ranked free-text search and nucleotide alignment search, paginated with a total." },
+    { "name": "Administration", "description": "Administrator-only instance, account, integration, index, job, ontology, backup, and audit operations under one authorization policy." }
   ],
   "components": {
     "securitySchemes": {
@@ -68,12 +72,16 @@
           },
           "capabilities": {
             "type": "object",
-            "required": ["browser_sessions", "legacy_api", "structured_search", "sequence_search", "data_lab", "sql_console"],
+            "required": ["browser_sessions", "legacy_api", "structured_search", "sequence_search", "profile_management", "password_change", "password_reset", "collaboration", "data_lab", "sql_console"],
             "properties": {
               "browser_sessions": { "type": "boolean" },
               "legacy_api": { "type": "boolean" },
               "structured_search": { "type": "boolean" },
               "sequence_search": { "type": "boolean" },
+              "profile_management": { "type": "boolean" },
+              "password_change": { "type": "boolean" },
+              "password_reset": { "type": "boolean", "description": "False until a reset-token delivery worker is configured." },
+              "collaboration": { "type": "boolean" },
               "data_lab": { "type": "boolean" },
               "sql_console": { "type": "boolean" }
             }
@@ -118,6 +126,214 @@
           }
         }
       },
+      "AccountPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Caller-owned profile fields. Omission preserves a field and an empty affiliation clears it.",
+        "properties": {
+          "name": { "type": "string" },
+          "affiliation": { "type": "string" }
+        }
+      },
+      "PasswordChange": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["current_password", "new_password"],
+        "properties": {
+          "current_password": { "type": "string", "format": "password", "writeOnly": true },
+          "new_password": { "type": "string", "format": "password", "writeOnly": true }
+        }
+      },
+      "SharedObjectsResponse": {
+        "type": "object",
+        "required": ["items", "total"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/ObjectDetails" } },
+          "total": { "type": "integer" }
+        }
+      },
+      "Collaborator": {
+        "type": "object",
+        "required": ["username", "name", "graph_uri", "is_curator"],
+        "properties": {
+          "username": { "type": "string" },
+          "name": { "type": "string" },
+          "graph_uri": { "type": "string" },
+          "is_curator": { "type": "boolean" }
+        }
+      },
+      "CollaboratorsResponse": {
+        "type": "object",
+        "required": ["owners", "viewers"],
+        "properties": {
+          "owners": { "type": "array", "items": { "$ref": "#/components/schemas/Collaborator" } },
+          "viewers": { "type": "array", "items": { "$ref": "#/components/schemas/Collaborator" } }
+        }
+      },
+      "CollaboratorRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["user"],
+        "properties": {
+          "user": { "type": "string", "description": "The recipient's username or email address." }
+        }
+      },
+      "AuditEvent": {
+        "type": "object",
+        "required": ["iri", "object_iri", "action", "actor_graph", "subject_graph", "note", "occurred_at"],
+        "properties": {
+          "iri": { "type": "string" },
+          "object_iri": { "type": "string" },
+          "action": {
+            "type": "string",
+            "enum": ["share_granted", "share_revoked", "ownership_transferred", "review_requested", "review_approved", "review_changes_requested"]
+          },
+          "actor_graph": { "type": "string" },
+          "subject_graph": { "type": ["string", "null"] },
+          "note": { "type": ["string", "null"] },
+          "occurred_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ActivityResponse": {
+        "type": "object",
+        "required": ["items", "total"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/AuditEvent" } },
+          "total": { "type": "integer" }
+        }
+      },
+      "ReviewCase": {
+        "type": "object",
+        "required": ["object_iri", "curator_graph", "requested_by_graph", "status", "updated_at", "note", "events"],
+        "properties": {
+          "object_iri": { "type": "string" },
+          "curator_graph": { "type": "string" },
+          "requested_by_graph": { "type": "string" },
+          "status": { "type": "string", "enum": ["pending", "approved", "changes_requested"] },
+          "updated_at": { "type": "string", "format": "date-time" },
+          "note": { "type": ["string", "null"] },
+          "events": { "type": "array", "items": { "$ref": "#/components/schemas/AuditEvent" } }
+        }
+      },
+      "ReviewListResponse": {
+        "type": "object",
+        "required": ["items", "total"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/ReviewCase" } },
+          "total": { "type": "integer" }
+        }
+      },
+      "ReviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["curator"],
+        "properties": {
+          "curator": { "type": "string", "description": "The assigned curator's username or email." },
+          "note": { "type": ["string", "null"], "maxLength": 4000 }
+        }
+      },
+      "ReviewDecisionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decision"],
+        "properties": {
+          "decision": { "type": "string", "enum": ["approve", "request_changes"] },
+          "note": { "type": ["string", "null"], "maxLength": 4000 }
+        }
+      },
+      "AdminInstance": {
+        "type": "object",
+        "required": ["name", "instance_url", "uri_prefix", "front_page_text", "allow_public_signup", "require_login", "setup_required"],
+        "properties": {
+          "name": { "type": "string" },
+          "instance_url": { "type": "string" },
+          "uri_prefix": { "type": "string" },
+          "front_page_text": { "type": "string" },
+          "allow_public_signup": { "type": "boolean" },
+          "require_login": { "type": "boolean" },
+          "setup_required": { "type": "boolean", "readOnly": true }
+        }
+      },
+      "AdminUser": {
+        "allOf": [
+          { "$ref": "#/components/schemas/SessionUser" }
+        ],
+        "description": "A safe account projection. Password hashes, reset links, and tokens are never present."
+      },
+      "AdminUsersResponse": {
+        "type": "object",
+        "required": ["total", "items"],
+        "properties": {
+          "total": { "type": "integer" },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/AdminUser" } }
+        }
+      },
+      "AdminAuditEvent": {
+        "type": "object",
+        "required": ["iri", "action", "actor", "target", "outcome", "detail", "occurred_at"],
+        "properties": {
+          "iri": { "type": "string" },
+          "action": { "type": "string" },
+          "actor": { "type": "string" },
+          "target": { "type": "string" },
+          "outcome": { "type": "string", "enum": ["attempted", "succeeded", "failed"] },
+          "detail": { "type": ["string", "null"] },
+          "occurred_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "AdminAuditResponse": {
+        "type": "object",
+        "required": ["total", "items"],
+        "properties": {
+          "total": { "type": "integer" },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/AdminAuditEvent" } }
+        }
+      },
+      "Confirmation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["confirmation"],
+        "properties": {
+          "confirmation": { "type": "string", "description": "The exact target-specific phrase documented by the operation." }
+        }
+      },
+      "BackupDocument": {
+        "type": "object",
+        "required": ["document_iri", "name", "description", "source_uri", "ntriples"],
+        "properties": {
+          "document_iri": { "type": ["string", "null"] },
+          "name": { "type": ["string", "null"] },
+          "description": { "type": ["string", "null"] },
+          "source_uri": { "type": ["string", "null"] },
+          "ntriples": { "type": "string" }
+        }
+      },
+      "BackupArchive": {
+        "type": "object",
+        "required": ["format", "version", "created_at", "scope", "documents", "checksum"],
+        "properties": {
+          "format": { "type": "string", "const": "sbol-db-registry-backup" },
+          "version": { "type": "integer", "const": 1 },
+          "created_at": { "type": "string", "format": "date-time" },
+          "scope": { "type": "string", "const": "registry_graphs_only" },
+          "documents": { "type": "array", "items": { "$ref": "#/components/schemas/BackupDocument" } },
+          "checksum": { "type": "string", "description": "SHA3-256 over the canonical archive payload." }
+        }
+      },
+      "BackupValidation": {
+        "type": "object",
+        "required": ["valid", "format", "version", "checksum", "documents", "confirmation", "scope", "excludes"],
+        "properties": {
+          "valid": { "type": "boolean", "const": true },
+          "format": { "type": "string" },
+          "version": { "type": "integer" },
+          "checksum": { "type": "string" },
+          "documents": { "type": "integer" },
+          "confirmation": { "type": "string" },
+          "scope": { "type": "string" },
+          "excludes": { "type": "array", "items": { "type": "string" } }
+        }
+      },
       "Error": {
         "type": "object",
         "description": "The single V2 error envelope. Every non-2xx response carries this shape.",
@@ -136,24 +352,49 @@
       },
       "SearchHit": {
         "type": "object",
-        "required": ["uri"],
+        "required": ["uri", "display_id", "version", "name", "description", "object_type", "roles", "owners", "created_at", "modified_at", "score"],
         "properties": {
           "uri": { "type": "string" },
           "display_id": { "type": ["string", "null"] },
           "version": { "type": ["string", "null"] },
           "name": { "type": ["string", "null"] },
           "description": { "type": ["string", "null"] },
-          "object_type": { "type": ["string", "null"] }
+          "object_type": { "type": ["string", "null"] },
+          "roles": { "type": "array", "items": { "type": "string" } },
+          "owners": { "type": "array", "items": { "type": "string" } },
+          "created_at": { "type": ["string", "null"], "description": "The earliest visible dcterms:created value." },
+          "modified_at": { "type": ["string", "null"], "description": "The latest visible dcterms:modified value." },
+          "score": { "type": "number", "description": "The relevance score. Zero for unranked browse-only objects." }
         }
       },
       "SearchResponse": {
         "type": "object",
-        "required": ["items", "total", "offset", "limit"],
+        "required": ["items", "total", "offset", "limit", "sort", "direction"],
         "properties": {
           "items": { "type": "array", "items": { "$ref": "#/components/schemas/SearchHit" } },
           "total": { "type": "integer", "description": "The total number of in-scope matches, independent of the returned window." },
           "offset": { "type": "integer" },
-          "limit": { "type": "integer" }
+          "limit": { "type": "integer" },
+          "sort": { "type": "string", "enum": ["relevance", "name", "created", "modified", "iri"] },
+          "direction": { "type": "string", "enum": ["asc", "desc"] }
+        }
+      },
+      "DiscoveryFacetValue": {
+        "type": "object",
+        "required": ["iri", "label", "curie", "count"],
+        "properties": {
+          "iri": { "type": "string" },
+          "label": { "type": "string", "description": "Ontology term name when loaded, otherwise a compact IRI fallback." },
+          "curie": { "type": ["string", "null"] },
+          "count": { "type": "integer", "description": "Distinct visible top-level objects carrying this value." }
+        }
+      },
+      "DiscoveryFacets": {
+        "type": "object",
+        "required": ["types", "roles"],
+        "properties": {
+          "types": { "type": "array", "items": { "$ref": "#/components/schemas/DiscoveryFacetValue" } },
+          "roles": { "type": "array", "items": { "$ref": "#/components/schemas/DiscoveryFacetValue" } }
         }
       },
       "StructuredSearchRequest": {
@@ -278,6 +519,172 @@
           "content_hash": { "type": "array", "items": { "type": "integer" } }
         }
       },
+      "ObjectContentState": {
+        "type": "string",
+        "enum": ["available", "empty", "partial", "unsupported"],
+        "description": "Explicitly distinguishes present content, asserted emptiness, incomplete modeling, and biology that does not apply."
+      },
+      "ObjectReference": {
+        "type": "object",
+        "required": ["uri", "display_id", "name", "description", "object_type"],
+        "properties": {
+          "uri": { "type": "string" },
+          "display_id": { "type": ["string", "null"] },
+          "name": { "type": ["string", "null"] },
+          "description": { "type": ["string", "null"] },
+          "object_type": { "type": ["string", "null"] }
+        }
+      },
+      "ObjectReferenceSection": {
+        "type": "object",
+        "required": ["state", "items", "note"],
+        "properties": {
+          "state": { "$ref": "#/components/schemas/ObjectContentState" },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/ObjectReference" } },
+          "note": { "type": ["string", "null"] }
+        }
+      },
+      "ObjectPropertyValue": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["kind", "value"],
+            "properties": {
+              "kind": { "const": "resource" },
+              "value": { "type": "string" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["kind", "value"],
+            "properties": {
+              "kind": { "const": "blank_node" },
+              "value": { "type": "string" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["kind", "value", "datatype", "language"],
+            "properties": {
+              "kind": { "const": "literal" },
+              "value": { "type": "string" },
+              "datatype": { "type": "string" },
+              "language": { "type": ["string", "null"] }
+            }
+          }
+        ]
+      },
+      "ObjectProperty": {
+        "type": "object",
+        "required": ["predicate", "values"],
+        "properties": {
+          "predicate": { "type": "string" },
+          "values": { "type": "array", "items": { "$ref": "#/components/schemas/ObjectPropertyValue" } }
+        }
+      },
+      "ObjectVisualFeature": {
+        "type": "object",
+        "required": ["uri", "label", "roles", "glyph", "start", "end", "orientation"],
+        "properties": {
+          "uri": { "type": "string" },
+          "label": { "type": "string" },
+          "roles": { "type": "array", "items": { "type": "string" } },
+          "glyph": {
+            "type": "string",
+            "enum": ["promoter", "coding_sequence", "ribosome_entry_site", "terminator", "operator", "origin_of_replication", "unspecified"]
+          },
+          "start": { "type": ["integer", "null"], "minimum": 1 },
+          "end": { "type": ["integer", "null"], "minimum": 1 },
+          "orientation": { "type": ["string", "null"] }
+        }
+      },
+      "ObjectVisualization": {
+        "type": "object",
+        "required": ["state", "sequence_length", "features", "note"],
+        "properties": {
+          "state": { "$ref": "#/components/schemas/ObjectContentState" },
+          "sequence_length": { "type": ["integer", "null"], "minimum": 1 },
+          "features": { "type": "array", "items": { "$ref": "#/components/schemas/ObjectVisualFeature" } },
+          "note": { "type": ["string", "null"] }
+        }
+      },
+      "ObjectDetails": {
+        "type": "object",
+        "description": "The ACL-scoped object-page projection assembled by the backend-neutral application service.",
+        "required": ["iri", "persistent_identity", "display_id", "version", "name", "description", "object_type", "types", "roles", "source_graph", "visibility", "owners", "created_at", "modified_at", "provenance", "sequence_content", "sequences", "features", "visualization", "interactions", "collections", "members", "attachments", "uses", "twins", "properties", "content_fingerprint"],
+        "properties": {
+          "iri": { "type": "string" },
+          "persistent_identity": { "type": ["string", "null"] },
+          "display_id": { "type": ["string", "null"] },
+          "version": { "type": ["string", "null"] },
+          "name": { "type": ["string", "null"] },
+          "description": { "type": ["string", "null"] },
+          "object_type": { "type": "string" },
+          "types": { "type": "array", "items": { "type": "string" } },
+          "roles": { "type": "array", "items": { "type": "string" } },
+          "source_graph": { "type": ["string", "null"] },
+          "visibility": { "type": "string", "enum": ["public", "restricted"] },
+          "owners": { "type": "array", "items": { "type": "string" } },
+          "created_at": { "type": ["string", "null"] },
+          "modified_at": { "type": ["string", "null"] },
+          "provenance": {
+            "type": "object",
+            "required": ["creators", "derived_from", "generated_by", "mutable_source", "citations"],
+            "properties": {
+              "creators": { "type": "array", "items": { "type": "string" } },
+              "derived_from": { "type": "array", "items": { "type": "string" } },
+              "generated_by": { "type": "array", "items": { "type": "string" } },
+              "mutable_source": { "type": "array", "items": { "type": "string" } },
+              "citations": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "sequence_content": {
+            "type": "object",
+            "required": ["state", "elements", "encoding", "length", "note"],
+            "properties": {
+              "state": { "$ref": "#/components/schemas/ObjectContentState" },
+              "elements": { "type": ["string", "null"] },
+              "encoding": { "type": ["string", "null"] },
+              "length": { "type": ["integer", "null"] },
+              "note": { "type": ["string", "null"] }
+            }
+          },
+          "sequences": { "$ref": "#/components/schemas/ObjectReferenceSection" },
+          "features": { "$ref": "#/components/schemas/ObjectReferenceSection" },
+          "visualization": { "$ref": "#/components/schemas/ObjectVisualization" },
+          "interactions": { "$ref": "#/components/schemas/ObjectReferenceSection" },
+          "collections": { "$ref": "#/components/schemas/ObjectReferenceSection" },
+          "members": { "$ref": "#/components/schemas/ObjectReferenceSection" },
+          "uses": { "$ref": "#/components/schemas/ObjectReferenceSection" },
+          "twins": { "$ref": "#/components/schemas/ObjectReferenceSection" },
+          "attachments": {
+            "type": "object",
+            "required": ["state", "items", "note"],
+            "properties": {
+              "state": { "$ref": "#/components/schemas/ObjectContentState" },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["uri", "name", "hash", "size", "format", "source", "resolved"],
+                  "properties": {
+                    "uri": { "type": "string" },
+                    "name": { "type": ["string", "null"] },
+                    "hash": { "type": ["string", "null"] },
+                    "size": { "type": ["integer", "null"] },
+                    "format": { "type": ["string", "null"] },
+                    "source": { "type": ["string", "null"] },
+                    "resolved": { "type": "boolean" }
+                  }
+                }
+              },
+              "note": { "type": ["string", "null"] }
+            }
+          },
+          "properties": { "type": "array", "items": { "$ref": "#/components/schemas/ObjectProperty" } },
+          "content_fingerprint": { "type": ["string", "null"] }
+        }
+      },
       "CreateCollectionRequest": {
         "type": "object",
         "required": ["id", "version", "content"],
@@ -288,7 +695,7 @@
           "description": { "type": ["string", "null"], "description": "The collection description (`dcterms:description`)." },
           "citations": { "type": "array", "items": { "type": "string" }, "description": "PubMed citation ids." },
           "creator_name": { "type": ["string", "null"], "description": "The creator name; defaults to the caller's display name." },
-          "format": { "type": ["string", "null"], "description": "The SBOL serialization of `content`: `rdfxml` (default), `turtle`, `jsonld`, `ntriples`." },
+          "format": { "type": ["string", "null"], "description": "The input serialization: `rdfxml` (default), `turtle`, `jsonld`, `ntriples`, `genbank`, or `fasta`. Sequence formats are converted to SBOL 3 before minting." },
           "overwrite": { "type": ["string", "null"], "description": "Collision policy: `fail` (default), `replace`, or `merge`." },
           "content": { "type": "string", "description": "The serialized SBOL document." }
         }
@@ -302,6 +709,42 @@
           "members": { "type": "array", "items": { "type": "string" } },
           "graph": { "type": ["string", "null"] },
           "triple_count": { "type": "integer" }
+        }
+      },
+      "SubmissionPreview": {
+        "type": "object",
+        "required": ["valid", "source_format", "source_standard", "normalized_standard", "collection_uri", "persistent_identity", "graph", "members", "triple_count", "collision", "consequence", "notices"],
+        "properties": {
+          "valid": { "type": "boolean", "const": true },
+          "source_format": { "type": "string" },
+          "source_standard": { "type": "string", "enum": ["sbol2", "sbol3", "rdf", "genbank", "fasta"] },
+          "normalized_standard": { "type": "string", "enum": ["sbol2", "sbol3", "rdf"] },
+          "collection_uri": { "type": "string" },
+          "persistent_identity": { "type": "string" },
+          "graph": { "type": "string" },
+          "members": { "type": "array", "items": { "type": "string" } },
+          "triple_count": { "type": "integer" },
+          "collision": { "type": "boolean" },
+          "consequence": { "type": "string", "enum": ["create", "reject_conflict", "replace", "merge"] },
+          "notices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["code", "level", "message"],
+              "properties": {
+                "code": { "type": "string" },
+                "level": { "type": "string", "enum": ["info", "warning"] },
+                "message": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "CollectionMemberRequest": {
+        "type": "object",
+        "required": ["member"],
+        "properties": {
+          "member": { "type": "string", "description": "The absolute IRI of an existing object." }
         }
       },
       "PatchRequest": {
@@ -500,17 +943,119 @@
         }
       }
     },
+    "/account": {
+      "get": {
+        "tags": ["Account"],
+        "summary": "Read the current account profile",
+        "description": "Returns the authenticated caller's safe profile. Password material, tokens, and unrelated administrator settings are never included.",
+        "operationId": "v2GetAccount",
+        "responses": {
+          "200": {
+            "description": "The current account profile.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SessionUser" } }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "patch": {
+        "tags": ["Account"],
+        "summary": "Update the current account profile",
+        "description": "Updates only caller-owned display name and affiliation fields. Identity, email, and role fields are immutable through self-service.",
+        "operationId": "v2PatchAccount",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/AccountPatch" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated account profile.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SessionUser" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/account/password": {
+      "post": {
+        "tags": ["Account"],
+        "summary": "Change the current account password",
+        "description": "Re-verifies the current password before replacing its Argon2 hash. Neither password is logged or returned.",
+        "operationId": "v2ChangePassword",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/PasswordChange" } }
+          }
+        },
+        "responses": {
+          "204": { "description": "The password was changed." },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/account/shared": {
+      "get": {
+        "tags": ["Account", "Collaboration"],
+        "summary": "List objects shared with the current account",
+        "description": "Returns exact read-only shares visible to the caller, ordered by canonical IRI and projected through the ordinary ACL boundary.",
+        "operationId": "v2ListSharedObjects",
+        "responses": {
+          "200": {
+            "description": "The account's read-only shared workspace.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SharedObjectsResponse" } }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/reviews": {
+      "get": {
+        "tags": ["Reviews"],
+        "summary": "List the current account's review queue",
+        "description": "Returns the latest review cycle for objects the caller submitted or was assigned. Administrators receive the complete queue.",
+        "operationId": "v2ListReviews",
+        "responses": {
+          "200": {
+            "description": "Relevant review cases in deterministic object-IRI order.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReviewListResponse" } }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
     "/objects": {
       "get": {
         "tags": ["Objects"],
         "summary": "List objects",
-        "description": "The paginated, ACL-scoped object list. Shares the ranked query and response envelope with `/search`; `type` and `q` narrow it, `limit`/`offset` page it.",
+        "description": "The paginated, ACL-scoped object list. Shares the normalized discovery contract and response envelope with `/search`.",
         "operationId": "v2ListObjects",
         "parameters": [
-          { "name": "q", "in": "query", "required": false, "description": "A free-text term. Absent ranks the whole in-scope corpus.", "schema": { "type": "string" } },
+          { "name": "q", "in": "query", "required": false, "description": "A free-text term. Absent browses the whole in-scope corpus.", "schema": { "type": "string" } },
           { "name": "type", "in": "query", "required": false, "description": "Restrict to one rdf:type, given as a full IRI.", "schema": { "type": "string" } },
-          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "default": 0 } },
-          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 50 } }
+          { "name": "role", "in": "query", "required": false, "description": "Restrict to one SBOL role, given as a full IRI.", "schema": { "type": "string" } },
+          { "name": "collection", "in": "query", "required": false, "description": "Restrict to direct members of this collection IRI.", "schema": { "type": "string" } },
+          { "name": "owner", "in": "query", "required": false, "description": "Restrict to objects owned by this user graph IRI.", "schema": { "type": "string" } },
+          { "name": "provenance", "in": "query", "required": false, "description": "Case-insensitive substring over mutable provenance.", "schema": { "type": "string" } },
+          { "name": "created_after", "in": "query", "required": false, "schema": { "type": "string", "format": "date" } },
+          { "name": "created_before", "in": "query", "required": false, "schema": { "type": "string", "format": "date" } },
+          { "name": "modified_after", "in": "query", "required": false, "schema": { "type": "string", "format": "date" } },
+          { "name": "modified_before", "in": "query", "required": false, "schema": { "type": "string", "format": "date" } },
+          { "name": "sort", "in": "query", "required": false, "schema": { "type": "string", "enum": ["relevance", "name", "created", "modified", "iri"], "default": "relevance" } },
+          { "name": "direction", "in": "query", "required": false, "description": "Defaults to ascending for name/IRI and descending otherwise.", "schema": { "type": "string", "enum": ["asc", "desc"] } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 0, "default": 0 } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 50 } }
         ],
         "responses": {
           "200": {
@@ -579,6 +1124,191 @@
         "operationId": "v2DeleteObject",
         "responses": {
           "204": { "description": "The object was removed." },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/objects/{iri}/details": {
+      "get": {
+        "tags": ["Objects"],
+        "summary": "Understand one object",
+        "description": "Return the normalized object-page resource under the caller's authorized graph scope. Identity, provenance, biological relationships, collections, attachments, uses, twins, and exact RDF properties carry explicit availability states. Unknown and out-of-scope objects are both non-disclosing `404` responses.",
+        "operationId": "v2GetObjectDetails",
+        "parameters": [
+          { "$ref": "#/components/parameters/iri" }
+        ],
+        "responses": {
+          "200": {
+            "description": "The normalized object-understanding projection.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ObjectDetails" } }
+            }
+          },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/objects/{iri}/activity": {
+      "get": {
+        "tags": ["Collaboration", "Reviews"],
+        "summary": "Read object collaboration activity",
+        "description": "Returns append-only sharing, transfer, and review evidence. Restricted to an owner or administrator because events identify participating accounts.",
+        "operationId": "v2GetObjectActivity",
+        "parameters": [{ "$ref": "#/components/parameters/iri" }],
+        "responses": {
+          "200": {
+            "description": "The object's immutable collaboration event stream.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ActivityResponse" } }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/objects/{iri}/reviews": {
+      "get": {
+        "tags": ["Reviews"],
+        "summary": "Read the latest object review",
+        "description": "Returns the latest immutable review cycle to an owner, assigned curator, requestor, or administrator.",
+        "operationId": "v2GetObjectReview",
+        "parameters": [{ "$ref": "#/components/parameters/iri" }],
+        "responses": {
+          "200": {
+            "description": "The latest review cycle.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReviewCase" } }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "post": {
+        "tags": ["Reviews"],
+        "summary": "Request curator review",
+        "description": "Atomically grants the assigned active curator read-only access and appends an immutable review-request event. The caller must own the object or be an administrator.",
+        "operationId": "v2RequestObjectReview",
+        "parameters": [{ "$ref": "#/components/parameters/iri" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/ReviewRequest" } }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The pending review cycle.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReviewCase" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/objects/{iri}/reviews/decision": {
+      "post": {
+        "tags": ["Reviews"],
+        "summary": "Record a curator review decision",
+        "description": "Appends an approval or changes-requested event to the pending review. The assigned curator or an administrator may decide; history is never rewritten.",
+        "operationId": "v2DecideObjectReview",
+        "parameters": [{ "$ref": "#/components/parameters/iri" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/ReviewDecisionRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The decided review cycle.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReviewCase" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/objects/{iri}/shares": {
+      "get": {
+        "tags": ["Collaboration"],
+        "summary": "List an object's collaborators",
+        "description": "Returns owners and read-only viewers as distinct groups. Only an owner or administrator may inspect this management projection.",
+        "operationId": "v2ListObjectCollaborators",
+        "parameters": [{ "$ref": "#/components/parameters/iri" }],
+        "responses": {
+          "200": {
+            "description": "The object's owners and read-only viewers.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/CollaboratorsResponse" } }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "post": {
+        "tags": ["Collaboration"],
+        "summary": "Grant read-only object access",
+        "description": "Grants an active member read-only access without making them an owner. This is distinct from the classic co-owner compatibility operation.",
+        "operationId": "v2GrantObjectShare",
+        "parameters": [{ "$ref": "#/components/parameters/iri" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/CollaboratorRequest" } }
+          }
+        },
+        "responses": {
+          "204": { "description": "Read-only access was granted." },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/objects/{iri}/shares/{user}": {
+      "delete": {
+        "tags": ["Collaboration"],
+        "summary": "Revoke read-only object access",
+        "description": "Removes one read-only viewer without changing ownership.",
+        "operationId": "v2RevokeObjectShare",
+        "parameters": [
+          { "$ref": "#/components/parameters/iri" },
+          { "name": "user", "in": "path", "required": true, "description": "The viewer's percent-encoded username or email.", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Read-only access was revoked." },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/objects/{iri}/owner": {
+      "put": {
+        "tags": ["Collaboration"],
+        "summary": "Transfer object ownership",
+        "description": "Atomically replaces the caller's ownership stamps with the selected active member. An administrator who is not an owner cannot use this self-service operation to reassign an object.",
+        "operationId": "v2TransferObjectOwner",
+        "parameters": [{ "$ref": "#/components/parameters/iri" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/CollaboratorRequest" } }
+          }
+        },
+        "responses": {
+          "204": { "description": "Ownership was transferred." },
+          "400": { "$ref": "#/components/responses/Error" },
           "403": { "$ref": "#/components/responses/Error" },
           "404": { "$ref": "#/components/responses/Error" }
         }
@@ -673,25 +1403,351 @@
         }
       }
     },
+    "/collections/validate": {
+      "post": {
+        "tags": ["Collections"],
+        "summary": "Validate and preview a contribution",
+        "description": "Runs the same parsing, validation, optional GenBank/FASTA conversion, identity minting, and collision analysis as commit without persisting anything. Requires an active member or administrator account.",
+        "operationId": "v2ValidateCollection",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/CreateCollectionRequest" } },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "version": { "type": "string" },
+                  "name": { "type": "string" },
+                  "description": { "type": "string" },
+                  "citations": { "type": "string" },
+                  "creator_name": { "type": "string" },
+                  "format": { "type": "string" },
+                  "overwrite": { "type": "string" },
+                  "file": { "type": "string", "format": "binary" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A write-free validation and identity preview.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SubmissionPreview" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/collections/{iri}": {
+      "delete": {
+        "tags": ["Collections"],
+        "summary": "Remove a collection submission",
+        "description": "Removes an owned collection and the closure belonging to that submission. This broader operation is separate from generic object deletion.",
+        "operationId": "v2DeleteCollection",
+        "parameters": [{ "$ref": "#/components/parameters/iri" }],
+        "responses": {
+          "204": { "description": "The collection submission was removed." },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/collections/{iri}/members": {
+      "post": {
+        "tags": ["Collections"],
+        "summary": "Add a collection member",
+        "description": "Adds one exact `sbol:member` edge to an owned collection.",
+        "operationId": "v2AddCollectionMember",
+        "parameters": [{ "$ref": "#/components/parameters/iri" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/CollectionMemberRequest" } }
+          }
+        },
+        "responses": {
+          "204": { "description": "Membership added." },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/collections/{iri}/members/{member}": {
+      "delete": {
+        "tags": ["Collections"],
+        "summary": "Remove a collection member",
+        "description": "Removes one exact `sbol:member` edge from an owned collection.",
+        "operationId": "v2RemoveCollectionMember",
+        "parameters": [
+          { "$ref": "#/components/parameters/iri" },
+          { "name": "member", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Membership removed." },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/admin": {
+      "get": {
+        "tags": ["Administration"],
+        "summary": "Discover administrator capabilities",
+        "description": "Returns the active backend capabilities, immutable search deployment, and the native admin sections. Requires an authenticated administrator.",
+        "operationId": "v2AdminOverview",
+        "responses": {
+          "200": { "description": "Administrator capability map.", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/admin/instance": {
+      "get": {
+        "tags": ["Administration"], "summary": "Read editable instance settings", "operationId": "v2AdminInstance",
+        "responses": {
+          "200": { "description": "The safe editable instance projection.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminInstance" } } } },
+          "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "patch": {
+        "tags": ["Administration"], "summary": "Update instance identity and public policy", "operationId": "v2AdminUpdateInstance",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "properties": {
+          "name": { "type": "string" }, "instance_url": { "type": "string" }, "uri_prefix": { "type": "string" }, "front_page_text": { "type": "string" }, "allow_public_signup": { "type": "boolean" }, "require_login": { "type": "boolean" }
+        } } } } },
+        "responses": {
+          "200": { "description": "Updated instance settings.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminInstance" } } } },
+          "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/admin/users": {
+      "get": {
+        "tags": ["Administration"], "summary": "List safe account profiles", "operationId": "v2AdminUsers",
+        "responses": {
+          "200": { "description": "Local accounts without credentials or reset material.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminUsersResponse" } } } },
+          "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "post": {
+        "tags": ["Administration"], "summary": "Create a local account", "operationId": "v2AdminCreateUser",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["username", "name", "email", "password"], "properties": {
+          "username": { "type": "string" }, "name": { "type": "string" }, "email": { "type": "string", "format": "email" }, "affiliation": { "type": "string" }, "password": { "type": "string", "format": "password", "writeOnly": true }, "is_admin": { "type": "boolean" }, "is_curator": { "type": "boolean" }, "is_member": { "type": "boolean", "default": true }
+        } } } } },
+        "responses": {
+          "201": { "description": "Created account.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminUser" } } } },
+          "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/admin/users/{username}": {
+      "parameters": [{ "name": "username", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "patch": {
+        "tags": ["Administration"], "summary": "Update an account profile and roles", "description": "Username and account graph identity remain immutable. Self-demotion and removal of the final administrator are rejected.", "operationId": "v2AdminUpdateUser",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "properties": {
+          "name": { "type": "string" }, "email": { "type": "string", "format": "email" }, "affiliation": { "type": "string" }, "is_admin": { "type": "boolean" }, "is_curator": { "type": "boolean" }, "is_member": { "type": "boolean" }
+        } } } } },
+        "responses": { "200": { "description": "Updated account.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminUser" } } } }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } }
+      },
+      "delete": {
+        "tags": ["Administration"], "summary": "Delete an account", "description": "Requires `DELETE {username}` exactly. Self-delete and deletion of the final administrator are rejected and every attempt is audited.", "operationId": "v2AdminDeleteUser",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Confirmation" } } } },
+        "responses": { "204": { "description": "Account deleted." }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/integrations": {
+      "get": {
+        "tags": ["Administration"], "summary": "Read federation, remote, and plugin settings", "description": "Remote credential fields are recursively redacted.", "operationId": "v2AdminIntegrations",
+        "responses": { "200": { "description": "Secret-safe integration settings.", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/federation": {
+      "post": {
+        "tags": ["Administration"], "summary": "Join a Web of Registries", "operationId": "v2AdminFederate",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["administrator_email", "url"], "properties": { "administrator_email": { "type": "string", "format": "email" }, "url": { "type": "string", "format": "uri" } } } } } },
+        "responses": { "200": { "description": "Membership saved.", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "$ref": "#/components/responses/Error" }, "501": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/federation/sync": {
+      "post": {
+        "tags": ["Administration"], "summary": "Synchronize registry routes", "operationId": "v2AdminFederationSync",
+        "responses": { "200": { "description": "Synchronization count.", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "$ref": "#/components/responses/Error" }, "501": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/registries": {
+      "post": {
+        "tags": ["Administration"], "summary": "Upsert a registry route", "operationId": "v2AdminSaveRegistry",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["uri", "url"], "properties": { "uri": { "type": "string" }, "url": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Registry route saved.", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/registries/{uri}": {
+      "delete": {
+        "tags": ["Administration"], "summary": "Delete a registry route", "description": "Requires `DELETE REGISTRY {uri}` exactly.", "operationId": "v2AdminDeleteRegistry",
+        "parameters": [{ "name": "uri", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Confirmation" } } } },
+        "responses": { "204": { "description": "Registry route deleted." }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/remotes": {
+      "post": {
+        "tags": ["Administration"], "summary": "Upsert an ICE or Benchling remote", "description": "The configuration is write-only for secret fields; subsequent reads redact them.", "operationId": "v2AdminSaveRemote",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "Remote id saved.", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/remotes/{id}": {
+      "delete": {
+        "tags": ["Administration"], "summary": "Delete a remote", "description": "Requires `DELETE REMOTE {id}` exactly.", "operationId": "v2AdminDeleteRemote",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Confirmation" } } } },
+        "responses": { "204": { "description": "Remote deleted." }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/plugins": {
+      "post": {
+        "tags": ["Administration"], "summary": "Add or replace a plugin", "operationId": "v2AdminSavePlugin",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["category", "id", "name", "url"], "properties": { "category": { "type": "string" }, "id": { "type": "string" }, "name": { "type": "string" }, "url": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Plugin saved.", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/plugins/{category}/{id}": {
+      "delete": {
+        "tags": ["Administration"], "summary": "Delete a plugin", "description": "Requires `DELETE PLUGIN {category}/{id}` exactly.", "operationId": "v2AdminDeletePlugin",
+        "parameters": [{ "name": "category", "in": "path", "required": true, "schema": { "type": "string" } }, { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Confirmation" } } } },
+        "responses": { "204": { "description": "Plugin deleted." }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/jobs": {
+      "get": {
+        "tags": ["Administration"], "summary": "List jobs", "operationId": "v2AdminJobs",
+        "parameters": [{ "name": "kind", "in": "query", "schema": { "type": "string" } }, { "name": "status", "in": "query", "schema": { "type": "string" } }, { "name": "queue", "in": "query", "schema": { "type": "string" } }, { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 100 } }],
+        "responses": { "200": { "description": "Matching jobs.", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }, "400": { "$ref": "#/components/responses/Error" } }
+      },
+      "post": {
+        "tags": ["Administration"], "summary": "Enqueue a job", "operationId": "v2AdminEnqueueJob",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["kind", "payload"], "properties": { "kind": { "type": "string" }, "payload": {}, "queue": { "type": "string" }, "priority": { "type": "integer" }, "max_attempts": { "type": "integer" }, "idempotency_key": { "type": "string" }, "correlation_id": { "type": "string", "format": "uuid" } } } } } },
+        "responses": { "200": { "description": "Enqueue result.", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/jobs/{id}": {
+      "get": {
+        "tags": ["Administration"], "summary": "Read one job", "operationId": "v2AdminJob",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Job record.", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/jobs/{id}/attempts": {
+      "get": {
+        "tags": ["Administration"], "summary": "List job attempts", "operationId": "v2AdminJobAttempts",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Attempt records.", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/jobs/{id}/logs": {
+      "get": {
+        "tags": ["Administration"], "summary": "List job log records", "operationId": "v2AdminJobLogs",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "after_id", "in": "query", "schema": { "type": "integer" } }, { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 500 } }],
+        "responses": { "200": { "description": "Job log records.", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/jobs/{id}/cancel": {
+      "post": {
+        "tags": ["Administration"], "summary": "Cancel a queued or running job", "description": "Requires `CANCEL JOB {id}` exactly.", "operationId": "v2AdminCancelJob",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Confirmation" } } } },
+        "responses": { "200": { "description": "Whether the job was cancelled.", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/ontologies": {
+      "get": {
+        "tags": ["Administration"], "summary": "List loaded ontologies", "operationId": "v2AdminOntologies",
+        "responses": { "200": { "description": "Loaded ontologies.", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } } }
+      },
+      "post": {
+        "tags": ["Administration"], "summary": "Load an ontology", "operationId": "v2AdminLoadOntology",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["prefix"], "properties": { "prefix": { "type": "string" }, "url": { "type": "string" }, "name": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Ontology import report.", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/search": {
+      "get": {
+        "tags": ["Administration"], "summary": "Read search deployment and rebuild status", "operationId": "v2AdminSearchStatus",
+        "responses": { "200": { "description": "Configured strategies and recent rebuilds.", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/admin/search/rebuild": {
+      "post": {
+        "tags": ["Administration"], "summary": "Schedule a full search-index rebuild", "operationId": "v2AdminRebuildSearch",
+        "responses": { "200": { "description": "Rebuild job.", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/admin/backup": {
+      "get": {
+        "tags": ["Administration"], "summary": "Export a portable registry archive", "description": "Exports SBOL document graphs only; excludes accounts, tokens, passwords, configuration, secrets, blobs, and operational state.", "operationId": "v2AdminBackup",
+        "responses": { "200": { "description": "Integrity-checked registry archive.", "headers": { "Content-Disposition": { "schema": { "type": "string" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BackupArchive" } } } } }
+      }
+    },
+    "/admin/backup/validate": {
+      "post": {
+        "tags": ["Administration"], "summary": "Validate a registry archive without mutation", "operationId": "v2AdminValidateBackup",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BackupArchive" } } } },
+        "responses": { "200": { "description": "Validation result and exact restore confirmation phrase.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BackupValidation" } } } }, "400": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/backup/restore": {
+      "post": {
+        "tags": ["Administration"], "summary": "Atomically restore a verified registry archive", "description": "Requires the checksum-derived confirmation returned by validation. A full search rebuild is queued after commit.", "operationId": "v2AdminRestoreBackup",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["archive", "confirmation"], "properties": { "archive": { "$ref": "#/components/schemas/BackupArchive" }, "confirmation": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Restore and rebuild result.", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/audit": {
+      "get": {
+        "tags": ["Administration"], "summary": "Read append-only administrator activity", "operationId": "v2AdminAudit",
+        "parameters": [{ "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 } }],
+        "responses": { "200": { "description": "Newest events first.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminAuditResponse" } } } } }
+      }
+    },
     "/search": {
       "get": {
         "tags": ["Search"],
-        "summary": "Ranked free-text search",
-        "description": "A ranked, ACL-scoped, paginated free-text search over the in-scope corpus. The query and paging are typed query parameters, not the V1 `/search/key=value` path grammar.",
+        "summary": "Discover registry objects",
+        "description": "Normalized ACL-scoped discovery with text, biological facets, collection/owner/provenance/date narrowing, deterministic sorting, exact totals, and stable paging. The wire uses query parameters rather than V1's path grammar.",
         "operationId": "v2Search",
         "parameters": [
-          { "name": "q", "in": "query", "required": false, "description": "The free-text term. Absent ranks the whole in-scope corpus.", "schema": { "type": "string" } },
+          { "name": "q", "in": "query", "required": false, "description": "The free-text term. Absent browses the whole in-scope corpus.", "schema": { "type": "string" } },
           { "name": "type", "in": "query", "required": false, "description": "Restrict to one rdf:type, given as a full IRI.", "schema": { "type": "string" } },
-          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "default": 0 } },
-          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 50 } }
+          { "name": "role", "in": "query", "required": false, "description": "Restrict to one SBOL role, given as a full IRI.", "schema": { "type": "string" } },
+          { "name": "collection", "in": "query", "required": false, "description": "Restrict to direct members of this collection IRI.", "schema": { "type": "string" } },
+          { "name": "owner", "in": "query", "required": false, "description": "Restrict to objects owned by this user graph IRI.", "schema": { "type": "string" } },
+          { "name": "provenance", "in": "query", "required": false, "description": "Case-insensitive substring over mutable provenance.", "schema": { "type": "string" } },
+          { "name": "created_after", "in": "query", "required": false, "schema": { "type": "string", "format": "date" } },
+          { "name": "created_before", "in": "query", "required": false, "schema": { "type": "string", "format": "date" } },
+          { "name": "modified_after", "in": "query", "required": false, "schema": { "type": "string", "format": "date" } },
+          { "name": "modified_before", "in": "query", "required": false, "schema": { "type": "string", "format": "date" } },
+          { "name": "sort", "in": "query", "required": false, "schema": { "type": "string", "enum": ["relevance", "name", "created", "modified", "iri"], "default": "relevance" } },
+          { "name": "direction", "in": "query", "required": false, "description": "Defaults to ascending for name/IRI and descending otherwise.", "schema": { "type": "string", "enum": ["asc", "desc"] } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 0, "default": 0 } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 50 } }
         ],
         "responses": {
           "200": {
-            "description": "A page of ranked hits with a total.",
+            "description": "A deterministic page of discovery hits with an exact total.",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/SearchResponse" } }
             }
-          }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" }
         }
       },
       "post": {
@@ -729,6 +1785,23 @@
               "application/json": { "schema": { "$ref": "#/components/schemas/SearchStrategiesResponse" } }
             }
           }
+        }
+      }
+    },
+    "/search/facets": {
+      "get": {
+        "tags": ["Search"],
+        "summary": "Discover visible biological facets",
+        "description": "Returns exact distinct-subject counts for rdf:type and SBOL role values under the caller's ACL scope, enriched with ontology labels when available.",
+        "operationId": "v2SearchFacets",
+        "responses": {
+          "200": {
+            "description": "Visible type and role values ordered by count and label.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/DiscoveryFacets" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Error" }
         }
       }
     },

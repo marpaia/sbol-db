@@ -158,6 +158,10 @@ trusting a mutable theme flag.
     "legacy_api": true,
     "structured_search": true,
     "sequence_search": true,
+    "profile_management": true,
+    "password_change": true,
+    "password_reset": false,
+    "collaboration": true,
     "data_lab": true,
     "sql_console": true
   }
@@ -193,6 +197,59 @@ includes a password hash, reset link, or plaintext token.
 expires the cookie, and returns `204`. It is idempotent for anonymous, stale,
 or already-revoked credentials.
 
+### Account and collaboration
+
+**`GET /api/v2/account`** returns the authenticated caller's safe profile.
+**`PATCH /api/v2/account`** updates only `name` and `affiliation`; identity,
+email, graph URI, and role flags are deliberately immutable through
+self-service. Both responses carry `Cache-Control: no-store` and never include
+password or token material.
+
+**`POST /api/v2/account/password`** requires `current_password` and
+`new_password`, re-verifies the current credential, and stores a fresh Argon2
+hash. Password reset remains capability-gated (`password_reset: false`) until
+an external delivery worker is selected and configured; the portal therefore
+does not mint or expose an undeliverable reset token.
+
+**`GET /api/v2/account/shared`** returns the exact objects explicitly shared
+with the caller. These projections pass through the same ACL-aware object
+details service as ordinary object pages and are sorted by canonical IRI.
+
+Native collaboration intentionally separates read access from ownership:
+
+- **`GET /api/v2/objects/{iri}/shares`** lists owners and read-only viewers for
+  an owner or administrator.
+- **`POST /api/v2/objects/{iri}/shares`** grants an active member read-only
+  access without adding an ownership stamp.
+- **`DELETE /api/v2/objects/{iri}/shares/{user}`** revokes that read-only
+  access immediately.
+- **`PUT /api/v2/objects/{iri}/owner`** atomically transfers the caller's
+  ownership stamps. An administrator who is not an owner cannot silently use
+  this self-service operation to reassign the object.
+
+This is a deliberate modern wire distinction from classic `addOwner`, whose
+compatibility semantics still create a co-owner. The classic adapter remains
+unchanged.
+
+Curator review is append-only:
+
+- **`POST /api/v2/objects/{iri}/reviews`** assigns an active curator, grants
+  them read-only access, and records `review_requested` in the same atomic
+  update.
+- **`POST /api/v2/objects/{iri}/reviews/decision`** lets the assigned curator
+  or an administrator append `review_approved` or
+  `review_changes_requested`.
+- **`GET /api/v2/objects/{iri}/reviews`** returns the latest review cycle to
+  its participants, an owner, or an administrator.
+- **`GET /api/v2/reviews`** returns cases requested by or assigned to the
+  caller; administrators see the complete queue.
+- **`GET /api/v2/objects/{iri}/activity`** returns owner/admin audit evidence
+  for native shares, revocations, transfers, and review decisions.
+
+Audit events are immutable RDF resources stored in the object's graph. Native
+object mutations and their evidence are composed into one SPARQL Update, so a
+successful state transition cannot be committed without its audit event.
+
 ### Objects
 
 An object's whole lifecycle lives under one path, `/api/v2/objects/{iri}`. The
@@ -214,6 +271,22 @@ chosen by:
   sequence formats ignore it.
 - otherwise `Accept` selects idiomatic JSON metadata or the object's RDF
   closure.
+
+**`GET /api/v2/objects/{iri}/details`** is the normalized object-page resource.
+Unlike the storage-oriented JSON representation above, it combines the
+authorized subject projection with inverse collection membership, uses,
+exact-sequence twins, attachment metadata, provenance, sequence content, and
+the exact RDF property set. Every biological section carries an explicit
+`available`, `empty`, `partial`, or `unsupported` state so clients never need
+to infer support from missing JSON fields. It also reports the logical source
+graph and only returns a persisted content fingerprint when the selected
+projection corresponds to the stored record. Unknown and out-of-scope objects
+both return the same non-disclosing `404`.
+
+This resource is the contract consumed by the public object page. Biological,
+identity, visibility, and graph-scope interpretation remains in
+`sbol-db-app`; the React client renders the typed projection and treats all
+imported prose and links as untrusted input.
 
 **`PATCH /api/v2/objects/{iri}`** edits the object's mutable fields in place.
 JSON body; every field is optional, and only present fields are applied:
@@ -281,25 +354,61 @@ Accepts either a JSON body (the idiomatic path):
 ```
 
 or the same `multipart/form-data` upload v1 takes, so an existing SBOL file
-rides through unchanged. `id` and `version` are required; `format` defaults to
-RDF/XML; `overwrite` is `fail` (default), `replace`, or `merge`. Returns `201
-Created` with a `Location` to the minted collection. An anonymous caller is
-`403`.
+rides through unchanged. `id` and `version` are required; `format` is one of
+`rdfxml`, `turtle`, `jsonld`, `ntriples`, `genbank`, or `fasta` and defaults to
+RDF/XML. GenBank and FASTA are validated and converted to SBOL 3 before URI
+minting. `overwrite` is `fail` (default), `replace`, or `merge`. Returns `201
+Created` with a `Location` to the minted collection. An anonymous or
+non-member caller is `403`.
+
+**`POST /api/v2/collections/validate`** accepts the identical JSON or multipart
+request but performs no write. It parses and validates the source, reports any
+SBOL 3 conversion, mints the exact identities commit would use, checks the
+target graph for a collision, and returns the resulting `create`,
+`reject_conflict`, `replace`, or `merge` consequence. Commit repeats the same
+preparation authoritatively, so a race cannot bypass validation.
+
+**`POST /api/v2/collections/{iri}/members`** adds the IRI in a JSON
+`{"member":"…"}` body to an owned Collection. **`DELETE
+/api/v2/collections/{iri}/members/{member}`** removes that membership. Both
+return `204`; an anonymous or non-owner caller is `403`.
+
+**`DELETE /api/v2/collections/{iri}`** removes an owned Collection and its
+submission closure, returning `204`. The broader collection deletion is kept
+separate from `DELETE /objects/{iri}`, which removes only the selected
+top-level closure. The account UI names the exact target and requires a typed
+confirmation before calling this operation.
 
 ### Search
 
-**`GET /api/v2/search`** runs a ranked, ACL-scoped, paginated free-text query.
-Typed query parameters, not the v1 path grammar:
+**`GET /api/v2/search`** runs normalized, ACL-scoped registry discovery. Typed
+query parameters replace the v1 path grammar:
 
 | Parameter | Meaning |
 | --- | --- |
-| `q` | the free-text term; absent ranks the whole in-scope corpus |
+| `q` | the free-text term; absent browses the whole in-scope corpus |
 | `type` | restrict to one rdf:type, given as a full IRI |
+| `role` | restrict to one SBOL 2 or SBOL 3 role, given as a full IRI |
+| `collection` | restrict to direct members of a collection IRI |
+| `owner` | restrict to an exact `sbh:ownedBy` graph IRI |
+| `provenance` | case-insensitive substring of mutable provenance |
+| `created_after`, `created_before` | inclusive creation dates in `YYYY-MM-DD` form |
+| `modified_after`, `modified_before` | inclusive modification dates in `YYYY-MM-DD` form |
+| `sort` | `relevance`, `name`, `created`, `modified`, or `iri` |
+| `direction` | `asc` or `desc`; omitted uses the sort's natural direction |
 | `offset` | paging offset (default 0) |
 | `limit` | page size, clamped to `[1, 1000]` (default 50) |
 
-Returns the paginated envelope. Each hit carries `uri`, `display_id`,
-`version`, `name`, `description`, and `object_type`.
+Returns an exact `total` and deterministic page ending in an ascending IRI
+tie-breaker. Each hit carries `uri`, `display_id`, `version`, `name`,
+`description`, `object_type`, `roles`, `owners`, creation/modification dates,
+and its relevance `score`. The envelope also echoes the effective `sort` and
+`direction`.
+
+**`GET /api/v2/search/facets`** returns exact type and role counts for the
+caller's visible corpus. Values carry their full IRI, display label, optional
+CURIE, and count. See the [registry discovery contract](discovery-contract.md)
+for URL state, semantics, and classic-link translation.
 
 **`POST /api/v2/search`** is the structured strategy surface. It accepts a
 tagged query, typed filters, cursor paging, execution options, and an optional
@@ -335,6 +444,37 @@ string, `mode` (`global`, the default banded aligner, or `exact` substring),
 and `limit`. Returns `{items, total}`; each hit carries the aligned object's
 URI and metadata plus `percent_match`, `strand`, and `cigar`.
 
+### Administration
+
+The native administrator control plane is rooted at
+`/api/v2/admin`. Every route below is protected by the same policy: an
+anonymous caller receives 401, a signed-in non-administrator receives 403,
+and hiding a link in React is never the authorization boundary. Browser
+requests may authenticate with the HttpOnly session cookie; API clients may
+use the same bearer token accepted elsewhere in V2.
+
+| Section | Routes | Contract |
+| --- | --- | --- |
+| Overview and instance | `GET /admin`, `GET/PATCH /admin/instance` | Safe capability/status projection and native instance policy. |
+| Accounts | `GET/POST /admin/users`, `PATCH/DELETE /admin/users/{username}` | Secret-free account projections; self-delete, self-demotion, and final-administrator removal are rejected. |
+| Integrations | `GET /admin/integrations`, federation sync/join, registry, remote, and plugin mutation routes | Secret-shaped remote fields are recursively redacted before serialization. |
+| Jobs and ontology | `/admin/jobs*`, `GET/POST /admin/ontologies` | Read/enqueue/cancel and ontology loading without using the unscoped native endpoints from the UI. |
+| Search | `GET /admin/search`, `POST /admin/search/rebuild` | Capability-aware strategy status and a coalesced rebuild command. |
+| Backup | `GET /admin/backup`, `POST /admin/backup/validate`, `POST /admin/backup/restore` | Canonical, SHA3-256-checked `registry_graphs_only` archives and atomic restore. |
+| Audit | `GET /admin/audit` | Newest-first append-only administrator events. |
+
+Destructive requests carry a `confirmation` value that must exactly name the
+target, such as `DELETE <username>` or `CANCEL JOB <uuid>`. Restore validation
+derives its confirmation phrase from the verified archive checksum; a changed
+archive cannot reuse an earlier confirmation. Administrator actions append an
+attempt/success/failure event to the dedicated audit graph.
+
+The portable backup format deliberately excludes accounts, password hashes,
+tokens, reset links, runtime configuration, integration secrets, and blobs.
+It is a registry-graph transfer artifact, not a full disaster-recovery image.
+Operators must back up identity, configuration, and blob storage through their
+deployment's protected infrastructure.
+
 ## OpenAPI
 
 The v2 surface documents itself:
@@ -348,23 +488,32 @@ shape fails the build.
 
 ## Mapping from v1 to v2
 
-The v2 surface covers the core read, write, search, and download paths of the
-v1 SynBioHub-compat surface under idiomatic verbs. v1's federation, plugin,
-admin, attachment-upload, and fine-grained field-edit routes have no v2
-equivalent yet; use v1 for those.
+The v2 surface covers the core read, write, search, download, collaboration,
+and administrator paths of the v1 compatibility surface under idiomatic verbs.
+Attachment upload and a few fine-grained classic field-edit shapes remain V1
+compatibility operations; native pages do not call them indirectly.
+Legacy V1 `/sbol` and `/sbolnr` downloads default to SBOL 2 for classic client
+compatibility and accept `?version=sbol3` explicitly. Native V2 RDF downloads
+default to SBOL 3 and accept `?version=sbol2` when a legacy representation is
+required.
+The complete path inventory, parity classifications, deprecated aliases, and
+unsupported behaviors live in the
+[compatibility and cutover matrix](synbiohub-compatibility-matrix.md).
 
 | v1 (SynBioHub-compat) | v2 (idiomatic) |
 | --- | --- |
 | `GET /admin/theme` | `GET /api/v2/instance` (public safe subset) |
+| V1 `/admin/*` instance, user, integration, job, ontology, and search operations | `/api/v2/admin/*` (one administrator policy and JSON contracts) |
 | `POST /login`, `POST /logout`, `GET /profile` | `POST`, `DELETE`, `GET /api/v2/session` (browser lifecycle) |
 | `POST /submit` (multipart) | `POST /api/v2/collections` (JSON or multipart) |
 | `GET /.../metadata` | `GET /api/v2/objects/{iri}` (`Accept: application/json`) |
+| object page metadata assembled from multiple classic endpoints | `GET /api/v2/objects/{iri}/details` |
 | `GET /.../sbol`, `/sbolnr`, `/gb`, `/fasta`, `/gff`, `/omex` | `GET /api/v2/objects/{iri}?format=sbol\|sbolnr\|gb\|fasta\|gff\|omex` |
 | SBOL2/SBOL3 negotiation via route conventions | `GET /api/v2/objects/{iri}?version=sbol2\|sbol3` or `Accept` |
 | `GET /.../remove` or `POST /.../remove` | `DELETE /api/v2/objects/{iri}` |
 | `POST /user/.../makePublic` | `POST /api/v2/objects/{iri}/publish` |
 | `POST /updateMutableDescription`, `/updateMutableNotes`, `/updateMutableSource`, `/updateCitations`, `/.../edit/:field` | `PATCH /api/v2/objects/{iri}` |
-| `GET /search/<term>`, `GET /search/key=value&...` | `GET /api/v2/search?q=<term>&type=<iri>&limit=&offset=` |
+| `GET /search/<term>`, `GET /search/key=value&...` | `GET /api/v2/search?q=<term>&type=<iri>&role=<iri>&collection=<iri>&owner=<iri>&provenance=<text>&created_after=&created_before=&modified_after=&modified_before=&sort=&direction=&limit=&offset=` |
 | `GET /rootCollections`, `GET /:type/count`, `GET /searchCount/...` | `GET /api/v2/objects` (paginated envelope carries `total`) |
 | `GET /.../similar` | `GET /api/v2/objects/{iri}/similar` |
 | sequence search (SBOLExplorer plugin) | `GET /api/v2/sequences/search` |

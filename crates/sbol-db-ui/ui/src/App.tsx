@@ -1,4 +1,5 @@
 import { lazy, Suspense } from "react";
+import type { ReactNode } from "react";
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 
 import ProductIdentity from "@/components/portal/ProductIdentity";
@@ -6,17 +7,29 @@ import PublicShell from "@/components/portal/PublicShell";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useInstance } from "@/features/portal/queries";
 import { adminPath, publicObjectPath } from "@/lib/routes";
-import AdminGate from "@/routes/AdminGate";
 import HomeRoute from "@/routes/HomeRoute";
 import LoginRoute from "@/routes/LoginRoute";
 import NotFoundRoute from "@/routes/NotFoundRoute";
-import PublicObjectRoute from "@/routes/PublicObjectRoute";
 import PublicAccessGate from "@/routes/PublicAccessGate";
 import RegisterRoute from "@/routes/RegisterRoute";
-import SearchRoute from "@/routes/SearchRoute";
 import SetupRoute from "@/routes/SetupRoute";
 
+const PublicObjectRoute = lazy(() => import("@/routes/PublicObjectRoute"));
+const ContributionRoute = lazy(() => import("@/routes/ContributionRoute"));
+const SearchRoute = lazy(() => import("@/routes/SearchRoute"));
+const SequenceSearchRoute = lazy(() => import("@/routes/SequenceSearchRoute"));
+const WorkspaceRoute = lazy(() => import("@/routes/WorkspaceRoute"));
+const AccountRoute = lazy(() => import("@/routes/AccountRoute"));
+const AdminGate = lazy(() => import("@/routes/AdminGate"));
 const DashboardRoute = lazy(() => import("@/routes/DashboardRoute"));
+const AdminAuditRoute = lazy(() => import("@/routes/AdminAuditRoute"));
+const AdminBackupRoute = lazy(() => import("@/routes/AdminBackupRoute"));
+const AdminInstanceRoute = lazy(() => import("@/routes/AdminInstanceRoute"));
+const AdminIntegrationsRoute = lazy(
+  () => import("@/routes/AdminIntegrationsRoute")
+);
+const AdminSearchRoute = lazy(() => import("@/routes/AdminSearchRoute"));
+const AdminUsersRoute = lazy(() => import("@/routes/AdminUsersRoute"));
 const GraphDetailRoute = lazy(() => import("@/routes/GraphDetailRoute"));
 const GraphsRoute = lazy(() => import("@/routes/GraphsRoute"));
 const ImportRoute = lazy(() => import("@/routes/ImportRoute"));
@@ -49,8 +62,62 @@ export default function App() {
             <Route path="setup" element={<SetupRoute />} />
             <Route element={<PublicAccessGate />}>
               <Route index element={<HomeRoute />} />
-              <Route path="search/*" element={<SearchRoute />} />
-              <Route path="objects/view/:iri" element={<PublicObjectRoute />} />
+              <Route
+                path="search/*"
+                element={
+                  <PortalRoute>
+                    <SearchRoute />
+                  </PortalRoute>
+                }
+              />
+              <Route
+                path="sequence-search"
+                element={
+                  <PortalRoute>
+                    <SequenceSearchRoute />
+                  </PortalRoute>
+                }
+              />
+              <Route
+                path="contribute"
+                element={
+                  <PortalRoute>
+                    <ContributionRoute />
+                  </PortalRoute>
+                }
+              />
+              <Route
+                path="submit"
+                element={<Navigate to="/contribute" replace />}
+              />
+              <Route
+                path="workspace/*"
+                element={
+                  <PortalRoute>
+                    <WorkspaceRoute />
+                  </PortalRoute>
+                }
+              />
+              <Route
+                path="account"
+                element={
+                  <PortalRoute>
+                    <AccountRoute />
+                  </PortalRoute>
+                }
+              />
+              <Route
+                path="advanced-search"
+                element={<Navigate to="/search" replace />}
+              />
+              <Route
+                path="objects/view/:iri"
+                element={
+                  <PortalRoute>
+                    <PublicObjectRoute />
+                  </PortalRoute>
+                }
+              />
               <Route
                 path="public/:collectionId/:displayId/:version?"
                 element={<CanonicalObjectRedirect scope="public" />}
@@ -113,6 +180,18 @@ export default function App() {
                 path="observability/postgres/tables/:schema/:name"
                 element={<RedirectToSchemaTable />}
               />
+              <Route
+                path="settings/instance"
+                element={<AdminInstanceRoute />}
+              />
+              <Route path="settings/users" element={<AdminUsersRoute />} />
+              <Route
+                path="settings/integrations"
+                element={<AdminIntegrationsRoute />}
+              />
+              <Route path="operations/search" element={<AdminSearchRoute />} />
+              <Route path="operations/backup" element={<AdminBackupRoute />} />
+              <Route path="operations/audit" element={<AdminAuditRoute />} />
               <Route path="*" element={<Navigate to={adminPath()} replace />} />
             </Route>
           </Route>
@@ -121,6 +200,28 @@ export default function App() {
         </Routes>
       </Suspense>
     </>
+  );
+}
+
+function PortalRoute({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<PortalEntryLoading />}>{children}</Suspense>;
+}
+
+function PortalEntryLoading() {
+  return (
+    <div
+      className="mx-auto w-full max-w-7xl space-y-5 px-4 py-12 sm:px-6 lg:px-8"
+      aria-label="Loading page"
+    >
+      <Skeleton className="h-5 w-28" />
+      <Skeleton className="h-10 w-full max-w-xl" />
+      <Skeleton className="h-24 w-full rounded-xl" />
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <Skeleton className="h-48 rounded-xl" />
+        <Skeleton className="h-48 rounded-xl" />
+        <Skeleton className="h-48 rounded-xl" />
+      </div>
+    </div>
   );
 }
 

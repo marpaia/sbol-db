@@ -441,6 +441,10 @@ pub trait UserStore: Send + Sync {
     /// Fetch an account by id. `None` when no such account exists.
     async fn get_by_id(&self, id: UserId) -> Result<Option<User>, DomainError>;
 
+    /// Every account ordered by username. Administrator projections use this
+    /// instead of backend-specific SQL or column-family scans.
+    async fn list_users(&self) -> Result<Vec<User>, DomainError>;
+
     /// Persist the mutable profile fields (`name`, `affiliation`, and the
     /// membership flags) of `user`, returning the stored account.
     async fn update_user(&self, user: &User) -> Result<User, DomainError>;

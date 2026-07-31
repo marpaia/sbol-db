@@ -40,10 +40,10 @@ pub fn resolve_overwrite(code: Option<&str>) -> Result<ImportOverwrite, V2Error>
     }
 }
 
-/// Resolve a submission's RDF serialization from an optional `format` hint,
-/// defaulting to RDF/XML. The non-RDF (sequence/JSON) formats are rejected: a
-/// submission is minted from RDF triples.
-pub fn resolve_rdf_format(hint: Option<&str>) -> Result<SerializationFormat, V2Error> {
+/// Resolve a contribution serialization from an optional `format` hint,
+/// defaulting to RDF/XML. GenBank and FASTA are accepted by the application
+/// service, which validates and converts them to SBOL 3 before minting.
+pub fn resolve_submission_format(hint: Option<&str>) -> Result<SerializationFormat, V2Error> {
     match hint.map(str::trim).filter(|s| !s.is_empty()) {
         None => Ok(SerializationFormat::RdfXml),
         Some(hint) => match hint.to_ascii_lowercase().as_str() {
@@ -51,6 +51,8 @@ pub fn resolve_rdf_format(hint: Option<&str>) -> Result<SerializationFormat, V2E
             "jsonld" => Ok(SerializationFormat::JsonLd),
             "rdfxml" | "rdf" | "xml" => Ok(SerializationFormat::RdfXml),
             "ntriples" | "nt" => Ok(SerializationFormat::NTriples),
+            "genbank" | "gb" | "gbk" => Ok(SerializationFormat::GenBank),
+            "fasta" | "fa" | "fna" | "faa" => Ok(SerializationFormat::Fasta),
             other => Err(V2Error::from(ApiError::BadRequest(format!(
                 "unsupported submission format: {other}"
             )))),

@@ -360,6 +360,9 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
+        ))
+        .route_layer(axum::middleware::from_fn(
+            metrics::track_virtuoso_compatibility_usage,
         ));
 
     // The SynBioHub V1 auth surface (`/login`, `/register`, `/profile`, …),
@@ -496,6 +499,7 @@ fn mount_portal(router: Router, config: &ServerConfig) -> Router {
     if !config.lab_enabled {
         return router;
     }
+    let router = router.layer(axum::middleware::from_fn(metrics::track_legacy_ui_usage));
     if !config.portal_enabled {
         tracing::info!(
             "public portal pages disabled via SBOL_DB_PORTAL_ENABLED; retaining admin UI"

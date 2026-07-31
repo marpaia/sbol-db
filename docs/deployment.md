@@ -622,6 +622,8 @@ ServiceMonitor with `serviceMonitor.enabled=true`.
 |---|---|---|---|
 | `http_requests_total` | counter | `method`, `route`, `status` | `route` is the **templated** path (e.g. `/objects/:id`), so cardinality stays bounded. Unmatched paths are bucketed as `unmatched`. |
 | `http_request_duration_seconds` | histogram | `method`, `route`, `status` | Buckets: 5 ms → 10 s (standard HTTP histogram set). |
+| `sbol_db_compatibility_requests_total` | counter | `surface`, `family`, `method`, `status` | Privacy-safe V1/Virtuoso adoption signal. Labels come from fixed vocabularies; raw paths, IRIs, usernames, queries, headers, and bodies are never exported. |
+| `sbol_db_legacy_ui_requests_total` | counter | `bookmark` ∈ {`root`, `deep_link`}, `method`, `status` | Transitional `/lab` browser usage. The actual deep link is deliberately not a label. |
 
 ##### Connection pools
 
@@ -693,6 +695,12 @@ histogram_quantile(0.99,
 # 5xx rate as a fraction
 sum(rate(http_requests_total{status=~"5.."}[5m]))
   / sum(rate(http_requests_total[5m]))
+
+# Compatibility workflow families still in use (no raw request values)
+sum by (surface, family) (rate(sbol_db_compatibility_requests_total[30d]))
+
+# Transitional /lab bookmark traffic
+sum by (bookmark) (increase(sbol_db_legacy_ui_requests_total[30d]))
 
 # --- Pools ----------------------------------------------------------
 

@@ -121,6 +121,36 @@ const TOP_LEVEL_SECTIONS: Array<{
   { prefix: adminPath("/sparql"), section: "Query", page: "SPARQL" },
   { prefix: adminPath("/sql"), section: "Query", page: "SQL" },
   {
+    prefix: adminPath("/settings/instance"),
+    section: "Administration",
+    page: "Instance",
+  },
+  {
+    prefix: adminPath("/settings/users"),
+    section: "Administration",
+    page: "Users",
+  },
+  {
+    prefix: adminPath("/settings/integrations"),
+    section: "Administration",
+    page: "Integrations",
+  },
+  {
+    prefix: adminPath("/operations/search"),
+    section: "Administration",
+    page: "Search indexes",
+  },
+  {
+    prefix: adminPath("/operations/backup"),
+    section: "Administration",
+    page: "Backup & restore",
+  },
+  {
+    prefix: adminPath("/operations/audit"),
+    section: "Administration",
+    page: "Activity",
+  },
+  {
     prefix: adminPath("/observability/maintenance"),
     section: "Operations",
     page: "Maintenance",

@@ -70,17 +70,30 @@ The comparator is chosen by payload, following classic SynBioHub's own rules:
 
 ## Self-consistency smoke (no classic stack)
 
-`test_subject_smoke.py` boots the compiled `sbol-db` compat server on SQLite and
-RocksDB (via `subject.py`), seeds `fixtures/smoke-corpus.nt`, and drives the
+`test_subject_smoke.py` boots the compiled `sbol-db` compatibility server on
+SQLite and RocksDB by default (via `subject.py`), seeds
+`fixtures/smoke-corpus.nt`, and drives the
 read/metadata/SPARQL/download subset, asserting each endpoint answers
-coherently. Its last test runs the driver itself across two independent backends
-(SQLite as the stand-in reference, RocksDB as the subject) so the fan-out and
-semantic comparators are exercised end to end without a classic reference. It
+coherently. Its last test runs the driver itself across every configured backend
+so the fan-out and semantic comparators are exercised end to end without a
+classic reference. It
 locates the binary from `$SBOLDB_BIN`, then a prebuilt `target/{release,debug}`
 artifact, else `cargo build -p sbol-db`.
 
 ```sh
 SBOLDB_BIN=target/debug/sbol-db \
+    tests/synbiohub-conformance/.venv/bin/python -m pytest \
+    tests/synbiohub-conformance/test_subject_smoke.py
+```
+
+The phase/release gate includes Postgres by pointing the harness at an isolated
+empty database. Startup failure for a requested backend fails rather than skips
+the gate:
+
+```sh
+SBOLDB_BIN=target/debug/sbol-db \
+SBOL_DB_TEST_BACKENDS=sqlite,rocksdb,postgres \
+SBOL_DB_TEST_POSTGRES_URL=postgres://sbol:sbol@localhost:5432/sbol_compat_test \
     tests/synbiohub-conformance/.venv/bin/python -m pytest \
     tests/synbiohub-conformance/test_subject_smoke.py
 ```

@@ -128,13 +128,15 @@ impl Downloader {
         object_iri: &str,
         scope: GraphScope,
     ) -> Result<Vec<Triple>, DomainError> {
+        let database_prefix = self.database_prefix_for(object_iri);
         let mut closure = if self.is_collection(object_iri, &scope).await? {
             let where_body = collection_where(object_iri);
             self.construct_paged(&where_body, &scope).await?
         } else {
-            self.crawl(object_iri, &scope, None, false).await?
+            self.crawl(object_iri, &scope, database_prefix, None, false)
+                .await?
         };
-        self.resolve_remotes(&mut closure).await?;
+        self.resolve_remotes(&mut closure, database_prefix).await?;
         Ok(closure)
     }
 
@@ -144,7 +146,11 @@ impl Downloader {
     /// instance, up to the fan-out cap. A no-op when no resolver is configured
     /// or no registered prefix matches, so a non-federated instance is
     /// unaffected.
-    async fn resolve_remotes(&self, closure: &mut Vec<Triple>) -> Result<(), DomainError> {
+    async fn resolve_remotes(
+        &self,
+        closure: &mut Vec<Triple>,
+        database_prefix: &str,
+    ) -> Result<(), DomainError> {
         let Some(resolver) = &self.remote else {
             return Ok(());
         };
@@ -165,7 +171,7 @@ impl Downloader {
         for triple in closure.iter() {
             if let ObjectTerm::Iri(iri) = &triple.object {
                 let uri = iri.as_str();
-                if uri.starts_with(&self.database_prefix) || defined.contains(uri) {
+                if uri.starts_with(database_prefix) || defined.contains(uri) {
                     continue;
                 }
                 if !instances
@@ -196,7 +202,21 @@ impl Downloader {
         scope: GraphScope,
     ) -> Result<Vec<Triple>, DomainError> {
         let prefix = object_prefix(object_iri);
-        self.crawl(object_iri, &scope, Some(&prefix), true).await
+        let database_prefix = self.database_prefix_for(object_iri);
+        self.crawl(object_iri, &scope, database_prefix, Some(&prefix), true)
+            .await
+    }
+
+    /// The registry prefix whose references are local to this closure. Native
+    /// objects use the configured database prefix; imported objects can retain
+    /// a different scheme or authority, so infer their origin rather than
+    /// reducing the recursive download to the root subject alone.
+    fn database_prefix_for<'a>(&'a self, root: &'a str) -> &'a str {
+        if root.starts_with(&self.database_prefix) {
+            &self.database_prefix
+        } else {
+            iri_origin_prefix(root).unwrap_or(&self.database_prefix)
+        }
     }
 
     /// Whether `root` is an SBOL2 Collection, probed with a `CONSTRUCT` that
@@ -218,6 +238,7 @@ impl Downloader {
         &self,
         root: &str,
         scope: &GraphScope,
+        database_prefix: &str,
         prefix_filter: Option<&str>,
         exclude_member: bool,
     ) -> Result<Vec<Triple>, DomainError> {
@@ -236,7 +257,7 @@ impl Downloader {
             for triple in &page {
                 if let ObjectTerm::Iri(iri) = &triple.object {
                     let referenced = iri.as_str();
-                    if self.should_resolve(referenced, prefix_filter)
+                    if self.should_resolve(referenced, database_prefix, prefix_filter)
                         && seen.insert(referenced.to_owned())
                     {
                         frontier.push_back(referenced.to_owned());
@@ -251,8 +272,13 @@ impl Downloader {
     /// Whether a referenced URI should be crawled: it must live under the
     /// database prefix, not be a SynBioHub-terms URI, and — for the
     /// non-recursive closure — start with the object's own prefix.
-    fn should_resolve(&self, uri: &str, prefix_filter: Option<&str>) -> bool {
-        if !uri.starts_with(&self.database_prefix) || uri.starts_with(WIKI_PREFIX) {
+    fn should_resolve(
+        &self,
+        uri: &str,
+        database_prefix: &str,
+        prefix_filter: Option<&str>,
+    ) -> bool {
+        if !uri.starts_with(database_prefix) || uri.starts_with(WIKI_PREFIX) {
             return false;
         }
         match prefix_filter {
@@ -351,6 +377,14 @@ fn object_prefix(uri: &str) -> String {
         Some(idx) => uri[..=idx].to_owned(),
         None => uri.to_owned(),
     }
+}
+
+/// The scheme-and-authority prefix of an absolute hierarchical IRI, including
+/// the first `/` after the authority (`https://example.org/`).
+fn iri_origin_prefix(iri: &str) -> Option<&str> {
+    let authority = iri.find("://")? + 3;
+    let path = iri[authority..].find('/')? + authority;
+    Some(&iri[..=path])
 }
 
 #[cfg(test)]
@@ -530,6 +564,50 @@ INSERT DATA {
         assert!(
             has_literal(&closure, REMOTE, TITLE, "remote object"),
             "closure should include the remotely-resolved object's triples: {closure:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn recursive_infers_the_origin_of_an_imported_root() {
+        const IMPORTED_ROOT: &str = "https://imported.example/public/part/1";
+        const IMPORTED_SEQUENCE: &str = "https://imported.example/public/part/sequence/1";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("imported-download.db");
+        let url = format!("sqlite://{}", path.display());
+        let backend = Backend::open(&url).await.expect("open sqlite backend");
+        backend
+            .migrator
+            .as_ref()
+            .expect("sqlite backend has a migrator")
+            .run_migrations()
+            .await
+            .expect("run migrations");
+
+        let fixture = format!(
+            "INSERT DATA {{ \
+             <{IMPORTED_ROOT}> <{RDF_TYPE}> <http://sbols.org/v3#Component> . \
+             <{IMPORTED_ROOT}> <http://sbols.org/v3#hasSequence> <{IMPORTED_SEQUENCE}> . \
+             <{IMPORTED_SEQUENCE}> <{RDF_TYPE}> <http://sbols.org/v3#Sequence> . \
+             <{IMPORTED_SEQUENCE}> <{TITLE}> \"imported sequence\" . }}"
+        );
+        let update =
+            SparqlUpdateEngine::new(backend.triple_source.clone(), backend.triple_writer.clone());
+        update
+            .execute(&fixture, Some(GRAPH), &SparqlOptions::default())
+            .await
+            .expect("seed imported fixture");
+
+        let engine = Arc::new(SparqlEngine::new(backend.triple_source.clone()));
+        // Keep the production default (`http://synbiohub.org/`) deliberately:
+        // the imported root's HTTPS origin must be inferred from the root.
+        let downloader = Downloader::new(engine);
+        let closure = downloader
+            .fetch_recursive(IMPORTED_ROOT, GraphScope::Union)
+            .await
+            .expect("recursive imported closure");
+        assert!(
+            has_literal(&closure, IMPORTED_SEQUENCE, TITLE, "imported sequence"),
+            "recursive closure should include same-origin imported children: {closure:?}"
         );
     }
 

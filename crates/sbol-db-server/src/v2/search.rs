@@ -1,16 +1,15 @@
 //! The V2 search resource.
 //!
-//! `GET /api/v2/search` runs a ranked free-text query over the in-scope corpus
-//! and returns a paginated JSON envelope with a total. The query and paging
-//! arrive as typed query parameters (`q`, `object_type`, `offset`, `limit`),
-//! not the V1 `/search/key=value` path grammar. The handler delegates to the
-//! same [`ranked_search`](sbol_db_app::AppServices::ranked_search) facade verb
-//! the V1 adapter calls; the caller's [`GraphScope`](sbol_db_sparql::GraphScope)
-//! is the read ceiling.
+//! `GET /api/v2/search` runs the normalized native discovery contract over the
+//! caller's in-scope corpus. It supports text, biological facets, collection
+//! and ownership context, provenance/date narrowing, deterministic sorting,
+//! and stable offset paging without inheriting V1's path grammar.
 
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
-use sbol_db_app::{FacetedSearch, Hit};
+use chrono::NaiveDate;
+use sbol_db_app::{DiscoveryFacets, DiscoveryPage, DiscoveryQuery, DiscoverySort, SortDirection};
+use sbol_db_core::DomainError;
 use sbol_db_search_sdk::{SearchPage as StructuredSearchPage, SearchRequest as StructuredRequest};
 use serde::{Deserialize, Serialize};
 
@@ -28,52 +27,35 @@ const MAX_LIMIT: usize = 1000;
 /// dedicated free-text emphasis.
 #[derive(Debug, Default, Deserialize)]
 pub struct SearchParams {
-    /// The free-text term. Absent ranks the whole in-scope corpus.
+    /// The free-text term. Absent browses the whole in-scope corpus.
     pub q: Option<String>,
     /// Restrict to one rdf:type, given as a full IRI. Carried on the wire as
     /// `type`, the idiomatic facet name.
     #[serde(rename = "type")]
     pub object_type: Option<String>,
-    /// The paging offset into the ranked results.
-    #[serde(default)]
-    pub offset: usize,
-    /// The page size, clamped to `[1, MAX_LIMIT]`.
-    pub limit: Option<usize>,
+    /// Restrict to objects carrying this full role IRI (SBOL 2 or SBOL 3).
+    pub role: Option<String>,
+    /// Restrict to direct members of this collection IRI.
+    pub collection: Option<String>,
+    /// Restrict to objects carrying `sbh:ownedBy` for this owner graph IRI.
+    pub owner: Option<String>,
+    /// Case-insensitive substring over `sbh:mutableProvenance`.
+    pub provenance: Option<String>,
+    pub created_after: Option<String>,
+    pub created_before: Option<String>,
+    pub modified_after: Option<String>,
+    pub modified_before: Option<String>,
+    /// `relevance`, `name`, `created`, `modified`, or `iri`.
+    pub sort: Option<String>,
+    /// `asc` or `desc`; omitted uses the natural direction for the sort.
+    pub direction: Option<String>,
+    /// Kept as strings until the handler so malformed values receive the V2
+    /// JSON error envelope instead of Axum's extractor plain-text rejection.
+    pub offset: Option<String>,
+    pub limit: Option<String>,
 }
 
-/// One ranked search hit as idiomatic JSON.
-#[derive(Debug, Serialize)]
-pub struct SearchHit {
-    pub uri: String,
-    pub display_id: Option<String>,
-    pub version: Option<String>,
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub object_type: Option<String>,
-}
-
-impl From<Hit> for SearchHit {
-    fn from(hit: Hit) -> Self {
-        Self {
-            uri: hit.subject,
-            display_id: hit.display_id,
-            version: hit.version,
-            name: hit.name,
-            description: hit.description,
-            object_type: hit.type_iri,
-        }
-    }
-}
-
-/// The paginated search response: the window of hits plus the total number of
-/// in-scope matches and the applied paging.
-#[derive(Debug, Serialize)]
-pub struct SearchResponse {
-    pub items: Vec<SearchHit>,
-    pub total: usize,
-    pub offset: usize,
-    pub limit: usize,
-}
+pub type SearchResponse = DiscoveryPage;
 
 /// Discovery envelope for the immutable runtime assembled at startup.
 #[derive(Debug, Serialize)]
@@ -89,6 +71,16 @@ pub async fn search(
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResponse>, V2Error> {
     Ok(Json(run_search(&state, &identity, params).await?))
+}
+
+/// `GET /api/v2/search/facets` — exact visible type/role counts with ontology
+/// labels where the deployment has loaded them.
+pub async fn facets(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+) -> Result<Json<DiscoveryFacets>, V2Error> {
+    let scope = scope_for(&state, &identity).await?;
+    Ok(Json(state.app.discovery_facets(scope).await?))
 }
 
 /// `POST /api/v2/search` — execute an explicitly structured, capability-checked
@@ -112,30 +104,91 @@ pub async fn strategies(State(state): State<AppState>) -> Json<StrategiesRespons
     })
 }
 
-/// Run the ranked, ACL-scoped, paginated query behind both `/search` and the
-/// `/objects` list. Delegates to the same
-/// [`ranked_search`](sbol_db_app::AppServices::ranked_search) facade verb the V1
-/// adapter calls; the caller's [`GraphScope`](sbol_db_sparql::GraphScope) is the
-/// read ceiling.
+/// Run the normalized native discovery query behind both `/search` and the
+/// `/objects` list. The application facade owns filtering, ranking, sorting,
+/// exact totals, and paging; this adapter only parses the wire representation.
 pub(super) async fn run_search(
     state: &AppState,
     identity: &Identity,
     params: SearchParams,
 ) -> Result<SearchResponse, V2Error> {
     let scope = scope_for(state, identity).await?;
-    let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    let faceted = FacetedSearch {
-        class: params.object_type,
-        free_text: params.q,
-        offset: params.offset,
-        limit: Some(limit),
-        ..FacetedSearch::default()
-    };
-    let (hits, total) = state.app.ranked_search(&faceted, scope).await?;
-    Ok(SearchResponse {
-        items: hits.into_iter().map(SearchHit::from).collect(),
-        total,
-        offset: params.offset,
+    let sort = parse_sort(params.sort.as_deref())?;
+    let direction = parse_direction(params.direction.as_deref(), sort)?;
+    let offset = parse_usize("offset", params.offset.as_deref(), 0)?;
+    let limit = parse_usize("limit", params.limit.as_deref(), DEFAULT_LIMIT)?.clamp(1, MAX_LIMIT);
+    let query = DiscoveryQuery {
+        text: non_empty(params.q),
+        object_type: non_empty(params.object_type),
+        role: non_empty(params.role),
+        collection: non_empty(params.collection),
+        owner: non_empty(params.owner),
+        provenance: non_empty(params.provenance),
+        created_after: parse_date("created_after", params.created_after.as_deref())?,
+        created_before: parse_date("created_before", params.created_before.as_deref())?,
+        modified_after: parse_date("modified_after", params.modified_after.as_deref())?,
+        modified_before: parse_date("modified_before", params.modified_before.as_deref())?,
+        sort,
+        direction,
+        offset,
         limit,
-    })
+    };
+    state.app.discover(&query, scope).await.map_err(Into::into)
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_usize(name: &str, value: Option<&str>, default: usize) -> Result<usize, V2Error> {
+    value
+        .map(|value| {
+            value.parse::<usize>().map_err(|_| {
+                V2Error::from(DomainError::InvalidInput(format!(
+                    "{name} must be a non-negative integer"
+                )))
+            })
+        })
+        .transpose()
+        .map(|value| value.unwrap_or(default))
+}
+
+fn parse_date(name: &str, value: Option<&str>) -> Result<Option<NaiveDate>, V2Error> {
+    value
+        .map(|value| {
+            NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| {
+                V2Error::from(DomainError::InvalidInput(format!(
+                    "{name} must use YYYY-MM-DD"
+                )))
+            })
+        })
+        .transpose()
+}
+
+fn parse_sort(value: Option<&str>) -> Result<DiscoverySort, V2Error> {
+    match value.unwrap_or("relevance") {
+        "relevance" => Ok(DiscoverySort::Relevance),
+        "name" => Ok(DiscoverySort::Name),
+        "created" => Ok(DiscoverySort::Created),
+        "modified" => Ok(DiscoverySort::Modified),
+        "iri" => Ok(DiscoverySort::Iri),
+        other => {
+            Err(DomainError::InvalidInput(format!("unsupported discovery sort: {other}")).into())
+        }
+    }
+}
+
+fn parse_direction(value: Option<&str>, sort: DiscoverySort) -> Result<SortDirection, V2Error> {
+    match value {
+        Some("asc") => Ok(SortDirection::Asc),
+        Some("desc") => Ok(SortDirection::Desc),
+        Some(other) => Err(DomainError::InvalidInput(format!(
+            "unsupported discovery direction: {other}"
+        ))
+        .into()),
+        None if matches!(sort, DiscoverySort::Name | DiscoverySort::Iri) => Ok(SortDirection::Asc),
+        None => Ok(SortDirection::Desc),
+    }
 }

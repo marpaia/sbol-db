@@ -17,6 +17,7 @@ use std::sync::Arc;
 use sbol_db_sparql::{SparqlError, SparqlOptions, SparqlUpdateEngine};
 
 use crate::acl::AclService;
+use crate::audit::{event_triples, AuditAction};
 use crate::mutation::MutationError;
 
 const SBH_OWNED_BY: &str = "http://wiki.synbiohub.org/wiki/Terms/synbiohub#ownedBy";
@@ -50,18 +51,72 @@ impl PermissionService {
     ) -> Result<(), MutationError> {
         let graph = self.authorize(user_graph, is_admin, object_uri).await?;
 
-        // The share fact lives on the target user's graph, so the grantee's
-        // shared listing (its `sbh:canView` subjects) surfaces the object.
-        let share =
-            format!("INSERT DATA {{ <{target_user_graph}> <{SBH_CAN_VIEW}> <{object_uri}> }}");
-        self.run(&share, target_user_graph).await?;
-
-        // The ownership stamps live on the object's own graph, one per URI in
-        // the closure, so the grantee owns every object it reaches.
+        // The share fact lives on the target user's graph while ownership
+        // stamps live on the object's graph. One explicit-graph update applies
+        // both partitions through a single atomic TripleWriter batch.
         let closure = self.acl_service.related_uris(object_uri).await?;
         let stamps = self.owned_by_body(&closure, target_user_graph);
-        let stamp = format!("INSERT DATA {{ {stamps} }}");
-        self.run(&stamp, &graph).await?;
+        let update = format!(
+            "INSERT DATA {{\n\
+             GRAPH <{target_user_graph}> {{ <{target_user_graph}> <{SBH_CAN_VIEW}> <{object_uri}> . }}\n\
+             GRAPH <{graph}> {{ {stamps} }}\n\
+             }}"
+        );
+        self.run_global(&update).await?;
+        Ok(())
+    }
+
+    /// Grant read-only access without adding an ownership stamp. This is the
+    /// native collaboration contract; classic `addOwner` continues to call
+    /// [`Self::add_owner`] for wire-compatible co-ownership semantics.
+    pub async fn grant_view(
+        &self,
+        user_graph: &str,
+        is_admin: bool,
+        object_uri: &str,
+        target_user_graph: &str,
+    ) -> Result<(), MutationError> {
+        let graph = self.authorize(user_graph, is_admin, object_uri).await?;
+        let event = event_triples(
+            object_uri,
+            AuditAction::ShareGranted,
+            user_graph,
+            Some(target_user_graph),
+            None,
+        )?;
+        let update = format!(
+            "INSERT DATA {{\n\
+             GRAPH <{target_user_graph}> {{ <{target_user_graph}> <{SBH_CAN_VIEW}> <{object_uri}> . }}\n\
+             GRAPH <{graph}> {{ {event} }}\n\
+             }}"
+        );
+        self.run_global(&update).await?;
+        Ok(())
+    }
+
+    /// Revoke a native read-only share. Ownership facts are deliberately left
+    /// untouched; a co-owner must be removed through the compatibility command
+    /// or an explicit ownership transfer.
+    pub async fn revoke_view(
+        &self,
+        user_graph: &str,
+        is_admin: bool,
+        object_uri: &str,
+        target_user_graph: &str,
+    ) -> Result<(), MutationError> {
+        let graph = self.authorize(user_graph, is_admin, object_uri).await?;
+        let event = event_triples(
+            object_uri,
+            AuditAction::ShareRevoked,
+            user_graph,
+            Some(target_user_graph),
+            None,
+        )?;
+        let update = format!(
+            "DELETE DATA {{ GRAPH <{target_user_graph}> {{ <{target_user_graph}> <{SBH_CAN_VIEW}> <{object_uri}> . }} }} ;\n\
+             INSERT DATA {{ GRAPH <{graph}> {{ {event} }} }}"
+        );
+        self.run_global(&update).await?;
         Ok(())
     }
 
@@ -77,14 +132,65 @@ impl PermissionService {
     ) -> Result<(), MutationError> {
         let graph = self.authorize(user_graph, is_admin, object_uri).await?;
 
-        let share =
-            format!("DELETE DATA {{ <{target_user_graph}> <{SBH_CAN_VIEW}> <{object_uri}> }}");
-        self.run(&share, target_user_graph).await?;
-
         let closure = self.acl_service.related_uris(object_uri).await?;
         let stamps = self.owned_by_body(&closure, target_user_graph);
-        let stamp = format!("DELETE DATA {{ {stamps} }}");
-        self.run(&stamp, &graph).await?;
+        let update = format!(
+            "DELETE DATA {{\n\
+             GRAPH <{target_user_graph}> {{ <{target_user_graph}> <{SBH_CAN_VIEW}> <{object_uri}> . }}\n\
+             GRAPH <{graph}> {{ {stamps} }}\n\
+             }}"
+        );
+        self.run_global(&update).await?;
+        Ok(())
+    }
+
+    /// Transfer the caller's ownership of `object_uri` to another account in
+    /// one storage transaction. The target gains the share index and closure
+    /// ownership stamps while the caller loses both. Other co-owners are left
+    /// unchanged.
+    pub async fn transfer_owner(
+        &self,
+        user_graph: &str,
+        _is_admin: bool,
+        object_uri: &str,
+        target_user_graph: &str,
+    ) -> Result<(), MutationError> {
+        if !self.acl_service.owns_object(user_graph, object_uri).await? {
+            return Err(MutationError::NotAuthorized(object_uri.to_owned()));
+        }
+        let graph = self
+            .acl_service
+            .graph_of_subject(object_uri)
+            .await?
+            .ok_or_else(|| MutationError::NotFound(object_uri.to_owned()))?;
+        if user_graph == target_user_graph {
+            return Err(MutationError::Domain(
+                sbol_db_core::DomainError::InvalidInput(
+                    "the new owner must be a different account".to_owned(),
+                ),
+            ));
+        }
+        let closure = self.acl_service.related_uris(object_uri).await?;
+        let old_stamps = self.owned_by_body(&closure, user_graph);
+        let new_stamps = self.owned_by_body(&closure, target_user_graph);
+        let event = event_triples(
+            object_uri,
+            AuditAction::OwnershipTransferred,
+            user_graph,
+            Some(target_user_graph),
+            None,
+        )?;
+        let update = format!(
+            "DELETE DATA {{\n\
+             GRAPH <{user_graph}> {{ <{user_graph}> <{SBH_CAN_VIEW}> <{object_uri}> . }}\n\
+             GRAPH <{graph}> {{ {old_stamps} }}\n\
+             }} ;\n\
+             INSERT DATA {{\n\
+             GRAPH <{target_user_graph}> {{ <{target_user_graph}> <{SBH_CAN_VIEW}> <{object_uri}> . }}\n\
+             GRAPH <{graph}> {{ {new_stamps}\n{event} }}\n\
+             }}"
+        );
+        self.run_global(&update).await?;
         Ok(())
     }
 
@@ -121,9 +227,9 @@ impl PermissionService {
         Ok(graph)
     }
 
-    async fn run(&self, update: &str, graph: &str) -> Result<(), SparqlError> {
+    async fn run_global(&self, update: &str) -> Result<(), SparqlError> {
         self.sparql_update
-            .execute(update, Some(graph), &SparqlOptions::default())
+            .execute(update, None, &SparqlOptions::default())
             .await?;
         Ok(())
     }

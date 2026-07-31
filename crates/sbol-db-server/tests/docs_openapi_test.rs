@@ -4,6 +4,7 @@
 //! v2) are served, parse as valid JSON, and each documents its own surface
 //! without carrying the others.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
@@ -17,6 +18,23 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 const BODY_LIMIT: usize = 4 * 1024 * 1024;
+const V1_OPENAPI: &str = include_str!("../src/synbiohub_openapi.json");
+const V1_PUBLIC_ROUTES: &str = include_str!("../src/synbiohub/mod.rs");
+const V1_ADMIN_ROUTES: &str = include_str!("../src/synbiohub/admin/mod.rs");
+const V1_ALIASES: &str = include_str!("../../../docs/synbiohub-compatibility-aliases.txt");
+
+const V1_TAGS: &[&str] = &[
+    "SynBioHub v1 Admin",
+    "SynBioHub v1 Attachments",
+    "SynBioHub v1 Auth",
+    "SynBioHub v1 Downloads",
+    "SynBioHub v1 Edit",
+    "SynBioHub v1 Permissions",
+    "SynBioHub v1 Plugins",
+    "SynBioHub v1 Query",
+    "SynBioHub v1 SPARQL",
+    "SynBioHub v1 Submission",
+];
 
 /// Build a router over a fresh SQLite backend. The returned `TempDir` owns the
 /// database file and must outlive the router.
@@ -172,4 +190,126 @@ async fn all_spec_routes_serve_valid_json() {
         assert_eq!(status, StatusCode::OK, "{uri} is served");
         serde_json::from_str::<Value>(&body).unwrap_or_else(|e| panic!("{uri} is valid JSON: {e}"));
     }
+}
+
+#[test]
+fn synbiohub_inventory_covers_every_runtime_compatibility_route() {
+    let spec: Value = serde_json::from_str(V1_OPENAPI).expect("SynBioHub OpenAPI parses");
+    let spec_paths: BTreeSet<String> = spec["paths"]
+        .as_object()
+        .expect("paths object")
+        .keys()
+        .cloned()
+        .collect();
+    let runtime_paths = runtime_v1_paths();
+    let alias_paths: BTreeSet<String> = V1_ALIASES
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_owned)
+        .collect();
+    let protocol_paths: BTreeSet<String> = [
+        "/sparql-auth".to_owned(),
+        "/sparql-graph-crud-auth".to_owned(),
+    ]
+    .into_iter()
+    .collect();
+
+    assert_eq!(
+        spec_paths.len(),
+        109,
+        "the primary catalog path count changed"
+    );
+    assert_eq!(
+        alias_paths.len(),
+        61,
+        "the supplemental alias count changed"
+    );
+    assert_eq!(
+        runtime_paths.len(),
+        168,
+        "the runtime V1 route count changed"
+    );
+    assert!(
+        spec_paths.is_disjoint(&alias_paths),
+        "a compatibility alias moved into OpenAPI without leaving the supplemental list"
+    );
+
+    let undocumented: BTreeSet<_> = runtime_paths.difference(&spec_paths).cloned().collect();
+    assert_eq!(
+        undocumented, alias_paths,
+        "every runtime route outside the primary OpenAPI catalog must be classified in the supplemental inventory"
+    );
+    let non_runtime_spec: BTreeSet<_> = spec_paths.difference(&runtime_paths).cloned().collect();
+    assert_eq!(
+        non_runtime_spec, protocol_paths,
+        "only the two top-level Virtuoso compatibility routes live outside the V1 router"
+    );
+}
+
+#[test]
+fn every_primary_v1_operation_has_one_classified_family() {
+    let spec: Value = serde_json::from_str(V1_OPENAPI).expect("SynBioHub OpenAPI parses");
+    let known: BTreeSet<&str> = V1_TAGS.iter().copied().collect();
+    let mut operations = 0usize;
+
+    for (path, item) in spec["paths"].as_object().expect("paths object") {
+        for (method, operation) in item.as_object().expect("path item") {
+            if method == "parameters" {
+                continue;
+            }
+            operations += 1;
+            let tags = operation["tags"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{method} {path} has tags"));
+            assert_eq!(tags.len(), 1, "{method} {path} has exactly one family");
+            let tag = tags[0]
+                .as_str()
+                .unwrap_or_else(|| panic!("{method} {path} tag is text"));
+            assert!(
+                known.contains(tag),
+                "{method} {path} has unknown family {tag}"
+            );
+        }
+    }
+    assert_eq!(operations, 127, "the classified V1 operation count changed");
+}
+
+fn runtime_v1_paths() -> BTreeSet<String> {
+    [V1_PUBLIC_ROUTES, V1_ADMIN_ROUTES]
+        .into_iter()
+        .flat_map(extract_route_literals)
+        .collect()
+}
+
+fn extract_route_literals(source: &str) -> Vec<String> {
+    // Test-only routers in these files are not part of the deployed surface.
+    let mut rest = source.split("#[cfg(test)]").next().unwrap_or(source);
+    let mut paths = Vec::new();
+    while let Some(route_start) = rest.find(".route(") {
+        rest = &rest[route_start + ".route(".len()..];
+        let quote_start = rest.find('"').expect("route begins with a string literal");
+        rest = &rest[quote_start + 1..];
+        let quote_end = rest.find('"').expect("route string closes");
+        paths.push(normalize_axum_path(&rest[..quote_end]));
+        rest = &rest[quote_end + 1..];
+    }
+    paths
+}
+
+fn normalize_axum_path(path: &str) -> String {
+    let mut normalized = path
+        .split('/')
+        .map(|segment| {
+            segment
+                .strip_prefix(':')
+                .or_else(|| segment.strip_prefix('*'))
+                .map_or_else(|| segment.to_owned(), |name| format!("{{{name}}}"))
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    if normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    normalized
 }

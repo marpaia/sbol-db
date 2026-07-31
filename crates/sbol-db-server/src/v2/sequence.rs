@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
 use sbol_db_app::{AlignMode, AlignOptions};
-use sbol_db_core::SbolObjectRecord;
+use sbol_db_core::{DomainError, SbolObjectRecord};
 use serde::{Deserialize, Serialize};
 
 use super::auth::{scope_for, Identity};
@@ -35,7 +35,9 @@ pub struct SequenceSearchParams {
     /// (exact substring).
     pub mode: Option<String>,
     /// The maximum number of hits to return, clamped to `[1, MAX_LIMIT]`.
-    pub limit: Option<usize>,
+    /// Kept as text until the handler so malformed values receive the V2 JSON
+    /// error envelope instead of Axum's extractor plain-text rejection.
+    pub limit: Option<String>,
 }
 
 /// The shared object-metadata columns carried by a sequence or `similar` hit.
@@ -97,10 +99,7 @@ pub async fn search_sequences(
             ))
         })?;
     let mode = parse_mode(params.mode.as_deref())?;
-    let max_accepts = params
-        .limit
-        .map(|l| l.clamp(1, MAX_LIMIT))
-        .unwrap_or(DEFAULT_LIMIT) as u32;
+    let max_accepts = parse_limit(params.limit.as_deref())? as u32;
     let options = AlignOptions {
         mode,
         max_accepts,
@@ -190,4 +189,16 @@ fn parse_mode(mode: Option<&str>) -> Result<AlignMode, V2Error> {
             "unknown alignment mode: {other}"
         )))),
     }
+}
+
+fn parse_limit(value: Option<&str>) -> Result<usize, V2Error> {
+    let Some(value) = value else {
+        return Ok(DEFAULT_LIMIT);
+    };
+    let limit = value.trim().parse::<usize>().map_err(|_| {
+        V2Error::from(DomainError::InvalidInput(
+            "limit must be a non-negative integer".to_owned(),
+        ))
+    })?;
+    Ok(limit.clamp(1, MAX_LIMIT))
 }

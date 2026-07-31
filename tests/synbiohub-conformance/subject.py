@@ -80,7 +80,7 @@ class LocalSubject:
     and removes the store directory."""
 
     def __init__(self, backend: str, binary: Optional[Path] = None):
-        if backend not in ("sqlite", "rocksdb"):
+        if backend not in ("sqlite", "rocksdb", "postgres"):
             raise SubjectError(f"unsupported subject backend {backend!r}")
         self.backend = backend
         self.binary = str(binary or find_binary())
@@ -92,6 +92,14 @@ class LocalSubject:
         self.base: str = ""
 
     def _database_url(self) -> str:
+        if self.backend == "postgres":
+            url = os.environ.get("SBOL_DB_TEST_POSTGRES_URL")
+            if not url:
+                raise SubjectError(
+                    "postgres was requested but SBOL_DB_TEST_POSTGRES_URL is unset; "
+                    "point it at an isolated empty test database"
+                )
+            return url
         root = Path(self._tmp or "")
         if self.backend == "sqlite":
             return f"sqlite://{root / 'sbol.db'}?mode=rwc"

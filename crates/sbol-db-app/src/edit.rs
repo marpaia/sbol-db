@@ -175,7 +175,7 @@ impl EditService {
         let update = format!(
             "DELETE {{ <{uri}> <{predicate}> {previous} . <{uri}> <{DCTERMS_MODIFIED}> ?mod }}\n\
              INSERT {{ <{uri}> <{predicate}> {value} . <{uri}> <{DCTERMS_MODIFIED}> \"{modified}\" }}\n\
-             WHERE {{ OPTIONAL {{ <{uri}> <{predicate}> {previous} . <{uri}> <{DCTERMS_MODIFIED}> ?mod }} }}",
+             WHERE {{ OPTIONAL {{ <{uri}> <{predicate}> {previous} }} OPTIONAL {{ <{uri}> <{DCTERMS_MODIFIED}> ?mod }} }}",
             value = value.to_sparql(),
             modified = now_modified(),
         );

@@ -39,6 +39,10 @@ struct InstanceCapabilities {
     legacy_api: bool,
     structured_search: bool,
     sequence_search: bool,
+    profile_management: bool,
+    password_change: bool,
+    password_reset: bool,
+    collaboration: bool,
     data_lab: bool,
     sql_console: bool,
 }
@@ -73,6 +77,13 @@ pub(super) async fn get(State(state): State<AppState>) -> Result<impl IntoRespon
                 legacy_api: true,
                 structured_search: true,
                 sequence_search: true,
+                profile_management: true,
+                password_change: true,
+                // No delivery worker is installed yet. Keeping this false
+                // prevents the native UI from exposing a reset flow that could
+                // mint an undeliverable secret.
+                password_reset: false,
+                collaboration: true,
                 data_lab,
                 sql_console,
             },

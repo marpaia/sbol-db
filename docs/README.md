@@ -12,6 +12,9 @@ Entry points to the project's documentation, organized by topic.
   ownership, browser/API compatibility, session and admin boundaries,
   frontend layering, design-system direction, and the phased SynBioHub
   compatibility migration.
+- **[Application acceptance contract](application-acceptance.md)**: autonomous
+  delivery boundaries, hard semantic/API/security/design gates, evidence tiers,
+  and measurable exit criteria for every application phase.
 - **[Application and admin UI guide](ui.md)**: current routes, screenshots,
   configuration switches, local development, and production-shaped testing.
 
@@ -19,6 +22,9 @@ Entry points to the project's documentation, organized by topic.
 
 `sbol-db` exposes five composable ways to read what you've imported:
 
+- **[Registry discovery contract](discovery-contract.md)**: normalized text
+  and biological facets, exact totals, deterministic paging, public URL state,
+  and the explicit classic-link translation boundary.
 - **[SPARQL endpoint](sparql.md)**: read-only SPARQL 1.1 evaluated
   directly against the active backend's triples through the
   `TripleSource` contract. SELECT, ASK, CONSTRUCT, and DESCRIBE are
@@ -69,6 +75,10 @@ Entry points to the project's documentation, organized by topic.
 
 ## SynBioHub compatibility
 
+- **[Compatibility and cutover matrix](synbiohub-compatibility-matrix.md)**:
+  the checked complete endpoint inventory, V1-to-V2 ownership, exact versus
+  semantic parity, deprecated aliases, intentional differences, unsupported
+  behavior, privacy-safe usage metrics, and the no-removal decision boundary.
 - **[Running SynBioHub on sbol-db](synbiohub.md)**: the triplestore
   interface classic SynBioHub reaches over HTTP, the behaviors sbol-db
   matches so it stands in for Virtuoso at runtime, and how to run

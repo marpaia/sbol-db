@@ -17,7 +17,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use sbol_db_app::{EditService, FieldValue, MakePublicRequest, MutationService};
-use sbol_db_sparql::GraphScope;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -68,13 +67,17 @@ pub async fn get_object(
     Query(params): Query<GetObjectParams>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, V2Error> {
-    let scope = scope_for(&state, &identity).await?;
-
-    if !object_in_scope(&state, &iri, &scope).await? {
-        // Hidden rather than disclosed: an out-of-scope (or unknown) object is a
-        // 404, not a 403, so its existence does not leak.
-        return Err(not_found(&iri));
-    }
+    let requested_scope = scope_for(&state, &identity).await?;
+    // Resolve visibility across every graph carrying this subject. Imported
+    // objects commonly occur in both a source graph and the public projection;
+    // selecting an arbitrary first graph would incorrectly hide the public
+    // copy. The returned scope also expands authorized logical document graphs
+    // to their physical storage graph for the closure crawl below.
+    let scope = state
+        .app
+        .object_read_scope(&iri, requested_scope)
+        .await?
+        .ok_or_else(|| not_found(&iri))?;
 
     let sbol2 = wants_sbol2(params.version.as_deref())?;
 
@@ -119,6 +122,24 @@ pub async fn get_object(
                 .into_response())
         }
     }
+}
+
+/// `GET /api/v2/objects/{iri}/details` — the normalized, ACL-scoped object-page
+/// resource. The application facade owns the biological relationships and
+/// explicit availability states; this handler only supplies identity scope and
+/// the V2 wire envelope. Unknown and out-of-scope objects are both `404`.
+pub async fn get_object_details(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(iri): Path<String>,
+) -> Result<Response, V2Error> {
+    let scope = scope_for(&state, &identity).await?;
+    let details = state
+        .app
+        .object_details(&iri, scope)
+        .await?
+        .ok_or_else(|| not_found(&iri))?;
+    Ok(Json(details).into_response())
 }
 
 /// A `PATCH /api/v2/objects/{iri}` body: the mutable fields a caller may edit
@@ -319,20 +340,4 @@ fn wants_sbol2(version: Option<&str>) -> Result<bool, V2Error> {
 /// filename when the object record carries none.
 fn last_segment(iri: &str) -> String {
     iri.rsplit(['/', '#']).next().unwrap_or(iri).to_owned()
-}
-
-/// Whether the object at `iri` is inside the caller's scope. A union scope
-/// reads everything; a restricted scope admits the object only when the named
-/// graph holding its triples is in the allowed set. The graph identifier read
-/// here is the same one [`AclService`](sbol_db_app::AclService) puts in the
-/// scope, so the check matches what the SPARQL engine would enforce.
-async fn object_in_scope(state: &AppState, iri: &str, scope: &GraphScope) -> Result<bool, V2Error> {
-    let allowed = match scope {
-        GraphScope::Union => return Ok(true),
-        GraphScope::Only(graphs) => graphs,
-    };
-    let Some(graph) = state.app.acl_service.graph_of_subject(iri).await? else {
-        return Ok(false);
-    };
-    Ok(allowed.iter().any(|g| g == &graph))
 }

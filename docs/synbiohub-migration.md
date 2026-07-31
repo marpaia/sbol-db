@@ -131,6 +131,49 @@ The command prints a JSON report of what it loaded: the named graphs and
 their triple counts, total triples, default-graph triples skipped, users
 imported, blobs copied, config keys set, and the reindex job id.
 
+## Rehearsal, cutover, and rollback
+
+Treat the first run as a rehearsal against a disposable, empty destination.
+The source files are opened read-only, but the destination is populated in
+stages (graphs, accounts, blobs, configuration, then the rebuild job), so a
+failed whole-instance migration is not a transaction spanning the database and
+filesystem. Discard the rehearsal destination and rerun after correcting the
+cause; do not treat a partial report as a cutover candidate.
+
+The maintained synthetic rehearsal runs the same source fixture on SQLite,
+RocksDB, and a configured isolated Postgres database. On every backend it
+asserts:
+
+- exact named-graph separation and triple counts;
+- migrated administrator/member roles and graph ownership;
+- successful login with the original password followed by Argon2 rehash;
+- byte-equal blob retrieval by the classic content hash;
+- durable instance configuration; and
+- enqueueing of the search rebuild.
+
+For a production cutover:
+
+1. rehearse from a recent snapshot and record the migration report plus every
+   verification result below;
+2. announce and begin a classic write freeze;
+3. take fresh, independently restorable RDF, account SQLite, upload, and config
+   snapshots;
+4. migrate into a new empty SBOL DB destination and run the same checks;
+5. keep the classic deployment and snapshots intact while routing a controlled
+   validation cohort, then switch normal traffic; and
+6. retain the frozen source for the agreed rollback window.
+
+Rollback before accepting new SBOL DB writes is a traffic switch back to the
+frozen classic instance. After new writes are accepted, rollback is not a
+simple route change: reconcile or export those writes first. This command does
+not reverse-migrate SBOL DB state into classic storage, and no cutover should
+claim otherwise.
+
+The original `passwordSalt` must be supplied as `SBOL_DB_PASSWORD_SALT` to the
+running server until every migrated credential has either logged in and
+upgraded or been reset. Losing that value does not expose passwords, but it
+prevents verification of credentials that still use the legacy digest.
+
 ## Post-migration verification
 
 Point the report's numbers and a few spot checks at the loaded database. The

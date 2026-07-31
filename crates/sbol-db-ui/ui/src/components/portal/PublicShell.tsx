@@ -2,15 +2,21 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
   ChevronDown,
+  Dna,
+  FilePlus2,
+  FolderKanban,
   LayoutDashboard,
   LogIn,
   LogOut,
+  Menu,
   Monitor,
   Moon,
   Search,
+  Settings,
   Sun,
   UserRound,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { BrandMark } from "@/components/lab/BrandMark";
@@ -31,15 +37,31 @@ import { deploymentName, PRODUCT_NAME, PRODUCT_TAGLINE } from "@/lib/product";
 import { useTheme, type Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-const navItems = [
+type NavItem = {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+  external?: boolean;
+};
+
+const navItems: NavItem[] = [
   { to: "/search", label: "Browse", icon: Search },
+  { to: "/sequence-search", label: "Sequence search", icon: Dna },
   { to: "/api/v2/docs", label: "API", icon: BookOpen, external: true },
+];
+
+const accountNavItems: NavItem[] = [
+  { to: "/contribute", label: "Contribute", icon: FilePlus2 },
+  { to: "/workspace", label: "Workspace", icon: FolderKanban },
 ];
 
 export default function PublicShell() {
   const instance = useInstance();
   const session = useSession();
   const deployment = deploymentName(instance.data?.name);
+  const visibleNavItems = session.data?.authenticated
+    ? [...navItems.slice(0, 2), ...accountNavItems, ...navItems.slice(2)]
+    : navItems;
 
   return (
     <div className="flex min-h-svh flex-col bg-background">
@@ -64,7 +86,7 @@ export default function PublicShell() {
             aria-label="Primary navigation"
             className="hidden items-center gap-1 md:flex"
           >
-            {navItems.map((item) =>
+            {visibleNavItems.map((item) =>
               item.external ? (
                 <a
                   key={item.to}
@@ -97,6 +119,9 @@ export default function PublicShell() {
           </nav>
 
           <div className="ml-auto flex items-center gap-1.5">
+            <MobileNavigation
+              authenticated={Boolean(session.data?.authenticated)}
+            />
             <ThemeMenu />
             {session.data?.authenticated && session.data.user ? (
               <AccountMenu
@@ -158,6 +183,47 @@ export default function PublicShell() {
   );
 }
 
+function MobileNavigation({ authenticated }: { authenticated: boolean }) {
+  const visibleNavItems = authenticated
+    ? [...navItems.slice(0, 2), ...accountNavItems, ...navItems.slice(2)]
+    : navItems;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="md:hidden"
+          aria-label="Open navigation"
+        >
+          <Menu />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56 md:hidden">
+        <DropdownMenuLabel>Explore SBOL DB</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {visibleNavItems.map((item) =>
+          item.external ? (
+            <DropdownMenuItem key={item.to} asChild>
+              <a href={item.to} target="_blank" rel="noopener noreferrer">
+                <item.icon />
+                {item.label}
+              </a>
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem key={item.to} asChild>
+              <Link to={item.to}>
+                <item.icon />
+                {item.label}
+              </Link>
+            </DropdownMenuItem>
+          )
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function AccountMenu({ name, isAdmin }: { name: string; isAdmin: boolean }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -197,6 +263,12 @@ function AccountMenu({ name, isAdmin }: { name: string; isAdmin: boolean }) {
             </Link>
           </DropdownMenuItem>
         )}
+        <DropdownMenuItem asChild>
+          <Link to="/account">
+            <Settings />
+            Account settings
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuItem
           disabled={logout.isPending}
           onSelect={() => logout.mutate()}

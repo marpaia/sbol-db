@@ -71,10 +71,22 @@ pub fn reference_adjacency(triples: &[Triple]) -> HashMap<String, Vec<String>> {
 /// sbh:topLevel ?x` yields a self-edge exactly as the query does.
 pub fn top_level_link_graph(triples: &[Triple]) -> Vec<(String, String)> {
     let top_levels = top_level_iris(triples);
+    link_graph_for_top_levels(triples, &top_levels)
+}
+
+/// Build the same one/two-hop link graph for an explicit top-level set.
+/// Native SBOL DB imports derive their top levels into the object view without
+/// adding SynBioHub's compatibility self-marker, while verbatim compatibility
+/// graphs retain that marker. Rebuild callers union both sources and pass the
+/// authoritative result here.
+pub fn link_graph_for_top_levels(
+    triples: &[Triple],
+    top_levels: &HashSet<String>,
+) -> Vec<(String, String)> {
     let out_edges = reference_adjacency(triples);
 
     let mut edges: HashSet<(String, String)> = HashSet::new();
-    for parent in &top_levels {
+    for parent in top_levels {
         let Some(direct) = out_edges.get(parent) else {
             continue;
         };

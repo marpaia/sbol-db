@@ -102,7 +102,6 @@ export default defineConfig({
             "@tanstack/react-table",
             "@tanstack/react-virtual",
           ],
-          monaco: ["monaco-editor", "@monaco-editor/react"],
         },
       },
     },

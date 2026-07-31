@@ -105,15 +105,29 @@ SBOL2 best-practice, SBOL2 incomplete-compliant, SBOL3, and RDF directories of
 a local [`SBOLTestSuite`](https://github.com/SynBioDex/SBOLTestSuite) checkout.
 At the pinned revision this is 447 documents. The gate verifies the exact
 upstream commit, tracked-worktree cleanliness, each directory's expected
-import/parse-failure count, the total stored document count, and the exact
-8,805-object default-vector rebuild. It deliberately imports sequentially: SQLite cannot
-reliably accept the TestSuite's many concurrent write transactions.
+import/parse-failure count, the total stored document count, and exact
+8,805-object public discovery coverage. It deliberately imports sequentially:
+SQLite cannot reliably accept the TestSuite's many concurrent write
+transactions.
 
 It then imports all 31 canonical SBOL3 Turtle documents into the public graph
 (one serialization per example, avoiding duplicate encodings), starts the
-final image with no search configuration, waits for the full-corpus BGE
-rebuild, and requires a known top-level object to rank first for each
-independent semantic query.
+final image with an explicit ranked-text-only search topology, and proves that
+normalized V2 discovery reaches the exact native object inventory without
+duplicates or paging omissions. Type and role facet totals are checked against
+filtered discovery totals.
+
+BGE is deliberately opt-in for this long-running integration gate while the
+application roadmap is under active development. This changes neither the
+server's production default nor the standalone model release gate. Enable the
+full 8,805-object vector rebuild and the four semantic ranking checks with:
+
+```sh
+make container/test-sbol-test-suite \
+  IMAGE=sbol-db:bge-e2e-fresh \
+  SBOL_TEST_SUITE_ROOT=/absolute/path/to/SBOLTestSuite \
+  SBOL_DB_TEST_SUITE_BGE_ENABLED=true
+```
 
 The checked-in [integration manifest](../crates/sbol-db-search-eval/fixtures/sbol-test-suite-integration-v1.json)
 contains source provenance, expected coverage, and query results—not a copied
@@ -128,7 +142,9 @@ make container/test-sbol-test-suite \
   SBOL_TEST_SUITE_ROOT=/absolute/path/to/SBOLTestSuite
 ```
 
-It is a real-document import, projection, authorization, startup-rebuild, and
-ranking integration test. The all-document sweep is a compatibility and scale
-gate; the four top-ranked queries are still smoke checks, not a substitute for
-a larger blinded human-relevance evaluation.
+The default run is a real-document import, projection, authorization,
+text-index rebuild, exhaustive paging, and facet-consistency integration test.
+The opt-in BGE run additionally exercises vector startup rebuild and ranking.
+The all-document sweep is a compatibility and scale gate; the four top-ranked
+queries are still smoke checks, not a substitute for a larger blinded
+human-relevance evaluation.

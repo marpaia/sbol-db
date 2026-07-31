@@ -82,6 +82,18 @@ impl UserStore for InMemoryUserStore {
         Ok(self.users.lock().unwrap().get(&id).cloned())
     }
 
+    async fn list_users(&self) -> Result<Vec<User>, DomainError> {
+        let mut users = self
+            .users
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        users.sort_by(|left, right| left.username.cmp(&right.username));
+        Ok(users)
+    }
+
     async fn update_user(&self, user: &User) -> Result<User, DomainError> {
         let mut users = self.users.lock().unwrap();
         let Some(existing) = users.get_mut(&user.id) else {

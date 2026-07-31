@@ -461,3 +461,115 @@ async fn compatibility_browser_login_cookie_is_understood_and_revoked_by_v2() {
     .await;
     assert_eq!(json_body(response).await["authenticated"], false);
 }
+
+#[tokio::test]
+async fn account_profile_and_password_commands_are_self_scoped_and_secret_free() {
+    let (app, services, _dir) = app_with(ServerConfig::default()).await;
+    let alice = register(&services, "alice", "alice@example.org", false).await;
+    let token = services.auth.issue_token(alice.id).await.unwrap();
+    let bearer = format!("Bearer {token}");
+
+    for (method, path) in [
+        ("GET", "/api/v2/account"),
+        ("PATCH", "/api/v2/account"),
+        ("POST", "/api/v2/account/password"),
+        ("GET", "/api/v2/account/shared"),
+    ] {
+        let response = send(
+            &app,
+            method,
+            path,
+            &[("content-type", "application/json")],
+            Body::from("{}"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
+    }
+
+    let response = send(
+        &app,
+        "GET",
+        "/api/v2/account",
+        &[("authorization", &bearer)],
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+    let profile = json_body(response).await;
+    assert_eq!(profile["username"], "alice");
+    assert_eq!(profile["name"], "alice name");
+    let encoded = profile.to_string();
+    assert!(!encoded.contains("password"));
+    assert!(!encoded.contains("token"));
+
+    let response = send(
+        &app,
+        "PATCH",
+        "/api/v2/account",
+        &[
+            ("authorization", &bearer),
+            ("content-type", "application/json"),
+        ],
+        Body::from(json!({"name": "Alice Researcher", "affiliation": "CU Boulder"}).to_string()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let profile = json_body(response).await;
+    assert_eq!(profile["name"], "Alice Researcher");
+    assert_eq!(profile["affiliation"], "CU Boulder");
+    assert_eq!(profile["is_admin"], false);
+
+    let response = send(
+        &app,
+        "PATCH",
+        "/api/v2/account",
+        &[
+            ("authorization", &bearer),
+            ("content-type", "application/json"),
+        ],
+        Body::from(json!({"is_admin": true}).to_string()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = send(
+        &app,
+        "POST",
+        "/api/v2/account/password",
+        &[
+            ("authorization", &bearer),
+            ("content-type", "application/json"),
+        ],
+        Body::from(json!({"current_password": "wrong", "new_password": "new-secret"}).to_string()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = send(
+        &app,
+        "POST",
+        "/api/v2/account/password",
+        &[
+            ("authorization", &bearer),
+            ("content-type", "application/json"),
+        ],
+        Body::from(json!({"current_password": "s3cret", "new_password": "new-secret"}).to_string()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(services
+        .auth
+        .authenticate("alice", "s3cret", &ServerConfig::default().password_salt)
+        .await
+        .is_err());
+    assert!(services
+        .auth
+        .authenticate(
+            "alice",
+            "new-secret",
+            &ServerConfig::default().password_salt
+        )
+        .await
+        .is_ok());
+}

@@ -609,6 +609,17 @@ pub async fn user_crud(app: &AppServices) {
         "username resolves to the created id"
     );
 
+    // The administrator control plane enumerates accounts through this
+    // bounded store operation instead of reaching into a concrete backend.
+    // Certify that every backend returns the newly-created account exactly
+    // once before exercising update and deletion below.
+    let listed = users.list_users().await.expect("list_users");
+    let matches = listed
+        .iter()
+        .filter(|user| user.id == created.id && user.username == "crud_user")
+        .count();
+    assert_eq!(matches, 1, "list_users returns the created account once");
+
     // Fetch by id round-trips the stored fields.
     let by_id = users
         .get_by_id(created.id)

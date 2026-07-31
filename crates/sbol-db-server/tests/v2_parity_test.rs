@@ -17,9 +17,11 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, Response, StatusCode};
 use sbol_db_app::AppServices;
 use sbol_db_backend::Backend;
+use sbol_db_core::SerializationFormat;
 use sbol_db_search::ranked_text::{IndexedPart, RankedTextIndex};
 use sbol_db_server::{router, AppState, Metrics, SchemaCache, ServerConfig};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
+use sbol_db_storage::GraphWriteMode;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use tempfile::TempDir;
@@ -28,6 +30,27 @@ use tower::ServiceExt;
 const BODY_LIMIT: usize = 4 * 1024 * 1024;
 const BOUNDARY: &str = "sboldbparityboundary";
 const PUBLIC_GRAPH: &str = "http://synbiohub.org/public";
+
+/// The authoritative RDF half of the ranked-search parity fixture. Native V2
+/// discovery deliberately intersects ranked hits with visible top-level RDF so
+/// stale index rows cannot surface as registry objects; keeping both halves in
+/// this fixture mirrors the invariant maintained by production index rebuilds.
+const SEARCH_CORPUS: &str = r#"
+<http://synbiohub.org/public/promoterA/1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://sbols.org/v2#ComponentDefinition> .
+<http://synbiohub.org/public/promoterA/1> <http://wiki.synbiohub.org/wiki/Terms/synbiohub#topLevel> <http://synbiohub.org/public/promoterA/1> .
+<http://synbiohub.org/public/promoterA/1> <http://sbols.org/v2#displayId> "promoterA" .
+<http://synbiohub.org/public/promoterA/1> <http://purl.org/dc/terms/title> "GFP promoter" .
+
+<http://synbiohub.org/public/promoterB/1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://sbols.org/v2#ComponentDefinition> .
+<http://synbiohub.org/public/promoterB/1> <http://wiki.synbiohub.org/wiki/Terms/synbiohub#topLevel> <http://synbiohub.org/public/promoterB/1> .
+<http://synbiohub.org/public/promoterB/1> <http://sbols.org/v2#displayId> "promoterB" .
+<http://synbiohub.org/public/promoterB/1> <http://purl.org/dc/terms/title> "RFP promoter" .
+
+<http://synbiohub.org/public/terminatorC/1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://sbols.org/v2#ComponentDefinition> .
+<http://synbiohub.org/public/terminatorC/1> <http://wiki.synbiohub.org/wiki/Terms/synbiohub#topLevel> <http://synbiohub.org/public/terminatorC/1> .
+<http://synbiohub.org/public/terminatorC/1> <http://sbols.org/v2#displayId> "terminatorC" .
+<http://synbiohub.org/public/terminatorC/1> <http://purl.org/dc/terms/title> "a terminator" .
+"#;
 
 /// A compliant SBOL2 document (Turtle): a titled ComponentDefinition plus a
 /// standalone Sequence, both versioned `1`.
@@ -67,6 +90,16 @@ async fn app() -> (axum::Router, Arc<RankedTextIndex>, TempDir) {
         .run_migrations()
         .await
         .expect("run migrations");
+    backend
+        .store
+        .graph_store_write(
+            PUBLIC_GRAPH,
+            SEARCH_CORPUS,
+            SerializationFormat::NTriples,
+            GraphWriteMode::Merge,
+        )
+        .await
+        .expect("seed authoritative search corpus");
 
     let sparql = Arc::new(SparqlEngine::new(backend.triple_source.clone()));
     let sparql_update = Arc::new(SparqlUpdateEngine::new(
@@ -413,8 +446,8 @@ fn v2_uris(body: &str) -> BTreeSet<String> {
 async fn same_query_returns_the_same_object_set_on_both_surfaces() {
     let (app, index, _dir) = app().await;
 
-    // Seed one public corpus into the shared ranked index both surfaces read.
-    // Two objects match the term, one does not.
+    // Complete the public corpus seeded by `app` with its shared ranked-index
+    // view. Two objects match the term, one does not.
     let cd = "http://sbols.org/v2#ComponentDefinition";
     index
         .rebuild(vec![

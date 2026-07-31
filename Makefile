@@ -28,7 +28,9 @@ container/test-faiss:
 
 container/test-sbol-test-suite:
 	@test -n "$(SBOL_TEST_SUITE_ROOT)" || (echo "set SBOL_TEST_SUITE_ROOT to a pinned SBOLTestSuite checkout" >&2; exit 2)
-	SBOL_DB_SBOL_TEST_SUITE_ROOT="$(SBOL_TEST_SUITE_ROOT)" docker/test-sbol-test-suite-container.sh $(IMAGE)
+	SBOL_DB_SBOL_TEST_SUITE_ROOT="$(SBOL_TEST_SUITE_ROOT)" \
+	SBOL_DB_TEST_SUITE_BGE_ENABLED="$(SBOL_DB_TEST_SUITE_BGE_ENABLED)" \
+		docker/test-sbol-test-suite-container.sh $(IMAGE)
 
 model/bge-small:
 	bash docker/fetch-builtin-bge-small-model.sh $(BUILTIN_BGE_SMALL_DIR)

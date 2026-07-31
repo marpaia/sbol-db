@@ -5,6 +5,10 @@ into the user-facing SBOL DB application. It describes the runtime boundary,
 SynBioHub compatibility policy, frontend architecture, quality gates, and the
 order in which the remaining compatible workflows should move.
 
+The measurable definition of completion, autonomous delivery boundary, and
+required evidence for every increment live in the
+[application acceptance contract](application-acceptance.md).
+
 The target is one product with two deliberately different surfaces:
 
 - a public and account-aware registry at `/`; and
@@ -67,8 +71,9 @@ handler. `/assets/*` is exact-match only, so a missing JavaScript file returns
 
 | Route family | Browser HTML owner | Machine owner | Notes |
 | --- | --- | --- | --- |
-| `/`, `/search/*` | React portal | existing handler when HTML is not preferred | Search also accepts classic path-style queries and canonical `?q=` URLs. |
+| `/`, `/search/*`, `/sequence-search` | React portal | existing handler when HTML is not preferred | Search accepts canonical query-string state; classic path grammar is translated visibly and sequence grammar moves to its dedicated workflow. |
 | `/login`, `/register`, `/setup` | React portal | V1 handler for mutations and non-HTML requests | V2 session is preferred by the new UI; V1 remains compatible. |
+| `/account`, `/workspace/*`, `/contribute` | React portal | none | Native account, collaboration, review, and validate-first contribution workflows. |
 | `/objects/view/:iri` | React portal | none | URI is encoded as one route parameter. |
 | `/public/*`, `/user/*` | React canonical redirect/object page | V1 identity and representation handlers | Reserved suffixes such as `/sbol`, `/full`, `/uses`, and `/download` always remain APIs. |
 | `/api/v2/*` | V2 docs only | V2 adapter | Never intercepted by the portal dispatcher. |
@@ -115,16 +120,17 @@ remain available so the portal can bootstrap and offer sign-in.
 
 1. React redirects anonymous users to `/login?next=...` and gives signed-in
    non-admin users a clear permission page.
-2. `/lab/api/*` resolves the same bearer/cookie identity and returns 401 for an
-   anonymous caller or 403 for a non-admin caller.
+2. `/api/v2/admin/*` and the retained `/lab/api/*` workbench surface resolve
+   the same bearer/cookie identity and return 401 for an anonymous caller or
+   403 for a non-admin caller.
 
-The native root management endpoints predate this portal and retain their
-current contracts for now. Before the admin workspace is considered a complete
-control-plane boundary, every mutation it uses (graph import/removal, ontology
-loading, job enqueue/cancel, and future configuration operations) must either
-move behind an admin-scoped versioned endpoint or adopt documented authorization
-with a compatibility transition. This decision must be made endpoint by
-endpoint; it must not be hidden inside the HTML routing cutover.
+The native admin control plane now lives entirely under `/api/v2/admin/*` and
+uses one `require_admin` policy. Instance configuration, accounts,
+integrations, jobs, ontology loading, search maintenance, backup/restore, and
+the admin audit stream all use that boundary. The older root management and V1
+compatibility routes retain their existing contracts for compatible clients;
+they are classified migration inputs, not authority for the native UI. Changing
+or removing one remains an endpoint-by-endpoint compatibility decision.
 
 ### Compatibility discipline
 
@@ -142,6 +148,10 @@ For every migrated workflow, maintain an endpoint matrix with:
 - status, headers, and representation behavior;
 - the owning frontend route; and
 - conformance evidence against classic SynBioHub where parity is intended.
+
+The implemented search request, public URL state, response shape, and classic
+path translation are specified in the
+[registry discovery contract](discovery-contract.md).
 
 ## Frontend architecture
 
@@ -169,8 +179,8 @@ Frontend code is organized in four layers:
 | Layer | Responsibility |
 | --- | --- |
 | `components/ui` | ShadCN/Radix primitives and project-wide variants. No domain fetching. |
-| `components/portal` and `components/lab` | Reusable composed presentation for one surface. |
-| `features/portal` and hooks | Typed HTTP clients, query keys, mutations, formatting, and domain-oriented client state. |
+| `components/portal`, `components/admin`, and `components/lab` | Reusable composed presentation for one surface. |
+| `features/portal`, `features/admin`, and hooks | Typed HTTP clients, query keys, mutations, formatting, and domain-oriented client state. |
 | `routes` | Page composition, URL state, and workflow orchestration. |
 
 TanStack Query owns server state. URL parameters own shareable search/filter and
@@ -244,6 +254,15 @@ Exit gate: canonical V1 identities open the modern page, every advertised
 download is byte/semantic checked, and unsupported biology is visible rather
 than silently dropped.
 
+The implemented object-page boundary is
+`GET /api/v2/objects/{iri}/details`. `sbol-db-app` selects the authorized
+logical/physical graph pair and assembles identity, visibility, provenance,
+sequence, relationship, attachment, and lossless RDF-property sections. The
+frontend consumes those explicit states and never reconstructs biological or
+ACL semantics from a storage record. Download routes remain separate machine
+representations; HTTP tests exercise every format and backend conformance tests
+round-trip the sequence-bearing formats.
+
 ### Slice 3: contribution and collection workflows
 
 - Introduce account-scoped workspace and collection routes.
@@ -257,7 +276,17 @@ than silently dropped.
 Exit gate: create, inspect, revise, publish, and download form one tested
 workflow with provenance and ACL assertions at every transition.
 
-### Slice 4: accounts and collaboration
+The implemented member workflow is `/contribute` → `/workspace` → the shared
+object page. `POST /api/v2/collections/validate` and `POST
+/api/v2/collections` accept the same contract, while only the second writes.
+SBOL 2/3 RDF stays in its asserted standard; GenBank and FASTA conversion to
+SBOL 3 is explicit in the preview. Collection metadata, membership,
+publication, and removal call owner-gated application commands through V2.
+The HTTP lifecycle test proves write-free cancellation, non-disclosing private
+reads, forbidden non-owner edits, provenance through revision/publication, and
+an anonymously parseable public download.
+
+### Slice 4: accounts and collaboration — implemented
 
 - Profile and affiliation management, password changes/resets, account graph,
   ownership transfer, shared collections, and curator review queues.
@@ -269,7 +298,19 @@ workflow with provenance and ACL assertions at every transition.
 Exit gate: anonymous, member, curator, and administrator journey tests cover
 both positive and forbidden cases.
 
-### Slice 5: admin control-plane consolidation
+The native account surface is `/account`, backed by no-store V2 profile and
+current-password-gated password commands. Reset remains capability-disabled
+until mail delivery exists. `/workspace` separates owned, shared, and review
+queues. Read-only shares use `sbh:canView` without granting ownership; transfer
+is a distinct atomic command and classic co-owner behavior remains confined to
+the V1 adapter. Review requests atomically share the object with an active
+curator and append an immutable RDF audit event. Decisions append rather than
+rewrite history. Object activity exposes the same event stream only to an
+owner or administrator. HTTP tests cover anonymous, unrelated member, owner,
+recipient, revoked recipient, curator, and administrator powers, and OpenAPI
+response tests exercise the account, sharing, review, and activity schemas.
+
+### Slice 5: admin control-plane consolidation — implemented
 
 - Move instance/theme policy editing, users, remotes, plugins, search index,
   jobs, ontology loading, backup/restore, and maintenance into coherent admin
@@ -284,7 +325,18 @@ Exit gate: an unauthenticated or member account cannot call any control-plane
 operation directly, and all administrator actions have audit and failure-path
 evidence.
 
-### Slice 6: compatibility cutover and retirement
+The implementation is a native `/api/v2/admin/*` boundary with one
+administrator middleware and a typed frontend client. It separates read-only
+status from mutations; recursively redacts remote secrets; protects account
+administration against self-deletion, self-demotion, and removal of the final
+administrator; and requires exact target-bearing confirmations for destructive
+actions. Backup archives are canonical, checksum-verified registry-graph
+snapshots and restore atomically before search maintenance is queued. The
+append-only RDF audit graph records attempted, successful, and failed admin
+actions. Backend-neutral user/config/storage conformance and HTTP tests cover
+the policy, redaction, destructive guards, backup integrity, and audit results.
+
+### Slice 6: compatibility cutover and retirement — implemented
 
 - Run the maintained V1 conformance suite and browser/API collision matrix on
   SQLite, RocksDB, and Postgres.
@@ -294,6 +346,19 @@ evidence.
   bookmark consumers.
 - Remove a compatibility path only after measured usage, documented notice,
   and an explicit release decision.
+
+The maintained compatibility boundary now has a checked inventory: 109 primary
+OpenAPI paths, 61 supplemental aliases, and two Virtuoso protocol paths. Fixed
+family telemetry measures compatibility and legacy `/lab` bookmark use without
+recording raw paths, IRIs, searches, users, headers, or bodies. The V1 subject
+suite, browser/API collision matrix, and synthetic classic-instance migration
+rehearsal run across SQLite, RocksDB, and Postgres. A clean live differential
+against classic SynBioHub covers the Elasticsearch-independent read surface on
+all three subjects. Legacy V1 SBOL downloads default to SBOL 2 as classic
+clients expect, while explicit `?version=sbol3` and native V2 downloads retain
+the modern SBOL 3 path. The compatibility matrix classifies every supported,
+deprecated, intentionally different, and unsupported behavior. No route is
+removed and no retirement date is set by this slice.
 
 ## Verification matrix
 

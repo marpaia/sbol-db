@@ -23,11 +23,15 @@ async fn app_with(config: ServerConfig) -> (axum::Router, TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("portal.db");
     let url = format!("sqlite://{}", path.display());
-    let backend = Backend::open(&url).await.expect("open sqlite backend");
+    (router_with_url(config, &url).await, dir)
+}
+
+async fn router_with_url(config: ServerConfig, url: &str) -> axum::Router {
+    let backend = Backend::open(url).await.expect("open test backend");
     backend
         .migrator
         .as_ref()
-        .expect("sqlite backend has a migrator")
+        .expect("test backend has a migrator")
         .run_migrations()
         .await
         .expect("run migrations");
@@ -52,7 +56,7 @@ async fn app_with(config: ServerConfig) -> (axum::Router, TempDir) {
         lsm_stats: backend.lsm_stats.clone(),
         schema_cache: Arc::new(SchemaCache::new()),
     };
-    (router(state, config), dir)
+    router(state, config)
 }
 
 async fn request(
@@ -98,6 +102,13 @@ fn assert_spa(response: &axum::response::Response, path: &str) {
         vary.split(',').any(|value| value.trim() == "Accept"),
         "portal response must vary on Accept for {path}: {vary}"
     );
+}
+
+async fn body_string(response: axum::response::Response) -> String {
+    let bytes = to_bytes(response.into_body(), BODY_LIMIT)
+        .await
+        .expect("response body");
+    String::from_utf8(bytes.to_vec()).expect("UTF-8 response")
 }
 
 #[tokio::test]
@@ -153,7 +164,12 @@ async fn html_navigation_intercepts_new_and_colliding_page_routes() {
         "/profile",
         "/search",
         "/search/objectType=ComponentDefinition",
+        "/sequence-search?q=GAATTC&mode=exact",
+        "/advanced-search",
+        "/contribute",
+        "/account",
         "/workspace/shared",
+        "/workspace/reviews",
         "/admin/theme",
         "/public/example/missing/1",
     ] {
@@ -245,4 +261,134 @@ async fn portal_head_requests_have_headers_without_a_body() {
         .await
         .expect("head body");
     assert!(body.is_empty(), "HEAD portal response must have no body");
+}
+
+#[tokio::test]
+async fn compatibility_usage_metrics_are_bounded_and_payload_free() {
+    let (app, _dir) = app_with(ServerConfig::default()).await;
+
+    let private_query = "phase6-private-search-value";
+    let response = request(
+        &app,
+        Method::GET,
+        &format!("/search/{private_query}"),
+        Some("application/json"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let private_bookmark = "phase6-private-admin-bookmark";
+    let response = request(
+        &app,
+        Method::GET,
+        &format!("/lab/{private_bookmark}"),
+        Some("text/html"),
+    )
+    .await;
+    assert!(is_html(&response));
+
+    let metrics = body_string(request(&app, Method::GET, "/metrics", None).await).await;
+    assert!(
+        metrics.contains("sbol_db_compatibility_requests_total"),
+        "the V1 usage counter is exported"
+    );
+    assert!(
+        metrics.contains("surface=\"synbiohub_v1\"") && metrics.contains("family=\"discovery\""),
+        "the V1 request is classified only by its bounded surface and family"
+    );
+    assert!(
+        metrics.contains("sbol_db_legacy_ui_requests_total")
+            && metrics.contains("bookmark=\"deep_link\""),
+        "the legacy bookmark counter is exported"
+    );
+    assert!(
+        !metrics.contains(private_query),
+        "search text is not exported"
+    );
+    assert!(
+        !metrics.contains(private_bookmark),
+        "legacy deep-link text is not exported"
+    );
+}
+
+#[tokio::test]
+async fn browser_api_collision_matrix_passes_on_every_configured_backend() {
+    let storage = tempfile::tempdir().expect("matrix tempdir");
+    let mut backends = vec![
+        (
+            "sqlite".to_owned(),
+            format!("sqlite://{}", storage.path().join("matrix.db").display()),
+        ),
+        (
+            "rocksdb".to_owned(),
+            format!(
+                "rocksdb://{}",
+                storage.path().join("matrix.rocksdb").display()
+            ),
+        ),
+    ];
+    if let Ok(url) = std::env::var("SBOL_DB_PORTAL_TEST_POSTGRES_URL") {
+        backends.push(("postgres".to_owned(), url));
+    }
+
+    for (backend, url) in backends {
+        let app = router_with_url(ServerConfig::default(), &url).await;
+        assert_collision_matrix(&app, &backend).await;
+    }
+}
+
+async fn assert_collision_matrix(app: &axum::Router, backend: &str) {
+    for path in ["/search/collision", "/profile", "/public/example/missing/1"] {
+        let response = request(app, Method::GET, path, Some("text/html")).await;
+        assert_spa(&response, &format!("{backend}:{path}"));
+    }
+
+    let response = request(
+        app,
+        Method::GET,
+        "/search/collision",
+        Some("application/json"),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{backend}: machine search"
+    );
+    assert!(
+        !is_html(&response),
+        "{backend}: machine search is not a page"
+    );
+
+    for path in [
+        "/public/example/missing/sbol",
+        "/user/alice/example/missing/uses",
+    ] {
+        let response = request(app, Method::GET, path, Some("text/html")).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{backend}:{path}");
+        assert!(
+            !is_html(&response),
+            "{backend}:{path} remains a machine route"
+        );
+    }
+
+    let response = request(app, Method::POST, "/login", Some("text/html")).await;
+    assert_ne!(
+        response.status(),
+        StatusCode::OK,
+        "{backend}: mutation bypass"
+    );
+    assert!(
+        !is_html(&response),
+        "{backend}: mutation does not render the SPA"
+    );
+
+    for path in ["/assets/private-missing.js", "/extension/private-route"] {
+        let response = request(app, Method::GET, path, Some("text/html")).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{backend}:{path}");
+        assert!(
+            !is_html(&response),
+            "{backend}:{path} is not caught by the SPA"
+        );
+    }
 }

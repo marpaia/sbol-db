@@ -1,16 +1,16 @@
 """Self-consistency smoke: the sbol-db subject side, no classic stack.
 
-This always-run smoke boots the compiled `sbol-db` compat server on each local
-backend (SQLite and RocksDB), seeds the shared corpus, and drives the
+This always-run smoke boots the compiled `sbol-db` compatibility server on
+every configured backend (SQLite and RocksDB by default; Postgres in the phase
+gate), seeds the shared corpus, and drives the
 Elasticsearch-independent read / metadata / SPARQL / download subset, asserting
 each endpoint answers coherently. It proves the subject half of the differential
 harness works before any reference is in the loop.
 
-The final test runs the *driver itself* across two independent backends (SQLite
-as the stand-in reference, RocksDB as the subject) so the fan-out, comparator
-selection, and semantic diffs are exercised end to end without the classic
-stack: two honest backends holding the identical corpus must compare equal on
-every subset case.
+The final test runs the *driver itself* across all configured backends so the
+fan-out, comparator selection, and semantic diffs are exercised end to end
+without the classic stack: honest backends holding the identical corpus must
+compare equal on every subset case.
 
 The suite skips (never fails) only when the `sbol-db` binary cannot be located
 or built in this environment; the assertions themselves never depend on the
@@ -19,6 +19,8 @@ reference stack.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from rdflib import Graph
 
@@ -26,7 +28,21 @@ import cases as case_defs
 from conformance import Target, run_cases
 from subject import LocalSubject, SubjectError, find_binary
 
-BACKENDS = ["sqlite", "rocksdb"]
+SUPPORTED_BACKENDS = {"sqlite", "rocksdb", "postgres"}
+
+
+def configured_backends() -> list[str]:
+    configured = os.environ.get("SBOL_DB_TEST_BACKENDS", "sqlite,rocksdb")
+    backends = [item.strip() for item in configured.split(",") if item.strip()]
+    unknown = set(backends) - SUPPORTED_BACKENDS
+    if unknown:
+        raise RuntimeError(f"unsupported SBOL_DB_TEST_BACKENDS values: {sorted(unknown)}")
+    if not backends:
+        raise RuntimeError("SBOL_DB_TEST_BACKENDS selected no backends")
+    return backends
+
+
+BACKENDS = configured_backends()
 
 
 @pytest.fixture(scope="module")
@@ -44,7 +60,7 @@ def seeded(request, binary):
         subject = LocalSubject(request.param, binary=binary)
         subject.__enter__()
     except SubjectError as err:
-        pytest.skip(f"could not start {request.param} subject: {err}")
+        pytest.fail(f"could not start {request.param} subject: {err}")
     try:
         subject.seed(case_defs.load_corpus())
         yield subject
@@ -71,36 +87,35 @@ def test_object_metadata_coherent(seeded):
     """Object metadata returns the seeded displayId, version, and title."""
     response = seeded.get(f"{case_defs.OBJECT_PATH}/metadata", headers={"Accept": "application/json"})
     assert response.status_code == 200
-    binding = _rows(response.json())[0]
-    assert binding["displayId"]["value"] == "pSmoke"
-    assert binding["version"]["value"] == "1"
-    assert binding["name"]["value"] == "pSmoke promoter"
-    assert binding["type"]["value"] == "http://sbols.org/v2#ComponentDefinition"
+    metadata = response.json()[0]
+    assert metadata["displayId"] == "pSmoke"
+    assert metadata["version"] == "1"
+    assert metadata["name"] == "pSmoke promoter"
+    assert metadata["type"] == "http://sbols.org/v2#ComponentDefinition"
 
 
 def test_type_counts(seeded):
-    """The SPARQL-backed type counts reflect the one CD and one Collection."""
-    cd = seeded.get("/ComponentDefinition/count", headers={"Accept": "application/json"})
+    """Classic's plain-integer counts reflect the one CD and one Collection."""
+    cd = seeded.get("/ComponentDefinition/count", headers={"Accept": "text/plain"})
     assert cd.status_code == 200
-    assert int(_one_value(cd.json(), "count")) == 1
+    assert int(cd.text) == 1
 
-    coll = seeded.get("/Collection/count", headers={"Accept": "application/json"})
+    coll = seeded.get("/Collection/count", headers={"Accept": "text/plain"})
     assert coll.status_code == 200
-    assert int(_one_value(coll.json(), "count")) == 1
+    assert int(coll.text) == 1
 
 
 def test_root_collections(seeded):
     """The lone Collection is a root (it is nobody's member)."""
     response = seeded.get("/rootCollections", headers={"Accept": "application/json"})
     assert response.status_code == 200
-    collections = {row["Collection"]["value"] for row in _rows(response.json())}
+    collections = {row["uri"] for row in response.json()}
     assert "http://synbiohub.org/public/smoke/smoke_collection/1" in collections
 
 
 def test_sbol_download_is_valid_rdf(seeded):
-    """The `/sbol` closure is well-formed RDF/XML naming the object and its
-    Sequence, so the semantic SBOL comparator has something to parse."""
-    response = seeded.get(f"{case_defs.OBJECT_PATH}/sbol")
+    """The explicit SBOL 2 closure preserves the seeded object identities."""
+    response = seeded.get(f"{case_defs.OBJECT_PATH}/sbol", params={"version": "sbol2"})
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/rdf+xml")
     graph = Graph().parse(data=response.text, format="xml")
@@ -132,34 +147,42 @@ def test_subset_cases_all_coherent(seeded):
 
 
 def test_driver_cross_backend_consistency(binary):
-    """Exercise the full driver end to end: SQLite stands in as the reference,
-    RocksDB is the subject, both hold the identical corpus, and every subset
-    case must compare equal. A failure here is a harness bug, not a data bug."""
-    try:
-        reference_subject = LocalSubject("sqlite", binary=binary)
-        subject_subject = LocalSubject("rocksdb", binary=binary)
-        reference_subject.__enter__()
-    except SubjectError as err:
-        pytest.skip(f"could not start subjects: {err}")
+    """Exercise the full driver end to end across every configured backend.
+
+    The first backend stands in as the reference; every remaining backend holds
+    the identical corpus and must compare equal on every subset case. A failure
+    here is either a backend divergence or a harness bug, never a skipped gate.
+    """
+    if len(BACKENDS) < 2:
+        pytest.fail("the cross-backend driver requires at least two configured backends")
+
+    subjects: list[LocalSubject] = []
     try:
         try:
-            subject_subject.__enter__()
+            for backend in BACKENDS:
+                subject = LocalSubject(backend, binary=binary)
+                subject.__enter__()
+                subjects.append(subject)
         except SubjectError as err:
-            pytest.skip(f"could not start rocksdb subject: {err}")
-        try:
-            corpus = case_defs.load_corpus()
-            reference_subject.seed(corpus)
-            subject_subject.seed(corpus)
+            pytest.fail(f"could not start configured subjects: {err}")
 
-            reference = Target("reference-sqlite", reference_subject.base, is_reference=True)
-            subject = Target("subject-rocksdb", subject_subject.base)
-            results = run_cases(case_defs.read_subset_cases(), reference, [subject])
+        corpus = case_defs.load_corpus()
+        for subject in subjects:
+            subject.seed(corpus)
 
-            assert results, "no cases ran"
-            for result in results:
-                for target_result in result.results:
-                    assert target_result.equal, f"{result.case} diverged across backends: {target_result.detail}"
-        finally:
-            subject_subject.__exit__(None, None, None)
+        reference_subject = subjects[0]
+        reference = Target(
+            f"reference-{reference_subject.backend}", reference_subject.base, is_reference=True
+        )
+        targets = [Target(f"subject-{subject.backend}", subject.base) for subject in subjects[1:]]
+        results = run_cases(case_defs.read_subset_cases(), reference, targets)
+
+        assert results, "no cases ran"
+        for result in results:
+            for target_result in result.results:
+                assert target_result.equal, (
+                    f"{result.case} diverged across backends: {target_result.detail}"
+                )
     finally:
-        reference_subject.__exit__(None, None, None)
+        for subject in reversed(subjects):
+            subject.__exit__(None, None, None)

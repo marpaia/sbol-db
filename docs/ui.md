@@ -1,8 +1,24 @@
 # SBOL DB application and admin UI
 
 SBOL DB ships an embedded React application at `/`, alongside the HTTP APIs.
-The public shell supports instance setup, account sessions, registry search,
-and object discovery. The original **data lab bench** now lives inside its
+The public shell supports instance setup, account sessions, faceted registry
+discovery at `/search`, nucleotide discovery at `/sequence-search`, and public
+object pages with typed identity, provenance, biological relationships,
+attachments, similarity, and machine representations. Empty, partial, and
+unsupported biological content is called out rather than silently omitted.
+Signed-in members use `/workspace` for their owned collections and
+`/contribute` for a validate, review, then commit flow. The review names every
+minted identity, conversion warning, and collision consequence before any
+graph is written. Collection pages reuse the public object frame and expose
+owner-gated metadata, membership, publication, and deliberate removal tools.
+`/account` provides safe profile and password self-service. `/workspace/shared`
+keeps read-only collaborations visibly separate from owned data, while
+`/workspace/reviews` collects review requests submitted by or assigned to the
+current account. A private object sidebar distinguishes sharing, ownership
+transfer, and role-scoped curator review, including its append-only event
+history. Password reset is hidden until the instance advertises a configured
+delivery capability.
+The original **data lab bench** now lives inside its
 administrator workspace at `/admin`; bookmarks under `/lab/*` redirect to the
 corresponding admin route. Production builds bake the compiled assets into the
 binary via `rust-embed`, so deploying the application is the same as deploying any
@@ -13,10 +29,22 @@ set a deployment name, but it appears only as secondary context. Legacy
 SynBioHub theme fields remain available to compatibility clients and do not
 rename or recolor the native UI.
 
+The public object route consumes `GET /api/v2/objects/{iri}/details`; it does
+not interpret raw RDF predicates in React. The details resource owns ACL-aware
+graph selection, inverse relationships, provenance, and availability states in
+the application layer. Direct SBOL 2, SBOL 3, non-recursive SBOL, GenBank,
+FASTA, GFF3, and OMEX links remain ordinary machine requests and are never
+claimed by the page dispatcher.
+
 ## A tour of the admin workspace
 
-The UI opens on an Overview and fans out into data, query, and
-operations views from the left nav.
+The UI opens on an Overview and fans out into registry data, query,
+operations, and administration views from the left nav. The Administration
+group contains Instance, Users, Integrations, Search indexes, Backup & restore,
+and Activity. These pages share `AdminPage`, `AdminSection`, form, feedback,
+and deliberate-confirmation compositions built from the same ShadCN/Radix and
+Tailwind primitives as the public application; route code orchestrates typed
+queries rather than inventing a second component system.
 
 The Overview lands on corpus totals, the most common SBOL classes,
 loaded ontologies, and your most recent graphs:
@@ -54,7 +82,7 @@ The API docs link opens the Scalar-rendered OpenAPI reference served at
   <img src="images/api-docs.png" alt="Scalar-rendered OpenAPI reference at /docs" width="900">
 </p>
 
-The lab is fronted by three knobs:
+The application is fronted by these controls:
 
 - `SBOL_DB_LAB_ENABLED` (env, default `true`) — runtime asset/admin toggle.
   When `false`, root portal pages, `/admin`, `/lab`, and `/lab/api` are not
@@ -77,6 +105,11 @@ The lab is fronted by three knobs:
   compile-time strip. Removes the `sbol-db-ui` dependency entirely;
   the binary ships without the embedded assets.
 
+The native `/api/v2/admin/*` control plane is always administrator-gated; the
+legacy workbench override applies only to `/lab/api/*` and cannot weaken the
+native policy. The UI uses the native control plane for instance policy, users,
+integrations, search maintenance, jobs, ontologies, backup/restore, and audit.
+
 ## Development
 
 Two terminals: the Rust server provides the JSON API on port 8888, and the Vite
@@ -92,7 +125,7 @@ cargo run -p sbol-db -- server
 
 # Terminal 2 — Vite dev server with React Refresh.
 cd crates/sbol-db-ui/ui
-npm run dev
+pnpm dev
 ```
 
 Then open `http://localhost:5173/`. Saves to any `.tsx`, `.ts`, or
@@ -149,11 +182,12 @@ All run from `crates/sbol-db-ui/ui/`:
 
 | Command            | Purpose                                                |
 | ------------------ | ------------------------------------------------------ |
-| `npm run dev`      | Vite dev server on `:5173` with HMR.                    |
-| `npm run build`    | Production build. Normally driven by Cargo; useful manually for output inspection. |
-| `npm run lint`     | ESLint over `src/`.                                     |
-| `npm run typecheck`| `tsc -b --noEmit` over the project.                     |
-| `npm run format`   | Prettier write.                                         |
+| `pnpm dev`       | Vite dev server on `:5173` with HMR.                    |
+| `pnpm build`     | Production build. Normally driven by Cargo; useful manually for output inspection. |
+| `pnpm lint`      | ESLint over `src/`.                                     |
+| `pnpm test`      | URL-state and presentation-contract tests.              |
+| `pnpm typecheck` | `tsc --noEmit` over the project.                         |
+| `pnpm format`    | Prettier write.                                          |
 
 ### Opt-outs and edge cases
 

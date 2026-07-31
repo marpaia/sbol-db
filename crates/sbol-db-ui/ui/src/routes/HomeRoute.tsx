@@ -3,6 +3,7 @@ import {
   BookOpen,
   Boxes,
   DatabaseZap,
+  Dna,
   Search,
   ShieldCheck,
 } from "lucide-react";
@@ -35,7 +36,7 @@ export default function HomeRoute() {
             Open biological design infrastructure
           </Badge>
           <h1 className="mx-auto max-w-4xl text-balance text-4xl font-semibold tracking-[-0.035em] sm:text-6xl">
-            Find, understand, and reuse biological designs.
+            Find, share, and reuse biological designs.
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-pretty text-base leading-7 text-muted-foreground sm:text-lg">
             Search {PRODUCT_NAME} for parts, systems, sequences, and
@@ -76,12 +77,18 @@ export default function HomeRoute() {
       )}
 
       <section className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8">
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <EntryPoint
             icon={<Search />}
             title="Browse the registry"
             description="Explore the full visible corpus, then narrow by keyword or SBOL type."
             to="/search"
+          />
+          <EntryPoint
+            icon={<Dna />}
+            title="Search by sequence"
+            description="Find exact or aligned nucleotide matches across the sequences visible to you."
+            to="/sequence-search"
           />
           <EntryPoint
             icon={<BookOpen />}

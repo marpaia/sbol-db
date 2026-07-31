@@ -12,7 +12,9 @@
 //! authentication over the identity stores.
 
 mod acl;
+mod admin_audit;
 mod attachment;
+mod audit;
 mod auth;
 mod blob;
 mod collection;
@@ -23,17 +25,21 @@ mod federation;
 mod maintenance;
 pub mod memory;
 mod mutation;
+mod object;
 mod permission;
 mod plugin;
+mod review;
 mod search;
 mod sequence;
 mod submission;
 
 pub use acl::{AclService, PUBLIC_GRAPH};
+pub use admin_audit::{AdminAuditEvent, AdminAuditOutcome, AdminAuditService};
 pub use attachment::{
     attachment_uris, read_attachment, AttachmentRef, AttachmentService, UNKNOWN_ATTACHMENT_TYPE,
 };
-pub use auth::{share_hash, AuthService, PasswordReset, Registration};
+pub use audit::{AuditAction, AuditEvent, AuditService};
+pub use auth::{share_hash, AuthService, PasswordReset, ProfileUpdate, Registration};
 pub use blob::FsBlobStore;
 pub use collection::{CollectionService, MintScope, MintedSubmission, Submission};
 pub use config::{ConfigError, ConfigService};
@@ -45,17 +51,30 @@ pub use federation::{
 };
 pub use maintenance::{MaintenanceScheduleReceipt, SearchMaintenanceScheduler};
 pub use mutation::{MakePublicOutcome, MakePublicRequest, MutationError, MutationService};
+pub use object::{
+    ObjectAttachment, ObjectAttachmentSection, ObjectContentState, ObjectDetails, ObjectProperty,
+    ObjectPropertyValue, ObjectProvenance, ObjectReference, ObjectReferenceSection,
+    ObjectSequenceContent, ObjectVisibility, ObjectVisualFeature, ObjectVisualGlyph,
+    ObjectVisualization,
+};
 pub use permission::PermissionService;
 pub use plugin::{
     CallPluginRequest, ExposeRegistry, HttpPluginClient, PluginClient, PluginError, PluginResponse,
     PluginService, StreamOutcome, StreamRegistry, StreamServe, PLUGIN_CATEGORIES,
 };
+pub use review::{ReviewCase, ReviewDecision, ReviewService, ReviewStatus};
 pub use sbol_db_search::ranked_text::Hit;
 pub use sbol_db_search::{AlignMode, AlignOptions};
 pub use sbol_db_storage::SequenceAlignment;
-pub use search::{DateField, FacetedSearch, LegacyExplorerStrategy};
+pub use search::{
+    DateField, DiscoveryFacetValue, DiscoveryFacets, DiscoveryHit, DiscoveryPage, DiscoveryQuery,
+    DiscoverySort, FacetedSearch, LegacyExplorerStrategy, SortDirection,
+};
 pub use sequence::{SequenceService, SimilarHit};
-pub use submission::{SubmissionService, SubmitOutcome, SubmitRequest};
+pub use submission::{
+    SubmissionService, SubmitConsequence, SubmitNotice, SubmitNoticeLevel, SubmitOutcome,
+    SubmitPreview, SubmitRequest,
+};
 
 use std::sync::{Arc, OnceLock};
 
@@ -377,6 +396,30 @@ impl AppServices {
             self.acl_service.clone(),
         )
         .with_maintenance(self.search_maintenance.clone())
+    }
+
+    /// The ownership and read-only collaboration command facade.
+    pub fn permission_service(&self) -> PermissionService {
+        PermissionService::new(self.sparql_update.clone(), self.acl_service.clone())
+    }
+
+    /// The append-only object activity projection.
+    pub fn audit_service(&self) -> AuditService {
+        AuditService::new(self.sparql.clone())
+    }
+
+    /// The append-only administrator activity stream.
+    pub fn admin_audit_service(&self) -> AdminAuditService {
+        AdminAuditService::new(self.sparql.clone(), self.sparql_update.clone())
+    }
+
+    /// The curator review command and queue facade.
+    pub fn review_service(&self) -> ReviewService {
+        ReviewService::new(
+            self.sparql.clone(),
+            self.sparql_update.clone(),
+            self.acl_service.clone(),
+        )
     }
 
     /// The attachment facade wired to automatic search maintenance.

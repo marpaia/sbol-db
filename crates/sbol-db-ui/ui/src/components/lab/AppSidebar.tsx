@@ -8,8 +8,10 @@
 
 import {
   Activity,
+  ArchiveRestore,
   BookOpen,
   Boxes,
+  Building2,
   ChevronRight,
   Command as CommandIcon,
   Database,
@@ -21,10 +23,14 @@ import {
   Library,
   ListChecks,
   Network,
+  Plug,
+  ScrollText,
   Search,
+  SearchCheck,
   Share2,
   Table2,
   Undo2,
+  Users,
 } from "lucide-react";
 import { NavLink, useMatch } from "react-router-dom";
 
@@ -134,6 +140,42 @@ function navGroups(capabilities?: Capabilities): NavGroup[] {
       label: "Operations",
       icon: <Activity className="text-sbol-terminator" />,
       items: operationsItems,
+    },
+    {
+      label: "Administration",
+      icon: <Building2 className="text-primary" />,
+      items: [
+        {
+          to: adminPath("/settings/instance"),
+          icon: <Building2 />,
+          label: "Instance",
+        },
+        {
+          to: adminPath("/settings/users"),
+          icon: <Users />,
+          label: "Users",
+        },
+        {
+          to: adminPath("/settings/integrations"),
+          icon: <Plug />,
+          label: "Integrations",
+        },
+        {
+          to: adminPath("/operations/search"),
+          icon: <SearchCheck />,
+          label: "Search indexes",
+        },
+        {
+          to: adminPath("/operations/backup"),
+          icon: <ArchiveRestore />,
+          label: "Backup & restore",
+        },
+        {
+          to: adminPath("/operations/audit"),
+          icon: <ScrollText />,
+          label: "Activity",
+        },
+      ],
     },
   ];
 }

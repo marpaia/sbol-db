@@ -29,17 +29,20 @@ the final tier needs the emulated reference.
    request-fan-out logic with fixtures. No stack, no binary. These are the
    hard, must-pass deliverable and run anywhere.
 2. **Self-consistency smoke** (`test_subject_smoke.py`) boots the compiled
-   `sbol-db` compat server on SQLite and RocksDB, seeds
+   `sbol-db` compatibility server on SQLite and RocksDB by default, and on
+   Postgres when the phase/release environment selects it. It seeds
    `fixtures/smoke-corpus.nt`, and drives the read/metadata/SPARQL/download
    subset, asserting each endpoint answers coherently. Its last test runs the
-   driver itself across two independent backends (SQLite as a stand-in
-   reference, RocksDB as the subject) so the fan-out and semantic comparators
-   are exercised end to end with no classic reference.
+   driver itself across every configured backend so fan-out and semantic
+   comparators are exercised end to end with no classic reference. Failure to
+   start a requested backend fails the gate rather than skipping it.
 3. **Best-effort live subset** (`test_differential_subset.py`) runs the
    Elasticsearch-independent subset against the live classic reference and
    every subject, seeding the shared corpus into both sides. It is gated on
    the `stack` fixture, so it skips cleanly when the reference or any subject
-   is unreachable.
+   is unreachable. The default V1 `/sbol` case is part of this tier, protecting
+   classic's SBOL 2 default while the explicit SBOL 3 representation remains
+   available.
 
 ## How comparison works
 
@@ -84,6 +87,17 @@ The smoke locates the binary from `$SBOLDB_BIN`, then a prebuilt
 
 ```sh
 SBOLDB_BIN=target/debug/sbol-db \
+    tests/synbiohub-conformance/.venv/bin/python -m pytest \
+    tests/synbiohub-conformance/test_subject_smoke.py
+```
+
+For the three-backend phase gate, create an isolated empty Postgres database
+and run:
+
+```sh
+SBOLDB_BIN=target/debug/sbol-db \
+SBOL_DB_TEST_BACKENDS=sqlite,rocksdb,postgres \
+SBOL_DB_TEST_POSTGRES_URL=postgres://sbol:sbol@localhost:5432/sbol_compat_test \
     tests/synbiohub-conformance/.venv/bin/python -m pytest \
     tests/synbiohub-conformance/test_subject_smoke.py
 ```
@@ -279,5 +293,6 @@ emits the legacy `{"type":"typed-literal"}`, while sbol-db emits the SPARQL 1.1
 `{"type":"literal"}` with the same datatype. The comparator treats these as
 equal, since the binding value and datatype are identical.
 
-The self-consistency smoke (`test_subject_smoke.py`) proves the subject side
-end to end regardless of whether the classic reference is reachable.
+The self-consistency smoke (`test_subject_smoke.py`) proves the configured
+subject matrix end to end regardless of whether the classic reference is
+reachable.
