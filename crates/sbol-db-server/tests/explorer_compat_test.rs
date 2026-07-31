@@ -12,7 +12,7 @@ use axum::http::{Request, StatusCode};
 use sbol_db_app::AppServices;
 use sbol_db_backend::Backend;
 use sbol_db_search::ranked_text::IndexedPart;
-use sbol_db_server::{explorer_router, AppState, Metrics, SchemaCache, ServerConfig};
+use sbol_db_server::{explorer_router, router, AppState, Metrics, SchemaCache, ServerConfig};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use serde_json::Value;
 use tempfile::TempDir;
@@ -22,7 +22,7 @@ const BODY_LIMIT: usize = 1024 * 1024;
 const PUBLIC_GRAPH: &str = "http://synbiohub.org/public";
 const PRIVATE_GRAPH: &str = "http://synbiohub.org/user/alice";
 
-async fn app() -> (axum::Router, TempDir) {
+async fn apps() -> (axum::Router, axum::Router, TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("explorer.db");
     let database_url = format!("sqlite://{}", path.display());
@@ -70,7 +70,16 @@ async fn app() -> (axum::Router, TempDir) {
         lsm_stats: backend.lsm_stats.clone(),
         schema_cache: Arc::new(SchemaCache::new()),
     };
-    (explorer_router(state, config), dir)
+    (
+        router(state.clone(), config.clone()),
+        explorer_router(state, config),
+        dir,
+    )
+}
+
+async fn app() -> (axum::Router, TempDir) {
+    let (_, explorer, dir) = apps().await;
+    (explorer, dir)
 }
 
 fn indexed(subject: &str, graph: &str) -> IndexedPart {
@@ -143,6 +152,45 @@ fn subjects(response: &str) -> Vec<String> {
         .iter()
         .map(|binding| binding["subject"]["value"].as_str().unwrap().to_owned())
         .collect()
+}
+
+#[tokio::test]
+async fn explorer_shaped_query_is_ranked_only_on_the_compatibility_listener() {
+    let (main, explorer, _dir) = apps().await;
+    let query = text_query("");
+
+    // The main server is the triplestore role. Its database is deliberately
+    // empty, so this ordinary SPARQL query must return no rows even though the
+    // process-local ranked index contains a matching document.
+    let main_uri = format!(
+        "/sparql?{}",
+        serde_urlencoded::to_string([
+            ("query", query.as_str()),
+            ("default-graph-uri", PUBLIC_GRAPH),
+        ])
+        .expect("encode main SPARQL query")
+    );
+    let main_response = request(&main, Request::get(main_uri).body(Body::empty()).unwrap()).await;
+    assert_eq!(main_response.status(), StatusCode::OK);
+    assert!(
+        subjects(&body(main_response).await).is_empty(),
+        "the triplestore endpoint must evaluate Explorer-shaped SPARQL literally"
+    );
+
+    // The dedicated listener owns the SBOLExplorer compatibility semantics and
+    // therefore answers the identical query from the ranked index.
+    let explorer_response = request(
+        &explorer,
+        Request::get(search_uri(&query, Some(PUBLIC_GRAPH)))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(explorer_response.status(), StatusCode::OK);
+    assert_eq!(
+        subjects(&body(explorer_response).await),
+        vec!["http://synbiohub.org/public/public_promoter/1"]
+    );
 }
 
 #[tokio::test]
