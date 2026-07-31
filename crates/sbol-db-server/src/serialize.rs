@@ -108,21 +108,38 @@ pub fn serialize_closure(
         }
         SerializationFormat::GenBank => {
             let document = parse_document(triples)?;
+            let bytes = to_genbank(&document)?;
+            ensure_sequence_export(&bytes, "GenBank")?;
             Ok(Serialized {
-                bytes: to_genbank(&document)?,
+                bytes,
                 content_type: "chemical/x-genbank",
             })
         }
         SerializationFormat::Fasta => {
             let document = parse_document(triples)?;
+            let bytes = to_fasta(&document).into_bytes();
+            ensure_sequence_export(&bytes, "FASTA")?;
             Ok(Serialized {
-                bytes: to_fasta(&document).into_bytes(),
+                bytes,
                 content_type: "chemical/x-fasta",
             })
         }
         other => Err(DomainError::InvalidInput(format!(
             "cannot serialize a download as {other:?}"
         ))),
+    }
+}
+
+/// Sequence exchange formats cannot faithfully represent a closure without
+/// any residues. Reject that case instead of returning a successful zero-byte
+/// attachment, which looks like a broken download and cannot be parsed.
+fn ensure_sequence_export(bytes: &[u8], format: &str) -> Result<(), DomainError> {
+    if bytes.is_empty() {
+        Err(DomainError::InvalidInput(format!(
+            "{format} export requires at least one sequence with non-empty elements"
+        )))
+    } else {
+        Ok(())
     }
 }
 
@@ -1433,6 +1450,16 @@ mod tests {
 
     const NS: &str = "https://example.org/lab";
 
+    fn document_triples(document: Document) -> Vec<Triple> {
+        let ntriples = document
+            .write(sbol::RdfFormat::NTriples)
+            .expect("write ntriples");
+        let graph =
+            sbol_rdf::Graph::parse(&ntriples, sbol_rdf::RdfFormat::NTriples).expect("parse");
+        let placeholder = sbol_db_core::IriString::unchecked("");
+        sbol_db_rdf::rdf_graph_to_triples(&graph, &placeholder)
+    }
+
     /// Build a one-component, one-sequence SBOL3 document and return its
     /// N-Triples so the serializers can read it back as a closure would arrive.
     fn dna_document_triples(display_id: &str, elements: &str) -> Vec<Triple> {
@@ -1454,13 +1481,19 @@ mod tests {
             SbolObject::Sequence(sequence),
         ])
         .expect("assemble document");
-        let ntriples = document
-            .write(sbol::RdfFormat::NTriples)
-            .expect("write ntriples");
-        let graph =
-            sbol_rdf::Graph::parse(&ntriples, sbol_rdf::RdfFormat::NTriples).expect("parse");
-        let placeholder = sbol_db_core::IriString::unchecked("");
-        sbol_db_rdf::rdf_graph_to_triples(&graph, &placeholder)
+        document_triples(document)
+    }
+
+    fn component_without_sequence_triples() -> Vec<Triple> {
+        let component = Component::builder(NS, "metadata_only_protein")
+            .expect("component builder")
+            .types([SBO_PROTEIN])
+            .name("Metadata-only protein")
+            .build()
+            .expect("build component");
+        let document = Document::from_objects(vec![SbolObject::Component(component)])
+            .expect("assemble document");
+        document_triples(document)
     }
 
     #[test]
@@ -1544,6 +1577,31 @@ mod tests {
             Some("ttgacg".to_owned()),
             "standalone GenBank export must round-trip the sequence elements"
         );
+    }
+
+    #[test]
+    fn sequence_formats_reject_a_closure_without_elements() {
+        let triples = component_without_sequence_triples();
+
+        for (format, name) in [
+            (SerializationFormat::GenBank, "GenBank"),
+            (SerializationFormat::Fasta, "FASTA"),
+        ] {
+            let error = match serialize_closure(&triples, format, false) {
+                Ok(_) => panic!("metadata-only components are not {name} exports"),
+                Err(error) => error,
+            };
+            assert!(
+                matches!(
+                    error,
+                    DomainError::InvalidInput(ref message)
+                        if message == &format!(
+                            "{name} export requires at least one sequence with non-empty elements"
+                        )
+                ),
+                "unexpected {name} error: {error}"
+            );
+        }
     }
 
     #[test]

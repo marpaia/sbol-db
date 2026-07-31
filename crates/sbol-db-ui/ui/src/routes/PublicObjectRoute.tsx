@@ -81,7 +81,7 @@ export default function PublicObjectRoute() {
             <ObjectCollaboration object={data} />
             <ObjectReview object={data} />
             <CollectionManagement object={data} />
-            <ObjectDownloads iri={data.iri} />
+            <ObjectDownloads object={data} />
             <MachineAccess iri={data.iri} />
           </aside>
         </div>

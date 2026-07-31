@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Archive,
   Braces,
@@ -8,11 +9,17 @@ import {
   ExternalLink,
   FileCode2,
   FileText,
+  Loader2,
   TriangleAlert,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  downloadPortalObject,
+  type PortalObjectDetails,
+} from "@/features/portal/api";
+import { sequenceDownloadAvailability } from "@/features/portal/downloads";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 
 const formats = [
@@ -42,12 +49,14 @@ const formats = [
     label: "FASTA",
     description: "Sequence exchange",
     icon: Dna,
+    sequenceOnly: true,
   },
   {
     format: "gb",
     label: "GenBank",
     description: "Annotated sequence",
     icon: FileText,
+    sequenceOnly: true,
   },
   {
     format: "gff",
@@ -63,8 +72,32 @@ const formats = [
   },
 ] as const;
 
-export function ObjectDownloads({ iri }: { iri: string }) {
-  const base = `/api/v2/objects/${encodeURIComponent(iri)}`;
+export function ObjectDownloads({ object }: { object: PortalObjectDetails }) {
+  const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const sequenceAvailability = sequenceDownloadAvailability(object);
+
+  const startDownload = async (download: (typeof formats)[number]) => {
+    const key = `${download.format}-${"version" in download ? download.version : ""}`;
+    setPending(key);
+    setError(null);
+    try {
+      await downloadPortalObject(
+        object.iri,
+        download.format,
+        "version" in download ? download.version : undefined
+      );
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "The download could not be prepared."
+      );
+    } finally {
+      setPending(null);
+    }
+  };
+
   return (
     <Card>
       <CardHeader className="border-b bg-muted/15 p-5">
@@ -78,14 +111,18 @@ export function ObjectDownloads({ iri }: { iri: string }) {
       <CardContent className="p-2">
         {formats.map((download) => {
           const Icon = download.icon;
-          const query = new URLSearchParams({ format: download.format });
-          if ("version" in download) query.set("version", download.version);
+          const key = `${download.format}-${"version" in download ? download.version : ""}`;
+          const unavailable =
+            "sequenceOnly" in download &&
+            sequenceAvailability.state === "unavailable";
+          const loading = pending === key;
           return (
-            <a
-              key={`${download.format}-${"version" in download ? download.version : ""}`}
-              href={`${base}?${query}`}
-              download
-              className="group flex min-h-12 items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            <button
+              key={key}
+              type="button"
+              disabled={unavailable || pending !== null}
+              onClick={() => void startDownload(download)}
+              className="group flex min-h-12 w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent"
             >
               <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground group-hover:bg-background group-hover:text-primary">
                 <Icon className="size-3.5" />
@@ -95,13 +132,28 @@ export function ObjectDownloads({ iri }: { iri: string }) {
                   {download.label}
                 </span>
                 <span className="block truncate text-[11px] text-muted-foreground">
-                  {download.description}
+                  {unavailable
+                    ? sequenceAvailability.note
+                    : download.description}
                 </span>
               </span>
-              <Download className="size-3.5 text-muted-foreground/60 group-hover:text-primary" />
-            </a>
+              {loading ? (
+                <Loader2 className="size-3.5 animate-spin text-primary" />
+              ) : (
+                <Download className="size-3.5 text-muted-foreground/60 group-hover:text-primary" />
+              )}
+            </button>
           );
         })}
+        {error && (
+          <div
+            role="alert"
+            className="mx-2 mb-2 mt-1 flex gap-2 rounded-md border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs leading-5 text-destructive"
+          >
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

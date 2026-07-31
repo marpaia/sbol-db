@@ -524,6 +524,65 @@ export async function fetchPortalObjectDetails(
   );
 }
 
+export type PortalDownloadFormat =
+  | "sbol"
+  | "sbolnr"
+  | "fasta"
+  | "gb"
+  | "gff"
+  | "omex";
+
+export async function downloadPortalObject(
+  iri: string,
+  format: PortalDownloadFormat,
+  version?: "sbol2" | "sbol3"
+): Promise<void> {
+  const query = new URLSearchParams({ format });
+  if (version) query.set("version", version);
+  const response = await fetch(
+    `/api/v2/objects/${encodeURIComponent(iri)}?${query}`
+  );
+  if (!response.ok) throw await responseError(response);
+
+  const blob = await response.blob();
+  if (blob.size === 0) {
+    throw new PortalApiError(
+      422,
+      "The server returned an empty download for this format.",
+      "empty_download"
+    );
+  }
+
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filename =
+    disposition.match(/filename="([^"]+)"/)?.[1] ??
+    `sbol-db-object.${downloadExtension(format)}`;
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function downloadExtension(format: PortalDownloadFormat): string {
+  switch (format) {
+    case "sbol":
+    case "sbolnr":
+      return "xml";
+    case "fasta":
+      return "fasta";
+    case "gb":
+      return "gb";
+    case "gff":
+      return "gff";
+    case "omex":
+      return "omex";
+  }
+}
+
 export async function fetchAccount(
   signal?: AbortSignal
 ): Promise<AccountProfile> {
