@@ -245,9 +245,6 @@ function CliPreview() {
         <span className="size-2.5 rounded-full bg-red-400/80" />
         <span className="size-2.5 rounded-full bg-amber-300/80" />
         <span className="size-2.5 rounded-full bg-emerald-400/80" />
-        <span className="ml-2 font-mono text-[10px] tracking-wide text-zinc-500">
-          sbol · file and registry workflows
-        </span>
       </div>
       <div className="space-y-5 px-5 py-5 font-mono text-xs leading-6 sm:px-6 sm:text-[13px]">
         <div>
@@ -300,7 +297,7 @@ function RegistryPromise() {
   return (
     <div className="rounded-2xl border bg-card p-5 shadow-sm sm:p-6">
       <p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">
-        A registry, not a file drop
+        SBOL DB CLI
       </p>
       <h3 className="mt-2 text-xl font-semibold tracking-tight">
         Keep the biological and social context together.
