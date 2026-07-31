@@ -675,21 +675,14 @@ async fn run_sparql(
     format: Option<ResultFormat>,
     default_graph: Option<String>,
 ) -> Result<axum::response::Response, ApiError> {
-    // SBOLExplorer stand-in: SynBioHub smuggles ranked search, `/similar`, and
-    // sequence search through comment markers and a fixed `search.sparql` body
-    // that a real SPARQL engine would evaluate literally. When the query is one
-    // of these shapes and the result is a JSON solution set, answer it from the
-    // facade's search rather than the triplestore. Every other query, and any
-    // non-JSON result format, falls through to generic evaluation.
-    if format.is_none_or(ResultFormat::is_solution_format) {
-        if let Some(explorer) = sbol_db_sparql::recognize_explorer(query) {
-            let scope = sbol_db_sparql::explorer_graph_scope(query, default_graph.as_deref());
-            return crate::explorer::route(&state, explorer, scope).await;
-        }
-    }
-
-    // The public `/sparql` endpoint imposes no authorization ceiling; the
-    // client's `default-graph-uri` is honored under the union default graph.
+    // This is the public triplestore endpoint, so every query is evaluated as
+    // SPARQL. SBOLExplorer-shaped ranked, sequence, and `/similar` requests are
+    // recognized only by the dedicated compatibility listener in
+    // `explorer::endpoint`; routing them here would change ordinary SynBioHub
+    // store queries into fuzzy index searches when Explorer is disabled.
+    //
+    // The public endpoint imposes no authorization ceiling; the client's
+    // `default-graph-uri` is honored under the union default graph.
     let options = SparqlOptions::default();
     let outcome = state
         .sparql
