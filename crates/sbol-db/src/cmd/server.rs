@@ -64,7 +64,20 @@ pub async fn run(
         None => metrics,
     };
 
-    let config = sbol_db_server::ServerConfig::from_env();
+    // Bind before constructing the router so a port-zero development listener
+    // can advertise the concrete port it actually received. Production
+    // deployments override this listener-derived HTTP origin with
+    // `SBOL_DB_PUBLIC_ORIGIN=https://…`.
+    let listener = tokio::net::TcpListener::bind(bind)
+        .await
+        .with_context(|| format!("bind SBOL DB listener at {bind}"))?;
+    let local_addr = listener
+        .local_addr()
+        .context("read bound SBOL DB listener address")?;
+    let mut config = sbol_db_server::ServerConfig::from_env();
+    config
+        .resolve_public_origin(&listener_public_origin(local_addr))
+        .map_err(anyhow::Error::msg)?;
     let sparql_update = Arc::new(SparqlUpdateEngine::new(
         backend.triple_source.clone(),
         backend.triple_writer.clone(),
@@ -150,7 +163,6 @@ pub async fn run(
     let explorer_app = explorer_bind.map(|_| explorer_router(state, config));
 
     let cancel = CancellationToken::new();
-    let listener = tokio::net::TcpListener::bind(bind).await?;
     let explorer_listener = match explorer_bind {
         Some(explorer_bind) => Some((
             explorer_bind,
@@ -161,8 +173,8 @@ pub async fn run(
         None => None,
     };
     let worker_handle = worker_setup.map(|setup| setup.spawn(cancel.clone()));
-    tracing::info!(%bind, worker = worker_handle.is_some(), "sbol-db serving");
-    println!("sbol-db listening on http://{bind}");
+    tracing::info!(%local_addr, worker = worker_handle.is_some(), "sbol-db serving");
+    println!("sbol-db listening on http://{local_addr}");
     if let Some((explorer_bind, _)) = explorer_listener.as_ref() {
         tracing::info!(%explorer_bind, "SBOLExplorer compatibility listener serving");
         println!("sbol-db Explorer compatibility listening on http://{explorer_bind}");
@@ -236,6 +248,18 @@ pub async fn run(
     }
     tracing::info!("sbol-db server loop exited cleanly");
     Ok(())
+}
+
+fn listener_public_origin(address: SocketAddr) -> String {
+    match address.ip() {
+        std::net::IpAddr::V4(ip) if ip.is_unspecified() => {
+            format!("http://127.0.0.1:{}", address.port())
+        }
+        std::net::IpAddr::V6(ip) if ip.is_unspecified() => {
+            format!("http://[::1]:{}", address.port())
+        }
+        _ => format!("http://{address}"),
+    }
 }
 
 /// Constructed setup for an embedded / standalone worker: the backend-neutral

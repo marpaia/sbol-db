@@ -85,7 +85,17 @@
               "data_lab": { "type": "boolean" },
               "sql_console": { "type": "boolean" }
             }
-          }
+          },
+          "machine_access": { "$ref": "#/components/schemas/MachineAccess" }
+        }
+      },
+      "MachineAccess": {
+        "type": "object",
+        "required": ["api_url"],
+        "properties": {
+          "api_url": { "type": "string", "format": "uri", "description": "Absolute base URL of the registry's V2 machine API." },
+          "mcp_url": { "type": "string", "format": "uri", "description": "Authenticated MCP endpoint, present only when the service is mounted." },
+          "authorization_issuer": { "type": "string", "format": "uri", "description": "OAuth/OIDC issuer for Sign in with SBOL, present only when supported." }
         }
       },
       "LoginRequest": {

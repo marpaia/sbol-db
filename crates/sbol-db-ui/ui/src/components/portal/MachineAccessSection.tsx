@@ -20,7 +20,11 @@ import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 
 const CLI_REFERENCE =
   "https://github.com/SynBioDex/sbol-rs/tree/master/crates/sbol-cli";
-const MCP_SERVER_ADDRESS = "https://sbol.io/mcp";
+
+function currentMcpServerAddress() {
+  if (typeof window === "undefined") return "/mcp";
+  return new URL("/mcp", window.location.origin).toString();
+}
 
 const steps: CapabilityStepProps[] = [
   {
@@ -124,7 +128,11 @@ const capabilityGroups: CapabilityGroupProps[] = [
   },
 ];
 
-export function MachineAccessSection() {
+export function MachineAccessSection({
+  mcpServerAddress,
+}: {
+  mcpServerAddress?: string;
+}) {
   return (
     <section
       id="machine-access"
@@ -178,7 +186,9 @@ export function MachineAccessSection() {
           <RegistryPromise />
         </div>
 
-        <McpDocumentation />
+        <McpDocumentation
+          serverAddress={mcpServerAddress ?? currentMcpServerAddress()}
+        />
 
         <div className="mt-6 flex flex-col gap-3 border-t pt-5 text-sm sm:flex-row sm:items-center sm:justify-between">
           <p className="max-w-2xl text-muted-foreground">
@@ -264,7 +274,7 @@ function CliPreview() {
               "sbol registry pull https://sbol.io/public/igem/BBa_J23100/1 -o design.ttl"
             }
           </Command>
-          <Command>sbol registry sync design.ttl --preview</Command>
+          <Command>sbol registry push design.ttl --preview</Command>
           <Command>sbol registry push design.ttl</Command>
         </div>
       </div>
@@ -334,7 +344,7 @@ function Command({ children }: { children: React.ReactNode }) {
   );
 }
 
-function McpDocumentation() {
+function McpDocumentation({ serverAddress }: { serverAddress: string }) {
   const clipboard = useCopyToClipboard();
   const copyLabel = clipboard.copied
     ? "Server address copied"
@@ -392,11 +402,11 @@ function McpDocumentation() {
             </p>
             <div className="mt-2 flex items-center gap-3">
               <code className="min-w-0 flex-1 break-all text-[13px] font-medium text-zinc-100">
-                {MCP_SERVER_ADDRESS}
+                {serverAddress}
               </code>
               <button
                 type="button"
-                onClick={() => clipboard.copy(MCP_SERVER_ADDRESS)}
+                onClick={() => clipboard.copy(serverAddress)}
                 aria-label={copyLabel}
                 title={copyLabel}
                 className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sky-300 text-zinc-950 shadow-sm shadow-sky-500/20 transition-colors hover:bg-sky-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"

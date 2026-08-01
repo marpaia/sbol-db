@@ -22,6 +22,11 @@ Entry points to the project's documentation, organized by topic.
 
 `sbol-db` exposes five composable ways to read what you've imported:
 
+- **[CLI and agent access](machine-access.md)**: the ownership boundary
+  between the `sbol` CLI and SBOL DB, runtime endpoint discovery,
+  collision-safe submission preview, authenticated MCP tools, and the OAuth
+  and tracked-sync integrity gates.
+
 - **[Registry discovery contract](discovery-contract.md)**: normalized text
   and biological facets, exact totals, deterministic paging, public URL state,
   and the explicit classic-link translation boundary.

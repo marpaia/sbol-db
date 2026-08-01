@@ -31,6 +31,11 @@ export interface InstanceInfo {
     data_lab: boolean;
     sql_console: boolean;
   };
+  machine_access?: {
+    api_url: string;
+    mcp_url?: string;
+    authorization_issuer?: string;
+  };
 }
 
 export interface SessionUser {

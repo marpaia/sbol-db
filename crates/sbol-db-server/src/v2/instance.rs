@@ -25,6 +25,8 @@ pub(super) struct InstanceResponse {
     setup_required: bool,
     policies: InstancePolicies,
     capabilities: InstanceCapabilities,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    machine_access: Option<MachineAccess>,
 }
 
 #[derive(Debug, Serialize)]
@@ -47,6 +49,17 @@ struct InstanceCapabilities {
     sql_console: bool,
 }
 
+/// Absolute endpoints a machine client can safely discover from a trusted
+/// deployment origin. Optional services are omitted until they are mounted.
+#[derive(Debug, Serialize)]
+struct MachineAccess {
+    api_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mcp_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authorization_issuer: Option<String>,
+}
+
 /// `GET /api/v2/instance` — public deployment identity, access policy,
 /// first-launch state, and feature discovery for the root application.
 pub(super) async fn get(State(state): State<AppState>) -> Result<impl IntoResponse, V2Error> {
@@ -59,6 +72,18 @@ pub(super) async fn get(State(state): State<AppState>) -> Result<impl IntoRespon
     let sql_console = data_lab && state.sql_console.is_some();
     #[cfg(not(feature = "lab"))]
     let sql_console = false;
+    let machine_access = state
+        .config
+        .public_origin
+        .as_ref()
+        .map(|origin| MachineAccess {
+            api_url: format!("{origin}/api/v2"),
+            mcp_url: state.config.mcp_enabled.then(|| format!("{origin}/mcp")),
+            // This becomes Some only when the corresponding OAuth/OIDC
+            // provider is actually mounted. Advertising it early would make
+            // capability discovery indistinguishable from forward-looking copy.
+            authorization_issuer: None,
+        });
 
     Ok((
         [(CACHE_CONTROL, "no-cache")],
@@ -87,6 +112,7 @@ pub(super) async fn get(State(state): State<AppState>) -> Result<impl IntoRespon
                 data_lab,
                 sql_console,
             },
+            machine_access,
         }),
     ))
 }
