@@ -1,0 +1,38 @@
+name: RocksDB HA nightly
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 7 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  process-chaos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out the pinned SBOLTestSuite corpus
+        uses: actions/checkout@v4
+        with:
+          repository: SynBioDex/SBOLTestSuite
+          ref: 0044284331b2f915a6e4b9d50e1cbf3ea2f62dcd
+          path: SBOLTestSuite
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the external-process node and controller
+        run: cargo build -p sbol-db-ha-test --bins
+      - name: Run the full corpus through process, network, and restart faults
+        run: >-
+          cargo run -p sbol-db-ha-test --bin sbol-db-ha-runner --
+          --node-binary target/debug/sbol-db-ha-node
+          --corpus-root "$GITHUB_WORKSPACE/SBOLTestSuite"
+          --artifact-root target/ha-runs/nightly
+          --seed 0x5b01db0000000001
