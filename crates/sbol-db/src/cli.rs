@@ -252,6 +252,12 @@ pub enum Command {
         action: InspectAction,
     },
 
+    /// Complete encrypted backup operations that do not require a live server.
+    Backup {
+        #[command(subcommand)]
+        action: BackupAction,
+    },
+
     /// Local utilities (file hashing, k-mer debug, ...).
     ///
     /// None of these touch Postgres.
@@ -303,6 +309,22 @@ pub enum Command {
         /// Do not enqueue the search-index rebuild after loading.
         #[arg(long)]
         no_reindex: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BackupAction {
+    /// Decrypt and fully verify a complete backup artifact offline.
+    Verify {
+        /// Encrypted `.sbolbackup.age` artifact to verify.
+        #[arg(long)]
+        artifact: PathBuf,
+        /// Private age X25519 identity file for this artifact.
+        #[arg(long, env = "SBOL_DB_BACKUP_IDENTITY_FILE")]
+        identity_file: PathBuf,
+        /// Existing or newly created private directory for temporary extraction.
+        #[arg(long)]
+        staging_dir: PathBuf,
     },
 }
 

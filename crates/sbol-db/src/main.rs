@@ -34,6 +34,9 @@ async fn main() -> Result<()> {
     if let Command::Util { action } = cli.command {
         return cmd::util::run(action).await;
     }
+    if let Command::Backup { action } = cli.command {
+        return cmd::backup::run(action);
+    }
 
     let mut server_runtime = match &cli.command {
         Command::Server { args } => Some(ServerRuntime::resolve(
@@ -139,6 +142,7 @@ async fn main() -> Result<()> {
             .await
         }
         Command::Util { .. } => unreachable!("handled before backend open"),
+        Command::Backup { .. } => unreachable!("handled before backend open"),
     }
 }
 

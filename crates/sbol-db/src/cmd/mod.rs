@@ -3,6 +3,7 @@
 //! daemon entry points) and exposes a `run` function invoked from
 //! `main.rs`.
 
+pub mod backup;
 pub mod db;
 pub mod graph;
 pub mod inspect;
