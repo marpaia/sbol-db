@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
+  Cable,
   ChevronDown,
   Dna,
   FilePlus2,
@@ -47,6 +48,7 @@ type NavItem = {
 const navItems: NavItem[] = [
   { to: "/search", label: "Browse", icon: Search },
   { to: "/sequence-search", label: "Sequence search", icon: Dna },
+  { to: "/connect", label: "Connect", icon: Cable },
   { to: "/api/v2/docs", label: "API", icon: BookOpen, external: true },
 ];
 
@@ -165,6 +167,9 @@ export default function PublicShell() {
             </span>
           </div>
           <div className="flex items-center gap-4">
+            <Link className="hover:text-foreground" to="/connect">
+              Connect tools
+            </Link>
             <a className="hover:text-foreground" href="/api/v2/docs">
               API reference
             </a>

@@ -1,7 +1,7 @@
 import {
   ArrowRight,
-  BookOpen,
   Boxes,
+  Cable,
   DatabaseZap,
   Dna,
   Search,
@@ -10,7 +10,6 @@ import {
 import { Link, useNavigate } from "react-router-dom";
 
 import { ObjectResultCard } from "@/components/portal/ObjectResultCard";
-import { MachineAccessSection } from "@/components/portal/MachineAccessSection";
 import { SearchBox } from "@/components/portal/SearchBox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -92,10 +91,10 @@ export default function HomeRoute() {
             to="/sequence-search"
           />
           <EntryPoint
-            icon={<BookOpen />}
-            title="Build on the API"
-            description="Use the documented V2 REST surface or download native RDF representations."
-            href="/api/v2/docs"
+            icon={<Cable />}
+            title="Connect your tools"
+            description="Use the sbol CLI, connect an AI agent over MCP, or build on the V2 REST API."
+            to="/connect"
           />
           <EntryPoint
             icon={<DatabaseZap />}
@@ -159,8 +158,6 @@ export default function HomeRoute() {
           )}
         </div>
       </section>
-
-      <MachineAccessSection />
     </>
   );
 }
