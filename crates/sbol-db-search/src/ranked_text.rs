@@ -549,8 +549,14 @@ mod tests {
             part("http://example.org/b", "promoter", "same text", 1.0),
         ]);
         let clusters = cluster_map(vec![
-            ("http://example.org/a".to_owned(), crate::cluster::ClusterId(0)),
-            ("http://example.org/b".to_owned(), crate::cluster::ClusterId(0)),
+            (
+                "http://example.org/a".to_owned(),
+                crate::cluster::ClusterId(0),
+            ),
+            (
+                "http://example.org/b".to_owned(),
+                crate::cluster::ClusterId(0),
+            ),
         ]);
 
         let hits = index
