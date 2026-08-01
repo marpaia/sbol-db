@@ -3,12 +3,10 @@
 //! connection pool so long-running handlers can't starve inbound HTTP; other
 //! backends open through the factory.
 
-use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use sbol_db_app::{AppServices, LegacyExplorerStrategy};
+use sbol_db_app::{AppServices, FsBlobStore, LegacyExplorerStrategy};
 use sbol_db_backend::Backend;
 use sbol_db_jobs::{default_registry, SearchIndexHandles, Worker, WorkerConfig};
 use sbol_db_search::VectorIndexMaintainerRegistry;
@@ -18,26 +16,30 @@ use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{ConfigStore, JobQueue, SbolStore};
 use tokio_util::sync::CancellationToken;
 
+use crate::cli::ServerArgs;
+use crate::runtime::ServerRuntime;
 use crate::signal::shutdown_signal;
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run(
-    backend: Backend,
-    database_url: &str,
-    bind: SocketAddr,
-    explorer_bind: Option<SocketAddr>,
-    no_worker: bool,
-    worker_concurrency: Option<usize>,
-    worker_queues: Option<String>,
-    worker_id: Option<String>,
-    search_config: Option<PathBuf>,
-) -> Result<()> {
+pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> Result<()> {
+    let ServerArgs {
+        profile: _,
+        data_dir: _,
+        blob_root: _,
+        bind,
+        explorer_bind,
+        no_worker,
+        worker_concurrency,
+        worker_queues,
+        worker_id,
+        search_config,
+    } = args;
+    let database_url = runtime.database_url().to_owned();
     let engine = Arc::new(SparqlEngine::new(backend.triple_source.clone()));
 
     let mut worker_setup = if !no_worker {
         Some(
             build_worker_setup(
-                database_url,
+                &database_url,
                 Some((
                     backend.store.clone(),
                     backend.jobs.clone(),
@@ -69,7 +71,37 @@ pub async fn run(
         backend.triple_source.clone(),
         backend.triple_writer.clone(),
     ));
-    let mut app_services = AppServices::from_backend(&backend);
+    let mut app_services = AppServices::from_backend(&backend)
+        .with_blobs(Arc::new(FsBlobStore::new(runtime.blob_root())));
+    if let Some(layout) = runtime.layout() {
+        let text_index = Arc::new(
+            sbol_db_search::ranked_text::RankedTextIndex::open_or_create(layout.search_root())
+                .with_context(|| {
+                    format!(
+                        "opening ranked text index at {}",
+                        layout.search_root().display()
+                    )
+                })?,
+        );
+        app_services = app_services.with_text_search(text_index);
+        tracing::info!(
+            profile = ?runtime.profile(),
+            data_dir = %layout.root().display(),
+            generation = %layout.generation(),
+            generation_root = %layout.generation_root().display(),
+            blob_root = %runtime.blob_root().display(),
+            acme_root = %layout.acme_root().display(),
+            backups_root = %layout.backups_root().display(),
+            restore_root = %layout.restore_root().display(),
+            "managed production data layout active"
+        );
+    } else {
+        tracing::info!(
+            profile = ?runtime.profile(),
+            blob_root = %runtime.blob_root().display(),
+            "server runtime configured"
+        );
+    }
 
     let built_in_search = search_config.is_none();
     if built_in_search && no_worker {

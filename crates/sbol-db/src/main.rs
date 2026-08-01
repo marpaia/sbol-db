@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 use sbol_db_backend::Backend;
 
@@ -16,10 +16,12 @@ mod cli;
 mod cmd;
 mod format;
 mod output;
+mod runtime;
 mod search_config;
 mod signal;
 
-use crate::cli::{BackendKind, Cli, Command};
+use crate::cli::{Cli, Command};
+use crate::runtime::{resolve_connection, ServerRuntime};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -32,29 +34,30 @@ async fn main() -> Result<()> {
         return cmd::util::run(action).await;
     }
 
-    let database_url = resolve_connection(cli.backend, &cli.database_url)?;
+    let mut server_runtime = match &cli.command {
+        Command::Server { args } => Some(ServerRuntime::resolve(
+            args.profile,
+            args.data_dir.as_deref(),
+            args.blob_root.as_deref(),
+            cli.backend,
+            cli.database_url.as_deref(),
+        )?),
+        _ => None,
+    };
+    let database_url = match server_runtime.as_ref() {
+        Some(runtime) => runtime.database_url().to_owned(),
+        None => resolve_connection(cli.backend, cli.database_url.as_deref())?,
+    };
     let backend = open_backend(&database_url, &cli.command).await?;
 
     match cli.command {
-        Command::Server {
-            bind,
-            explorer_bind,
-            no_worker,
-            worker_concurrency,
-            worker_queues,
-            worker_id,
-            search_config,
-        } => {
+        Command::Server { args } => {
             cmd::server::run(
                 backend,
-                &database_url,
-                bind,
-                explorer_bind,
-                no_worker,
-                worker_concurrency,
-                worker_queues,
-                worker_id,
-                search_config,
+                server_runtime
+                    .take()
+                    .expect("server runtime is resolved before backend open"),
+                args,
             )
             .await
         }
@@ -151,28 +154,6 @@ fn init_logging() {
     }
 }
 
-/// Resolve the effective connection string from the optional `--backend`
-/// selector and `--database-url`. With no selector the URL stands as given (its
-/// scheme picks the backend). With a selector, the URL must either already carry
-/// that backend's scheme or be a bare path the scheme completes; a conflicting
-/// scheme is an error so a Postgres URL is never silently opened as something
-/// else.
-fn resolve_connection(backend: Option<BackendKind>, url: &str) -> Result<String> {
-    let Some(backend) = backend else {
-        return Ok(url.to_owned());
-    };
-    match url.split_once("://") {
-        Some((scheme, _)) if backend.accepts_scheme(scheme) => Ok(url.to_owned()),
-        Some((scheme, _)) => bail!(
-            "--backend {} conflicts with --database-url scheme `{scheme}://`; \
-             pass a {}:// connection string (or a bare path) or drop --backend",
-            backend.scheme(),
-            backend.scheme(),
-        ),
-        None => Ok(format!("{}://{url}", backend.scheme())),
-    }
-}
-
 /// Open the storage backend selected by `database_url`'s scheme. Commands that
 /// need a long startup retry loop honor `DATABASE_STARTUP_TIMEOUT_SECS`;
 /// everything else fails fast on the first connection error.
@@ -192,53 +173,4 @@ async fn open_backend(database_url: &str, command: &Command) -> Result<Backend> 
         Duration::ZERO
     };
     Backend::open_with_retry(database_url, deadline).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn no_selector_passes_url_through() {
-        assert_eq!(
-            resolve_connection(None, "sqlite:///tmp/x.db").unwrap(),
-            "sqlite:///tmp/x.db"
-        );
-    }
-
-    #[test]
-    fn selector_accepts_matching_scheme() {
-        assert_eq!(
-            resolve_connection(Some(BackendKind::Rocksdb), "rocksdb:///data/x").unwrap(),
-            "rocksdb:///data/x"
-        );
-        // Postgres answers to both schemes.
-        assert_eq!(
-            resolve_connection(Some(BackendKind::Postgres), "postgresql://h/db").unwrap(),
-            "postgresql://h/db"
-        );
-    }
-
-    #[test]
-    fn selector_completes_a_bare_path() {
-        assert_eq!(
-            resolve_connection(Some(BackendKind::Rocksdb), "/var/lib/sbol.rocksdb").unwrap(),
-            "rocksdb:///var/lib/sbol.rocksdb"
-        );
-        assert_eq!(
-            resolve_connection(Some(BackendKind::Sqlite), "/tmp/x.db").unwrap(),
-            "sqlite:///tmp/x.db"
-        );
-    }
-
-    #[test]
-    fn selector_rejects_conflicting_scheme() {
-        let err = resolve_connection(
-            Some(BackendKind::Sqlite),
-            "postgres://sbol:sbol@localhost/sbol",
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("conflicts"), "got: {err}");
-    }
 }

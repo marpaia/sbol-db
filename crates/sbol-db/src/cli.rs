@@ -13,7 +13,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(version, about = "sbol-db CLI", long_about = None)]
@@ -21,12 +21,8 @@ pub struct Cli {
     /// Storage backend connection string. The scheme selects the backend:
     /// `postgres://`, `sqlite://`, or `rocksdb://`. With `--backend` set, a
     /// bare path (no scheme) is also accepted.
-    #[arg(
-        long,
-        env = "DATABASE_URL",
-        default_value = "postgres://sbol:sbol@localhost:5432/sbol"
-    )]
-    pub database_url: String,
+    #[arg(long, env = "DATABASE_URL")]
+    pub database_url: Option<String>,
 
     /// Storage backend. When omitted it is inferred from `--database-url`'s
     /// scheme. When set, it must agree with that scheme (or the URL may be a
@@ -44,6 +40,72 @@ pub enum BackendKind {
     Postgres,
     Sqlite,
     Rocksdb,
+}
+
+/// Runtime safety profile for the HTTP server.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum RuntimeProfile {
+    /// Convenient local defaults with caller-selectable storage backends.
+    #[default]
+    Development,
+    /// A fail-closed, single-node appliance with a managed RocksDB data layout.
+    Production,
+}
+
+/// Arguments that configure the HTTP server and its embedded worker.
+#[derive(Args, Debug)]
+pub struct ServerArgs {
+    /// Runtime safety profile. Production manages a versioned RocksDB data
+    /// layout below `--data-dir` and rejects external database overrides.
+    #[arg(
+        long,
+        value_enum,
+        env = "SBOL_DB_PROFILE",
+        default_value = "development"
+    )]
+    pub profile: RuntimeProfile,
+
+    /// Durable server state root. Required, absolute, and exclusively locked in
+    /// production. Development defaults to `./sbol-db-data`.
+    #[arg(long, env = "SBOL_DB_DATA_DIR")]
+    pub data_dir: Option<PathBuf>,
+
+    /// Durable blob-store root for development or legacy deployments.
+    /// Production derives this path from the active managed generation.
+    #[arg(long, env = "SBOL_DB_BLOB_ROOT")]
+    pub blob_root: Option<PathBuf>,
+
+    #[arg(long, env = "SBOL_DB_BIND", default_value = "127.0.0.1:8888")]
+    pub bind: SocketAddr,
+
+    /// Optional network-internal SBOLExplorer-compatible listener. The listener
+    /// shares this server process's application state and search index;
+    /// deployments conventionally bind it to `0.0.0.0:13162`.
+    #[arg(long, env = "SBOL_DB_EXPLORER_BIND")]
+    pub explorer_bind: Option<SocketAddr>,
+
+    /// Disable the embedded worker.
+    #[arg(long, env = "SBOL_DB_WORKER_DISABLED")]
+    pub no_worker: bool,
+
+    /// Maximum concurrent in-flight handler tasks. Defaults to the machine's
+    /// available parallelism.
+    #[arg(long, env = "SBOL_DB_WORKER_CONCURRENCY")]
+    pub worker_concurrency: Option<usize>,
+
+    /// Comma-separated queue allowlist. Defaults to all registered queues
+    /// (currently just `default`).
+    #[arg(long, env = "SBOL_DB_WORKER_QUEUES")]
+    pub worker_queues: Option<String>,
+
+    /// Stable worker identity for log attribution. Defaults to
+    /// `<hostname>-<pid>-<random>`.
+    #[arg(long, env = "SBOL_DB_WORKER_ID")]
+    pub worker_id: Option<String>,
+
+    /// JSON search-plugin topology and concrete provider/backend config.
+    #[arg(long, env = "SBOL_DB_SEARCH_CONFIG")]
+    pub search_config: Option<PathBuf>,
 }
 
 impl BackendKind {
@@ -76,31 +138,8 @@ pub enum Command {
     /// API-only nodes when a dedicated worker fleet runs elsewhere
     /// (see `sbol-db worker`).
     Server {
-        #[arg(long, env = "SBOL_DB_BIND", default_value = "127.0.0.1:8888")]
-        bind: SocketAddr,
-        /// Optional network-internal SBOLExplorer-compatible listener. The
-        /// listener shares this server process's application state and search
-        /// index; deployments conventionally bind it to `0.0.0.0:13162`.
-        #[arg(long, env = "SBOL_DB_EXPLORER_BIND")]
-        explorer_bind: Option<SocketAddr>,
-        /// Disable the embedded worker.
-        #[arg(long, env = "SBOL_DB_WORKER_DISABLED")]
-        no_worker: bool,
-        /// Maximum concurrent in-flight handler tasks. Defaults to the
-        /// machine's available parallelism.
-        #[arg(long, env = "SBOL_DB_WORKER_CONCURRENCY")]
-        worker_concurrency: Option<usize>,
-        /// Comma-separated queue allowlist. Defaults to all registered
-        /// queues (currently just `default`).
-        #[arg(long, env = "SBOL_DB_WORKER_QUEUES")]
-        worker_queues: Option<String>,
-        /// Stable worker identity for log attribution. Defaults to
-        /// `<hostname>-<pid>-<random>`.
-        #[arg(long, env = "SBOL_DB_WORKER_ID")]
-        worker_id: Option<String>,
-        /// JSON search-plugin topology and concrete provider/backend config.
-        #[arg(long, env = "SBOL_DB_SEARCH_CONFIG")]
-        search_config: Option<PathBuf>,
+        #[command(flatten)]
+        args: ServerArgs,
     },
 
     /// Run a standalone async-job worker (no HTTP listener).

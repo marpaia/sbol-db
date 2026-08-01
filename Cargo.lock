@@ -4007,6 +4007,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "fs2",
  "oxrdf",
  "oxrdfio",
  "sbol",
