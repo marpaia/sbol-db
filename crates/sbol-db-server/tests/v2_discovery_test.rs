@@ -121,7 +121,7 @@ fn app_router(backend: &Backend, text_index: Arc<RankedTextIndex>) -> axum::Rout
         backend.triple_source.clone(),
         backend.triple_writer.clone(),
     ));
-    let services = AppServices::from_backend(&backend).with_text_search(text_index);
+    let services = AppServices::from_backend(backend).with_text_search(text_index);
     let config = ServerConfig::default();
     let state = AppState {
         service: backend.store.clone(),

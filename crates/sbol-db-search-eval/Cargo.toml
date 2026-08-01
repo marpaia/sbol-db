@@ -13,8 +13,13 @@ serde_json.workspace = true
 sha2.workspace = true
 sbol-db-search-sdk.workspace = true
 
+[features]
+default = ["download-ort"]
+download-ort = ["sbol-db-embedding-fastembed/download-ort"]
+dynamic-ort = ["sbol-db-embedding-fastembed/dynamic-ort"]
+
 [dev-dependencies]
 async-trait.workspace = true
-sbol-db-embedding-fastembed = { workspace = true, features = ["download-ort"] }
+sbol-db-embedding-fastembed.workspace = true
 sbol-db-search.workspace = true
 tokio.workspace = true

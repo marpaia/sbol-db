@@ -189,7 +189,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target \
     cargo test -p sbol-db-search-faiss --features native \
     && SBOL_DB_BGE_SMALL_MODEL_DIR=/opt/sbol-db/models/bge-small-en-v1.5 \
-       cargo run -p sbol-db-search-eval --example bge_small_release_gate \
+       cargo run -p sbol-db-search-eval --no-default-features \
+           --features dynamic-ort --example bge_small_release_gate \
     && cp target/debug/examples/bge_small_release_gate /usr/local/bin/sbol-db-bge-release-gate
 
 ############################
