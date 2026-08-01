@@ -16,6 +16,7 @@ members = [
     "crates/sbol-db-sqlite",
     "crates/sbol-db-rocksdb",
     "crates/sbol-db-raft",
+    "crates/sbol-db-ha-sim",
     "crates/sbol-db-backend",
     "crates/sbol-db-conformance",
     "crates/sbol-db-sparql",

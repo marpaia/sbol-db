@@ -208,6 +208,9 @@ not accept local mutations.
    tests. Every acknowledged request id must exist exactly once after recovery,
    and all nodes at one applied index must produce the same logical digest.
 
+The concrete test layers, corpus workload, current evidence, and remaining
+production claim gates are specified in [RocksDB HA testing](ha-testing.md).
+
 The HA claim covers only state included in this protocol and snapshot contract.
 Before production, any file-backed upload, search index, or other sidecar must
 be classified as replicated source-of-truth state or explicitly rebuildable

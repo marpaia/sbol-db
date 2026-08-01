@@ -67,6 +67,10 @@ Entry points to the project's documentation, organized by topic.
 - **[RocksDB high availability](ha-rocksdb.md)**: quorum guarantees, durable
   Raft and state-machine boundaries, failover behavior, snapshots, and the
   implementation sequence for two- and three-node clusters.
+- **[RocksDB HA testing](ha-testing.md)**: the acknowledged-write oracle,
+  SBOLTestSuite-powered three-node simulation, reproducible fault schedules,
+  and the process, disk, and external-history gates required for a no-loss
+  production claim.
 
 ## Operations
 

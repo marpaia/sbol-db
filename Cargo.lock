@@ -4440,6 +4440,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "sbol-db-ha-sim"
+version = "0.1.3"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "hex",
+ "openraft",
+ "sbol-db-core",
+ "sbol-db-derive",
+ "sbol-db-raft",
+ "sbol-db-storage",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "sbol-db-jobs"
 version = "0.1.3"
 dependencies = [
