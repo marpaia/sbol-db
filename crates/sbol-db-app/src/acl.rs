@@ -27,11 +27,25 @@ const SBH_OWNED_BY: &str = "http://wiki.synbiohub.org/wiki/Terms/synbiohub#owned
 pub struct AclService {
     store: Arc<dyn SbolStore>,
     acl: Arc<dyn AclStore>,
+    public_graph: String,
 }
 
 impl AclService {
     pub fn new(store: Arc<dyn SbolStore>, acl: Arc<dyn AclStore>) -> Self {
-        Self { store, acl }
+        Self {
+            store,
+            acl,
+            public_graph: PUBLIC_GRAPH.to_owned(),
+        }
+    }
+
+    pub fn with_public_graph(mut self, public_graph: impl Into<String>) -> Self {
+        self.public_graph = public_graph.into();
+        self
+    }
+
+    pub fn public_graph(&self) -> &str {
+        &self.public_graph
     }
 
     /// The graph scope a caller may read.
@@ -52,11 +66,11 @@ impl AclService {
         user_graph_iri: Option<&str>,
     ) -> Result<GraphScope, DomainError> {
         let Some(user) = user_graph_iri else {
-            return Ok(GraphScope::Only(vec![PUBLIC_GRAPH.to_owned()]));
+            return Ok(GraphScope::Only(vec![self.public_graph.clone()]));
         };
 
         let mut graphs: BTreeSet<String> = BTreeSet::new();
-        graphs.insert(PUBLIC_GRAPH.to_owned());
+        graphs.insert(self.public_graph.clone());
 
         for owned in self.acl.owned_graphs(user).await? {
             graphs.insert(owned);
@@ -120,7 +134,7 @@ impl AclService {
         if is_admin {
             return Ok(true);
         }
-        if graph == PUBLIC_GRAPH {
+        if graph == self.public_graph {
             return Ok(false);
         }
         self.owns_object(user_graph_iri, object_iri).await

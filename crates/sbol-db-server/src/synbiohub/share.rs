@@ -20,8 +20,6 @@ use super::routes::{run_scoped_value, UserObject};
 use super::{queries, render};
 use crate::{ApiError, AppState};
 
-const BASE: &str = "http://synbiohub.org/";
-
 /// A share-scoped object path: the object identity plus the share `:hash`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,10 +32,14 @@ pub struct ShareObject {
 }
 
 impl ShareObject {
-    fn object_uri(&self) -> String {
+    fn object_uri(&self, state: &AppState) -> String {
         format!(
-            "{BASE}user/{}/{}/{}/{}",
-            self.user_id, self.collection_id, self.display_id, self.version
+            "{}user/{}/{}/{}/{}",
+            state.app.registry_namespace.database_prefix(),
+            self.user_id,
+            self.collection_id,
+            self.display_id,
+            self.version
         )
     }
 }
@@ -45,8 +47,8 @@ impl ShareObject {
 /// Verify the share hash for the object, returning the object URI on success.
 /// A mismatched hash is a `404`, revealing nothing about the object's existence.
 fn verify(state: &AppState, object: &ShareObject) -> Result<String, ApiError> {
-    let uri = object.object_uri();
-    let expected = sbol_db_app::share_hash(&uri, &state.config.password_salt);
+    let uri = object.object_uri(state);
+    let expected = sbol_db_app::share_hash(&uri, &state.config.share_link_salt);
     if expected == object.hash {
         Ok(uri)
     } else {
@@ -57,8 +59,8 @@ fn verify(state: &AppState, object: &ShareObject) -> Result<String, ApiError> {
 /// `GET <object>/shareLink` — mint the object's share hash and URL. Only the
 /// owner reaches this (the router applies the identity gate), matching classic.
 pub async fn share_link(State(state): State<AppState>, Path(object): Path<UserObject>) -> Response {
-    let uri = super::routes::user_uri(&object);
-    let hash = sbol_db_app::share_hash(&uri, &state.config.password_salt);
+    let uri = super::routes::user_uri(&state, &object);
+    let hash = sbol_db_app::share_hash(&uri, &state.config.share_link_salt);
     let url = format!(
         "/user/{}/{}/{}/{}/{}/share",
         object.user_id, object.collection_id, object.display_id, object.version, hash

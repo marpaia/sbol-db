@@ -22,9 +22,6 @@ use super::search::{extract_sequence, has_sequence_facet, parse_search_path};
 use super::{queries, render, sequence, CurrentUser};
 use crate::{ApiError, AppState};
 
-/// The instance base IRI classic SynBioHub mints objects under.
-const BASE: &str = "http://synbiohub.org/";
-
 /// The `?offset=&limit=` paging classic honors on the search family.
 #[derive(Debug, Default, Deserialize)]
 pub struct Paging {
@@ -55,17 +52,24 @@ pub struct UserObject {
     pub version: String,
 }
 
-pub(super) fn public_uri(object: &PublicObject) -> String {
+pub(super) fn public_uri(state: &AppState, object: &PublicObject) -> String {
     format!(
-        "{BASE}public/{}/{}/{}",
-        object.collection_id, object.display_id, object.version
+        "{}public/{}/{}/{}",
+        state.app.registry_namespace.database_prefix(),
+        object.collection_id,
+        object.display_id,
+        object.version
     )
 }
 
-pub(super) fn user_uri(object: &UserObject) -> String {
+pub(super) fn user_uri(state: &AppState, object: &UserObject) -> String {
     format!(
-        "{BASE}user/{}/{}/{}/{}",
-        object.user_id, object.collection_id, object.display_id, object.version
+        "{}user/{}/{}/{}/{}",
+        state.app.registry_namespace.database_prefix(),
+        object.user_id,
+        object.collection_id,
+        object.display_id,
+        object.version
     )
 }
 
@@ -87,17 +91,22 @@ pub struct UserObjectPi {
     pub display_id: String,
 }
 
-pub(super) fn public_pi_uri(object: &PublicObjectPi) -> String {
+pub(super) fn public_pi_uri(state: &AppState, object: &PublicObjectPi) -> String {
     format!(
-        "{BASE}public/{}/{}",
-        object.collection_id, object.display_id
+        "{}public/{}/{}",
+        state.app.registry_namespace.database_prefix(),
+        object.collection_id,
+        object.display_id
     )
 }
 
-pub(super) fn user_pi_uri(object: &UserObjectPi) -> String {
+pub(super) fn user_pi_uri(state: &AppState, object: &UserObjectPi) -> String {
     format!(
-        "{BASE}user/{}/{}/{}",
-        object.user_id, object.collection_id, object.display_id
+        "{}user/{}/{}/{}",
+        state.app.registry_namespace.database_prefix(),
+        object.user_id,
+        object.collection_id,
+        object.display_id
     )
 }
 
@@ -272,7 +281,13 @@ pub async fn public_uses(
     user: Extension<CurrentUser>,
     Path(object): Path<PublicObject>,
 ) -> Result<Response, ApiError> {
-    uses_impl(state.0, user.0 .0, public_uri(&object), false).await
+    uses_impl(
+        state.0.clone(),
+        user.0 .0,
+        public_uri(&state.0, &object),
+        false,
+    )
+    .await
 }
 
 pub async fn public_uses_count(
@@ -280,7 +295,13 @@ pub async fn public_uses_count(
     user: Extension<CurrentUser>,
     Path(object): Path<PublicObject>,
 ) -> Result<Response, ApiError> {
-    uses_impl(state.0, user.0 .0, public_uri(&object), true).await
+    uses_impl(
+        state.0.clone(),
+        user.0 .0,
+        public_uri(&state.0, &object),
+        true,
+    )
+    .await
 }
 
 pub async fn public_twins(
@@ -288,7 +309,13 @@ pub async fn public_twins(
     user: Extension<CurrentUser>,
     Path(object): Path<PublicObject>,
 ) -> Result<Response, ApiError> {
-    twins_impl(state.0, user.0 .0, public_uri(&object), false).await
+    twins_impl(
+        state.0.clone(),
+        user.0 .0,
+        public_uri(&state.0, &object),
+        false,
+    )
+    .await
 }
 
 pub async fn public_twins_count(
@@ -296,7 +323,13 @@ pub async fn public_twins_count(
     user: Extension<CurrentUser>,
     Path(object): Path<PublicObject>,
 ) -> Result<Response, ApiError> {
-    twins_impl(state.0, user.0 .0, public_uri(&object), true).await
+    twins_impl(
+        state.0.clone(),
+        user.0 .0,
+        public_uri(&state.0, &object),
+        true,
+    )
+    .await
 }
 
 pub async fn public_sub_collections(
@@ -304,7 +337,7 @@ pub async fn public_sub_collections(
     user: Extension<CurrentUser>,
     Path(object): Path<PublicObject>,
 ) -> Result<Response, ApiError> {
-    sub_collections_impl(state.0, user.0 .0, public_uri(&object)).await
+    sub_collections_impl(state.0.clone(), user.0 .0, public_uri(&state.0, &object)).await
 }
 
 pub async fn public_metadata(
@@ -312,7 +345,7 @@ pub async fn public_metadata(
     user: Extension<CurrentUser>,
     Path(object): Path<PublicObject>,
 ) -> Result<Response, ApiError> {
-    metadata_impl(state.0, user.0 .0, public_uri(&object)).await
+    metadata_impl(state.0.clone(), user.0 .0, public_uri(&state.0, &object)).await
 }
 
 pub async fn user_uses(
@@ -320,7 +353,13 @@ pub async fn user_uses(
     user: Extension<CurrentUser>,
     Path(object): Path<UserObject>,
 ) -> Result<Response, ApiError> {
-    uses_impl(state.0, user.0 .0, user_uri(&object), false).await
+    uses_impl(
+        state.0.clone(),
+        user.0 .0,
+        user_uri(&state.0, &object),
+        false,
+    )
+    .await
 }
 
 pub async fn user_uses_count(
@@ -328,7 +367,13 @@ pub async fn user_uses_count(
     user: Extension<CurrentUser>,
     Path(object): Path<UserObject>,
 ) -> Result<Response, ApiError> {
-    uses_impl(state.0, user.0 .0, user_uri(&object), true).await
+    uses_impl(
+        state.0.clone(),
+        user.0 .0,
+        user_uri(&state.0, &object),
+        true,
+    )
+    .await
 }
 
 pub async fn user_twins(
@@ -336,7 +381,13 @@ pub async fn user_twins(
     user: Extension<CurrentUser>,
     Path(object): Path<UserObject>,
 ) -> Result<Response, ApiError> {
-    twins_impl(state.0, user.0 .0, user_uri(&object), false).await
+    twins_impl(
+        state.0.clone(),
+        user.0 .0,
+        user_uri(&state.0, &object),
+        false,
+    )
+    .await
 }
 
 pub async fn user_twins_count(
@@ -344,7 +395,13 @@ pub async fn user_twins_count(
     user: Extension<CurrentUser>,
     Path(object): Path<UserObject>,
 ) -> Result<Response, ApiError> {
-    twins_impl(state.0, user.0 .0, user_uri(&object), true).await
+    twins_impl(
+        state.0.clone(),
+        user.0 .0,
+        user_uri(&state.0, &object),
+        true,
+    )
+    .await
 }
 
 pub async fn user_sub_collections(
@@ -352,7 +409,7 @@ pub async fn user_sub_collections(
     user: Extension<CurrentUser>,
     Path(object): Path<UserObject>,
 ) -> Result<Response, ApiError> {
-    sub_collections_impl(state.0, user.0 .0, user_uri(&object)).await
+    sub_collections_impl(state.0.clone(), user.0 .0, user_uri(&state.0, &object)).await
 }
 
 pub async fn user_metadata(
@@ -360,7 +417,7 @@ pub async fn user_metadata(
     user: Extension<CurrentUser>,
     Path(object): Path<UserObject>,
 ) -> Result<Response, ApiError> {
-    metadata_impl(state.0, user.0 .0, user_uri(&object)).await
+    metadata_impl(state.0.clone(), user.0 .0, user_uri(&state.0, &object)).await
 }
 
 // Version-less object-relation routes. The UI fetches an object's relations off
@@ -385,8 +442,8 @@ pub async fn public_uses_pi(
     user: Extension<CurrentUser>,
     Path(object): Path<PublicObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
-    uses_impl(state.0, user.0 .0, uri, false).await
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&state.0, &object)).await?;
+    uses_impl(state.0.clone(), user.0 .0, uri, false).await
 }
 
 pub async fn public_uses_count_pi(
@@ -394,8 +451,8 @@ pub async fn public_uses_count_pi(
     user: Extension<CurrentUser>,
     Path(object): Path<PublicObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
-    uses_impl(state.0, user.0 .0, uri, true).await
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&state.0, &object)).await?;
+    uses_impl(state.0.clone(), user.0 .0, uri, true).await
 }
 
 pub async fn public_twins_pi(
@@ -403,8 +460,8 @@ pub async fn public_twins_pi(
     user: Extension<CurrentUser>,
     Path(object): Path<PublicObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
-    twins_impl(state.0, user.0 .0, uri, false).await
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&state.0, &object)).await?;
+    twins_impl(state.0.clone(), user.0 .0, uri, false).await
 }
 
 pub async fn public_twins_count_pi(
@@ -412,8 +469,8 @@ pub async fn public_twins_count_pi(
     user: Extension<CurrentUser>,
     Path(object): Path<PublicObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
-    twins_impl(state.0, user.0 .0, uri, true).await
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&state.0, &object)).await?;
+    twins_impl(state.0.clone(), user.0 .0, uri, true).await
 }
 
 pub async fn public_sub_collections_pi(
@@ -421,8 +478,8 @@ pub async fn public_sub_collections_pi(
     user: Extension<CurrentUser>,
     Path(object): Path<PublicObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
-    sub_collections_impl(state.0, user.0 .0, uri).await
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&state.0, &object)).await?;
+    sub_collections_impl(state.0.clone(), user.0 .0, uri).await
 }
 
 pub async fn public_metadata_pi(
@@ -430,8 +487,8 @@ pub async fn public_metadata_pi(
     user: Extension<CurrentUser>,
     Path(object): Path<PublicObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&object)).await?;
-    metadata_impl(state.0, user.0 .0, uri).await
+    let uri = resolve_pi(&state.0, &user.0 .0, public_pi_uri(&state.0, &object)).await?;
+    metadata_impl(state.0.clone(), user.0 .0, uri).await
 }
 
 pub async fn user_uses_pi(
@@ -439,8 +496,8 @@ pub async fn user_uses_pi(
     user: Extension<CurrentUser>,
     Path(object): Path<UserObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
-    uses_impl(state.0, user.0 .0, uri, false).await
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&state.0, &object)).await?;
+    uses_impl(state.0.clone(), user.0 .0, uri, false).await
 }
 
 pub async fn user_uses_count_pi(
@@ -448,8 +505,8 @@ pub async fn user_uses_count_pi(
     user: Extension<CurrentUser>,
     Path(object): Path<UserObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
-    uses_impl(state.0, user.0 .0, uri, true).await
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&state.0, &object)).await?;
+    uses_impl(state.0.clone(), user.0 .0, uri, true).await
 }
 
 pub async fn user_twins_pi(
@@ -457,8 +514,8 @@ pub async fn user_twins_pi(
     user: Extension<CurrentUser>,
     Path(object): Path<UserObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
-    twins_impl(state.0, user.0 .0, uri, false).await
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&state.0, &object)).await?;
+    twins_impl(state.0.clone(), user.0 .0, uri, false).await
 }
 
 pub async fn user_twins_count_pi(
@@ -466,8 +523,8 @@ pub async fn user_twins_count_pi(
     user: Extension<CurrentUser>,
     Path(object): Path<UserObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
-    twins_impl(state.0, user.0 .0, uri, true).await
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&state.0, &object)).await?;
+    twins_impl(state.0.clone(), user.0 .0, uri, true).await
 }
 
 pub async fn user_sub_collections_pi(
@@ -475,8 +532,8 @@ pub async fn user_sub_collections_pi(
     user: Extension<CurrentUser>,
     Path(object): Path<UserObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
-    sub_collections_impl(state.0, user.0 .0, uri).await
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&state.0, &object)).await?;
+    sub_collections_impl(state.0.clone(), user.0 .0, uri).await
 }
 
 pub async fn user_metadata_pi(
@@ -484,8 +541,8 @@ pub async fn user_metadata_pi(
     user: Extension<CurrentUser>,
     Path(object): Path<UserObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&object)).await?;
-    metadata_impl(state.0, user.0 .0, uri).await
+    let uri = resolve_pi(&state.0, &user.0 .0, user_pi_uri(&state.0, &object)).await?;
+    metadata_impl(state.0.clone(), user.0 .0, uri).await
 }
 
 async fn uses_impl(

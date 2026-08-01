@@ -186,7 +186,7 @@ pub async fn public_copy_from_remote(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(object): Path<PublicObject>,
 ) -> Result<Response, ApiError> {
-    copy_from_remote(&state, &user, public_uri(&object)).await
+    copy_from_remote(&state, &user, public_uri(&state, &object)).await
 }
 
 /// `GET/POST /user/<u>/<c>/<d>/<v>/copyFromRemote`.
@@ -195,7 +195,7 @@ pub async fn user_copy_from_remote(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(object): Path<UserObject>,
 ) -> Result<Response, ApiError> {
-    copy_from_remote(&state, &user, user_uri(&object)).await
+    copy_from_remote(&state, &user, user_uri(&state, &object)).await
 }
 
 /// `POST /sbsearch` — classic runs a sequence search and redirects to `/search`.

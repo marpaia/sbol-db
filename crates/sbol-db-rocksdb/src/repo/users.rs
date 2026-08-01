@@ -84,9 +84,9 @@ impl UserStore for RocksdbUserStore {
         let db = self.db.clone();
         let identifier = identifier.to_owned();
         blocking(move || {
-            let id = match db.get_cf(CF_BY_EMAIL, identifier.as_bytes())? {
+            let id = match db.get_cf(CF_BY_USERNAME, identifier.as_bytes())? {
                 Some(bytes) => Some(user_id_from_bytes(&bytes)?),
-                None => match db.get_cf(CF_BY_USERNAME, identifier.as_bytes())? {
+                None => match db.get_cf(CF_BY_EMAIL, identifier.as_bytes())? {
                     Some(bytes) => Some(user_id_from_bytes(&bytes)?),
                     None => None,
                 },

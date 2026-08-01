@@ -103,9 +103,9 @@ macro_rules! download_routes {
         ) -> Result<Response, ApiError> {
             let display_id = object.display_id.clone();
             download(
-                state,
+                state.clone(),
                 user,
-                public_uri(&object),
+                public_uri(&state, &object),
                 display_id,
                 $format,
                 params.version,
@@ -121,9 +121,9 @@ macro_rules! download_routes {
         ) -> Result<Response, ApiError> {
             let display_id = object.display_id.clone();
             download(
-                state,
+                state.clone(),
                 user,
-                user_uri(&object),
+                user_uri(&state, &object),
                 display_id,
                 $format,
                 params.version,
@@ -177,9 +177,9 @@ macro_rules! object_routes {
         ) -> Result<Response, ApiError> {
             let display_id = object.display_id.clone();
             download(
-                state,
+                state.clone(),
                 user,
-                public_uri(&object),
+                public_uri(&state, &object),
                 display_id,
                 Format::Sbol,
                 None,
@@ -194,9 +194,9 @@ macro_rules! object_routes {
         ) -> Result<Response, ApiError> {
             let display_id = object.display_id.clone();
             download(
-                state,
+                state.clone(),
                 user,
-                user_uri(&object),
+                user_uri(&state, &object),
                 display_id,
                 Format::Sbol,
                 None,
@@ -209,7 +209,7 @@ macro_rules! object_routes {
             Extension(CurrentUser(user)): Extension<CurrentUser>,
             Path(object): Path<PublicObjectPi>,
         ) -> Result<Response, ApiError> {
-            let pi = public_pi_uri(&object);
+            let pi = public_pi_uri(&state, &object);
             let scope = scope_for(&state, &user).await?;
             let uri = latest_version_uri(&state, scope, &pi)
                 .await?
@@ -222,7 +222,7 @@ macro_rules! object_routes {
             Extension(CurrentUser(user)): Extension<CurrentUser>,
             Path(object): Path<UserObjectPi>,
         ) -> Result<Response, ApiError> {
-            let pi = user_pi_uri(&object);
+            let pi = user_pi_uri(&state, &object);
             let scope = scope_for(&state, &user).await?;
             let uri = latest_version_uri(&state, scope, &pi)
                 .await?
@@ -246,9 +246,9 @@ pub async fn public_object_full(
 ) -> Result<Response, ApiError> {
     let display_id = object.display_id.clone();
     download(
-        state,
+        state.clone(),
         user,
-        public_uri(&object),
+        public_uri(&state, &object),
         display_id,
         Format::Sbol,
         None,
@@ -264,9 +264,9 @@ pub async fn user_object_full(
 ) -> Result<Response, ApiError> {
     let display_id = object.display_id.clone();
     download(
-        state,
+        state.clone(),
         user,
-        user_uri(&object),
+        user_uri(&state, &object),
         display_id,
         Format::Sbol,
         None,
@@ -285,7 +285,7 @@ macro_rules! versionless_download_routes {
             Path(object): Path<PublicObjectPi>,
             Query(params): Query<DownloadParams>,
         ) -> Result<Response, ApiError> {
-            let pi = public_pi_uri(&object);
+            let pi = public_pi_uri(&state, &object);
             let scope = scope_for(&state, &user).await?;
             let uri = latest_version_uri(&state, scope, &pi)
                 .await?
@@ -299,7 +299,7 @@ macro_rules! versionless_download_routes {
             Path(object): Path<UserObjectPi>,
             Query(params): Query<DownloadParams>,
         ) -> Result<Response, ApiError> {
-            let pi = user_pi_uri(&object);
+            let pi = user_pi_uri(&state, &object);
             let scope = scope_for(&state, &user).await?;
             let uri = latest_version_uri(&state, scope, &pi)
                 .await?
@@ -414,7 +414,9 @@ async fn fetch_closure(
     // into a known Web of Registries instance is fetched remotely and spliced
     // in. A non-federated instance has an empty map, so this stays local.
     let resolver = std::sync::Arc::new(state.app.federation());
-    let downloader = Downloader::new(state.app.sparql.clone()).with_remote_resolver(resolver);
+    let downloader = Downloader::new(state.app.sparql.clone())
+        .with_database_prefix(state.app.registry_namespace.database_prefix())
+        .with_remote_resolver(resolver);
     let triples = match format {
         Format::SbolNonRecursive => downloader.fetch_non_recursive(uri, scope).await?,
         _ => downloader.fetch_recursive(uri, scope).await?,

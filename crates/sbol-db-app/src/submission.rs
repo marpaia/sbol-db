@@ -256,7 +256,8 @@ impl SubmissionService {
     fn prepare(&self, request: &SubmitRequest) -> Result<PreparedSubmission, DomainError> {
         let source_format = request.format;
         let source_standard = source_standard(&request.body, source_format);
-        let (body, format, normalized_standard, notices) = normalize_sequence_submission(request)?;
+        let (body, format, normalized_standard, notices) =
+            normalize_sequence_submission(request, self.collection.database_prefix())?;
         let submission = Submission {
             body,
             format,
@@ -363,6 +364,7 @@ fn rdf_format_for_detection(format: SerializationFormat) -> sbol::RdfFormat {
 
 fn normalize_sequence_submission(
     request: &SubmitRequest,
+    database_prefix: &str,
 ) -> Result<(String, SerializationFormat, String, Vec<SubmitNotice>), DomainError> {
     if !matches!(
         request.format,
@@ -377,8 +379,8 @@ fn normalize_sequence_submission(
     }
 
     let conversion_namespace = format!(
-        "http://synbiohub.org/user/{}/{}/source",
-        request.owner, request.id
+        "{database_prefix}user/{}/{}/source",
+        request.owner, request.id,
     );
     let document = parse_import_document(&ImportInput {
         body: request.body.clone(),

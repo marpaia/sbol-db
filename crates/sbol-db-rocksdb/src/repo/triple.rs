@@ -12,7 +12,7 @@ use rocksdb::WriteBatch;
 use sbol_db_core::{DomainError, IriString, Triple};
 use sbol_db_storage::{
     GraphFilter, IdGraphFilter, IdQuad, PatternObject, PatternSubject, TermId as StorageTermId,
-    TermKey, TermValue,
+    TermKey, TermValue, TripleScanPage,
 };
 
 use crate::codec::{Term, TermId};
@@ -252,6 +252,47 @@ impl TripleRepository {
         })
         .await
         .map_err(join_err)?
+    }
+
+    /// Stable keyset page over one named graph. The opaque cursor is the hex
+    /// encoding of the last GSPO index key returned.
+    pub fn scan_graph_page(
+        &self,
+        graph: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<TripleScanPage, DomainError> {
+        if limit == 0 {
+            return Err(DomainError::InvalidInput(
+                "graph page limit must be greater than zero".to_owned(),
+            ));
+        }
+        let gid = Term::named(graph).id();
+        let after_key = after
+            .map(hex::decode)
+            .transpose()
+            .map_err(|_| DomainError::InvalidInput("invalid RocksDB graph cursor".to_owned()))?;
+        if after_key
+            .as_ref()
+            .is_some_and(|key| key.len() != 64 || !key.starts_with(&gid))
+        {
+            return Err(DomainError::InvalidInput(
+                "RocksDB graph cursor does not belong to this graph".to_owned(),
+            ));
+        }
+        let mut items = Vec::with_capacity(limit);
+        let mut last_key = None;
+        self.db
+            .for_each_prefix_after(GSPO.cf, &gid, after_key.as_deref(), |key, _| {
+                let quad = keys::decode_key(GSPO, key);
+                items.push(self.materialize(&quad)?);
+                last_key = Some(key.to_vec());
+                Ok(items.len() < limit)
+            })?;
+        let next_cursor = (items.len() == limit)
+            .then(|| last_key.as_deref().map(hex::encode))
+            .flatten();
+        Ok(TripleScanPage { items, next_cursor })
     }
 
     pub fn distinct_named_graphs_blocking(&self) -> Result<Vec<String>, DomainError> {

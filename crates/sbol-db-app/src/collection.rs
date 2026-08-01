@@ -160,7 +160,14 @@ impl CollectionService {
     /// deployment-specific; a caller wires its configured prefix here.
     pub fn with_database_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.database_prefix = prefix.into();
+        if !self.database_prefix.ends_with('/') {
+            self.database_prefix.push('/');
+        }
         self
+    }
+
+    pub fn database_prefix(&self) -> &str {
+        &self.database_prefix
     }
 
     /// The user graph IRI for `owner`: `<prefix>user/<owner>`. This is the value

@@ -23,8 +23,8 @@ use sbol_db_storage::{
     LabStore, ListGraphsFilter, ListObjectsFilter, NeighborhoodStore, ObjectStore,
     OntologyLoadReport, OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject,
     PatternSubject, SbolStore, SequenceMatch, SequenceSearchOptions, SequenceSearchStore, TermId,
-    TermKey, TermValue, TextSearchQuery, TextSearchStore, TripleChange, TripleSource, TripleWriter,
-    UpdateOutcome, SBH_CAN_VIEW, SBH_OWNED_BY,
+    TermKey, TermValue, TextSearchQuery, TextSearchStore, TripleChange, TripleScanPage,
+    TripleSource, TripleWriter, UpdateOutcome, SBH_CAN_VIEW, SBH_OWNED_BY,
 };
 
 use crate::codec::Term;
@@ -278,6 +278,18 @@ impl RocksdbStore {
         self.triples
             .triples_for_graph(Some(graph), GRAPH_READ_LIMIT)
             .await
+    }
+
+    async fn graph_store_read_page(
+        &self,
+        graph: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<TripleScanPage, DomainError> {
+        let triples = self.triples.clone();
+        let graph = graph.to_owned();
+        let after = after.map(ToOwned::to_owned);
+        blocking(move || triples.scan_graph_page(&graph, after.as_deref(), limit)).await
     }
 }
 
@@ -782,6 +794,15 @@ impl SbolStore for RocksdbStore {
 
     async fn graph_store_read(&self, graph: &str) -> Result<Vec<Triple>, DomainError> {
         RocksdbStore::graph_store_read(self, graph).await
+    }
+
+    async fn graph_store_read_page(
+        &self,
+        graph: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<TripleScanPage, DomainError> {
+        RocksdbStore::graph_store_read_page(self, graph, after, limit).await
     }
 
     async fn triples_for_subject(&self, subject_iri: &str) -> Result<Vec<Triple>, DomainError> {

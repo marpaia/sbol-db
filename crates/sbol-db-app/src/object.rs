@@ -14,7 +14,7 @@ use sbol_db_rdf::GRAPH_IRI_PREFIX;
 use sbol_db_sparql::{GraphScope, ResultFormat, SparqlOptions};
 use serde::Serialize;
 
-use crate::{AppServices, PUBLIC_GRAPH};
+use crate::AppServices;
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const DCTERMS_TITLE: &str = "http://purl.org/dc/terms/title";
@@ -419,7 +419,9 @@ impl AppServices {
             types,
             roles: iri_values(triples, &[SBOL2_ROLE, SBOL3_ROLE]),
             source_graph: scoped.source_graph.clone(),
-            visibility: if scoped.source_graph.as_deref() == Some(PUBLIC_GRAPH) {
+            visibility: if scoped.source_graph.as_deref()
+                == Some(self.registry_namespace.public_graph())
+            {
                 ObjectVisibility::Public
             } else {
                 ObjectVisibility::Restricted
@@ -497,18 +499,35 @@ impl AppServices {
         &self,
         user_graph: &str,
     ) -> Result<Vec<ObjectDetails>, DomainError> {
+        Ok(self
+            .shared_object_details_page(user_graph, 0, usize::MAX)
+            .await?
+            .0)
+    }
+
+    /// Paginated variant used by the production workspace. The ACL relation
+    /// itself is normalized and sorted before slicing, so stable pages do not
+    /// omit or repeat grants while object materialization stays bounded.
+    pub async fn shared_object_details_page(
+        &self,
+        user_graph: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<ObjectDetails>, usize), DomainError> {
         let scope = self.acl_service.compute_scope(Some(user_graph)).await?;
         let mut iris = self.acl.viewable_objects(user_graph).await?;
         iris.sort();
         iris.dedup();
-        let mut items = Vec::with_capacity(iris.len());
-        for iri in iris {
+        let total = iris.len();
+        let selected = iris.into_iter().skip(offset).take(limit);
+        let mut items = Vec::with_capacity(limit.min(total.saturating_sub(offset)));
+        for iri in selected {
             if let Some(details) = self.object_details(&iri, scope.clone()).await? {
                 items.push(details);
             }
         }
         items.sort_by(|left, right| left.iri.cmp(&right.iri));
-        Ok(items)
+        Ok((items, total))
     }
 
     /// User graph IRIs carrying an explicit read-only share for `object_iri`.
@@ -566,7 +585,12 @@ impl AppServices {
             })
             .filter(|graph| graph_allowed(graph, &query_scope))
             .collect::<Vec<_>>();
-        candidates.sort_by(|left, right| graph_priority(left).cmp(&graph_priority(right)));
+        candidates.sort_by(|left, right| {
+            graph_priority(left, self.registry_namespace.public_graph()).cmp(&graph_priority(
+                right,
+                self.registry_namespace.public_graph(),
+            ))
+        });
         candidates.dedup();
 
         let physical_graph = candidates.first().cloned();
@@ -827,8 +851,8 @@ fn graph_allowed(graph: &str, scope: &GraphScope) -> bool {
     }
 }
 
-fn graph_priority(graph: &str) -> (u8, &str) {
-    let priority = if graph == PUBLIC_GRAPH {
+fn graph_priority<'a>(graph: &'a str, public_graph: &str) -> (u8, &'a str) {
+    let priority = if graph == public_graph {
         0
     } else if graph.starts_with(GRAPH_IRI_PREFIX) {
         2

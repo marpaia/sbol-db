@@ -81,7 +81,7 @@ pub async fn user_make_public(
         .unwrap_or_else(|| object.version.clone());
 
     let request = MakePublicRequest {
-        source_uri: user_uri(&object),
+        source_uri: user_uri(&state, &object),
         owner_username: object.user_id.clone(),
         public_id,
         version,
@@ -131,7 +131,7 @@ pub async fn user_remove(
 ) -> Result<Response, ApiError> {
     let user = require_user(user)?;
     service(&state)
-        .remove(&user.graph_uri, user.is_admin, &user_uri(&object))
+        .remove(&user.graph_uri, user.is_admin, &user_uri(&state, &object))
         .await?;
     Ok(success())
 }
@@ -143,7 +143,7 @@ pub async fn public_remove(
 ) -> Result<Response, ApiError> {
     let user = require_user(user)?;
     service(&state)
-        .remove(&user.graph_uri, user.is_admin, &public_uri(&object))
+        .remove(&user.graph_uri, user.is_admin, &public_uri(&state, &object))
         .await?;
     Ok(success())
 }
@@ -155,7 +155,7 @@ pub async fn user_replace(
 ) -> Result<Response, ApiError> {
     let user = require_user(user)?;
     service(&state)
-        .replace(&user.graph_uri, user.is_admin, &user_uri(&object))
+        .replace(&user.graph_uri, user.is_admin, &user_uri(&state, &object))
         .await?;
     Ok(success())
 }
@@ -167,7 +167,7 @@ pub async fn public_replace(
 ) -> Result<Response, ApiError> {
     let user = require_user(user)?;
     service(&state)
-        .replace(&user.graph_uri, user.is_admin, &public_uri(&object))
+        .replace(&user.graph_uri, user.is_admin, &public_uri(&state, &object))
         .await?;
     Ok(success())
 }
@@ -179,7 +179,7 @@ pub async fn user_remove_collection(
 ) -> Result<Response, ApiError> {
     let user = require_user(user)?;
     service(&state)
-        .remove_collection(&user.graph_uri, user.is_admin, &user_uri(&object))
+        .remove_collection(&user.graph_uri, user.is_admin, &user_uri(&state, &object))
         .await?;
     Ok(success())
 }
@@ -191,7 +191,7 @@ pub async fn public_remove_collection(
 ) -> Result<Response, ApiError> {
     let user = require_user(user)?;
     service(&state)
-        .remove_collection(&user.graph_uri, user.is_admin, &public_uri(&object))
+        .remove_collection(&user.graph_uri, user.is_admin, &public_uri(&state, &object))
         .await?;
     Ok(success())
 }
@@ -208,7 +208,7 @@ pub async fn user_icon(
     Path(object): Path<UserObject>,
     multipart: Multipart,
 ) -> Result<Response, ApiError> {
-    store_icon(&state, user, user_uri(&object), multipart).await
+    store_icon(&state, user, user_uri(&state, &object), multipart).await
 }
 
 pub async fn public_icon(
@@ -217,7 +217,7 @@ pub async fn public_icon(
     Path(object): Path<PublicObject>,
     multipart: Multipart,
 ) -> Result<Response, ApiError> {
-    store_icon(&state, user, public_uri(&object), multipart).await
+    store_icon(&state, user, public_uri(&state, &object), multipart).await
 }
 
 /// Owner-gate the request, then store the first uploaded file part in the blob

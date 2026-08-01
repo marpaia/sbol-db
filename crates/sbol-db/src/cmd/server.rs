@@ -8,9 +8,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use sbol_db_app::{AppServices, LegacyExplorerStrategy};
+use sbol_db_app::{
+    AppServices, FsBlobStore, LegacyExplorerStrategy, RegistryNamespace,
+    DEFAULT_REGISTRY_DATABASE_PREFIX,
+};
 use sbol_db_backend::Backend;
 use sbol_db_jobs::{default_registry, SearchIndexHandles, Worker, WorkerConfig};
+use sbol_db_search::ranked_text::RankedTextIndex;
 use sbol_db_search::VectorIndexMaintainerRegistry;
 use sbol_db_search_sdk::IndexMutationSource;
 use sbol_db_server::{explorer_router, router, AppState, Metrics};
@@ -69,7 +73,35 @@ pub async fn run(
         backend.triple_source.clone(),
         backend.triple_writer.clone(),
     ));
-    let mut app_services = AppServices::from_backend(&backend);
+    let namespace = resolve_registry_namespace(backend.config.clone(), &config).await?;
+    tracing::info!(
+        database_prefix = namespace.database_prefix(),
+        public_graph = namespace.public_graph(),
+        "registry namespace configured"
+    );
+    let mut app_services = AppServices::from_backend(&backend).with_registry_namespace(namespace);
+    if let Some(root) = &config.blob_root {
+        std::fs::create_dir_all(root)
+            .with_context(|| format!("create durable blob root {}", root.display()))?;
+        app_services = app_services.with_blobs(Arc::new(FsBlobStore::new(root)));
+        tracing::info!(path = %root.display(), "durable blob store configured");
+    } else {
+        tracing::warn!(
+            "SBOL_DB_BLOB_ROOT is unset; attachment blobs use the ephemeral development path"
+        );
+    }
+    if let Some(path) = &config.text_index_path {
+        std::fs::create_dir_all(path)
+            .with_context(|| format!("create text-index directory {}", path.display()))?;
+        let text_index = RankedTextIndex::open_or_create(path)
+            .with_context(|| format!("open text index {}", path.display()))?;
+        app_services = app_services.with_text_search(Arc::new(text_index));
+        tracing::info!(path = %path.display(), "durable text index configured");
+    } else {
+        tracing::warn!(
+            "SBOL_DB_TEXT_INDEX_PATH is unset; ranked text search uses an in-memory index"
+        );
+    }
 
     let built_in_search = search_config.is_none();
     if built_in_search && no_worker {
@@ -236,6 +268,43 @@ pub async fn run(
     }
     tracing::info!("sbol-db server loop exited cleanly");
     Ok(())
+}
+
+async fn resolve_registry_namespace(
+    store: Arc<dyn ConfigStore>,
+    runtime: &sbol_db_server::ServerConfig,
+) -> Result<RegistryNamespace> {
+    let persisted = store.get("registryNamespace").await?;
+    let theme = store.get("theme").await?;
+    let persisted_prefix = persisted
+        .as_ref()
+        .and_then(|value| value.get("databasePrefix"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            theme
+                .as_ref()
+                .and_then(|value| value.get("uriPrefix"))
+                .and_then(serde_json::Value::as_str)
+        });
+    let database_prefix = runtime
+        .database_prefix
+        .as_deref()
+        .or(persisted_prefix)
+        .unwrap_or(DEFAULT_REGISTRY_DATABASE_PREFIX);
+    let mut normalized_prefix = database_prefix.to_owned();
+    if !normalized_prefix.ends_with('/') {
+        normalized_prefix.push('/');
+    }
+    let persisted_public = persisted
+        .as_ref()
+        .and_then(|value| value.get("publicGraph"))
+        .and_then(serde_json::Value::as_str);
+    let public_graph = runtime
+        .public_graph
+        .clone()
+        .or_else(|| persisted_public.map(ToOwned::to_owned))
+        .unwrap_or_else(|| format!("{normalized_prefix}public"));
+    Ok(RegistryNamespace::new(normalized_prefix, public_graph)?)
 }
 
 /// Constructed setup for an embedded / standalone worker: the backend-neutral

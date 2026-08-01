@@ -29,7 +29,7 @@ use sbol_db_search_sdk::{IndexMaintenanceEvent, IndexMutationSource};
 use sbol_db_sparql::{SparqlError, SparqlOptions, SparqlUpdateEngine};
 use sbol_db_storage::{GraphWriteMode, ImportOverwrite, SbolStore};
 
-use crate::acl::{AclService, PUBLIC_GRAPH};
+use crate::acl::AclService;
 use crate::collection::{CollectionService, MintScope};
 use crate::SearchMaintenanceScheduler;
 
@@ -128,6 +128,11 @@ impl MutationService {
     /// Attach automatic search maintenance to this mutation service.
     pub fn with_maintenance(mut self, maintenance: Arc<SearchMaintenanceScheduler>) -> Self {
         self.maintenance = Some(maintenance);
+        self
+    }
+
+    pub fn with_database_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.collection = self.collection.with_database_prefix(prefix);
         self
     }
 
@@ -271,7 +276,7 @@ impl MutationService {
         let triple_count = self
             .store
             .graph_store_write(
-                PUBLIC_GRAPH,
+                self.acl_service.public_graph(),
                 &body,
                 SerializationFormat::NTriples,
                 GraphWriteMode::Merge,

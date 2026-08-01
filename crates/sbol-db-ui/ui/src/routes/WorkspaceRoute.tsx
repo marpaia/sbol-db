@@ -1,5 +1,7 @@
 import {
   ClipboardCheck,
+  ChevronLeft,
+  ChevronRight,
   FilePlus2,
   FolderKanban,
   LockKeyhole,
@@ -7,6 +9,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
+import { useState } from "react";
 
 import { ObjectResultCard } from "@/components/portal/ObjectResultCard";
 import { SurfaceState } from "@/components/portal/SurfaceState";
@@ -27,6 +30,7 @@ import {
 import { publicObjectPath } from "@/lib/routes";
 
 const COLLECTION = "http://sbols.org/v2#Collection";
+const PAGE_SIZE = 24;
 
 export default function WorkspaceRoute() {
   const session = useSession();
@@ -214,12 +218,14 @@ function ReviewQueueCard({
 }
 
 function OwnedCollections({ owner }: { owner: string }) {
+  const [page, setPage] = useState(0);
   const collections = usePortalSearch({
     owner,
     type: COLLECTION,
     sort: "modified",
     direction: "desc",
-    limit: 100,
+    offset: page * PAGE_SIZE,
+    limit: PAGE_SIZE,
   });
 
   if (collections.isLoading) return <CollectionGridSkeleton />;
@@ -261,14 +267,17 @@ function OwnedCollections({ owner }: { owner: string }) {
     <ObjectGrid
       items={collections.data.items}
       total={collections.data.total}
-      capped={collections.data.total > collections.data.items.length}
+      page={page}
+      pageSize={PAGE_SIZE}
+      onPage={setPage}
       noun="owned collection"
     />
   );
 }
 
 function SharedObjects() {
-  const shared = useSharedObjects();
+  const [page, setPage] = useState(0);
+  const shared = useSharedObjects(page * PAGE_SIZE, PAGE_SIZE);
   if (shared.isLoading) return <CollectionGridSkeleton />;
   if (shared.error) {
     return (
@@ -297,6 +306,9 @@ function SharedObjects() {
     <ObjectGrid
       items={shared.data.items.map(detailsToHit)}
       total={shared.data.total}
+      page={page}
+      pageSize={PAGE_SIZE}
+      onPage={setPage}
       noun="shared object"
     />
   );
@@ -305,14 +317,21 @@ function SharedObjects() {
 function ObjectGrid({
   items,
   total,
-  capped = false,
+  page,
+  pageSize,
+  onPage,
   noun,
 }: {
   items: PortalSearchHit[];
   total: number;
-  capped?: boolean;
+  page: number;
+  pageSize: number;
+  onPage: (page: number) => void;
   noun: string;
 }) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const start = total === 0 ? 0 : page * pageSize + 1;
+  const end = Math.min(total, (page + 1) * pageSize);
   return (
     <>
       <div className="mb-4 flex items-center justify-between gap-4 text-xs text-muted-foreground">
@@ -320,13 +339,41 @@ function ObjectGrid({
           {total.toLocaleString()} {noun}
           {total === 1 ? "" : "s"}
         </span>
-        {capped && <span>Showing the 100 most recently modified</span>}
+        <span>
+          Showing {start.toLocaleString()}–{end.toLocaleString()}
+        </span>
       </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {items.map((item) => (
           <ObjectResultCard key={item.uri} hit={item} />
         ))}
       </div>
+      {totalPages > 1 && (
+        <nav
+          aria-label={`${noun} pages`}
+          className="mt-6 flex items-center justify-between border-t pt-4 text-xs text-muted-foreground"
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onPage(Math.max(0, page - 1))}
+            disabled={page === 0}
+          >
+            <ChevronLeft /> Previous
+          </Button>
+          <span className="tabular-nums">
+            Page {(page + 1).toLocaleString()} of {totalPages.toLocaleString()}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onPage(Math.min(totalPages - 1, page + 1))}
+            disabled={page >= totalPages - 1}
+          >
+            Next <ChevronRight />
+          </Button>
+        </nav>
+      )}
     </>
   );
 }

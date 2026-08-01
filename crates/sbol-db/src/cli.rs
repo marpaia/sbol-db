@@ -171,46 +171,70 @@ pub enum Command {
         action: UtilAction,
     },
 
-    /// Load a classic SynBioHub instance into this sbol-db.
+    /// Inspect a classic SynBioHub snapshot without opening an SBOL DB target.
     ///
-    /// Reads an unpacked classic instance (or its individual parts) and
-    /// reconstructs the equivalent state: the Virtuoso RDF dump is loaded
-    /// verbatim graph-by-graph, `synbiohub.sqlite` users become accounts with
-    /// their legacy password hash kept intact, the `uploads/` blob tree is
-    /// copied into the blob-store root, each `config.local.json` key is written
-    /// to durable config, and a search-index rebuild is enqueued.
-    ///
-    /// Pending schema migrations run first unless `--skip-migrations`.
-    MigrateSynbiohub {
-        /// Root of an unpacked classic instance. Supplies the default location
-        /// of any part not given its own path.
+    /// Discovers the production filesystem layout, validates the SQLite
+    /// account database and upload tree, streams an optional RDF export, and
+    /// writes a content-addressed source manifest. Missing or inconsistent
+    /// required inputs are blockers by default.
+    PreflightSynbiohub {
+        /// Root of the copied classic instance.
         #[arg(long)]
         source: Option<PathBuf>,
-        /// Virtuoso RDF dump (N-Quads or TriG). Defaults to `<source>/dump.nq`.
+        /// Raw Virtuoso database. Defaults to `<source>/virtuoso.db`.
+        #[arg(long)]
+        virtuoso_db: Option<PathBuf>,
+        /// Virtuoso N-Quads or TriG export. Defaults to a discovered dump under
+        /// `--source`; a raw `.db` alone is inventoried but cannot be reconciled.
         #[arg(long)]
         rdf: Option<PathBuf>,
-        /// Classic `synbiohub.sqlite`. Defaults to `<source>/synbiohub.sqlite`.
+        /// Classic account SQLite database. Production-layout discovery checks
+        /// `<source>/sbhData/data/synbiohub.sqlite` as well as the flat layout.
         #[arg(long)]
         sqlite: Option<PathBuf>,
-        /// Classic `uploads/` blob tree. Defaults to `<source>/uploads`.
+        /// Classic uploads tree.
         #[arg(long)]
         uploads: Option<PathBuf>,
-        /// Classic `config.local.json`. Defaults to
-        /// `<source>/config.local.json`.
+        /// Classic `config.local.json` overlay.
         #[arg(long)]
         config: Option<PathBuf>,
+        /// Shipped classic `config.json` defaults used to compute the effective
+        /// configuration (including whether a legacy password salt is present).
+        #[arg(long)]
+        config_defaults: Option<PathBuf>,
+        /// Write the complete manifest atomically to this path. When set,
+        /// stdout receives a compact summary rather than every blob entry.
+        #[arg(long)]
+        report: Option<PathBuf>,
+        /// Return success even when the report contains blockers. The report's
+        /// `ready_for_import` field remains false.
+        #[arg(long)]
+        allow_blockers: bool,
+    },
+
+    /// Run a manifest-gated, resumable classic SynBioHub production import.
+    ///
+    /// This command is Postgres-only. It re-verifies the preflight artifacts,
+    /// refuses a non-empty unrelated target, persists a stage ledger, streams
+    /// RDF in bounded batches, preserves classic accounts and password hashes,
+    /// stages blobs for atomic promotion, and reconciles every graph before the
+    /// run can become ready.
+    MigrateSynbiohub {
+        /// Complete JSON emitted by `preflight-synbiohub --report`.
+        #[arg(long)]
+        manifest: PathBuf,
+        /// Optional JSON containing blocker waiver reasons and explicit
+        /// dispositions for non-public/non-user graphs.
+        #[arg(long)]
+        policy: Option<PathBuf>,
         /// Blob-store root the uploads tree is copied under (as
         /// `<root>/uploads`), matching the server's configured blob path.
         #[arg(long)]
         blob_store: PathBuf,
-        /// Named graph to load default-graph (unnamed) triples into. Unset
-        /// counts and skips them, since a SynBioHub dump keeps everything in
-        /// named graphs.
-        #[arg(long)]
-        default_graph: Option<String>,
-        /// Do not apply pending schema migrations before loading.
-        #[arg(long)]
-        skip_migrations: bool,
+        /// RDF and identity batch size. Bounds importer memory and transaction
+        /// size; it does not change migration semantics.
+        #[arg(long, default_value_t = 25_000)]
+        chunk_size: usize,
         /// Do not enqueue the search-index rebuild after loading.
         #[arg(long)]
         no_reindex: bool,

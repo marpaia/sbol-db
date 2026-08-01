@@ -236,6 +236,34 @@ impl Db {
         Ok(())
     }
 
+    /// Iterate a prefix range strictly after an opaque prior key. The cursor
+    /// is the exact last key returned by a previous page, so this remains
+    /// stable without OFFSET even while the database contains many graphs.
+    pub fn for_each_prefix_after(
+        &self,
+        cf: &str,
+        prefix: &[u8],
+        after: Option<&[u8]>,
+        mut f: impl FnMut(&[u8], &[u8]) -> Result<bool, DomainError>,
+    ) -> Result<(), DomainError> {
+        let handle = self.cf(cf);
+        let start = after.unwrap_or(prefix);
+        let mode = rocksdb::IteratorMode::From(start, rocksdb::Direction::Forward);
+        for item in self.inner.iterator_cf(&handle, mode) {
+            let (key, value) = item.map_err(db_err)?;
+            if !key.starts_with(prefix) {
+                break;
+            }
+            if after.is_some_and(|cursor| key.as_ref() == cursor) {
+                continue;
+            }
+            if !f(&key, &value)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// Read an integer-valued RocksDB property (e.g. `rocksdb.estimate-num-keys`)
     /// for one column family. Returns `None` when the property is unset or the
     /// engine cannot compute it.

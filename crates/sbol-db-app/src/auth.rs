@@ -61,18 +61,36 @@ pub struct ProfileUpdate {
 pub struct AuthService {
     users: Arc<dyn UserStore>,
     tokens: Arc<dyn TokenStore>,
+    database_prefix: String,
 }
 
 impl AuthService {
     /// Build the service over the identity stores.
     pub fn new(users: Arc<dyn UserStore>, tokens: Arc<dyn TokenStore>) -> Self {
-        Self { users, tokens }
+        Self {
+            users,
+            tokens,
+            database_prefix: crate::DEFAULT_REGISTRY_DATABASE_PREFIX.to_owned(),
+        }
+    }
+
+    pub fn with_database_prefix(mut self, database_prefix: impl Into<String>) -> Self {
+        let mut database_prefix = database_prefix.into();
+        if !database_prefix.ends_with('/') {
+            database_prefix.push('/');
+        }
+        self.database_prefix = database_prefix;
+        self
     }
 
     /// The named graph an account owns, the identity-to-RDF bridge ACL scoping
     /// keys on. Matches SynBioHub's `databasePrefix + user/<username>`.
     pub fn graph_uri(username: &str) -> String {
         format!("http://synbiohub.org/user/{username}")
+    }
+
+    pub fn user_graph_uri(&self, username: &str) -> String {
+        format!("{}user/{username}", self.database_prefix)
     }
 
     /// Whether the instance has any administrator. A fresh instance has none and
@@ -100,7 +118,7 @@ impl AuthService {
             }
         }
         let password_hash = hash_password(&registration.password)?;
-        let graph_uri = Self::graph_uri(&registration.username);
+        let graph_uri = self.user_graph_uri(&registration.username);
         let new_user = NewUser {
             username: registration.username,
             name: registration.name,
@@ -384,6 +402,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(by_email.id, user.id);
+    }
+
+    #[tokio::test]
+    async fn configured_namespace_controls_new_user_graphs() {
+        let (auth, _) = service();
+        let auth = auth.with_database_prefix("https://synbiohub.org");
+        let user = auth.register(registration("s3cret")).await.unwrap();
+        assert_eq!(user.graph_uri, "https://synbiohub.org/user/alice");
     }
 
     #[tokio::test]

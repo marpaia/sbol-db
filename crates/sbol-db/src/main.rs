@@ -32,6 +32,34 @@ async fn main() -> Result<()> {
         return cmd::util::run(action).await;
     }
 
+    // Source preflight is intentionally target-free: it must work before a
+    // destination database exists and must never mutate one accidentally.
+    if let Command::PreflightSynbiohub {
+        source,
+        virtuoso_db,
+        rdf,
+        sqlite,
+        uploads,
+        config,
+        config_defaults,
+        report,
+        allow_blockers,
+    } = cli.command
+    {
+        return cmd::migrate::preflight::run(cmd::migrate::preflight::PreflightInputs {
+            source,
+            virtuoso_db,
+            rdf,
+            sqlite,
+            uploads,
+            config,
+            config_defaults,
+            report,
+            allow_blockers,
+        })
+        .await;
+    }
+
     let database_url = resolve_connection(cli.backend, &cli.database_url)?;
     let backend = open_backend(&database_url, &cli.command).await?;
 
@@ -92,36 +120,28 @@ async fn main() -> Result<()> {
             cmd::inspect::run(stats, action).await
         }
         Command::MigrateSynbiohub {
-            source,
-            rdf,
-            sqlite,
-            uploads,
-            config,
+            manifest,
+            policy,
             blob_store,
-            default_graph,
-            skip_migrations,
+            chunk_size,
             no_reindex,
         } => {
-            cmd::migrate::run(
-                backend.store.clone(),
-                backend.users.clone(),
+            let pool = backend.require_postgres()?.pool.clone();
+            cmd::migrate::production::run(
+                pool,
                 backend.config.clone(),
                 backend.jobs.clone(),
-                backend.migrator.clone(),
-                cmd::migrate::MigrateInputs {
-                    source,
-                    rdf,
-                    sqlite,
-                    uploads,
-                    config,
+                cmd::migrate::production::ProductionInputs {
+                    manifest,
+                    policy,
                     blob_store,
-                    default_graph,
-                    skip_migrations,
+                    chunk_size,
                     no_reindex,
                 },
             )
             .await
         }
+        Command::PreflightSynbiohub { .. } => unreachable!("handled before backend open"),
         Command::Util { .. } => unreachable!("handled before backend open"),
     }
 }

@@ -25,6 +25,7 @@ mod federation;
 mod maintenance;
 pub mod memory;
 mod mutation;
+mod namespace;
 mod object;
 mod permission;
 mod plugin;
@@ -51,6 +52,10 @@ pub use federation::{
 };
 pub use maintenance::{MaintenanceScheduleReceipt, SearchMaintenanceScheduler};
 pub use mutation::{MakePublicOutcome, MakePublicRequest, MutationError, MutationService};
+pub use namespace::{
+    RegistryNamespace, DEFAULT_DATABASE_PREFIX as DEFAULT_REGISTRY_DATABASE_PREFIX,
+    DEFAULT_PUBLIC_GRAPH,
+};
 pub use object::{
     ObjectAttachment, ObjectAttachmentSection, ObjectContentState, ObjectDetails, ObjectProperty,
     ObjectPropertyValue, ObjectProvenance, ObjectReference, ObjectReferenceSection,
@@ -92,6 +97,9 @@ use sbol_db_storage::{
 /// subsystems every HTTP adapter shares.
 #[derive(Clone)]
 pub struct AppServices {
+    /// Immutable graph/object namespace for this registry. Production migration
+    /// installs the source registry's HTTPS values before serving requests.
+    pub registry_namespace: RegistryNamespace,
     /// The SBOL-aware store: ingest plus every derived-view read surface.
     pub store: Arc<dyn SbolStore>,
     /// SPARQL query evaluation over the derived triple view.
@@ -296,9 +304,21 @@ impl AppServices {
     /// the neutral handles directly yet must exercise the real per-backend
     /// identity persistence.
     pub fn with_identity(mut self, users: Arc<dyn UserStore>, tokens: Arc<dyn TokenStore>) -> Self {
-        self.auth = AuthService::new(users.clone(), tokens.clone());
+        self.auth = AuthService::new(users.clone(), tokens.clone())
+            .with_database_prefix(self.registry_namespace.database_prefix());
         self.users = users;
         self.tokens = tokens;
+        self
+    }
+
+    /// Install the registry's persistent namespace across identity, ACL, URI
+    /// minting, mutation, visibility, and download consumers.
+    pub fn with_registry_namespace(mut self, namespace: RegistryNamespace) -> Self {
+        self.acl_service = AclService::new(self.store.clone(), self.acl.clone())
+            .with_public_graph(namespace.public_graph());
+        self.auth = AuthService::new(self.users.clone(), self.tokens.clone())
+            .with_database_prefix(namespace.database_prefix());
+        self.registry_namespace = namespace;
         self
     }
 
@@ -373,7 +393,8 @@ impl AppServices {
     pub fn submission_service(&self) -> SubmissionService {
         SubmissionService::with_maintenance(
             self.store.clone(),
-            CollectionService::new(),
+            CollectionService::new()
+                .with_database_prefix(self.registry_namespace.database_prefix()),
             self.search_maintenance.clone(),
         )
     }
@@ -385,6 +406,7 @@ impl AppServices {
             self.sparql_update.clone(),
             self.acl_service.clone(),
         )
+        .with_database_prefix(self.registry_namespace.database_prefix())
         .with_maintenance(self.search_maintenance.clone())
     }
 
@@ -474,6 +496,7 @@ impl AppServices {
             Arc::new(IndexMaintenanceRegistry::default()),
         ));
         Self {
+            registry_namespace: RegistryNamespace::default(),
             store,
             sparql,
             sparql_update,
