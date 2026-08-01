@@ -104,6 +104,7 @@ impl Metrics {
             "sbol_db_backup_last_remote_verification_timestamp_seconds",
             "sbol_db_backup_scheduler_last_enqueue_timestamp_seconds",
             "sbol_db_backup_scheduler_next_timestamp_seconds",
+            "sbol_db_backup_scheduler_interval_seconds",
             "sbol_db_backup_local_artifacts",
         ] {
             metrics::gauge!(gauge).set(0.0);

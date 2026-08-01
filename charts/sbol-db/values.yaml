@@ -109,6 +109,8 @@ service:
   port: 80
   # -- Port name exposed on the Service.
   portName: http
+  # -- Cluster-internal health/readiness/metrics port.
+  operationsPort: 9090
 
 ## Application configuration. The chart serializes these into env vars
 ## on both the server Deployment and (where applicable) the migration
@@ -123,6 +125,10 @@ config:
   # -- `RUST_LOG` env-filter passed to tracing-subscriber. Use e.g.
   # `info,sbol_db=debug` to bump verbosity per crate.
   rustLog: info
+
+  # -- Container operations listener. This is exposed only through the
+  # cluster-internal operations Service port, never through Ingress.
+  operationsBind: 0.0.0.0:9090
 
   # -- Address sbol-db's HTTP server binds on, inside the container.
   # Change only if you also change `image` to a build that listens on a
@@ -250,9 +256,8 @@ podDisruptionBudget:
   minAvailable: 1
   maxUnavailable: ""
 
-## Prometheus Operator ServiceMonitor for scraping /metrics. The endpoint
-## is on the main HTTP port (no separate metrics port); the app has no
-## auth, so cluster-internal scraping is the assumed model.
+## Prometheus Operator ServiceMonitor for scraping the cluster-internal
+## operations port. This port is not routed through Ingress.
 serviceMonitor:
   enabled: false
   # -- Namespace for the ServiceMonitor. Empty = release namespace.

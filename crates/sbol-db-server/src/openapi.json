@@ -49,7 +49,7 @@
     },
     {
       "name": "Meta",
-      "description": "Liveness, readiness, metrics, OpenAPI schema, and this docs page."
+      "description": "Liveness, readiness, and metrics are served by the separate operations listener; OpenAPI schema and docs remain on the public listener."
     }
   ],
   "paths": {
@@ -82,7 +82,7 @@
           "Meta"
         ],
         "summary": "Readiness check",
-        "description": "Issues a short-timeout `SELECT 1` against the connection pool. Returns 200 when Postgres is reachable, 503 otherwise. Wire this to Kubernetes `readinessProbe`.",
+        "description": "Requires deployed TLS when configured, sufficient managed-filesystem reserve, and a short-timeout backend ping. Returns 200 when ready or 503 with a reason. Wire this to Kubernetes `readinessProbe` on the operations port.",
         "operationId": "readyz",
         "responses": {
           "200": {

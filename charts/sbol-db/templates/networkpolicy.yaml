@@ -16,6 +16,8 @@ spec:
       ports:
         - port: 8080
           protocol: TCP
+        - port: 9090
+          protocol: TCP
     {{- with .Values.networkPolicy.extraIngress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

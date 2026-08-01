@@ -21,7 +21,7 @@ spec:
         {{- /* Fallback Prometheus annotations when ServiceMonitor isn't used. */ -}}
         {{- if not .Values.serviceMonitor.enabled }}
         prometheus.io/scrape: "true"
-        prometheus.io/port: "8080"
+        prometheus.io/port: "9090"
         prometheus.io/path: /metrics
         {{- end }}
         {{- with .Values.podAnnotations }}
@@ -45,6 +45,9 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+            - name: operations
+              containerPort: 9090
+              protocol: TCP
           env:
             {{- include "sbol-db.databaseEnv"       . | nindent 12 }}
             {{- include "sbol-db.databaseConfigEnv" . | nindent 12 }}
@@ -55,7 +58,7 @@ spec:
             {{- end }}
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:
-            httpGet: { path: /healthz, port: http }
+            httpGet: { path: /healthz, port: operations }
             initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
             timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
@@ -63,7 +66,7 @@ spec:
           {{- end }}
           {{- if .Values.readinessProbe.enabled }}
           readinessProbe:
-            httpGet: { path: /readyz, port: http }
+            httpGet: { path: /readyz, port: operations }
             initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
             timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
@@ -71,7 +74,7 @@ spec:
           {{- end }}
           {{- if .Values.startupProbe.enabled }}
           startupProbe:
-            httpGet: { path: /readyz, port: http }
+            httpGet: { path: /readyz, port: operations }
             periodSeconds: {{ .Values.startupProbe.periodSeconds }}
             failureThreshold: {{ .Values.startupProbe.failureThreshold }}
           {{- end }}
