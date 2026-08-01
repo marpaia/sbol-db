@@ -11,18 +11,17 @@ import {
   fetchAdminIntegrations,
   fetchAdminOverview,
   fetchAdminUsers,
+  fetchCompleteBackupStatus,
   fetchSearchStatus,
   joinFederation,
   rebuildSearch,
-  restoreBackup,
   savePlugin,
   saveRegistry,
   saveRemote,
   syncFederation,
+  triggerCompleteBackup,
   updateAdminInstance,
   updateAdminUser,
-  validateBackup,
-  type BackupArchive,
   type UpdateAdminUser,
 } from "./api";
 
@@ -32,6 +31,7 @@ export const adminKeys = {
   users: ["admin", "users"] as const,
   integrations: ["admin", "integrations"] as const,
   search: ["admin", "search"] as const,
+  backup: ["admin", "backup"] as const,
   audit: ["admin", "audit"] as const,
 };
 
@@ -224,25 +224,23 @@ export function useAdminAudit() {
   });
 }
 
-export function useValidateBackup() {
-  return useMutation({ mutationFn: validateBackup });
+export function useCompleteBackupStatus() {
+  return useQuery({
+    queryKey: adminKeys.backup,
+    queryFn: ({ signal }) => fetchCompleteBackupStatus(signal),
+    refetchInterval: 5_000,
+  });
 }
 
-export function useRestoreBackup() {
+export function useTriggerCompleteBackup() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      archive,
-      confirmation,
-    }: {
-      archive: BackupArchive;
-      confirmation: string;
-    }) => restoreBackup(archive, confirmation),
+    mutationFn: () => triggerCompleteBackup("manual"),
     onSuccess: () => {
-      client.invalidateQueries({ queryKey: adminKeys.search });
+      client.invalidateQueries({ queryKey: adminKeys.backup });
       client.invalidateQueries({ queryKey: adminKeys.audit });
-      client.invalidateQueries({ queryKey: ["lab", "overview"] });
-      client.invalidateQueries({ queryKey: ["lab", "graphs"] });
+      client.invalidateQueries({ queryKey: ["lab", "obs", "jobs", "recent"] });
+      client.invalidateQueries({ queryKey: ["lab", "obs", "summary"] });
     },
   });
 }

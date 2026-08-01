@@ -120,24 +120,18 @@ export interface AdminAuditResponse {
   items: AdminAuditEvent[];
 }
 
-export interface BackupArchive {
-  format: string;
-  version: number;
-  created_at: string;
-  scope: string;
-  documents: unknown[];
-  checksum: string;
+export type CompleteBackupTrigger = "manual" | "pre_deploy";
+
+export interface CompleteBackupStatus {
+  enabled: boolean;
+  strategy: "complete_encrypted_checkpoint";
+  components: Array<"rocksdb" | "blobs" | "search" | "acme">;
+  recent: RecentJob[];
 }
 
-export interface BackupValidation {
-  valid: true;
-  format: string;
-  version: number;
-  checksum: string;
-  documents: number;
-  confirmation: string;
-  scope: string;
-  excludes: string[];
+export interface CompleteBackupEnqueueResponse {
+  job: RecentJob;
+  deduplicated: boolean;
 }
 
 export function fetchAdminOverview(signal?: AbortSignal) {
@@ -258,35 +252,21 @@ export function fetchAdminAudit(signal?: AbortSignal) {
   return request<AdminAuditResponse>("/audit?limit=200", { signal });
 }
 
-export async function downloadBackup(): Promise<void> {
-  const res = await fetch(`${ADMIN_API}/backup`);
-  if (!res.ok) throw await responseError(res);
-  const blob = await res.blob();
-  const disposition = res.headers.get("content-disposition") ?? "";
-  const filename =
-    disposition.match(/filename="([^"]+)"/)?.[1] ?? "sbol-db-registry.json";
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
+export function fetchCompleteBackupStatus(signal?: AbortSignal) {
+  return request<CompleteBackupStatus>("/backup", { signal });
 }
 
-export function validateBackup(archive: BackupArchive) {
-  return request<BackupValidation>(
-    "/backup/validate",
-    jsonRequest("POST", archive)
+export function triggerCompleteBackup(
+  trigger: CompleteBackupTrigger = "manual",
+  idempotencyKey?: string
+) {
+  return request<CompleteBackupEnqueueResponse>(
+    "/backup",
+    jsonRequest("POST", {
+      trigger,
+      ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+    })
   );
-}
-
-export function restoreBackup(archive: BackupArchive, confirmation: string) {
-  return request<{
-    status: "restored";
-    checksum: string;
-    documents: number;
-    rebuild_job: RecentJob;
-  }>("/backup/restore", jsonRequest("POST", { archive, confirmation }));
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
