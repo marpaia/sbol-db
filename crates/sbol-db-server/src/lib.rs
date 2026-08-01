@@ -173,6 +173,9 @@ pub struct ServerConfig {
     /// SHA3-256 of the one-time first-launch setup token. The plaintext token is
     /// never retained in server state or printed by debug output.
     pub setup_token_hash: Option<[u8; 32]>,
+    /// Whether this process has the native complete-backup executor installed.
+    /// Admin routes fail closed when it is absent.
+    pub complete_backups_enabled: bool,
 }
 
 impl Default for ServerConfig {
@@ -197,6 +200,7 @@ impl Default for ServerConfig {
             cors: CorsPolicy::Permissive,
             https_security_headers: false,
             setup_token_hash: None,
+            complete_backups_enabled: false,
         }
     }
 }
@@ -258,6 +262,7 @@ impl ServerConfig {
             cors: CorsPolicy::Permissive,
             https_security_headers: defaults.https_security_headers,
             setup_token_hash: setup_token_hash_from_env(),
+            complete_backups_enabled: false,
         };
         if let Ok(origins) = std::env::var("SBOL_DB_CORS_ALLOWED_ORIGINS") {
             match parse_cors_origins(&origins) {

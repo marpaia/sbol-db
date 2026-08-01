@@ -156,6 +156,11 @@ pub struct ServerArgs {
     /// JSON search-plugin topology and concrete provider/backend config.
     #[arg(long, env = "SBOL_DB_SEARCH_CONFIG")]
     pub search_config: Option<PathBuf>,
+
+    /// Public age X25519 recipient whose secret recovery identity is held
+    /// outside this server. Required by the production profile.
+    #[arg(long, env = "SBOL_DB_BACKUP_RECOVERY_RECIPIENT")]
+    pub backup_recovery_recipient: Option<String>,
 }
 
 impl BackendKind {
@@ -189,7 +194,7 @@ pub enum Command {
     /// (see `sbol-db worker`).
     Server {
         #[command(flatten)]
-        args: ServerArgs,
+        args: Box<ServerArgs>,
     },
 
     /// Run a standalone async-job worker (no HTTP listener).

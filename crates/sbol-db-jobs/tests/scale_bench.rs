@@ -187,6 +187,7 @@ async fn rebuild_and_similar_scale() {
         }),
         vector_indexes: None,
         config: None,
+        backups: None,
     };
 
     let rebuild_start = Instant::now();

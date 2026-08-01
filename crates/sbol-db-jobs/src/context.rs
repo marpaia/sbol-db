@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use sbol_db_backup::CompleteBackupService;
 use sbol_db_core::JobId;
 use sbol_db_search::{ranked_text::RankedTextIndex, VectorIndexMaintainerRegistry};
 use sbol_db_storage::{
@@ -66,6 +67,9 @@ pub struct JobContext {
     /// Web of Registries URL and persist the pulled prefix map, and every other
     /// handler ignores it.
     pub config: Option<Arc<dyn ConfigStore>>,
+    /// Present on the self-contained production worker. Every complete-backup
+    /// trigger dispatches through this one executor.
+    pub backups: Option<Arc<CompleteBackupService>>,
 }
 
 impl JobContext {

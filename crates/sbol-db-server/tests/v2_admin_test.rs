@@ -7,24 +7,19 @@ use axum::http::{Request, Response, StatusCode};
 use axum::Router;
 use sbol_db_app::{AppServices, Registration};
 use sbol_db_backend::Backend;
-use sbol_db_core::{IriString, SerializationFormat, User};
+use sbol_db_core::User;
 use sbol_db_server::{router, AppState, Metrics, SchemaCache, ServerConfig};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
-use sbol_db_storage::{ImportInput, ImportOverwrite};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
 const BODY_LIMIT: usize = 4 * 1024 * 1024;
-const DOCUMENT: &str = r#"
-@prefix sbol: <http://sbols.org/v3#> .
-<https://example.org/component> a sbol:Component ;
-  sbol:displayId "component" ;
-  sbol:name "Backup component" ;
-  sbol:type <https://identifiers.org/SBO:0000251> .
-"#;
-
 async fn app() -> (Router, Arc<AppServices>, TempDir) {
+    app_with_backups(false).await
+}
+
+async fn app_with_backups(complete_backups_enabled: bool) -> (Router, Arc<AppServices>, TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("v2-admin.db");
     let backend = Backend::open(&format!("sqlite://{}", path.display()))
@@ -38,7 +33,10 @@ async fn app() -> (Router, Arc<AppServices>, TempDir) {
         .await
         .expect("migrate");
     let services = Arc::new(AppServices::from_backend(&backend));
-    let config = ServerConfig::default();
+    let config = ServerConfig {
+        complete_backups_enabled,
+        ..ServerConfig::default()
+    };
     let state = AppState {
         service: backend.store.clone(),
         sparql: Arc::new(SparqlEngine::new(backend.triple_source.clone())),
@@ -271,69 +269,98 @@ async fn integration_reads_redact_secrets_and_deletes_require_exact_confirmation
 }
 
 #[tokio::test]
-async fn registry_backup_validates_integrity_and_restores_atomically() {
-    let (app, services, _dir) = app().await;
-    let (admin, token) = register(&services, "admin", true).await;
-    services
-        .store
-        .import_document(ImportInput {
-            body: DOCUMENT.to_owned(),
-            format: SerializationFormat::Turtle,
-            namespace: Some("https://example.org/".to_owned()),
-            source_uri: Some("https://source.example/component.ttl".to_owned()),
-            document_iri: Some(IriString::new("https://example.org/document").expect("iri")),
-            created_by: Some(admin.graph_uri),
-            name: Some("Portable design".to_owned()),
-            description: Some("Backup roundtrip".to_owned()),
-            overwrite: ImportOverwrite::Fail,
-        })
-        .await
-        .expect("import document");
+async fn all_backup_triggers_enqueue_the_one_complete_backup_job() {
+    let (app, services, _dir) = app_with_backups(true).await;
+    let (_admin, token) = register(&services, "admin", true).await;
 
-    let exported = send(&app, "GET", "/api/v2/admin/backup", Some(&token), json!({})).await;
-    assert_eq!(exported.status(), StatusCode::OK);
-    assert_eq!(exported.headers()["cache-control"], "no-store");
-    let archive = body(exported).await;
-    assert_eq!(archive["format"], "sbol-db-registry-backup");
-    assert_eq!(archive["documents"].as_array().unwrap().len(), 1);
+    let status = send(&app, "GET", "/api/v2/admin/backup", Some(&token), json!({})).await;
+    assert_eq!(status.status(), StatusCode::OK);
+    let status = body(status).await;
+    assert_eq!(status["enabled"], true);
+    assert_eq!(status["strategy"], "complete_encrypted_checkpoint");
+    assert_eq!(
+        status["components"],
+        json!(["rocksdb", "blobs", "search", "acme"])
+    );
 
-    let mut tampered = archive.clone();
-    tampered["documents"][0]["name"] = json!("tampered");
-    let invalid = send(
+    let manual = send(
         &app,
         "POST",
-        "/api/v2/admin/backup/validate",
+        "/api/v2/admin/backup",
         Some(&token),
-        tampered,
+        json!({}),
     )
     .await;
-    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(manual.status(), StatusCode::ACCEPTED);
+    let manual = body(manual).await;
+    assert_eq!(manual["job"]["kind"], "complete_backup");
+    assert_eq!(manual["job"]["payload"]["trigger"], "manual");
+    assert_eq!(manual["job"]["payload"]["requested_by"], "admin");
 
-    let validation = body(
+    let missing_key = send(
+        &app,
+        "POST",
+        "/api/v2/admin/backup",
+        Some(&token),
+        json!({ "trigger": "pre_deploy" }),
+    )
+    .await;
+    assert_eq!(missing_key.status(), StatusCode::BAD_REQUEST);
+
+    let first = body(
         send(
             &app,
             "POST",
-            "/api/v2/admin/backup/validate",
+            "/api/v2/admin/backup",
             Some(&token),
-            archive.clone(),
+            json!({
+                "trigger": "pre_deploy",
+                "idempotency_key": "release-abc"
+            }),
         )
         .await,
     )
     .await;
-    assert_eq!(validation["valid"], true);
-    let confirmation = validation["confirmation"].as_str().unwrap();
-
-    let restored = send(
-        &app,
-        "POST",
-        "/api/v2/admin/backup/restore",
-        Some(&token),
-        json!({ "archive": archive, "confirmation": confirmation }),
+    let second = body(
+        send(
+            &app,
+            "POST",
+            "/api/v2/admin/backup",
+            Some(&token),
+            json!({
+                "trigger": "pre_deploy",
+                "idempotency_key": "release-abc"
+            }),
+        )
+        .await,
     )
     .await;
-    assert_eq!(restored.status(), StatusCode::OK);
-    let restored = body(restored).await;
-    assert_eq!(restored["documents"], 1);
-    assert_eq!(restored["status"], "restored");
-    assert_eq!(restored["rebuild_job"]["kind"], "rebuild_search_index");
+    assert_eq!(first["job"]["id"], second["job"]["id"]);
+    assert_eq!(first["deduplicated"], false);
+    assert_eq!(second["deduplicated"], true);
+
+    let old_validate = send(
+        &app,
+        "POST",
+        "/api/v2/admin/backup/validate",
+        Some(&token),
+        json!({}),
+    )
+    .await;
+    assert_eq!(old_validate.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn complete_backup_trigger_fails_closed_when_runtime_is_absent() {
+    let (app, services, _dir) = app().await;
+    let (_admin, token) = register(&services, "admin", true).await;
+    let response = send(
+        &app,
+        "POST",
+        "/api/v2/admin/backup",
+        Some(&token),
+        json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
 }

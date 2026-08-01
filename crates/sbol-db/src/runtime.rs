@@ -242,6 +242,10 @@ impl ManagedDataLayout {
         self.generation
     }
 
+    pub fn layout_version(&self) -> &'static str {
+        LAYOUT_VERSION
+    }
+
     pub fn generation_root(&self) -> &Path {
         &self.generation_root
     }

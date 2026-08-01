@@ -89,6 +89,15 @@ fn default_registry_contains_import_document() {
 }
 
 #[test]
+fn default_registry_contains_complete_backup() {
+    let registry = default_registry();
+    let handler = registry
+        .lookup("complete_backup")
+        .expect("default_registry must include complete_backup");
+    assert_eq!(handler.kind(), "complete_backup");
+}
+
+#[test]
 fn default_registry_contains_import_remote_document() {
     let registry = default_registry();
     let handler = registry

@@ -711,6 +711,7 @@ mod tests {
             worker_queues: None,
             worker_id: None,
             search_config: None,
+            backup_recovery_recipient: None,
         }
     }
 

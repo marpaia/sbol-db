@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
                 server_runtime
                     .take()
                     .expect("server runtime is resolved before backend open"),
-                args,
+                *args,
                 edge_http
                     .take()
                     .expect("edge HTTP config is resolved before backend open"),

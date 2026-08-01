@@ -58,9 +58,7 @@ pub(super) fn router() -> Router<AppState> {
         )
         .route("/search", get(operations::search_status))
         .route("/search/rebuild", post(operations::rebuild_search))
-        .route("/backup", get(backup::export))
-        .route("/backup/validate", post(backup::validate))
-        .route("/backup/restore", post(backup::restore))
+        .route("/backup", get(backup::status).post(backup::trigger))
         .route("/audit", get(audit))
         .route_layer(axum::middleware::from_fn(require_admin))
 }

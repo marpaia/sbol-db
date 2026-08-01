@@ -5065,13 +5065,16 @@ dependencies = [
 name = "sbol-db-jobs"
 version = "0.1.3"
 dependencies = [
+ "age",
  "async-trait",
  "chrono",
  "futures",
  "metrics",
  "reqwest",
+ "sbol-db-backup",
  "sbol-db-core",
  "sbol-db-postgres",
+ "sbol-db-rocksdb",
  "sbol-db-search",
  "sbol-db-search-sdk",
  "sbol-db-sqlite",

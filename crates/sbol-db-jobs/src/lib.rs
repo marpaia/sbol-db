@@ -16,6 +16,7 @@ mod worker;
 
 pub use context::{JobContext, SearchIndexHandles};
 pub use handler::{ErasedHandler, HandlerError, JobHandler, JobOutcome};
+pub use handlers::{BackupTrigger, CompleteBackupPayload, COMPLETE_BACKUP_JOB_KIND};
 pub use registry::JobRegistry;
 pub use worker::{Worker, WorkerConfig};
 
@@ -25,6 +26,7 @@ pub use worker::{Worker, WorkerConfig};
 /// register only what they need.
 pub fn default_registry() -> JobRegistry {
     JobRegistry::new()
+        .register(handlers::CompleteBackupHandler)
         .register(handlers::ImportDocumentHandler)
         .register(handlers::ImportRemoteDocumentHandler)
         .register(handlers::ImportSynBioHubCollectionHandler)

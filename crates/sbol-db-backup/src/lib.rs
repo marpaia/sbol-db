@@ -17,7 +17,9 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 
+use age::secrecy::ExposeSecret;
 use age::x25519;
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -158,6 +160,87 @@ impl BackupEncryption {
     }
 }
 
+/// Load the server's local verification identity, creating it atomically on
+/// first launch. The external recovery recipient is public configuration; its
+/// corresponding secret key must be held outside the server.
+pub fn load_or_create_encryption(
+    recovery_recipient: &str,
+    verification_identity_path: &Path,
+) -> Result<BackupEncryption> {
+    let recovery_recipient = x25519::Recipient::from_str(recovery_recipient.trim())
+        .map_err(|error| anyhow::anyhow!("invalid age recovery recipient: {error}"))?;
+    let parent = verification_identity_path
+        .parent()
+        .context("backup verification identity path has no parent")?;
+    prepare_private_directory(parent)?;
+
+    let verification_identity = match read_private_identity(verification_identity_path) {
+        Ok(identity) => identity,
+        Err(error)
+            if error
+                .downcast_ref::<io::Error>()
+                .is_some_and(|io| io.kind() == io::ErrorKind::NotFound) =>
+        {
+            create_private_identity(verification_identity_path)?
+        }
+        Err(error) => return Err(error),
+    };
+    Ok(BackupEncryption::new(
+        recovery_recipient,
+        verification_identity,
+    ))
+}
+
+fn read_private_identity(path: &Path) -> Result<x25519::Identity> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!(
+            "backup verification identity must be a regular, non-symlink file: {}",
+            path.display()
+        );
+    }
+    verify_private_file_mode(path, &metadata)?;
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("read backup verification identity {}", path.display()))?;
+    parse_x25519_identity(&contents)
+}
+
+fn create_private_identity(path: &Path) -> Result<x25519::Identity> {
+    let parent = path
+        .parent()
+        .context("backup verification identity path has no parent")?;
+    let identity = x25519::Identity::generate();
+    let encoded = identity.to_string();
+    let body = format!(
+        "# sbol-db local backup verification identity\n# public key: {}\n{}\n",
+        identity.to_public(),
+        encoded.expose_secret()
+    );
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".backup-verification-identity-")
+        .tempfile_in(parent)
+        .context("create temporary backup verification identity")?;
+    set_file_mode(temporary.path(), 0o600)?;
+    temporary
+        .write_all(body.as_bytes())
+        .context("write backup verification identity")?;
+    temporary
+        .as_file()
+        .sync_all()
+        .context("sync backup verification identity")?;
+    match temporary.persist_noclobber(path) {
+        Ok(_) => {
+            sync_directory(parent)?;
+            Ok(identity)
+        }
+        Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => {
+            read_private_identity(path)
+        }
+        Err(error) => Err(error.error)
+            .with_context(|| format!("publish backup verification identity at {}", path.display())),
+    }
+}
+
 /// Parse an age secret-key file. Blank lines and age-keygen comments are
 /// ignored, but exactly one X25519 identity must remain.
 pub fn parse_x25519_identity(contents: &str) -> Result<x25519::Identity> {
@@ -178,6 +261,7 @@ pub fn parse_x25519_identity(contents: &str) -> Result<x25519::Identity> {
 #[derive(Clone, Debug, Serialize)]
 pub struct CreatedBackup {
     pub backup_id: Uuid,
+    pub created_at: DateTime<Utc>,
     pub path: PathBuf,
     pub artifact_sha256: String,
     pub artifact_bytes: u64,
@@ -185,6 +269,70 @@ pub struct CreatedBackup {
     pub files: u64,
     pub referenced_blobs: u64,
     pub verified_at: DateTime<Utc>,
+    /// True when an at-least-once job retry found and re-verified the artifact
+    /// already published for this backup id.
+    pub reused: bool,
+}
+
+#[derive(Clone)]
+pub struct CompleteBackupConfig {
+    pub db: Db,
+    pub blobs_root: PathBuf,
+    pub search_root: PathBuf,
+    pub acme_root: PathBuf,
+    pub backups_root: PathBuf,
+    pub generation: Uuid,
+    pub layout_version: String,
+    pub application_version: String,
+}
+
+/// Process-local executor for complete backup jobs. Calls are serialized, then
+/// run on a blocking thread because checkpointing, hashing, compression, and
+/// encryption are synchronous filesystem work.
+#[derive(Clone)]
+pub struct CompleteBackupService {
+    config: Arc<CompleteBackupConfig>,
+    encryption: Arc<BackupEncryption>,
+    operation: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl CompleteBackupService {
+    pub fn new(config: CompleteBackupConfig, encryption: BackupEncryption) -> Self {
+        Self {
+            config: Arc::new(config),
+            encryption: Arc::new(encryption),
+            operation: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
+    pub async fn create(
+        &self,
+        backup_id: Uuid,
+        requested_at: DateTime<Utc>,
+    ) -> Result<CreatedBackup> {
+        let _operation = self.operation.lock().await;
+        let config = self.config.clone();
+        let encryption = self.encryption.clone();
+        tokio::task::spawn_blocking(move || {
+            create_complete_backup_with_id(
+                CompleteBackupSource {
+                    db: &config.db,
+                    blobs_root: &config.blobs_root,
+                    search_root: &config.search_root,
+                    acme_root: &config.acme_root,
+                    generation: config.generation,
+                    layout_version: &config.layout_version,
+                    application_version: &config.application_version,
+                },
+                &config.backups_root,
+                &encryption,
+                backup_id,
+                requested_at,
+            )
+        })
+        .await
+        .context("complete backup blocking task panicked")?
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -264,13 +412,33 @@ pub fn create_complete_backup(
     backup_root: &Path,
     encryption: &BackupEncryption,
 ) -> Result<CreatedBackup> {
+    create_complete_backup_with_id(source, backup_root, encryption, Uuid::new_v4(), Utc::now())
+}
+
+/// Create a backup with caller-supplied identity and request time. Durable job
+/// runners use the job UUID here, making retries idempotent across crashes.
+pub fn create_complete_backup_with_id(
+    source: CompleteBackupSource<'_>,
+    backup_root: &Path,
+    encryption: &BackupEncryption,
+    backup_id: Uuid,
+    created_at: DateTime<Utc>,
+) -> Result<CreatedBackup> {
     prepare_private_directory(backup_root)?;
+    let final_path = backup_path(backup_root, backup_id, created_at);
+    if final_path.exists() {
+        let verified =
+            verify_encrypted_backup(&final_path, encryption.verification_identity(), backup_root)
+                .context("verify artifact published by an earlier backup attempt")?;
+        if verified.manifest.backup_id != backup_id || verified.manifest.created_at != created_at {
+            bail!("existing backup artifact does not match the requested backup identity");
+        }
+        return Ok(created_from_verified(final_path, verified, true));
+    }
     validate_source_directory(source.blobs_root, "blob root")?;
     validate_source_directory(source.search_root, "search root")?;
     validate_source_directory(source.acme_root, "ACME root")?;
 
-    let backup_id = Uuid::new_v4();
-    let created_at = Utc::now();
     let staging = tempfile::Builder::new()
         .prefix(&format!(".backup-stage-{backup_id}-"))
         .tempdir_in(backup_root)
@@ -359,32 +527,35 @@ pub fn create_complete_backup(
     if verified.manifest.backup_id != backup_id {
         bail!("read-back manifest backup id changed unexpectedly");
     }
-    let referenced_blobs = verified.referenced_blobs;
-    let artifact_sha256 = verified.artifact_sha256.clone();
-    let artifact_bytes = verified.artifact_bytes;
-    drop(verified);
-
-    let stamp = created_at
-        .to_rfc3339_opts(SecondsFormat::Secs, true)
-        .replace([':', '-'], "");
-    let file_name = format!("sbol-db-{stamp}-{backup_id}.sbolbackup.age");
-    let final_path = backup_root.join(file_name);
     partial
         .persist_noclobber(&final_path)
         .map_err(|error| error.error)
         .with_context(|| format!("publish verified backup at {}", final_path.display()))?;
     sync_directory(backup_root)?;
 
-    Ok(CreatedBackup {
-        backup_id,
-        path: final_path,
-        artifact_sha256,
-        artifact_bytes,
-        payload_bytes,
-        files: manifest.files.len() as u64,
-        referenced_blobs,
+    Ok(created_from_verified(final_path, verified, false))
+}
+
+fn backup_path(backup_root: &Path, backup_id: Uuid, created_at: DateTime<Utc>) -> PathBuf {
+    let stamp = created_at
+        .to_rfc3339_opts(SecondsFormat::Secs, true)
+        .replace([':', '-'], "");
+    backup_root.join(format!("sbol-db-{stamp}-{backup_id}.sbolbackup.age"))
+}
+
+fn created_from_verified(path: PathBuf, verified: VerifiedBackup, reused: bool) -> CreatedBackup {
+    CreatedBackup {
+        backup_id: verified.manifest.backup_id,
+        created_at: verified.manifest.created_at,
+        path,
+        artifact_sha256: verified.artifact_sha256,
+        artifact_bytes: verified.artifact_bytes,
+        payload_bytes: verified.manifest.payload_bytes,
+        files: verified.manifest.files.len() as u64,
+        referenced_blobs: verified.referenced_blobs,
         verified_at: Utc::now(),
-    })
+        reused,
+    }
 }
 
 /// Decrypt and validate an artifact into a private temporary directory. This is
@@ -396,9 +567,15 @@ pub fn verify_encrypted_backup(
     staging_parent: &Path,
 ) -> Result<VerifiedBackup> {
     prepare_private_directory(staging_parent)?;
-    let artifact_bytes = fs::metadata(artifact)
-        .with_context(|| format!("inspect backup artifact {}", artifact.display()))?
-        .len();
+    let artifact_metadata = fs::symlink_metadata(artifact)
+        .with_context(|| format!("inspect backup artifact {}", artifact.display()))?;
+    if artifact_metadata.file_type().is_symlink() || !artifact_metadata.is_file() {
+        bail!(
+            "backup artifact must be a regular, non-symlink file: {}",
+            artifact.display()
+        );
+    }
+    let artifact_bytes = artifact_metadata.len();
     let artifact_sha256 = sha256_file(artifact)?;
     let input = BufReader::new(
         File::open(artifact)
@@ -988,6 +1165,24 @@ fn file_mode(metadata: &fs::Metadata) -> u32 {
     metadata.permissions().mode() & 0o777
 }
 
+#[cfg(unix)]
+fn verify_private_file_mode(path: &Path, metadata: &fs::Metadata) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if metadata.permissions().mode() & 0o077 != 0 {
+        bail!(
+            "backup verification identity must not be accessible by group or others: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn verify_private_file_mode(_path: &Path, _metadata: &fs::Metadata) -> Result<()> {
+    Ok(())
+}
+
 #[cfg(not(unix))]
 fn file_mode(_metadata: &fs::Metadata) -> u32 {
     0o600
@@ -1106,6 +1301,7 @@ mod tests {
         .unwrap();
 
         assert!(created.path.is_file());
+        assert!(!created.reused);
         assert_eq!(created.referenced_blobs, 1);
         assert_eq!(created.artifact_sha256.len(), 64);
         let verified =
@@ -1119,6 +1315,26 @@ mod tests {
             .is_file());
         assert!(verified.payload_root().join("search/meta.json").is_file());
         assert!(verified.payload_root().join("acme/account-key").is_file());
+
+        let retried = create_complete_backup_with_id(
+            CompleteBackupSource {
+                db: &db,
+                blobs_root: &root.path().join("blobs"),
+                search_root: &root.path().join("search"),
+                acme_root: &root.path().join("acme"),
+                generation,
+                layout_version: "1",
+                application_version: "test",
+            },
+            &root.path().join("backups"),
+            &encryption,
+            created.backup_id,
+            created.created_at,
+        )
+        .unwrap();
+        assert!(retried.reused);
+        assert_eq!(retried.path, created.path);
+        assert_eq!(retried.artifact_sha256, created.artifact_sha256);
     }
 
     #[tokio::test]
@@ -1160,5 +1376,28 @@ mod tests {
         );
         let parsed = parse_x25519_identity(&file).unwrap();
         assert_eq!(parsed.to_public(), identity.to_public());
+    }
+
+    #[test]
+    fn creates_and_reloads_a_private_local_verification_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("verification.agekey");
+        let recovery = x25519::Identity::generate();
+        let first = load_or_create_encryption(&recovery.to_public().to_string(), &path).unwrap();
+        let second = load_or_create_encryption(&recovery.to_public().to_string(), &path).unwrap();
+
+        assert!(path.is_file());
+        assert_eq!(
+            first.verification_identity().to_public(),
+            second.verification_identity().to_public()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
     }
 }
