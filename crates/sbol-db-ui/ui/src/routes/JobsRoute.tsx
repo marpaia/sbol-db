@@ -21,6 +21,7 @@ import {
   useRecentJobs,
 } from "@/hooks/useObservability";
 import type { JobStatus, ObservabilitySummary, RecentJob } from "@/lib/api";
+import { adminPath } from "@/lib/routes";
 import { describeError, formatMs, formatRelative } from "@/lib/utils";
 
 export default function JobsRoute() {
@@ -151,8 +152,8 @@ export default function JobsRoute() {
             <h1 className="text-2xl font-semibold tracking-tight">Jobs</h1>
             <p className="mt-2 text-sm text-muted-foreground">
               Background work queue. Click any row to inspect its payload,
-              timing, and result; running or queued jobs can be cancelled
-              from their detail page.
+              timing, and result; running or queued jobs can be cancelled from
+              their detail page.
             </p>
           </div>
           <button
@@ -166,10 +167,7 @@ export default function JobsRoute() {
         </header>
 
         {error ? (
-          <ErrorBanner
-            title="Couldn't load jobs"
-            body={describeError(error)}
-          />
+          <ErrorBanner title="Couldn't load jobs" body={describeError(error)} />
         ) : (
           <>
             <section className="space-y-3">
@@ -213,7 +211,7 @@ export default function JobsRoute() {
                     defaultSort={{ id: "started", direction: "desc" }}
                     emptyMessage="No jobs match the current filters."
                     onRowClick={(j) =>
-                      navigate(`/observability/jobs/${j.id}`)
+                      navigate(adminPath(`/observability/jobs/${j.id}`))
                     }
                   />
                 )}
@@ -231,7 +229,7 @@ export default function JobsRoute() {
         onEnqueued={(result) => {
           qc.invalidateQueries({ queryKey: ["lab", "obs", "jobs", "recent"] });
           qc.invalidateQueries({ queryKey: ["lab", "obs", "summary"] });
-          navigate(`/observability/jobs/${result.job.id}`);
+          navigate(adminPath(`/observability/jobs/${result.job.id}`));
         }}
       />
     </div>

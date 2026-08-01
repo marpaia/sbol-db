@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 
 import { useLabStore } from "@/lib/store";
+import { adminPath } from "@/lib/routes";
 import { useNavigate } from "react-router-dom";
 
 export interface IriContextMenuProps {
@@ -47,28 +48,28 @@ export function IriContextMenu({ x, y, iri, onClose }: IriContextMenuProps) {
   }, [onClose]);
 
   const openObject = () => {
-    navigate(`/objects/${encodeURIComponent(iri)}`);
+    navigate(adminPath(`/objects/${encodeURIComponent(iri)}`));
     onClose();
   };
   const walkNeighborhood = () => {
-    navigate(`/neighborhood?iri=${encodeURIComponent(iri)}`);
+    navigate(adminPath(`/neighborhood?iri=${encodeURIComponent(iri)}`));
     onClose();
   };
   const lookupTerm = () => {
-    navigate(`/ontologies?lookup=${encodeURIComponent(iri)}`);
+    navigate(adminPath(`/ontologies?lookup=${encodeURIComponent(iri)}`));
     onClose();
   };
   const openInSparql = () => {
     const q = `SELECT ?p ?o WHERE {\n  <${iri}> ?p ?o .\n}\nLIMIT 100\n`;
     setBuffer("sparql", q);
-    navigate("/sparql");
+    navigate(adminPath("/sparql"));
     onClose();
   };
   const openInSql = () => {
     const escaped = iri.replace(/'/g, "''");
     const q = `SELECT *\nFROM sbol_objects\nWHERE iri = '${escaped}';\n`;
     setBuffer("sql", q);
-    navigate("/sql");
+    navigate(adminPath("/sql"));
     onClose();
   };
   const openHttp = () => {

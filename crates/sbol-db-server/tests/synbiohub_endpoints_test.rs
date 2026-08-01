@@ -46,6 +46,10 @@ async fn fresh_app() -> axum::Router {
     let pool_console = pool.clone();
     let pool_stats = pool.clone();
     let metrics = Metrics::install(Some(pool), env!("CARGO_PKG_VERSION"));
+    let config = ServerConfig {
+        admin_api_auth_required: false,
+        ..ServerConfig::default()
+    };
     let state = AppState {
         lab: service.clone(),
         app: Arc::new(AppServices::new(
@@ -60,7 +64,7 @@ async fn fresh_app() -> axum::Router {
         sparql_update,
         metrics,
         jobs,
-        config: ServerConfig::default(),
+        config: config.clone(),
         backend_kind: sbol_db_server::BackendKind::Postgres,
         sql_console: Some(Arc::new(sbol_db_postgres::PgSqlConsole::new(pool_console))),
         db_stats: Some(Arc::new(sbol_db_postgres::PgStatsRepository::new(
@@ -69,7 +73,7 @@ async fn fresh_app() -> axum::Router {
         lsm_stats: None,
         schema_cache: Arc::new(sbol_db_server::SchemaCache::new()),
     };
-    router(state, ServerConfig::default())
+    router(state, config)
 }
 
 fn basic_auth() -> String {

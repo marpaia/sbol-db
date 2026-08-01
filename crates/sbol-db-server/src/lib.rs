@@ -5,11 +5,15 @@ mod docs;
 mod error;
 mod explorer;
 mod export;
+mod instance;
 #[cfg(feature = "lab")]
 mod lab;
 pub mod metrics;
+#[cfg(feature = "lab")]
+mod portal;
 mod routes;
 mod serialize;
+mod session;
 mod synbiohub;
 mod v2;
 
@@ -89,12 +93,25 @@ pub struct AppState {
 pub struct ServerConfig {
     pub request_timeout: Duration,
     pub max_body_bytes: usize,
-    /// When true (and the `lab` cargo feature is enabled), the data lab
-    /// bench SPA is mounted at `/lab` and its JSON API at `/lab/api`.
-    /// The toggle is runtime-only — to strip the embedded UI from the
-    /// binary entirely, build with `--no-default-features` on
-    /// `sbol-db-server`.
+    /// When true (and the `lab` cargo feature is enabled), embedded application
+    /// assets, the transitional `/lab` entry, and `/lab/api` are available.
+    /// The root application additionally requires `portal_enabled`. This toggle is
+    /// runtime-only — to strip the UI from the binary entirely, build with
+    /// `--no-default-features` on `sbol-db-server`.
     pub lab_enabled: bool,
+    /// When true (and the UI is enabled), wrap the completed HTTP router with
+    /// compatibility-aware browser dispatch for the root-mounted SBOL DB
+    /// application. Set false to disable browser pages while retaining every API
+    /// route and the transitional `/lab` mount.
+    pub portal_enabled: bool,
+    /// Add the `Secure` attribute to the shared browser-session cookie. Keep
+    /// this false for plain-HTTP local development and enable it for every
+    /// deployment whose public origin is HTTPS.
+    pub session_cookie_secure: bool,
+    /// Require an authenticated administrator for `/lab/api/*`. This defaults
+    /// on. The false value exists for isolated handler fixtures and deliberate
+    /// compatibility deployments; it should not be used on a public server.
+    pub admin_api_auth_required: bool,
     /// Upper bound (ms) the lab SQL endpoint applies via
     /// `SET LOCAL statement_timeout`. Clients can ask for less, never
     /// more.
@@ -129,6 +146,9 @@ impl Default for ServerConfig {
             request_timeout: Duration::from_secs(60),
             max_body_bytes: 32 * 1024 * 1024,
             lab_enabled: true,
+            portal_enabled: true,
+            session_cookie_secure: false,
+            admin_api_auth_required: true,
             lab_sql_timeout_ms_max: 60_000,
             lab_sql_row_cap_max: 50_000,
             sparql_auth_user: "dba".to_owned(),
@@ -157,6 +177,18 @@ impl ServerConfig {
                 .ok()
                 .map(|v| parse_bool(&v))
                 .unwrap_or(defaults.lab_enabled),
+            portal_enabled: std::env::var("SBOL_DB_PORTAL_ENABLED")
+                .ok()
+                .map(|v| parse_bool(&v))
+                .unwrap_or(defaults.portal_enabled),
+            session_cookie_secure: std::env::var("SBOL_DB_SESSION_COOKIE_SECURE")
+                .ok()
+                .map(|v| parse_bool(&v))
+                .unwrap_or(defaults.session_cookie_secure),
+            admin_api_auth_required: std::env::var("SBOL_DB_ADMIN_API_AUTH_REQUIRED")
+                .ok()
+                .map(|v| parse_bool(&v))
+                .unwrap_or(defaults.admin_api_auth_required),
             lab_sql_timeout_ms_max: std::env::var("SBOL_DB_LAB_SQL_TIMEOUT_MS_MAX")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -328,6 +360,9 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
+        ))
+        .route_layer(axum::middleware::from_fn(
+            metrics::track_virtuoso_compatibility_usage,
         ));
 
     // The SynBioHub V1 auth surface (`/login`, `/register`, `/profile`, …),
@@ -335,9 +370,12 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
     // Basic-auth `/sparql-auth*` write path above.
     let synbiohub_routes = synbiohub::router(state.clone());
 
-    let app = mount_lab(api.merge(authed).merge(synbiohub_routes), &config)
-        .fallback(not_found_handler)
-        .with_state(state);
+    let app = mount_portal(
+        mount_lab(api.merge(authed).merge(synbiohub_routes), &config, &state)
+            .fallback(not_found_handler)
+            .with_state(state),
+        &config,
+    );
 
     // Body limit and timeout apply to every route, including the
     // operational endpoints. `DefaultBodyLimit::max` overrides axum's
@@ -415,24 +453,70 @@ async fn not_found_handler(req: Request) -> impl IntoResponse {
 }
 
 #[cfg(feature = "lab")]
-fn mount_lab(router: Router<AppState>, config: &ServerConfig) -> Router<AppState> {
+fn mount_lab(
+    router: Router<AppState>,
+    config: &ServerConfig,
+    state: &AppState,
+) -> Router<AppState> {
     if !config.lab_enabled {
         tracing::info!("lab disabled via SBOL_DB_LAB_ENABLED");
         return router;
     }
     tracing::info!(
         ui_built = sbol_db_ui::is_built(),
-        "lab enabled; mounting JSON API at /lab/api and SPA at /lab"
+        "UI enabled; mounting admin JSON API at /lab/api and transitional SPA entry at /lab"
     );
     // Nest /lab/api first: axum matches more specific prefixes ahead
     // of shorter ones, but registering in order keeps the intent
     // legible and avoids surprises if axum's matcher ever changes.
+    let lab_api = if config.admin_api_auth_required {
+        lab::router()
+            .route_layer(axum::middleware::from_fn(lab::require_admin))
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                v2::auth::attach_identity,
+            ))
+    } else {
+        tracing::warn!("admin API authentication disabled");
+        lab::router()
+    };
     router
-        .nest("/lab/api", lab::router())
+        .nest("/lab/api", lab_api)
         .nest_service("/lab", sbol_db_ui::router())
 }
 
 #[cfg(not(feature = "lab"))]
-fn mount_lab(router: Router<AppState>, _config: &ServerConfig) -> Router<AppState> {
+fn mount_lab(
+    router: Router<AppState>,
+    _config: &ServerConfig,
+    _state: &AppState,
+) -> Router<AppState> {
+    router
+}
+
+#[cfg(feature = "lab")]
+fn mount_portal(router: Router, config: &ServerConfig) -> Router {
+    if !config.lab_enabled {
+        return router;
+    }
+    let router = router.layer(axum::middleware::from_fn(metrics::track_legacy_ui_usage));
+    if !config.portal_enabled {
+        tracing::info!(
+            "public portal pages disabled via SBOL_DB_PORTAL_ENABLED; retaining admin UI"
+        );
+        return router.layer(axum::middleware::from_fn(portal::dispatch_admin));
+    }
+    tracing::info!(
+        ui_built = sbol_db_ui::is_built(),
+        "portal enabled; browser navigation is served from the root origin"
+    );
+    // Apply this after routes, fallback, and state are complete. The layer must
+    // see a request before Axum selects a V1 handler or emits a method-specific
+    // 405; paths such as GET /profile and GET /login exercise both cases.
+    router.layer(axum::middleware::from_fn(portal::dispatch))
+}
+
+#[cfg(not(feature = "lab"))]
+fn mount_portal(router: Router, _config: &ServerConfig) -> Router {
     router
 }

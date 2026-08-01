@@ -33,7 +33,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use sbol_db_core::User;
 
-use crate::AppState;
+use crate::{metrics, AppState};
 
 /// The account a request authenticates as, resolved from the `X-authorization`
 /// token by [`attach_current_user`] and read by the V1 routes through an
@@ -577,7 +577,9 @@ pub fn router(state: AppState) -> Router<AppState> {
         ));
     // The admin surface carries its own identity + admin gate, so it is merged
     // in after the public routes rather than sharing their route layer.
-    public.merge(admin::router(state))
+    public
+        .merge(admin::router(state))
+        .route_layer(axum::middleware::from_fn(metrics::track_synbiohub_v1_usage))
 }
 
 /// Resolve the `X-authorization` token to the caller's account and attach it to

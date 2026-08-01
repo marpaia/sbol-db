@@ -21,18 +21,18 @@
 //! context rather than through the [`SbolStore`] surface, so `tantivy`, the
 //! aligner, and the ranked-text types never enter the storage traits.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use async_trait::async_trait;
-use sbol_db_core::{ObjectTerm, SubjectTerm, Triple};
+use sbol_db_core::{GraphId, ObjectTerm, SubjectTerm, Triple};
 use sbol_db_search::keywords::{build_keywords, SoTerm};
-use sbol_db_search::pagerank::{pagerank, top_level_iris, top_level_link_graph};
+use sbol_db_search::pagerank::{link_graph_for_top_levels, pagerank, top_level_iris};
 use sbol_db_search::ranked_text::IndexedPart;
 use sbol_db_search::{
     band_hashes, cluster_sequences, sketch, AlignOptions, Signature, SketchParams,
 };
-use sbol_db_storage::{JobStatus, ListJobsFilter, RankRow, SbolJob};
+use sbol_db_storage::{JobStatus, ListJobsFilter, ListObjectsFilter, RankRow, SbolJob};
 use serde_json::Value;
 
 use crate::context::JobContext;
@@ -42,11 +42,16 @@ pub const KIND: &str = "rebuild_search_index";
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const DISPLAY_ID: &str = "http://sbols.org/v2#displayId";
+const DISPLAY_ID_V3: &str = "http://sbols.org/v3#displayId";
 const VERSION: &str = "http://sbols.org/v2#version";
 const SBOL_TYPE: &str = "http://sbols.org/v2#type";
+const SBOL_TYPE_V3: &str = "http://sbols.org/v3#type";
 const ROLE: &str = "http://sbols.org/v2#role";
+const ROLE_V3: &str = "http://sbols.org/v3#role";
 /// The `sbol2:sequence` predicate linking a part to its Sequence object.
 const SEQUENCE: &str = "http://sbols.org/v2#sequence";
+/// The equivalent SBOL 3 predicate.
+const SEQUENCE_V3: &str = "http://sbols.org/v3#hasSequence";
 /// The `sbol2:elements` predicate carrying a Sequence's nucleotide string.
 const ELEMENTS: &str = "http://sbols.org/v2#elements";
 /// The `sbol3:elements` predicate. The sketch and clustering stages read both
@@ -55,7 +60,11 @@ const ELEMENTS: &str = "http://sbols.org/v2#elements";
 /// version-specific derived view.
 const ELEMENTS_V3: &str = "http://sbols.org/v3#elements";
 const TITLE: &str = "http://purl.org/dc/terms/title";
+const NAME_V3: &str = "http://sbols.org/v3#name";
 const DESCRIPTION: &str = "http://purl.org/dc/terms/description";
+const DESCRIPTION_V3: &str = "http://sbols.org/v3#description";
+const SBH_TOP_LEVEL: &str = "http://wiki.synbiohub.org/wiki/Terms/synbiohub#topLevel";
+const INTERNAL_DOCUMENT_GRAPH_PREFIX: &str = "graph:document:";
 
 /// The Sequence Ontology prefix under which role labels and synonyms are
 /// looked up when building keywords.
@@ -123,7 +132,9 @@ impl JobHandler for RebuildSearchIndexHandler {
         .await
         .map_err(|e| HandlerError::Other(format!("triple scan task join: {e}")))??;
 
-        let uris_set = top_level_iris(&all_triples);
+        let native = native_objects(&ctx).await?;
+        let mut uris_set = top_level_iris(&all_triples);
+        uris_set.extend(native.iris.iter().cloned());
         let uris: Vec<String> = uris_set.iter().cloned().collect();
 
         // Sketch stage: sketch every DNA/RNA sequence and swap the whole
@@ -156,7 +167,7 @@ impl JobHandler for RebuildSearchIndexHandler {
         let clusters = distinct_cluster_count(&assignments);
         search.cluster.replace_clusters(assignments).await?;
 
-        let edges = top_level_link_graph(&all_triples);
+        let edges = link_graph_for_top_levels(&all_triples, &uris_set);
         let ranks = pagerank(&edges, &uris);
 
         let rank_rows: Vec<RankRow> = ranks
@@ -171,6 +182,13 @@ impl JobHandler for RebuildSearchIndexHandler {
 
         let so_terms = load_so_terms(&ctx).await?;
         let mut metas = collect_object_metadata(&all_triples, &uris_set);
+        // The physical graph of a native import is `graph:document:<uuid>`,
+        // but callers are authorized against its public document IRI. Store
+        // that public identity in the text index so ACL graph filters agree
+        // with every other application read.
+        for (iri, document_iri) in native.document_graphs {
+            metas.entry(iri).or_default().graph = Some(document_iri);
+        }
 
         let mut parts = Vec::with_capacity(uris.len());
         for uri in &uris {
@@ -294,17 +312,39 @@ fn collect_object_metadata(
             }
         }
         match t.predicate.as_str() {
+            // A compatibility top-level marker identifies the externally
+            // addressable graph that search ACLs use. The same subject may
+            // also occur in a native physical `graph:document:*` graph; prefer
+            // the explicit external marker regardless of scan order.
+            SBH_TOP_LEVEL if matches!(&t.object, ObjectTerm::Iri(object) if object.as_str() == subject) => {
+                if let Some(candidate) = t.graph_iri.as_ref().map(|graph| graph.as_str()) {
+                    let should_replace = match meta.graph.as_deref() {
+                        None => true,
+                        Some(current) => {
+                            current.starts_with(INTERNAL_DOCUMENT_GRAPH_PREFIX)
+                                && !candidate.starts_with(INTERNAL_DOCUMENT_GRAPH_PREFIX)
+                        }
+                    };
+                    if should_replace {
+                        meta.graph = Some(candidate.to_owned());
+                    }
+                }
+            }
             RDF_TYPE => {
                 if let Some(v) = object_iri(&t.object) {
                     meta.types.push(v);
                 }
             }
-            DISPLAY_ID => set_first(&mut meta.display_id, object_literal(&t.object)),
-            TITLE => set_first(&mut meta.name, object_literal(&t.object)),
-            DESCRIPTION => set_first(&mut meta.description, object_literal(&t.object)),
+            DISPLAY_ID | DISPLAY_ID_V3 => {
+                set_first(&mut meta.display_id, object_literal(&t.object))
+            }
+            TITLE | NAME_V3 => set_first(&mut meta.name, object_literal(&t.object)),
+            DESCRIPTION | DESCRIPTION_V3 => {
+                set_first(&mut meta.description, object_literal(&t.object))
+            }
             VERSION => set_first(&mut meta.version, object_literal(&t.object)),
-            ROLE => set_first(&mut meta.role, object_iri(&t.object)),
-            SBOL_TYPE => set_first(&mut meta.sbol_type, object_iri(&t.object)),
+            ROLE | ROLE_V3 => set_first(&mut meta.role, object_iri(&t.object)),
+            SBOL_TYPE | SBOL_TYPE_V3 => set_first(&mut meta.sbol_type, object_iri(&t.object)),
             _ => {}
         }
     }
@@ -360,7 +400,7 @@ fn collect_part_sequences(
     let mut parts: Vec<(String, String)> = Vec::new();
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for t in triples {
-        if t.predicate.as_str() != SEQUENCE {
+        if !matches!(t.predicate.as_str(), SEQUENCE | SEQUENCE_V3) {
             continue;
         }
         let (SubjectTerm::Iri(part), ObjectTerm::Iri(seq)) = (&t.subject, &t.object) else {
@@ -376,6 +416,67 @@ fn collect_part_sequences(
         }
     }
     parts
+}
+
+/// Native imports persist their authoritative top-level projection in the
+/// object view but do not add the classic `sbh:topLevel` annotation to user
+/// RDF. Page through that view so the rebuilt indexes cover native and
+/// compatibility ingest paths alike.
+struct NativeObjects {
+    iris: HashSet<String>,
+    document_graphs: HashMap<String, String>,
+}
+
+async fn native_objects(ctx: &JobContext) -> Result<NativeObjects, HandlerError> {
+    const PAGE_SIZE: u32 = 5_000;
+    let mut iris = HashSet::new();
+    let mut document_graphs = HashMap::new();
+    let mut graph_documents: HashMap<GraphId, Option<String>> = HashMap::new();
+    let mut after_iri = None;
+    loop {
+        let page = ctx
+            .service
+            .list_objects(&ListObjectsFilter {
+                after_iri: after_iri.clone(),
+                limit: PAGE_SIZE,
+                ..ListObjectsFilter::default()
+            })
+            .await?;
+        if page.is_empty() {
+            break;
+        }
+        let page_len = page.len();
+        after_iri = page.last().map(|record| record.iri.as_str().to_owned());
+        for record in page {
+            let iri = record.iri.as_str().to_owned();
+            iris.insert(iri.clone());
+            let Some(graph_id) = record.graph_id else {
+                continue;
+            };
+            let document_iri = if let Some(document_iri) = graph_documents.get(&graph_id) {
+                document_iri.clone()
+            } else {
+                let document_iri = ctx
+                    .service
+                    .get_graph(graph_id)
+                    .await?
+                    .and_then(|graph| graph.document_iri)
+                    .map(|iri| iri.into_inner());
+                graph_documents.insert(graph_id, document_iri.clone());
+                document_iri
+            };
+            if let Some(document_iri) = document_iri {
+                document_graphs.insert(iri, document_iri);
+            }
+        }
+        if page_len < PAGE_SIZE as usize {
+            break;
+        }
+    }
+    Ok(NativeObjects {
+        iris,
+        document_graphs,
+    })
 }
 
 /// Sketch each `(iri, elements)` into `(iri, signature, band_hashes)`, dropping a
@@ -446,4 +547,41 @@ async fn load_so_terms(ctx: &JobContext) -> Result<Vec<SoTerm>, HandlerError> {
         }
     }
     Ok(terms)
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use sbol_db_core::IriString;
+
+    use super::*;
+
+    const SUBJECT: &str = "https://example.org/component";
+    const PUBLIC: &str = "https://example.org/public";
+    const COMPONENT: &str = "http://sbols.org/v3#Component";
+
+    fn triple(graph: &str, predicate: &str, object: &str) -> Triple {
+        Triple {
+            graph_iri: Some(IriString::unchecked(graph)),
+            subject: SubjectTerm::Iri(IriString::unchecked(SUBJECT)),
+            predicate: IriString::unchecked(predicate),
+            object: ObjectTerm::Iri(IriString::unchecked(object)),
+        }
+    }
+
+    #[test]
+    fn external_top_level_graph_wins_over_native_physical_graph() {
+        let triples = vec![
+            triple("graph:document:1234", RDF_TYPE, COMPONENT),
+            triple(PUBLIC, SBH_TOP_LEVEL, SUBJECT),
+            // A later physical marker must not make the result private again.
+            triple("graph:document:1234", SBH_TOP_LEVEL, SUBJECT),
+        ];
+        let top_levels = HashSet::from([SUBJECT.to_owned()]);
+        let metadata = collect_object_metadata(&triples, &top_levels);
+
+        assert_eq!(
+            metadata.get(SUBJECT).and_then(|meta| meta.graph.as_deref()),
+            Some(PUBLIC)
+        );
+    }
 }

@@ -27,6 +27,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { useOntologies, useOntologyTerms } from "@/hooks/useOntologies";
 import type { OntologyTermRecord } from "@/lib/api";
+import { adminPath } from "@/lib/routes";
 
 const PAGE_SIZE = 100;
 
@@ -73,7 +74,7 @@ export default function OntologyDetailRoute() {
     <div className="h-full w-full overflow-y-auto">
       <div className="mx-auto max-w-6xl space-y-6 px-8 py-10">
         <Link
-          to="/ontologies"
+          to={adminPath("/ontologies")}
           className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           <ChevronLeft size={12} />
@@ -259,7 +260,11 @@ function TermRow({ term }: { term: OntologyTermRecord }) {
           <button
             type="button"
             onClick={() =>
-              navigate(`/ontologies?lookup=${encodeURIComponent(term.curie)}`)
+              navigate(
+                adminPath(
+                  `/ontologies?lookup=${encodeURIComponent(term.curie)}`
+                )
+              )
             }
             className="text-xs font-medium text-foreground underline underline-offset-2 hover:text-foreground/80"
           >

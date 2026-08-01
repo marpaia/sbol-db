@@ -13,6 +13,7 @@ import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { useObjectLookup } from "@/hooks/useObjects";
 import type { SbolObjectRecord } from "@/lib/api";
+import { adminPath } from "@/lib/routes";
 import { describeError } from "@/lib/utils";
 
 const HARD_LIMIT = 1000;
@@ -93,7 +94,7 @@ export default function ObjectLookupRoute() {
     <div className="h-full w-full overflow-y-auto">
       <div className="mx-auto max-w-6xl space-y-6 px-8 py-10">
         <Link
-          to="/objects"
+          to={adminPath("/objects")}
           className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           <ChevronLeft size={12} />
@@ -182,7 +183,9 @@ export default function ObjectLookupRoute() {
                     rowKey={(o) => o.id}
                     filterable
                     onRowClick={(o) =>
-                      navigate(`/objects/${encodeURIComponent(o.iri)}`)
+                      navigate(
+                        adminPath(`/objects/${encodeURIComponent(o.iri)}`)
+                      )
                     }
                   />
                 </div>

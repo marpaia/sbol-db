@@ -17,6 +17,7 @@ import { ImportDialog } from "@/components/lab/ImportDialog";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { useGraphs } from "@/hooks/useGraphs";
 import type { GraphSummary, ImportReport } from "@/lib/api";
+import { adminPath } from "@/lib/routes";
 import { formatRelative } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
@@ -39,7 +40,7 @@ export default function GraphsRoute() {
       queryClient.invalidateQueries({ queryKey: ["lab", "graphs"] });
       queryClient.invalidateQueries({ queryKey: ["lab", "overview"] });
       setImporterOpen(false);
-      navigate(`/graphs/${report.graph_id}`);
+      navigate(adminPath(`/graphs/${report.graph_id}`));
     },
     [queryClient, navigate]
   );
@@ -84,11 +85,7 @@ export default function GraphsRoute() {
       width: 90,
       align: "right",
       cell: (g) =>
-        g.object_count > 0 ? (
-          g.object_count.toLocaleString()
-        ) : (
-          <Muted>—</Muted>
-        ),
+        g.object_count > 0 ? g.object_count.toLocaleString() : <Muted>—</Muted>,
       sortValue: (g) => g.object_count,
     },
     {
@@ -144,7 +141,7 @@ export default function GraphsRoute() {
                 rows={data.graphs}
                 rowKey={(g) => g.id}
                 filterable
-                onRowClick={(g) => navigate(`/graphs/${g.id}`)}
+                onRowClick={(g) => navigate(adminPath(`/graphs/${g.id}`))}
               />
             </div>
             <Pagination page={page} totalPages={totalPages} onPage={setPage} />

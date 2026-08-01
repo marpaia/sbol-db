@@ -69,6 +69,8 @@ pub const BUILTIN_BGE_SMALL_REVISION: &str =
 /// An operator may point a source build at the exact same verified bundle.
 pub const BUILTIN_BGE_SMALL_MODEL_DIR_ENV: &str = "SBOL_DB_BGE_SMALL_MODEL_DIR";
 const BUILTIN_BGE_SMALL_CONTAINER_DIR: &str = "/opt/sbol-db/models/bge-small-en-v1.5";
+const BUILTIN_BGE_SMALL_SOURCE_CACHE: &str =
+    ".cache/sbol-db/models/bge-small-en-v1.5-onnx-q-5239827";
 const BUILTIN_BGE_SMALL_ONNX_FILE: &str = "model_optimized.onnx";
 const BUILTIN_BGE_SMALL_INDEX: &str = "builtin.sbol-text-bge-small.v1";
 const BUILTIN_BGE_SMALL_STRATEGY: &str = "builtin.sbol-text-vector.v2";
@@ -116,10 +118,11 @@ fn legacy_explorer_maintenance() -> Arc<dyn IndexMaintenancePlugin> {
 ///
 /// It uses the pinned BGE-small ONNX bundle over the canonical SBOL object text
 /// projection and an in-process exact backend. The official image always ships
-/// that bundle; a source build must set [`BUILTIN_BGE_SMALL_MODEL_DIR_ENV`] to
-/// an artifact fetched with `make model/bge-small`. There is no silent lexical
-/// fallback, because serving a different vector space under the same default
-/// strategy would make query behavior deployment-dependent.
+/// that bundle. Source builds automatically discover the verified artifact
+/// fetched by `make model/bge-small`; [`BUILTIN_BGE_SMALL_MODEL_DIR_ENV`]
+/// remains an explicit override. There is no silent lexical fallback, because
+/// serving a different vector space under the same default strategy would make
+/// query behavior deployment-dependent.
 ///
 /// The server installs it only when it also embeds a worker, because that
 /// worker shares the backend state. Production topologies that separate API
@@ -135,8 +138,9 @@ pub async fn built_in_text_deployment() -> Result<SearchDeployment> {
             .context("joining built-in BGE-small model initialization task")?
             .with_context(|| {
                 format!(
-                    "loading built-in BGE-small bundle from {}; source builds must run \
-                     `make model/bge-small` and set {BUILTIN_BGE_SMALL_MODEL_DIR_ENV}",
+                    "loading built-in BGE-small bundle from {}; source builds populate the \
+                     auto-discovered cache with `make model/bge-small` (override with \
+                     {BUILTIN_BGE_SMALL_MODEL_DIR_ENV})",
                     model_directory.display()
                 )
             })?;
@@ -171,9 +175,34 @@ fn builtin_bge_small_bundle(directory: PathBuf) -> LocalFastEmbedBundleConfig {
 }
 
 fn builtin_bge_small_model_dir() -> PathBuf {
-    std::env::var_os(BUILTIN_BGE_SMALL_MODEL_DIR_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(BUILTIN_BGE_SMALL_CONTAINER_DIR))
+    resolve_builtin_bge_small_model_dir(
+        std::env::var_os(BUILTIN_BGE_SMALL_MODEL_DIR_ENV).map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+        PathBuf::from(BUILTIN_BGE_SMALL_CONTAINER_DIR),
+    )
+}
+
+fn resolve_builtin_bge_small_model_dir(
+    explicit: Option<PathBuf>,
+    home: Option<PathBuf>,
+    container: PathBuf,
+) -> PathBuf {
+    if let Some(explicit) = explicit {
+        return explicit;
+    }
+
+    let source_cache = home.map(|home| home.join(BUILTIN_BGE_SMALL_SOURCE_CACHE));
+    if let Some(source_cache) = source_cache.as_ref().filter(|path| path.is_dir()) {
+        return source_cache.clone();
+    }
+    if container.is_dir() {
+        return container;
+    }
+
+    // Prefer the path populated by the documented Make target in diagnostics,
+    // even before it exists. Falling back to /opt on a source checkout made a
+    // successful `make model/bge-small` look ineffective.
+    source_cache.unwrap_or(container)
 }
 
 fn build_builtin_text_deployment(
@@ -484,6 +513,56 @@ mod tests {
         assert_eq!(profile.dimension, 384);
         assert_eq!(bundle.onnx_file, "model_optimized.onnx");
         assert_eq!(bundle.pooling, FastEmbedPooling::Cls);
+    }
+
+    #[test]
+    fn explicit_builtin_model_directory_always_wins() {
+        let explicit = PathBuf::from("/configured/model");
+        let selected = resolve_builtin_bge_small_model_dir(
+            Some(explicit.clone()),
+            Some(PathBuf::from("/home/developer")),
+            PathBuf::from("/container/model"),
+        );
+        assert_eq!(selected, explicit);
+    }
+
+    #[test]
+    fn source_build_discovers_the_make_target_cache() {
+        let home = tempfile::tempdir().unwrap();
+        let source_cache = home.path().join(BUILTIN_BGE_SMALL_SOURCE_CACHE);
+        std::fs::create_dir_all(&source_cache).unwrap();
+
+        let selected = resolve_builtin_bge_small_model_dir(
+            None,
+            Some(home.path().to_owned()),
+            home.path().join("missing-container-model"),
+        );
+        assert_eq!(selected, source_cache);
+    }
+
+    #[test]
+    fn missing_source_bundle_reports_the_path_populated_by_make() {
+        let home = tempfile::tempdir().unwrap();
+        let selected = resolve_builtin_bge_small_model_dir(
+            None,
+            Some(home.path().to_owned()),
+            home.path().join("missing-container-model"),
+        );
+        assert_eq!(selected, home.path().join(BUILTIN_BGE_SMALL_SOURCE_CACHE));
+    }
+
+    #[test]
+    fn packaged_model_is_used_when_the_source_cache_is_absent() {
+        let root = tempfile::tempdir().unwrap();
+        let container = root.path().join("container-model");
+        std::fs::create_dir_all(&container).unwrap();
+
+        let selected = resolve_builtin_bge_small_model_dir(
+            None,
+            Some(root.path().join("home")),
+            container.clone(),
+        );
+        assert_eq!(selected, container);
     }
 
     #[cfg(feature = "faiss")]

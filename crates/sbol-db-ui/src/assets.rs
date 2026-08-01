@@ -43,9 +43,33 @@ pub fn is_built() -> bool {
     Assets::get("index.html").is_some()
 }
 
+/// Serve one exact embedded asset without applying the SPA fallback.
+///
+/// Root-mounted hosts use this for `/assets/*`, the favicon, and other
+/// browser resources. A missing resource must remain a real 404 rather than
+/// returning `index.html`, otherwise script and stylesheet failures are
+/// reported by the browser as misleading MIME-type errors.
+pub fn asset_response(path: &str) -> Option<Response> {
+    let normalized = path.trim_start_matches('/');
+    Assets::get(normalized).map(|file| respond(normalized, file))
+}
+
+/// Serve the SPA entry document (or the explanatory build stub).
+///
+/// The host server calls this after it has decided that a request is browser
+/// navigation. Keeping that policy outside this asset crate lets the same
+/// embed continue to work at `/lab` while a compatibility-aware root mount is
+/// developed independently.
+pub fn index_response() -> Response {
+    match Assets::get("index.html") {
+        Some(index) => respond("index.html", index),
+        None => stub_response(),
+    }
+}
+
 /// axum router that serves the SPA. Mount under whatever prefix the host
-/// server wants — the SPA is built with `base: "/lab/"` in vite config,
-/// so the natural mount point is `/lab`.
+/// server wants. The SPA is built for the root portal; `/lab` remains a
+/// transitional mount whose client-side route redirects into `/admin`.
 pub fn router() -> Router {
     Router::new()
         .route("/", get(handle))
@@ -60,10 +84,7 @@ async fn handle(uri: Uri) -> Response {
         Some(file) => respond(path, file),
         // SPA fallback: unknown paths (client-side routes) return
         // index.html so React Router can take over.
-        None => match Assets::get("index.html") {
-            Some(index) => respond("index.html", index),
-            None => stub_response(),
-        },
+        None => index_response(),
     }
 }
 

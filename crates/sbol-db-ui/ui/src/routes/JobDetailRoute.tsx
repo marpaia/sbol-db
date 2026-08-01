@@ -22,6 +22,7 @@ import {
   useJobLogs,
 } from "@/hooks/useObservability";
 import type { JobAttempt, JobLogRecord, RecentJob } from "@/lib/api";
+import { adminPath } from "@/lib/routes";
 import { describeError, formatMs } from "@/lib/utils";
 
 export default function JobDetailRoute() {
@@ -45,7 +46,7 @@ export default function JobDetailRoute() {
     <div className="h-full w-full overflow-y-auto">
       <div className="mx-auto max-w-6xl space-y-6 px-8 py-10">
         <Link
-          to="/observability/jobs"
+          to={adminPath("/observability/jobs")}
           className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           <ChevronLeft size={12} />
@@ -62,7 +63,9 @@ export default function JobDetailRoute() {
           <>
             <Header
               job={job}
-              onCancel={() => cancel.mutate(job.id)}
+              onCancel={(confirmation) =>
+                cancel.mutate({ id: job.id, confirmation })
+              }
               canCancel={
                 (job.status === "queued" || job.status === "running") &&
                 !cancel.isPending
@@ -259,11 +262,14 @@ function Header({
   cancelMessage,
 }: {
   job: RecentJob;
-  onCancel: () => void;
+  onCancel: (confirmation: string) => void;
   canCancel: boolean;
   cancelling: boolean;
   cancelMessage: string | null;
 }) {
+  const [confirming, setConfirming] = useState(false);
+  const [confirmation, setConfirmation] = useState("");
+  const expected = `CANCEL JOB ${job.id}`;
   return (
     <div className="space-y-2">
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -278,10 +284,10 @@ function Header({
             {job.id}
           </div>
         </div>
-        {(canCancel || cancelling) && (
+        {(canCancel || cancelling) && !confirming && (
           <button
             type="button"
-            onClick={onCancel}
+            onClick={() => setConfirming(true)}
             disabled={!canCancel}
             className="inline-flex items-center gap-1.5 rounded-md border border-destructive/40 bg-background px-3 py-1.5 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
           >
@@ -290,6 +296,41 @@ function Header({
           </button>
         )}
       </header>
+      {confirming && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3">
+          <p className="text-xs text-muted-foreground">
+            Type{" "}
+            <code className="font-semibold text-foreground">{expected}</code> to
+            stop this job.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <input
+              value={confirmation}
+              onChange={(event) => setConfirmation(event.target.value)}
+              className="h-8 min-w-80 rounded-md border bg-background px-3 font-mono text-xs outline-none focus:ring-1 focus:ring-ring"
+              aria-label="Cancel job confirmation"
+            />
+            <button
+              type="button"
+              disabled={cancelling || confirmation !== expected}
+              onClick={() => onCancel(confirmation)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-destructive px-3 text-xs font-medium text-destructive-foreground disabled:opacity-50"
+            >
+              <Octagon size={12} /> {cancelling ? "Cancelling…" : "Cancel job"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setConfirming(false);
+                setConfirmation("");
+              }}
+              className="h-8 rounded-md px-3 text-xs font-medium text-muted-foreground hover:bg-muted"
+            >
+              Keep running
+            </button>
+          </div>
+        </div>
+      )}
       {cancelMessage && (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
           {cancelMessage}

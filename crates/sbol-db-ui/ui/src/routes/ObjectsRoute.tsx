@@ -13,6 +13,7 @@ import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { useObjectsList } from "@/hooks/useObjects";
 import type { SbolObjectRecord } from "@/lib/api";
+import { adminPath } from "@/lib/routes";
 
 const PAGE_SIZE = 100;
 
@@ -106,7 +107,7 @@ export default function ObjectsRoute() {
           </div>
           <button
             type="button"
-            onClick={() => navigate("/objects/lookup")}
+            onClick={() => navigate(adminPath("/objects/lookup"))}
             className="inline-flex items-center gap-1.5 rounded-md border bg-background px-3 py-1.5 text-sm font-medium transition-colors hover:bg-accent/40"
           >
             <Search size={14} />
@@ -149,7 +150,7 @@ export default function ObjectsRoute() {
                 rowKey={(o) => o.id}
                 filterable
                 onRowClick={(o) =>
-                  navigate(`/objects/${encodeURIComponent(o.iri)}`)
+                  navigate(adminPath(`/objects/${encodeURIComponent(o.iri)}`))
                 }
               />
             </div>
@@ -197,7 +198,9 @@ function Filters({
   graphFilter: string;
   onChange: (key: "class" | "role" | "graph", value: string) => void;
 }) {
-  const [open, setOpen] = useState(!!(classFilter || roleFilter || graphFilter));
+  const [open, setOpen] = useState(
+    !!(classFilter || roleFilter || graphFilter)
+  );
   const active = [classFilter, roleFilter, graphFilter].filter(Boolean).length;
   return (
     <section className="rounded-lg border bg-card">

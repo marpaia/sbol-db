@@ -166,12 +166,14 @@ ENV LD_LIBRARY_PATH=/opt/faiss/lib
 COPY --from=planner /work/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target \
-    cargo chef cook --release --bin sbol-db --features faiss --recipe-path recipe.json
+    cargo chef cook --release --bin sbol-db --no-default-features \
+        --features lab,faiss,dynamic-ort --recipe-path recipe.json
 
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target \
-    cargo build --release --bin sbol-db --features faiss \
+    cargo build --release --bin sbol-db --no-default-features \
+        --features lab,faiss,dynamic-ort \
     && cp target/release/sbol-db /usr/local/bin/sbol-db \
     && strip /usr/local/bin/sbol-db
 
@@ -187,7 +189,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target \
     cargo test -p sbol-db-search-faiss --features native \
     && SBOL_DB_BGE_SMALL_MODEL_DIR=/opt/sbol-db/models/bge-small-en-v1.5 \
-       cargo run -p sbol-db-search-eval --example bge_small_release_gate \
+       cargo run -p sbol-db-search-eval --no-default-features \
+           --features dynamic-ort --example bge_small_release_gate \
     && cp target/debug/examples/bge_small_release_gate /usr/local/bin/sbol-db-bge-release-gate
 
 ############################

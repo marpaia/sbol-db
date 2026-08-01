@@ -158,8 +158,9 @@ export function useJob(id: string) {
 export function useCancelJob() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => cancelJob(id),
-    onSuccess: (_data, id) => {
+    mutationFn: ({ id, confirmation }: { id: string; confirmation: string }) =>
+      cancelJob(id, confirmation),
+    onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ["job", id] });
       qc.invalidateQueries({ queryKey: ["job", id, "attempts"] });
       qc.invalidateQueries({ queryKey: ["lab", "obs", "jobs", "recent"] });

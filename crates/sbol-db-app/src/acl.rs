@@ -156,18 +156,21 @@ impl AclService {
     }
 
     /// The named graph holding `object_iri`, or `None` when the object is
-    /// unknown or its graph carries no document IRI.
+    /// unknown. Derived object records retain their logical document IRI; a
+    /// verbatim submission root may not have a derived record, so fall back to
+    /// the authoritative subject triples instead of silently dropping a valid
+    /// read-only share from the caller's scope.
     async fn graph_of_object(&self, object_iri: &str) -> Result<Option<String>, DomainError> {
-        let Some(record) = self.store.get_object_by_iri(object_iri).await? else {
-            return Ok(None);
-        };
-        let Some(graph_id) = record.graph_id else {
-            return Ok(None);
-        };
-        let Some(graph) = self.store.get_graph(graph_id).await? else {
-            return Ok(None);
-        };
-        Ok(graph.document_iri.map(|iri| iri.into_inner()))
+        if let Some(record) = self.store.get_object_by_iri(object_iri).await? {
+            if let Some(graph_id) = record.graph_id {
+                if let Some(graph) = self.store.get_graph(graph_id).await? {
+                    if let Some(document_iri) = graph.document_iri {
+                        return Ok(Some(document_iri.into_inner()));
+                    }
+                }
+            }
+        }
+        self.graph_of_subject(object_iri).await
     }
 }
 

@@ -1,0 +1,316 @@
+import type { Capabilities, RecentJob } from "@/lib/api";
+
+const ADMIN_API = "/api/v2/admin";
+
+export class AdminApiError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(status: number, message: string, code?: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export interface AdminOverview {
+  api: "v2-admin";
+  policy: "authenticated_administrator";
+  backend?: "postgres" | "sqlite" | "rocksdb";
+  backend_name?: string;
+  capabilities?: Capabilities;
+  sections: Array<{ id: string; read: boolean; mutate: boolean }>;
+  search: SearchStatus;
+}
+
+export interface AdminInstance {
+  name: string;
+  instance_url: string;
+  uri_prefix: string;
+  front_page_text: string;
+  allow_public_signup: boolean;
+  require_login: boolean;
+  setup_required: boolean;
+}
+
+export type AdminInstancePatch = Partial<
+  Pick<
+    AdminInstance,
+    | "name"
+    | "instance_url"
+    | "uri_prefix"
+    | "front_page_text"
+    | "allow_public_signup"
+    | "require_login"
+  >
+>;
+
+export interface AdminUser {
+  id: string;
+  username: string;
+  name: string;
+  email: string;
+  affiliation: string | null;
+  graph_uri: string;
+  is_admin: boolean;
+  is_curator: boolean;
+  is_member: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminUsersResponse {
+  total: number;
+  items: AdminUser[];
+}
+
+export interface CreateAdminUser {
+  username: string;
+  name: string;
+  email: string;
+  affiliation?: string;
+  password: string;
+  is_admin: boolean;
+  is_curator: boolean;
+  is_member: boolean;
+}
+
+export type UpdateAdminUser = Partial<
+  Pick<
+    AdminUser,
+    "name" | "email" | "affiliation" | "is_admin" | "is_curator" | "is_member"
+  >
+>;
+
+export interface RegistryIntegration {
+  uri: string;
+  url: string;
+}
+
+export interface AdminIntegrations {
+  federation: { registered: boolean; url: string };
+  registries: RegistryIntegration[];
+  remotes: Record<string, Record<string, unknown>>;
+  plugins: Record<string, Array<{ name: string; url: string }>>;
+}
+
+export interface SearchStatus {
+  default_strategy: string;
+  strategies: Array<{
+    id: string;
+    label?: string;
+    description?: string;
+    [key: string]: unknown;
+  }>;
+  recent_rebuilds?: RecentJob[];
+}
+
+export interface AdminAuditEvent {
+  iri: string;
+  action: string;
+  actor: string;
+  target: string;
+  outcome: "attempted" | "succeeded" | "failed";
+  detail: string | null;
+  occurred_at: string;
+}
+
+export interface AdminAuditResponse {
+  total: number;
+  items: AdminAuditEvent[];
+}
+
+export interface BackupArchive {
+  format: string;
+  version: number;
+  created_at: string;
+  scope: string;
+  documents: unknown[];
+  checksum: string;
+}
+
+export interface BackupValidation {
+  valid: true;
+  format: string;
+  version: number;
+  checksum: string;
+  documents: number;
+  confirmation: string;
+  scope: string;
+  excludes: string[];
+}
+
+export function fetchAdminOverview(signal?: AbortSignal) {
+  return request<AdminOverview>("", { signal });
+}
+
+export function fetchAdminInstance(signal?: AbortSignal) {
+  return request<AdminInstance>("/instance", { signal });
+}
+
+export function updateAdminInstance(payload: AdminInstancePatch) {
+  return request<AdminInstance>("/instance", jsonRequest("PATCH", payload));
+}
+
+export function fetchAdminUsers(signal?: AbortSignal) {
+  return request<AdminUsersResponse>("/users", { signal });
+}
+
+export function createAdminUser(payload: CreateAdminUser) {
+  return request<AdminUser>("/users", jsonRequest("POST", payload));
+}
+
+export function updateAdminUser(username: string, payload: UpdateAdminUser) {
+  return request<AdminUser>(
+    `/users/${encodeURIComponent(username)}`,
+    jsonRequest("PATCH", payload)
+  );
+}
+
+export function deleteAdminUser(username: string, confirmation: string) {
+  return request<void>(
+    `/users/${encodeURIComponent(username)}`,
+    jsonRequest("DELETE", { confirmation })
+  );
+}
+
+export function fetchAdminIntegrations(signal?: AbortSignal) {
+  return request<AdminIntegrations>("/integrations", { signal });
+}
+
+export function joinFederation(administrator_email: string, url: string) {
+  return request<{ status: string }>(
+    "/federation",
+    jsonRequest("POST", { administrator_email, url })
+  );
+}
+
+export function syncFederation() {
+  return request<{ status: string; count: number }>(
+    "/federation/sync",
+    jsonRequest("POST", {})
+  );
+}
+
+export function saveRegistry(uri: string, url: string) {
+  return request<{ status: string; uri: string }>(
+    "/registries",
+    jsonRequest("POST", { uri, url })
+  );
+}
+
+export function deleteRegistry(uri: string, confirmation: string) {
+  return request<void>(
+    `/registries/${encodeURIComponent(uri)}`,
+    jsonRequest("DELETE", { confirmation })
+  );
+}
+
+export function saveRemote(remote: Record<string, unknown>) {
+  return request<{ status: string; id: string }>(
+    "/remotes",
+    jsonRequest("POST", remote)
+  );
+}
+
+export function deleteRemote(id: string, confirmation: string) {
+  return request<void>(
+    `/remotes/${encodeURIComponent(id)}`,
+    jsonRequest("DELETE", { confirmation })
+  );
+}
+
+export function savePlugin(payload: {
+  category: string;
+  id: string;
+  name: string;
+  url: string;
+}) {
+  return request<{ status: string; name: string }>(
+    "/plugins",
+    jsonRequest("POST", payload)
+  );
+}
+
+export function deletePlugin(
+  category: string,
+  id: string,
+  confirmation: string
+) {
+  return request<void>(
+    `/plugins/${encodeURIComponent(category)}/${encodeURIComponent(id)}`,
+    jsonRequest("DELETE", { confirmation })
+  );
+}
+
+export function fetchSearchStatus(signal?: AbortSignal) {
+  return request<SearchStatus>("/search", { signal });
+}
+
+export function rebuildSearch() {
+  return request<{ job: RecentJob; deduplicated: boolean }>(
+    "/search/rebuild",
+    jsonRequest("POST", {})
+  );
+}
+
+export function fetchAdminAudit(signal?: AbortSignal) {
+  return request<AdminAuditResponse>("/audit?limit=200", { signal });
+}
+
+export async function downloadBackup(): Promise<void> {
+  const res = await fetch(`${ADMIN_API}/backup`);
+  if (!res.ok) throw await responseError(res);
+  const blob = await res.blob();
+  const disposition = res.headers.get("content-disposition") ?? "";
+  const filename =
+    disposition.match(/filename="([^"]+)"/)?.[1] ?? "sbol-db-registry.json";
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+export function validateBackup(archive: BackupArchive) {
+  return request<BackupValidation>(
+    "/backup/validate",
+    jsonRequest("POST", archive)
+  );
+}
+
+export function restoreBackup(archive: BackupArchive, confirmation: string) {
+  return request<{
+    status: "restored";
+    checksum: string;
+    documents: number;
+    rebuild_job: RecentJob;
+  }>("/backup/restore", jsonRequest("POST", { archive, confirmation }));
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${ADMIN_API}${path}`, init);
+  if (!res.ok) throw await responseError(res);
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+function jsonRequest(method: string, body: unknown): RequestInit {
+  return {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
+}
+
+async function responseError(res: Response): Promise<AdminApiError> {
+  const value = (await res.json().catch(() => null)) as {
+    error?: { message?: string; code?: string };
+  } | null;
+  return new AdminApiError(
+    res.status,
+    value?.error?.message || `Request failed with HTTP ${res.status}`,
+    value?.error?.code
+  );
+}

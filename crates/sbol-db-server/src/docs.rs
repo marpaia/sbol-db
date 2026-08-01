@@ -6,8 +6,8 @@
 //! The UI is rendered by [Scalar](https://github.com/scalar/scalar), pinned to
 //! a fixed CDN version. `Scalar.createApiReference` mounts a single reference
 //! carrying three same-origin documents, each a switcher entry: `/openapi.json`
-//! (the original sbol-db native API), `/synbiohub/openapi.json` (the SynBioHub
-//! v1-compatible API), and `/api/v2/openapi.json` (the idiomatic V2 API). The
+//! (the original SBOL DB API), `/synbiohub/openapi.json` (the SynBioHub
+//! v1-compatibility API), and `/api/v2/openapi.json` (the native V2 API). The
 //! multi-document `sources` configuration is driven through the explicit
 //! `createApiReference` call; the attribute-based auto-mount does not honor it.
 //! The look-and-feel is closest to FastAPI's auto-generated `/docs` of the
@@ -22,7 +22,7 @@ const SYNBIOHUB_OPENAPI_JSON: &str = include_str!("synbiohub_openapi.json");
 const DOCS_HTML: &str = r#"<!doctype html>
 <html lang="en">
   <head>
-    <title>sbol-db API</title>
+    <title>SBOL DB API</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="data:," />
@@ -40,19 +40,19 @@ const DOCS_HTML: &str = r#"<!doctype html>
         hideClientButton: false,
         sources: [
           {
-            title: "sbol-db native API",
+            title: "SBOL DB native API",
             slug: "native",
             url: "/openapi.json",
             default: true
           },
           {
-            title: "SynBioHub v1 API",
+            title: "SynBioHub v1 compatibility API",
             slug: "synbiohub-v1",
             url: "/synbiohub/openapi.json"
           },
           {
-            title: "SynBioHub v2 API",
-            slug: "synbiohub-v2",
+            title: "SBOL DB V2 API",
+            slug: "sbol-db-v2",
             url: "/api/v2/openapi.json"
           }
         ]

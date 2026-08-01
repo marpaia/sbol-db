@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use sbol_db_core::SerializationFormat;
+use sbol_db_core::{IriString, SerializationFormat};
 use sbol_db_jobs::handlers::rebuild_search_index::RebuildSearchIndexHandler;
 use sbol_db_jobs::{JobContext, JobHandler, SearchIndexHandles};
 use sbol_db_search::ranked_text::{cluster_map, ClusterMap, GraphFilter, Hit, RankedTextIndex};
@@ -19,14 +19,18 @@ use sbol_db_sqlite::{
     SqliteSketchStore, SqliteStore,
 };
 use sbol_db_storage::{
-    ClusterStore, GraphWriteMode, JobQueue, NewJob, PageRankStore, SbolStore, SketchStore,
-    TripleSource,
+    ClusterStore, GraphWriteMode, ImportInput, ImportOverwrite, JobQueue, NewJob, PageRankStore,
+    SbolStore, SketchStore, TripleSource,
 };
 use tokio_util::sync::CancellationToken;
 
 const PUBLIC_GRAPH: &str = "https://synbiohub.org/public";
 const J23100: &str = "https://synbiohub.org/public/igem/BBa_J23100/1";
 const J23101: &str = "https://synbiohub.org/public/igem/BBa_J23101/1";
+const NATIVE_GRAPH: &str = "https://example.org/native/";
+const NATIVE_ALPHA: &str = "https://example.org/native/alpha";
+const NATIVE_BETA: &str = "https://example.org/native/beta";
+const NATIVE_COMPONENT: &str = "http://sbols.org/v3#Component";
 
 /// A minimal SynBioHub SBOL2 corpus: a Collection with two member
 /// ComponentDefinitions, each referencing a Sequence. The two promoter
@@ -84,6 +88,50 @@ const CORPUS: &str = r#"
     sbol2:displayId "BBa_J23101_sequence" ;
     sbol2:version "1" ;
     sbol2:elements "ttgacggctagctcagtcctaggtacagtgctaga" .
+"#;
+
+/// A normal SBOL DB import has authoritative object rows but deliberately no
+/// compatibility-only `sbh:topLevel` annotations. Rebuilds must union those
+/// rows with verbatim compatibility top-levels before indexing and clustering.
+const NATIVE_CORPUS: &str = r#"
+@prefix sbol: <http://sbols.org/v3#> .
+@prefix SBO: <https://identifiers.org/SBO:> .
+@prefix SO: <https://identifiers.org/SO:> .
+@prefix EDAM: <https://identifiers.org/edam:> .
+
+<https://example.org/native/alpha>
+    a sbol:Component ;
+    sbol:displayId "alpha" ;
+    sbol:name "Native alpha promoter" ;
+    sbol:description "A native SBOL DB import" ;
+    sbol:hasNamespace <https://example.org/native/> ;
+    sbol:type SBO:0000251 ;
+    sbol:role SO:0000167 ;
+    sbol:hasSequence <https://example.org/native/alpha-sequence> .
+
+<https://example.org/native/alpha-sequence>
+    a sbol:Sequence ;
+    sbol:displayId "alpha-sequence" ;
+    sbol:hasNamespace <https://example.org/native/> ;
+    sbol:elements "ttgacggctagctcagtcctaggtacagtgctagc" ;
+    sbol:encoding EDAM:format_1207 .
+
+<https://example.org/native/beta>
+    a sbol:Component ;
+    sbol:displayId "beta" ;
+    sbol:name "Native beta promoter" ;
+    sbol:description "A second native SBOL DB import" ;
+    sbol:hasNamespace <https://example.org/native/> ;
+    sbol:type SBO:0000251 ;
+    sbol:role SO:0000167 ;
+    sbol:hasSequence <https://example.org/native/beta-sequence> .
+
+<https://example.org/native/beta-sequence>
+    a sbol:Sequence ;
+    sbol:displayId "beta-sequence" ;
+    sbol:hasNamespace <https://example.org/native/> ;
+    sbol:elements "ttgacggctagctcagtcctaggtacagtgctaga" ;
+    sbol:encoding EDAM:format_1207 .
 "#;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -214,6 +262,97 @@ async fn rebuild_populates_ranks_and_index() {
         (halved, kept),
         (1, 1),
         "exactly one clustered promoter is halved and the other kept: ratios {ratios:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rebuild_indexes_and_clusters_native_imports_without_compatibility_markers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let url = format!(
+        "sqlite://{}",
+        dir.path().join("native-reindex.db").display()
+    );
+    let pool = connect_and_migrate(&url).await.expect("connect + migrate");
+
+    let sqlite_store = Arc::new(SqliteStore::new(pool.clone()));
+    sqlite_store
+        .import_document(ImportInput {
+            body: NATIVE_CORPUS.to_owned(),
+            format: SerializationFormat::Turtle,
+            namespace: None,
+            source_uri: None,
+            document_iri: Some(IriString::new(NATIVE_GRAPH.to_owned()).expect("document IRI")),
+            created_by: None,
+            name: None,
+            description: None,
+            overwrite: ImportOverwrite::Fail,
+        })
+        .await
+        .expect("import native corpus");
+
+    let service: Arc<dyn SbolStore> = sqlite_store.clone();
+    let cluster: Arc<dyn ClusterStore> = Arc::new(SqliteClusterStore::new(pool.clone()));
+    let pagerank: Arc<dyn PageRankStore> = Arc::new(SqlitePageRankStore::new(pool.clone()));
+    let sketch: Arc<dyn SketchStore> = Arc::new(SqliteSketchStore::new(pool.clone()));
+    let text_index = Arc::new(RankedTextIndex::in_ram().expect("in-ram index"));
+    let triples: Arc<dyn TripleSource> = sqlite_store.triple_source();
+    let jobs: Arc<dyn JobQueue> = Arc::new(SqliteJobRepository::new(pool));
+    let ctx = JobContext {
+        job_id: sbol_db_core::JobId::new(),
+        worker_id: Arc::from("test-worker"),
+        attempt: 1,
+        service,
+        jobs,
+        cancel: CancellationToken::new(),
+        search: Some(SearchIndexHandles {
+            cluster: cluster.clone(),
+            pagerank: pagerank.clone(),
+            sketch: sketch.clone(),
+            text_index: text_index.clone(),
+            triples,
+        }),
+        vector_indexes: None,
+        config: None,
+    };
+
+    let outcome = RebuildSearchIndexHandler
+        .run(ctx, serde_json::json!({}))
+        .await
+        .expect("native rebuild runs");
+    assert_eq!(outcome.result.expect("result")["indexed"], 4);
+
+    let hits = text_index
+        .search(
+            "Native alpha promoter",
+            0,
+            10,
+            &GraphFilter::Only(vec![NATIVE_GRAPH.to_owned()]),
+            &ClusterMap::new(),
+        )
+        .expect("search native index");
+    let alpha = hits
+        .iter()
+        .find(|hit| hit.subject == NATIVE_ALPHA)
+        .expect("native component is indexed");
+    assert!(alpha.type_iris.iter().any(|iri| iri == NATIVE_COMPONENT));
+
+    let alpha_cluster = cluster
+        .cluster_id_of(NATIVE_ALPHA)
+        .await
+        .expect("alpha cluster lookup")
+        .expect("alpha is clustered");
+    let beta_cluster = cluster
+        .cluster_id_of(NATIVE_BETA)
+        .await
+        .expect("beta cluster lookup")
+        .expect("beta is clustered");
+    assert_eq!(alpha_cluster, beta_cluster);
+
+    let ranks = pagerank.all_ranks().await.expect("native ranks");
+    assert!(ranks.iter().any(|row| row.iri == NATIVE_ALPHA));
+    assert_eq!(
+        sketch.all_sketches().await.expect("native sketches").len(),
+        2
     );
 }
 

@@ -25,6 +25,7 @@ import {
   type ImportRemoteDocumentPayload,
   type ImportSynBioHubCollectionPayload,
 } from "@/lib/api";
+import { adminPath } from "@/lib/routes";
 import { describeError } from "@/lib/utils";
 
 const SYNBIOHUB_BASE_URL = "https://synbiohub.org";
@@ -212,7 +213,7 @@ export default function ImportRoute() {
                 variant="outline"
                 size="sm"
                 onClick={() =>
-                  navigate(`/observability/jobs/${lastJob.job.id}`)
+                  navigate(adminPath(`/observability/jobs/${lastJob.job.id}`))
                 }
               >
                 <ExternalLink size={14} />
@@ -306,7 +307,7 @@ export default function ImportRoute() {
                   }
                   onEnqueue={() => enqueueTargets([target])}
                   onOpenJob={(jobId) =>
-                    navigate(`/observability/jobs/${jobId}`)
+                    navigate(adminPath(`/observability/jobs/${jobId}`))
                   }
                 />
               ))}
@@ -333,7 +334,9 @@ export default function ImportRoute() {
                   ? enqueueTargets([customCollectionTarget])
                   : undefined
               }
-              onOpenJob={(jobId) => navigate(`/observability/jobs/${jobId}`)}
+              onOpenJob={(jobId) =>
+                navigate(adminPath(`/observability/jobs/${jobId}`))
+              }
             />
           </TabsContent>
 
@@ -349,7 +352,9 @@ export default function ImportRoute() {
               states={states}
               submitting={submitting}
               onEnqueue={() => enqueueTargets(urlTargets)}
-              onOpenJob={(jobId) => navigate(`/observability/jobs/${jobId}`)}
+              onOpenJob={(jobId) =>
+                navigate(adminPath(`/observability/jobs/${jobId}`))
+              }
             />
           </TabsContent>
         </Tabs>

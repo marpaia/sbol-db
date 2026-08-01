@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Write};
 
 use gb_io::seq::{After, Before, Feature, Location, Qualifier, Seq, Topology};
-use sbol::v3::constants::{SBO_PROTEIN, SBO_RNA, SO_CIRCULAR};
+use sbol::v3::constants::{EDAM_IUPAC_PROTEIN, SBO_PROTEIN, SBO_RNA, SO_CIRCULAR};
 use sbol::v3::{Component, Document, Range, Sequence, SequenceFeature, SubComponent};
 use sbol_db_core::{DomainError, ObjectTerm, SerializationFormat, SubjectTerm, Triple};
 use sbol_db_rdf::triples_to_rdf;
@@ -90,6 +90,14 @@ pub fn serialize_closure(
             let text = if sbol2 {
                 let ntriples = triples_to_rdf(triples, SerializationFormat::NTriples)?;
                 downgrade_sbol3_ntriples(&ntriples, format)?
+            } else if is_sbol2(triples) {
+                let ntriples = triples_to_rdf(triples, SerializationFormat::NTriples)?;
+                let (document, _report) =
+                    sbol::convert::upgrade_from_sbol2(&ntriples, sbol::RdfFormat::NTriples)
+                        .map_err(|error| DomainError::Parse(error.to_string()))?;
+                document
+                    .write(sbol_rdf_format(format)?)
+                    .map_err(|error| DomainError::Serialization(error.to_string()))?
             } else {
                 triples_to_rdf(triples, format)?
             };
@@ -100,20 +108,49 @@ pub fn serialize_closure(
         }
         SerializationFormat::GenBank => {
             let document = parse_document(triples)?;
+            let bytes = to_genbank(&document)?;
+            ensure_sequence_export(&bytes, "GenBank")?;
             Ok(Serialized {
-                bytes: to_genbank(&document)?,
+                bytes,
                 content_type: "chemical/x-genbank",
             })
         }
         SerializationFormat::Fasta => {
             let document = parse_document(triples)?;
+            let bytes = to_fasta(&document).into_bytes();
+            ensure_sequence_export(&bytes, "FASTA")?;
             Ok(Serialized {
-                bytes: to_fasta(&document).into_bytes(),
+                bytes,
                 content_type: "chemical/x-fasta",
             })
         }
         other => Err(DomainError::InvalidInput(format!(
             "cannot serialize a download as {other:?}"
+        ))),
+    }
+}
+
+/// Sequence exchange formats cannot faithfully represent a closure without
+/// any residues. Reject that case instead of returning a successful zero-byte
+/// attachment, which looks like a broken download and cannot be parsed.
+fn ensure_sequence_export(bytes: &[u8], format: &str) -> Result<(), DomainError> {
+    if bytes.is_empty() {
+        Err(DomainError::InvalidInput(format!(
+            "{format} export requires at least one sequence with non-empty elements"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn sbol_rdf_format(format: SerializationFormat) -> Result<sbol::RdfFormat, DomainError> {
+    match format {
+        SerializationFormat::RdfXml => Ok(sbol::RdfFormat::RdfXml),
+        SerializationFormat::Turtle => Ok(sbol::RdfFormat::Turtle),
+        SerializationFormat::JsonLd => Ok(sbol::RdfFormat::JsonLd),
+        SerializationFormat::NTriples => Ok(sbol::RdfFormat::NTriples),
+        other => Err(DomainError::InvalidInput(format!(
+            "{other:?} is not an RDF serialization"
         ))),
     }
 }
@@ -262,9 +299,11 @@ fn write_fasta_record(out: &mut String, header: &str, elements: &str) {
 }
 
 /// Write every [`Component`] that carries a resolvable sequence as one GenBank
-/// record, mapping its `SequenceFeature`s to GenBank features. Rendering goes
-/// through `gb_io` so the output parses back through the same engine
-/// `sbol-genbank` imports with.
+/// record, mapping its `SequenceFeature`s to GenBank features. Sequences that
+/// have no owning component in the closure are emitted as records in their own
+/// right, which is required when a top-level [`Sequence`] is downloaded.
+/// Rendering goes through `gb_io` so the output parses back through the same
+/// engine `sbol-genbank` imports with.
 fn to_genbank(document: &Document) -> Result<Vec<u8>, DomainError> {
     use sbol::v3::SbolIdentified;
 
@@ -282,16 +321,22 @@ fn to_genbank(document: &Document) -> Result<Vec<u8>, DomainError> {
         .collect();
 
     let mut buffer = Vec::new();
+    let mut owned: HashSet<&str> = HashSet::new();
     for component in document.components() {
-        let Some(elements) = component
+        let Some((sequence_iri, sequence)) = component
             .sequences
             .iter()
             .filter_map(|resource| resource.as_iri())
-            .filter_map(|iri| sequences.get(iri.as_str()))
-            .find_map(|seq| seq.elements.as_deref().filter(|e| !e.is_empty()))
+            .filter_map(|iri| sequences.get(iri.as_str()).map(|seq| (iri.as_str(), *seq)))
+            .find(|(_, seq)| seq.elements.as_deref().is_some_and(|e| !e.is_empty()))
         else {
             continue;
         };
+        let elements = sequence
+            .elements
+            .as_deref()
+            .expect("the selected sequence has elements");
+        owned.insert(sequence_iri);
 
         let mut record = Seq::empty();
         record.name = component.display_id().map(sanitize_locus_name).or_else(|| {
@@ -305,6 +350,32 @@ fn to_genbank(document: &Document) -> Result<Vec<u8>, DomainError> {
         record.topology = topology(component);
         record.seq = elements.as_bytes().to_vec();
         record.features = component_features(component, &features, &ranges);
+
+        record
+            .write(Cursor::new(&mut buffer))
+            .map_err(|e| DomainError::Serialization(e.to_string()))?;
+    }
+
+    for sequence in document.sequences() {
+        let Some(iri) = sequence.identity.as_iri().map(|iri| iri.as_str()) else {
+            continue;
+        };
+        if owned.contains(iri) {
+            continue;
+        }
+        let Some(elements) = sequence.elements.as_deref().filter(|e| !e.is_empty()) else {
+            continue;
+        };
+
+        let mut record = Seq::empty();
+        record.name = sequence
+            .display_id()
+            .map(sanitize_locus_name)
+            .or_else(|| Some(iri.to_owned()));
+        record.definition = sequence.name().map(ToOwned::to_owned);
+        record.molecule_type = Some(sequence_molecule_type(sequence).to_owned());
+        record.topology = Topology::Linear;
+        record.seq = elements.as_bytes().to_vec();
 
         record
             .write(Cursor::new(&mut buffer))
@@ -387,6 +458,22 @@ fn molecule_type(component: &Component) -> &'static str {
         "AA"
     } else if types.contains(&SBO_RNA.as_str()) {
         "RNA"
+    } else {
+        "DNA"
+    }
+}
+
+/// The GenBank molecule type for a sequence without an owning component. SBOL
+/// records the protein alphabet on the sequence itself; nucleic-acid encodings
+/// do not distinguish DNA from RNA, so a bare nucleic-acid sequence defaults
+/// to DNA.
+fn sequence_molecule_type(sequence: &Sequence) -> &'static str {
+    if sequence
+        .encoding
+        .as_ref()
+        .is_some_and(|encoding| encoding.as_str() == EDAM_IUPAC_PROTEIN.as_str())
+    {
+        "AA"
     } else {
         "DNA"
     }
@@ -1363,6 +1450,16 @@ mod tests {
 
     const NS: &str = "https://example.org/lab";
 
+    fn document_triples(document: Document) -> Vec<Triple> {
+        let ntriples = document
+            .write(sbol::RdfFormat::NTriples)
+            .expect("write ntriples");
+        let graph =
+            sbol_rdf::Graph::parse(&ntriples, sbol_rdf::RdfFormat::NTriples).expect("parse");
+        let placeholder = sbol_db_core::IriString::unchecked("");
+        sbol_db_rdf::rdf_graph_to_triples(&graph, &placeholder)
+    }
+
     /// Build a one-component, one-sequence SBOL3 document and return its
     /// N-Triples so the serializers can read it back as a closure would arrive.
     fn dna_document_triples(display_id: &str, elements: &str) -> Vec<Triple> {
@@ -1384,13 +1481,19 @@ mod tests {
             SbolObject::Sequence(sequence),
         ])
         .expect("assemble document");
-        let ntriples = document
-            .write(sbol::RdfFormat::NTriples)
-            .expect("write ntriples");
-        let graph =
-            sbol_rdf::Graph::parse(&ntriples, sbol_rdf::RdfFormat::NTriples).expect("parse");
-        let placeholder = sbol_db_core::IriString::unchecked("");
-        sbol_db_rdf::rdf_graph_to_triples(&graph, &placeholder)
+        document_triples(document)
+    }
+
+    fn component_without_sequence_triples() -> Vec<Triple> {
+        let component = Component::builder(NS, "metadata_only_protein")
+            .expect("component builder")
+            .types([SBO_PROTEIN])
+            .name("Metadata-only protein")
+            .build()
+            .expect("build component");
+        let document = Document::from_objects(vec![SbolObject::Component(component)])
+            .expect("assemble document");
+        document_triples(document)
     }
 
     #[test]
@@ -1436,6 +1539,69 @@ mod tests {
             Some(elements.to_ascii_lowercase()),
             "genbank export must round-trip the sequence elements"
         );
+    }
+
+    #[test]
+    fn genbank_exports_a_standalone_sbol2_sequence() {
+        let sequence_iri = "http://synbiohub.org/public/smoke/pSmoke_seq/1";
+        let triples: Vec<Triple> = smoke_sbol2_triples()
+            .into_iter()
+            .filter(|triple| {
+                matches!(
+                    &triple.subject,
+                    SubjectTerm::Iri(subject) if subject.as_str() == sequence_iri
+                )
+            })
+            .collect();
+
+        let out = serialize_closure(&triples, SerializationFormat::GenBank, false)
+            .expect("standalone sequence GenBank");
+        assert_eq!(out.content_type, "chemical/x-genbank");
+        assert!(
+            !out.bytes.is_empty(),
+            "a standalone Sequence must produce a GenBank record"
+        );
+        let text = String::from_utf8(out.bytes).expect("utf8");
+        assert!(
+            text.starts_with("LOCUS"),
+            "expected a GenBank record: {text}"
+        );
+
+        let (document, _report) = sbol_genbank::GenbankImporter::new(NS)
+            .expect("importer")
+            .read_str(&text)
+            .expect("re-import standalone GenBank");
+        let sequence = document.sequences().next().expect("one sequence");
+        assert_eq!(
+            sequence.elements.as_deref().map(str::to_ascii_lowercase),
+            Some("ttgacg".to_owned()),
+            "standalone GenBank export must round-trip the sequence elements"
+        );
+    }
+
+    #[test]
+    fn sequence_formats_reject_a_closure_without_elements() {
+        let triples = component_without_sequence_triples();
+
+        for (format, name) in [
+            (SerializationFormat::GenBank, "GenBank"),
+            (SerializationFormat::Fasta, "FASTA"),
+        ] {
+            let error = match serialize_closure(&triples, format, false) {
+                Ok(_) => panic!("metadata-only components are not {name} exports"),
+                Err(error) => error,
+            };
+            assert!(
+                matches!(
+                    error,
+                    DomainError::InvalidInput(ref message)
+                        if message == &format!(
+                            "{name} export requires at least one sequence with non-empty elements"
+                        )
+                ),
+                "unexpected {name} error: {error}"
+            );
+        }
     }
 
     #[test]

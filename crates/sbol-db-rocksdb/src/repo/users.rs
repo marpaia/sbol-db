@@ -104,6 +104,20 @@ impl UserStore for RocksdbUserStore {
         blocking(move || get_user(&db, id)).await
     }
 
+    async fn list_users(&self) -> Result<Vec<User>, DomainError> {
+        let db = self.db.clone();
+        blocking(move || {
+            let mut users = Vec::new();
+            db.for_each(CF_USERS, |_, value| {
+                users.push(decode::<User>(value)?);
+                Ok(true)
+            })?;
+            users.sort_by(|left, right| left.username.cmp(&right.username));
+            Ok(users)
+        })
+        .await
+    }
+
     async fn update_user(&self, user: &User) -> Result<User, DomainError> {
         let db = self.db.clone();
         let writes = self.writes.clone();

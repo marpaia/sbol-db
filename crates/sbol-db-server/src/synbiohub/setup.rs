@@ -20,15 +20,12 @@ use super::auth::parse_body;
 use crate::error::ApiError;
 use crate::AppState;
 
-/// Config key holding the instance branding/policy the theme endpoint serves.
-const THEME_KEY: &str = "theme";
-
 /// Whether the instance still needs first-launch setup: it has no administrator.
 /// Read by [`super::admin`]'s theme endpoint as `firstLaunch`. Deriving this from
 /// admin presence (rather than a stored marker) means a seeded or migrated
 /// instance that already has an administrator is correctly not first-launch.
 pub(super) async fn is_first_launch(state: &AppState) -> Result<bool, ApiError> {
-    Ok(!state.app.auth.any_admin().await?)
+    crate::instance::setup_required(state).await
 }
 
 /// The first-launch form the SynBioHub UI POSTs as JSON.
@@ -63,7 +60,7 @@ pub async fn get_setup(State(state): State<AppState>) -> Result<Response, ApiErr
     if is_first_launch(&state).await? {
         Ok(Json(json!({ "firstLaunch": true })).into_response())
     } else {
-        Ok(plain(StatusCode::CONFLICT, "SynBioHub is already set up"))
+        Ok(plain(StatusCode::CONFLICT, "SBOL DB is already set up"))
     }
 }
 
@@ -75,7 +72,7 @@ pub async fn post_setup(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     if !is_first_launch(&state).await? {
-        return Ok(plain(StatusCode::FORBIDDEN, "SynBioHub is already set up"));
+        return Ok(plain(StatusCode::FORBIDDEN, "SBOL DB is already set up"));
     }
     let form: SetupBody = parse_body(&headers, &body)?;
 
@@ -122,18 +119,22 @@ pub async fn post_setup(
     let color = form
         .color
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "#D25627".to_owned());
+        .unwrap_or_else(|| crate::instance::SBOL_DB_ACCENT_COLOR.to_owned());
     let theme = json!({
-        "instanceName": form.instance_name.filter(|s| !s.is_empty()).unwrap_or_else(|| "SynBioHub".to_owned()),
+        "instanceName": form.instance_name.filter(|s| !s.is_empty()).unwrap_or_else(|| crate::instance::DEFAULT_INSTANCE_NAME.to_owned()),
         "instanceUrl": form.instance_url.unwrap_or_default(),
-        "uriPrefix": form.uri_prefix.filter(|s| !s.is_empty()).unwrap_or_else(|| "http://synbiohub.org/".to_owned()),
+        "uriPrefix": form.uri_prefix.filter(|s| !s.is_empty()).unwrap_or_else(|| crate::instance::DEFAULT_URI_PREFIX.to_owned()),
         "frontPageText": form.front_page_text.unwrap_or_default(),
         "themeParameters": [{ "name": "Base Color", "variable": "baseColor", "value": color }],
         "altHome": form.alt_home.unwrap_or_default(),
         "allowPublicSignup": form.allow_public_signup.unwrap_or(true),
         "requireLogin": form.require_login.unwrap_or(false),
     });
-    state.app.config.set(THEME_KEY, &theme).await?;
+    state
+        .app
+        .config
+        .set(crate::instance::THEME_KEY, &theme)
+        .await?;
 
-    Ok(plain(StatusCode::OK, "SynBioHub configured"))
+    Ok(plain(StatusCode::OK, "SBOL DB configured"))
 }

@@ -8,8 +8,10 @@
 
 import {
   Activity,
+  ArchiveRestore,
   BookOpen,
   Boxes,
+  Building2,
   ChevronRight,
   Command as CommandIcon,
   Database,
@@ -21,14 +23,21 @@ import {
   Library,
   ListChecks,
   Network,
+  Plug,
+  ScrollText,
   Search,
+  SearchCheck,
   Share2,
   Table2,
+  Undo2,
+  Users,
 } from "lucide-react";
 import { NavLink, useMatch } from "react-router-dom";
 
 import { useBackendInfo } from "@/hooks/useBackendInfo";
 import type { Capabilities } from "@/lib/api";
+import { PRODUCT_NAME } from "@/lib/product";
+import { adminPath } from "@/lib/routes";
 import {
   Collapsible,
   CollapsibleContent,
@@ -73,17 +82,26 @@ interface NavGroup {
 
 function navGroups(capabilities?: Capabilities): NavGroup[] {
   const queryItems: NavLeaf[] = [
-    { to: "/schema", icon: <Table2 />, label: "Schema" },
-    { to: "/sparql", icon: <Network />, label: "SPARQL" },
+    { to: adminPath("/schema"), icon: <Table2 />, label: "Schema" },
+    { to: adminPath("/sparql"), icon: <Network />, label: "SPARQL" },
   ];
   if (capabilities?.sql_console) {
-    queryItems.push({ to: "/sql", icon: <Database />, label: "SQL" });
+    queryItems.push({
+      to: adminPath("/sql"),
+      icon: <Database />,
+      label: "SQL",
+    });
   }
 
   const operationsItems: NavLeaf[] = [
-    { to: "/observability", end: true, icon: <Gauge />, label: "Metrics" },
     {
-      to: "/observability/jobs",
+      to: adminPath("/observability"),
+      end: true,
+      icon: <Gauge />,
+      label: "Metrics",
+    },
+    {
+      to: adminPath("/observability/jobs"),
       end: true,
       icon: <ListChecks />,
       label: "Jobs",
@@ -91,7 +109,7 @@ function navGroups(capabilities?: Capabilities): NavGroup[] {
   ];
   if (capabilities && capabilities.maintenance !== null) {
     operationsItems.push({
-      to: "/observability/maintenance",
+      to: adminPath("/observability/maintenance"),
       icon: <HardDrive />,
       label: "Maintenance",
     });
@@ -102,11 +120,15 @@ function navGroups(capabilities?: Capabilities): NavGroup[] {
       label: "Data",
       icon: <Boxes className="text-sbol-rbs" />,
       items: [
-        { to: "/import", icon: <Import />, label: "Import" },
-        { to: "/graphs", icon: <Share2 />, label: "Graphs" },
-        { to: "/objects", icon: <Boxes />, label: "Objects" },
-        { to: "/sequences", icon: <Dna />, label: "Sequences" },
-        { to: "/ontologies", icon: <Library />, label: "Ontologies" },
+        { to: adminPath("/import"), icon: <Import />, label: "Import" },
+        { to: adminPath("/graphs"), icon: <Share2 />, label: "Graphs" },
+        { to: adminPath("/objects"), icon: <Boxes />, label: "Objects" },
+        { to: adminPath("/sequences"), icon: <Dna />, label: "Sequences" },
+        {
+          to: adminPath("/ontologies"),
+          icon: <Library />,
+          label: "Ontologies",
+        },
       ],
     },
     {
@@ -119,6 +141,42 @@ function navGroups(capabilities?: Capabilities): NavGroup[] {
       icon: <Activity className="text-sbol-terminator" />,
       items: operationsItems,
     },
+    {
+      label: "Administration",
+      icon: <Building2 className="text-primary" />,
+      items: [
+        {
+          to: adminPath("/settings/instance"),
+          icon: <Building2 />,
+          label: "Instance",
+        },
+        {
+          to: adminPath("/settings/users"),
+          icon: <Users />,
+          label: "Users",
+        },
+        {
+          to: adminPath("/settings/integrations"),
+          icon: <Plug />,
+          label: "Integrations",
+        },
+        {
+          to: adminPath("/operations/search"),
+          icon: <SearchCheck />,
+          label: "Search indexes",
+        },
+        {
+          to: adminPath("/operations/backup"),
+          icon: <ArchiveRestore />,
+          label: "Backup & restore",
+        },
+        {
+          to: adminPath("/operations/audit"),
+          icon: <ScrollText />,
+          label: "Activity",
+        },
+      ],
+    },
   ];
 }
 
@@ -130,15 +188,15 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild tooltip="SBOL Data Lab">
-              <NavLink to="/">
+            <SidebarMenuButton size="lg" asChild tooltip="Admin workspace">
+              <NavLink to={adminPath()}>
                 <BrandMark />
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-semibold tracking-tight">
-                    SBOL Data Lab
+                    {PRODUCT_NAME}
                   </span>
                   <span className="truncate text-xs text-sidebar-foreground/60">
-                    Powered by sbol-db 🦀
+                    Admin workspace
                   </span>
                 </div>
               </NavLink>
@@ -153,7 +211,7 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
           <SidebarGroupContent>
             <SidebarMenu>
               <NavItem
-                to="/"
+                to={adminPath()}
                 end
                 icon={<Home className="text-primary" />}
                 label="Overview"
@@ -168,6 +226,14 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
 
       <SidebarFooter>
         <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild tooltip="Return to registry">
+              <NavLink to="/">
+                <Undo2 />
+                <span>Return to registry</span>
+              </NavLink>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
               onClick={onOpenPalette}

@@ -17,12 +17,14 @@ sbol-db-search-sdk.workspace = true
 tokio.workspace = true
 
 [features]
-default = ["dynamic-ort"]
-# Load ONNX Runtime dynamically. Deployments set ORT_DYLIB_PATH or otherwise
-# make a compatible runtime available without a build-time binary download.
-dynamic-ort = ["fastembed/ort-load-dynamic"]
-# Alternatively, bundle the platform runtime during the build.
+# Native source builds carry the checksum-verified ONNX Runtime selected by the
+# locked `ort` crate, so running the resulting binary needs no host library or
+# ORT_DYLIB_PATH setup.
+default = ["download-ort"]
 download-ort = ["fastembed/ort-download-binaries-rustls-tls"]
+# Container and other controlled deployments may instead provide the pinned
+# runtime dynamically and set ORT_DYLIB_PATH explicitly.
+dynamic-ort = ["fastembed/ort-load-dynamic"]
 # Enable FastEmbed's Hugging Face model retrieval using rustls. Production
 # profiles should use an immutable weight revision/digest in their descriptor.
 online-models = ["fastembed/hf-hub-rustls-tls"]

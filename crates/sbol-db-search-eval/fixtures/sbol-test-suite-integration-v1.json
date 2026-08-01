@@ -40,6 +40,11 @@
   ],
   "expected_imported_documents": 447,
   "expected_indexed_objects": 8805,
+  "public_discovery_corpus": {
+    "expected_objects": 8805,
+    "page_size": 1000,
+    "selection": "Every authoritative object record derived from the 447 importable documents. The gate projects the corpus RDF plus self top-level markers into its throwaway public compatibility graph, then compares the complete normalized V2 discovery result set with the independently paged native object inventory."
+  },
   "public_semantic_corpus": {
     "directory": "SBOL3",
     "extension": "ttl",

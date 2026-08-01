@@ -44,7 +44,7 @@ const FIXTURE: &str = r#"
 
 /// Build a router over a fresh SQLite backend. The returned `TempDir` owns the
 /// database file and must outlive the router.
-async fn app() -> (axum::Router, TempDir) {
+async fn app_with_services() -> (axum::Router, Arc<AppServices>, TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("v2openapi.db");
     let url = format!("sqlite://{}", path.display());
@@ -63,11 +63,12 @@ async fn app() -> (axum::Router, TempDir) {
         backend.triple_writer.clone(),
     ));
     let config = ServerConfig::default();
+    let services = Arc::new(AppServices::from_backend(&backend));
     let state = AppState {
         service: backend.store.clone(),
         sparql,
         sparql_update,
-        app: Arc::new(AppServices::from_backend(&backend)),
+        app: services.clone(),
         metrics: Metrics::install(None, env!("CARGO_PKG_VERSION")),
         jobs: backend.jobs.clone(),
         lab: backend.lab.clone(),
@@ -78,7 +79,12 @@ async fn app() -> (axum::Router, TempDir) {
         lsm_stats: backend.lsm_stats.clone(),
         schema_cache: Arc::new(SchemaCache::new()),
     };
-    (router(state, config), dir)
+    (router(state, config), services, dir)
+}
+
+async fn app() -> (axum::Router, TempDir) {
+    let (app, _services, dir) = app_with_services().await;
+    (app, dir)
 }
 
 fn encode_iri(iri: &str) -> String {
@@ -312,12 +318,55 @@ async fn openapi_json_is_served_and_wellformed() {
     // Every documented path is present.
     for path in [
         "/",
+        "/instance",
+        "/session",
+        "/account",
+        "/account/password",
+        "/account/shared",
+        "/reviews",
         "/objects",
         "/objects/{iri}",
+        "/objects/{iri}/details",
+        "/objects/{iri}/activity",
+        "/objects/{iri}/reviews",
+        "/objects/{iri}/reviews/decision",
+        "/objects/{iri}/shares",
+        "/objects/{iri}/shares/{user}",
+        "/objects/{iri}/owner",
         "/objects/{iri}/publish",
         "/objects/{iri}/similar",
         "/collections",
+        "/collections/validate",
+        "/collections/{iri}",
+        "/collections/{iri}/members",
+        "/collections/{iri}/members/{member}",
+        "/admin",
+        "/admin/instance",
+        "/admin/users",
+        "/admin/users/{username}",
+        "/admin/integrations",
+        "/admin/federation",
+        "/admin/federation/sync",
+        "/admin/registries",
+        "/admin/registries/{uri}",
+        "/admin/remotes",
+        "/admin/remotes/{id}",
+        "/admin/plugins",
+        "/admin/plugins/{category}/{id}",
+        "/admin/jobs",
+        "/admin/jobs/{id}",
+        "/admin/jobs/{id}/attempts",
+        "/admin/jobs/{id}/logs",
+        "/admin/jobs/{id}/cancel",
+        "/admin/ontologies",
+        "/admin/search",
+        "/admin/search/rebuild",
+        "/admin/backup",
+        "/admin/backup/validate",
+        "/admin/backup/restore",
+        "/admin/audit",
         "/search",
+        "/search/facets",
         "/search/strategies",
         "/sequences/search",
     ] {
@@ -338,10 +387,15 @@ async fn openapi_json_is_served_and_wellformed() {
         "POST creates a collection"
     );
 
-    // Bearer auth is the declared scheme.
+    // API and browser auth are both declared; bearer is selected first by the
+    // implementation when both are presented.
     assert_eq!(
         spec["components"]["securitySchemes"]["bearerAuth"]["scheme"],
         "bearer"
+    );
+    assert_eq!(
+        spec["components"]["securitySchemes"]["cookieAuth"]["name"],
+        "sbol-db-token"
     );
     // The shared error envelope schema exists.
     assert!(spec["components"]["schemas"]["Error"]["properties"]["error"].is_object());
@@ -365,6 +419,157 @@ async fn version_response_matches_schema() {
     let (status, body) = send(&app, "GET", "/api/v2", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_conforms(&spec, "/", "get", "200", &body);
+}
+
+#[tokio::test]
+async fn portal_bootstrap_responses_match_schema() {
+    let (app, _dir) = app().await;
+    let spec = openapi(&app).await;
+
+    let (status, body) = send(&app, "GET", "/api/v2/instance", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/instance", "get", "200", &body);
+
+    let (status, body) = send(&app, "GET", "/api/v2/session", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/session", "get", "200", &body);
+
+    let _token = register_and_login(&app, "alice", "alice@example.org").await;
+    let login = serde_json::json!({
+        "identifier": "alice@example.org",
+        "password": "s3cret"
+    })
+    .to_string();
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v2/session",
+        None,
+        Some("application/json"),
+        Some(login),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/session", "post", "200", &body);
+}
+
+#[tokio::test]
+async fn account_and_collaboration_responses_match_schema() {
+    let (app, services, _dir) = app_with_services().await;
+    let spec = openapi(&app).await;
+    let alice = register_and_login(&app, "alice", "alice@example.org").await;
+    let bob = register_and_login(&app, "bob", "bob@example.org").await;
+    let mut bob_user = services
+        .users
+        .find_by_email_or_username("bob")
+        .await
+        .expect("bob lookup")
+        .expect("bob");
+    bob_user.is_curator = true;
+    services
+        .users
+        .update_user(&bob_user)
+        .await
+        .expect("grant curator role");
+
+    let (status, body) = send(&app, "GET", "/api/v2/account", Some(&alice), None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/account", "get", "200", &body);
+
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        "/api/v2/account",
+        Some(&alice),
+        Some("application/json"),
+        Some(serde_json::json!({ "affiliation": "Test Lab" }).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/account", "patch", "200", &body);
+
+    let (collection, _) = create_collection(&app, &alice, "collaboration-contract").await;
+    let encoded = encode_iri(&collection);
+    let (status, body) = send(
+        &app,
+        "POST",
+        &format!("/api/v2/objects/{encoded}/shares"),
+        Some(&alice),
+        Some("application/json"),
+        Some(serde_json::json!({ "user": "bob" }).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "share body: {body}");
+
+    let (status, body) = send(
+        &app,
+        "GET",
+        &format!("/api/v2/objects/{encoded}/shares"),
+        Some(&alice),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/objects/{iri}/shares", "get", "200", &body);
+
+    let (status, body) = send(
+        &app,
+        "GET",
+        "/api/v2/account/shared",
+        Some(&bob),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/account/shared", "get", "200", &body);
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        &format!("/api/v2/objects/{encoded}/reviews"),
+        Some(&alice),
+        Some("application/json"),
+        Some(serde_json::json!({ "curator": "bob" }).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "review body: {body}");
+    assert_conforms(&spec, "/objects/{iri}/reviews", "post", "201", &body);
+
+    let (status, body) = send(&app, "GET", "/api/v2/reviews", Some(&bob), None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/reviews", "get", "200", &body);
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        &format!("/api/v2/objects/{encoded}/reviews/decision"),
+        Some(&bob),
+        Some("application/json"),
+        Some(serde_json::json!({ "decision": "approve" }).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "decision body: {body}");
+    assert_conforms(
+        &spec,
+        "/objects/{iri}/reviews/decision",
+        "post",
+        "200",
+        &body,
+    );
+
+    let (status, body) = send(
+        &app,
+        "GET",
+        &format!("/api/v2/objects/{encoded}/activity"),
+        Some(&alice),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/objects/{iri}/activity", "get", "200", &body);
 }
 
 #[tokio::test]
@@ -401,6 +606,10 @@ async fn search_response_matches_schema() {
     let (status, body) = send(&app, "GET", "/api/v2/search/strategies", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_conforms(&spec, "/search/strategies", "get", "200", &body);
+
+    let (status, body) = send(&app, "GET", "/api/v2/search/facets", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_conforms(&spec, "/search/facets", "get", "200", &body);
 }
 
 #[tokio::test]
@@ -421,6 +630,22 @@ async fn error_response_matches_schema() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_conforms(&spec, "/objects/{iri}", "get", "404", &body);
+
+    // Malformed query values are parsed inside the V2 handler so clients
+    // always receive the documented JSON envelope, never Axum's plain text.
+    let (status, body) = send(
+        &app,
+        "GET",
+        "/api/v2/sequences/search?q=ATGC&limit=not-a-number",
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_conforms(&spec, "/sequences/search", "get", "400", &body);
+    let error: Value = serde_json::from_str(&body).expect("V2 error JSON");
+    assert_eq!(error["error"]["code"], "invalid_input");
 }
 
 #[tokio::test]
@@ -430,6 +655,31 @@ async fn collection_created_matches_schema() {
     let token = register_and_login(&app, "alice", "alice@example.org").await;
     let (_uri, body) = create_collection(&app, &token, "sub1").await;
     assert_conforms(&spec, "/collections", "post", "201", &body);
+}
+
+#[tokio::test]
+async fn contribution_preview_matches_schema() {
+    let (app, _dir) = app().await;
+    let spec = openapi(&app).await;
+    let token = register_and_login(&app, "alice", "alice@example.org").await;
+    let request = serde_json::json!({
+        "id": "preview",
+        "version": "1",
+        "format": "turtle",
+        "content": FIXTURE,
+    })
+    .to_string();
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v2/collections/validate",
+        Some(&token),
+        Some("application/json"),
+        Some(request),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "preview body: {body}");
+    assert_conforms(&spec, "/collections/validate", "post", "200", &body);
 }
 
 #[tokio::test]
@@ -450,4 +700,24 @@ async fn similar_response_matches_schema() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_conforms(&spec, "/objects/{iri}/similar", "get", "200", &body);
+}
+
+#[tokio::test]
+async fn object_details_response_matches_schema() {
+    let (app, _dir) = app().await;
+    let spec = openapi(&app).await;
+    let token = register_and_login(&app, "alice", "alice@example.org").await;
+    let (uri, _) = create_collection(&app, &token, "details").await;
+    let segment = encode_iri(&uri);
+    let (status, body) = send(
+        &app,
+        "GET",
+        &format!("/api/v2/objects/{segment}/details"),
+        Some(&token),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "details body: {body}");
+    assert_conforms(&spec, "/objects/{iri}/details", "get", "200", &body);
 }

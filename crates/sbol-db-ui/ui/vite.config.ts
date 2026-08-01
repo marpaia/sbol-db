@@ -5,43 +5,28 @@ import http from "node:http";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-// Dev-only plugin: Vite's dev server enforces a strict trailing
-// slash on `base`. A request to bare `/lab` falls outside the base
-// and Vite responds with a confusing "did you mean /lab/?" message.
-// Production (Rust server) doesn't care — it serves both. Mirror
-// that here with a 301 to `/lab/` so the dev UX matches production.
-const redirectBareLab: PluginOption = {
-  name: "sbol-lab-redirect-bare-base",
-  configureServer(server) {
-    server.middlewares.use(
-      (req: IncomingMessage, res: ServerResponse, next: () => void) => {
-        if (req.url === "/lab" || req.url === "/lab?") {
-          res.writeHead(301, { Location: "/lab/" });
-          res.end();
-          return;
-        }
-        next();
-      }
-    );
-  },
-};
-
-// Backend-API proxy for paths that live at the root of the origin
-// (`/ontology`, `/openapi.json`, etc.). These can't go through Vite's
-// `server.proxy` config because with `base: "/lab/"` set, Vite's
-// base-aware handler intercepts root-level requests before the proxy
-// middleware fires and returns 404. Installing this as a
-// configureServer middleware puts it ahead of base handling and
-// guarantees the forward. Production (Rust server, same origin)
-// doesn't need this — there's no proxy hop at all.
+// Backend-API proxy for the root-mounted portal. Some legacy/native API paths
+// overlap client-side page families (`/objects/view/*`, `/setup`, `/register`).
+// Mirror the Rust dispatch boundary: explicit browser navigation stays with
+// Vite, while API methods and machine requests go to the backend.
 const ROOT_API_PREFIXES = [
+  "/api",
+  "/lab/api",
+  "/docs",
+  "/healthz",
+  "/readyz",
+  "/metrics",
+  "/synbiohub",
   "/ontology",
   "/openapi.json",
   "/objects",
   "/graphs",
   "/sequences",
   "/jobs",
+  "/setup",
+  "/register",
 ];
+const PORTAL_PAGE_PREFIXES = ["/objects/view", "/setup", "/register"];
 const BACKEND_HOST = "localhost";
 const BACKEND_PORT = 8888;
 
@@ -55,9 +40,16 @@ const forwardRootApi: PluginOption = {
           (p) => url === p || url.startsWith(`${p}/`) || url.startsWith(`${p}?`)
         );
         if (!matched) return next();
+        const pathname = url.split("?", 1)[0];
+        const browserNavigation =
+          (req.method === "GET" || req.method === "HEAD") &&
+          (req.headers.accept ?? "").includes("text/html") &&
+          PORTAL_PAGE_PREFIXES.some(
+            (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+          );
+        if (browserNavigation) return next();
 
         const headers = { ...req.headers };
-        delete headers["host"];
         const upstream = http.request(
           {
             host: BACKEND_HOST,
@@ -86,26 +78,17 @@ const forwardRootApi: PluginOption = {
   },
 };
 
-// `base: "/lab/"` makes every emitted asset URL absolute under /lab/,
-// matching the path the Rust server mounts the SPA at. The dev proxy
-// forwards backend traffic to the Rust server on port 8888.
+// The production portal owns the root origin. The transitional `/lab/*` URLs
+// still serve the same index and immediately redirect client-side to `/admin`.
 export default defineConfig({
-  base: "/lab/",
-  plugins: [react(), svgr(), redirectBareLab, forwardRootApi],
+  base: "/",
+  plugins: [react(), svgr(), forwardRootApi],
   resolve: {
     alias: { "@": path.resolve(__dirname, "src") },
   },
   server: {
     port: 5173,
     strictPort: true,
-    // /lab/api/* lives inside the SPA's base and goes through Vite's
-    // own proxy. Root-level backend paths (`/ontology`,
-    // `/openapi.json`) are handled by the forwardRootApi plugin
-    // above, because Vite's base-aware handler swallows them before
-    // proxy middleware fires.
-    proxy: {
-      "/lab/api": `http://${BACKEND_HOST}:${BACKEND_PORT}`,
-    },
   },
   build: {
     target: "es2022",
@@ -119,7 +102,6 @@ export default defineConfig({
             "@tanstack/react-table",
             "@tanstack/react-virtual",
           ],
-          monaco: ["monaco-editor", "@monaco-editor/react"],
         },
       },
     },

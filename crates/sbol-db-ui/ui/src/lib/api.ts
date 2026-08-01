@@ -328,7 +328,7 @@ export async function loadOntology(
   req: OntologyLoadRequest,
   signal?: AbortSignal
 ): Promise<OntologyLoadReport> {
-  const res = await fetch("/ontology", {
+  const res = await fetch("/api/v2/admin/ontologies", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -776,7 +776,9 @@ export async function getJob(
   id: string,
   signal?: AbortSignal
 ): Promise<RecentJob> {
-  const res = await fetch(`/jobs/${encodeURIComponent(id)}`, { signal });
+  const res = await fetch(`/api/v2/admin/jobs/${encodeURIComponent(id)}`, {
+    signal,
+  });
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as RecentJob;
 }
@@ -806,9 +808,10 @@ export async function fetchJobAttempts(
   id: string,
   signal?: AbortSignal
 ): Promise<JobAttempt[]> {
-  const res = await fetch(`/jobs/${encodeURIComponent(id)}/attempts`, {
-    signal,
-  });
+  const res = await fetch(
+    `/api/v2/admin/jobs/${encodeURIComponent(id)}/attempts`,
+    { signal }
+  );
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as JobAttempt[];
 }
@@ -825,7 +828,7 @@ export async function fetchJobLogs(
   if (typeof query.limit === "number") qs.set("limit", String(query.limit));
   const tail = qs.toString();
   const res = await fetch(
-    `/jobs/${encodeURIComponent(id)}/logs${tail ? `?${tail}` : ""}`,
+    `/api/v2/admin/jobs/${encodeURIComponent(id)}/logs${tail ? `?${tail}` : ""}`,
     { signal }
   );
   if (!res.ok) throw await asApiError(res);
@@ -851,7 +854,7 @@ export async function enqueueJob(
   req: EnqueueJobRequest,
   signal?: AbortSignal
 ): Promise<EnqueueJobResult> {
-  const res = await fetch(`/jobs`, {
+  const res = await fetch(`/api/v2/admin/jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -933,12 +936,18 @@ export interface CancelJobResponse {
 
 export async function cancelJob(
   id: string,
+  confirmation: string,
   signal?: AbortSignal
 ): Promise<CancelJobResponse> {
-  const res = await fetch(`/jobs/${encodeURIComponent(id)}/cancel`, {
-    method: "POST",
-    signal,
-  });
+  const res = await fetch(
+    `/api/v2/admin/jobs/${encodeURIComponent(id)}/cancel`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation }),
+      signal,
+    }
+  );
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as CancelJobResponse;
 }

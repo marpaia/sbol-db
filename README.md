@@ -61,9 +61,12 @@ CLI invocation):
 docker compose up -d
 ```
 
-Build and install the CLI, then apply migrations:
+Build and install the CLI, then apply migrations. When running the server from
+a source build, fetch its verified BGE-small model once; the installed binary
+discovers this cache automatically and already carries ONNX Runtime:
 
 ```sh
+make model/bge-small
 cargo install --path crates/sbol-db
 sbol-db db migrate
 ```
@@ -164,15 +167,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Data Lab
+## SBOL DB application and admin workspace
 
-`sbol-db server` also serves the **SBOL Data Lab**, an embedded web UI
-at [http://127.0.0.1:8888/lab](http://127.0.0.1:8888/lab). It's a
-single front end over the whole query surface: write SPARQL or SQL
-against your corpus, browse the relational schema and RDF prefixes,
-load ontology packs, and watch jobs and metrics. The compiled assets
-are baked into the binary, so the lab ships wherever the server does.
-See [`docs/ui.md`](docs/ui.md).
+`sbol-db server` serves the SBOL DB application at
+[http://127.0.0.1:8888/](http://127.0.0.1:8888/). Registry search,
+canonical object pages, setup, and account sessions share one origin with the
+APIs. The original **SBOL Data Lab** is preserved as the administrator workspace
+at `/admin`, with `/lab/*` retained as a transitional bookmark redirect. The
+compiled assets are baked into the binary, so the UI ships wherever the server
+does. SynBioHub remains a compatibility and migration target, not the product
+brand. See [`docs/ui.md`](docs/ui.md) and the
+[application architecture and roadmap](docs/portal-architecture.md).
 
 Read-only SPARQL 1.1, with a prefix and class sidebar, saved queries,
 and history:
@@ -284,7 +289,7 @@ and operator-surface details.
 | `sbol-db-conformance` | Backend-neutral conformance suite every engine passes through the trait surface. |
 | `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over any `TripleSource`).        |
 | `sbol-db-jobs`     | Async job runtime — `JobHandler` trait, registry, worker, built-in handlers.            |
-| `sbol-db-ui`       | Embedded data-lab SPA served at `/lab` (React + Vite, baked in via `rust-embed`).        |
+| `sbol-db-ui`       | Embedded SBOL DB application at `/` with the data/operations workspace at `/admin` (React + Vite, baked in via `rust-embed`). |
 | `sbol-db-server`   | axum HTTP API.                                                                          |
 | `sbol-db`          | CLI binary.                                                                             |
 

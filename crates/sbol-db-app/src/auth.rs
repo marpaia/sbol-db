@@ -47,6 +47,15 @@ pub struct PasswordReset {
     pub reset_link: String,
 }
 
+/// Mutable self-service account fields. An omitted field is unchanged; an
+/// empty affiliation clears it. Username, email, graph identity, and role flags
+/// are deliberately outside this member-owned command.
+#[derive(Clone, Debug, Default)]
+pub struct ProfileUpdate {
+    pub name: Option<String>,
+    pub affiliation: Option<String>,
+}
+
 /// Password and API-token authentication over the identity stores.
 #[derive(Clone)]
 pub struct AuthService {
@@ -154,6 +163,55 @@ impl AuthService {
     /// Revoke a plaintext token, returning whether a live token was removed.
     pub async fn revoke_token(&self, token: &str) -> Result<bool, DomainError> {
         self.tokens.revoke(&token_hash(token)).await
+    }
+
+    /// Update the caller's own presentation profile without admitting changes
+    /// to identity, email, graph ownership, or role flags.
+    pub async fn update_profile(
+        &self,
+        user: &User,
+        update: ProfileUpdate,
+    ) -> Result<User, DomainError> {
+        let mut updated = user.clone();
+        if let Some(name) = update.name {
+            let name = name.trim();
+            if name.is_empty() {
+                return Err(DomainError::InvalidInput(
+                    "name must not be empty".to_owned(),
+                ));
+            }
+            updated.name = name.to_owned();
+        }
+        if let Some(affiliation) = update.affiliation {
+            updated.affiliation =
+                (!affiliation.trim().is_empty()).then(|| affiliation.trim().to_owned());
+        }
+        self.users.update_user(&updated).await
+    }
+
+    /// Change the caller's password after re-verifying the current password.
+    /// This never accepts another account id, so role changes cannot turn it
+    /// into an administrator password-reset primitive.
+    pub async fn change_password(
+        &self,
+        user: &User,
+        current_password: &str,
+        new_password: &str,
+        legacy_salt: &str,
+    ) -> Result<(), DomainError> {
+        if new_password.is_empty() {
+            return Err(DomainError::InvalidInput(
+                "new password must not be empty".to_owned(),
+            ));
+        }
+        let authenticated = self
+            .authenticate(&user.username, current_password, legacy_salt)
+            .await?;
+        if authenticated.id != user.id {
+            return Err(DomainError::Validation("invalid credentials".to_owned()));
+        }
+        let password_hash = hash_password(new_password)?;
+        self.users.set_password_hash(user.id, &password_hash).await
     }
 
     /// Begin a password reset for the account matching `identifier` (email or

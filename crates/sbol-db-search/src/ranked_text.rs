@@ -16,7 +16,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use tantivy::collector::TopDocs;
+use tantivy::collector::{Count, TopDocs};
 use tantivy::directory::MmapDirectory;
 use tantivy::query::{AllQuery, BooleanQuery, BoostQuery, FuzzyTermQuery, Occur, Query, TermQuery};
 use tantivy::schema::{
@@ -113,6 +113,10 @@ pub struct Hit {
     pub name: Option<String>,
     pub description: Option<String>,
     pub type_iri: Option<String>,
+    /// Every rdf:type recorded for the object. `type_iri` retains the classic
+    /// single-value projection; native discovery uses this complete set so a
+    /// secondary type can be filtered without depending on triple order.
+    pub type_iris: Vec<String>,
     pub score: f64,
 }
 
@@ -328,7 +332,8 @@ impl RankedTextIndex {
                 version: self.stored_string(&doc, self.fields.version),
                 name: self.stored_string(&doc, self.fields.name),
                 description: self.stored_string(&doc, self.fields.description),
-                type_iri: types.into_iter().next(),
+                type_iri: types.first().cloned(),
+                type_iris: types,
                 score,
             });
         }
@@ -337,8 +342,29 @@ impl RankedTextIndex {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.subject.cmp(&b.subject))
         });
         Ok(hits.into_iter().skip(offset).take(limit).collect())
+    }
+
+    /// Return the complete ranked match set under the graph ceiling.
+    ///
+    /// The compatibility path deliberately keeps its historical 10,000-item
+    /// candidate window. Native registry discovery needs exact totals and must
+    /// make every matching object reachable by pagination, so it first counts
+    /// the scoped Tantivy query and then asks the same scorer for that complete
+    /// window. Callers page only after applying their remaining facets.
+    pub fn search_all(
+        &self,
+        query: &str,
+        graphs: &GraphFilter,
+        clusters: &ClusterMap,
+    ) -> tantivy::Result<Vec<Hit>> {
+        let searcher = self.reader.searcher();
+        let text_query = self.text_query(query);
+        let scoped_query = self.apply_graph_filter(text_query, graphs);
+        let total = searcher.search(&scoped_query, &Count)?;
+        self.search(query, 0, total, graphs, clusters)
     }
 
     /// The boolean OR of per-field fuzzy term queries. An empty or whitespace
@@ -522,23 +548,22 @@ mod tests {
             part("http://example.org/a", "promoter", "same text", 1.0),
             part("http://example.org/b", "promoter", "same text", 1.0),
         ]);
-        let mut clusters = ClusterMap::new();
-        // The first-ranked subject declares the second its duplicate, halving it.
-        let unpenalized = search(&index, "promoter");
-        let leader = unpenalized[0].subject.clone();
-        let follower = unpenalized[1].subject.clone();
-        clusters.insert(leader, vec![follower.clone()]);
+        let clusters = cluster_map(vec![
+            (
+                "http://example.org/a".to_owned(),
+                crate::cluster::ClusterId(0),
+            ),
+            (
+                "http://example.org/b".to_owned(),
+                crate::cluster::ClusterId(0),
+            ),
+        ]);
 
         let hits = index
             .search("promoter", 0, 100, &GraphFilter::Any, &clusters)
             .expect("search");
-        let follower_hit = hits.iter().find(|h| h.subject == follower).unwrap();
-        let follower_base = unpenalized
-            .iter()
-            .find(|h| h.subject == follower)
-            .unwrap()
-            .score;
-        assert!((follower_base / follower_hit.score - 2.0).abs() < 1e-6);
+        assert_eq!(hits.len(), 2);
+        assert!((hits[0].score / hits[1].score - 2.0).abs() < 1e-6);
     }
 
     #[test]

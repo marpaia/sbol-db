@@ -166,13 +166,15 @@ Without `--search-config`, `sbol-db server` installs a built-in vector index:
 projection (URI, SBOL class, display ID, name, description, types, and roles)
 with a checksum-pinned 384-dimensional BGE-small ONNX bundle and cosine
 similarity. The model is local and has no request-time egress; the production
-image carries its verified weights. Source builds set
-`SBOL_DB_BGE_SMALL_MODEL_DIR` after `make model/bge-small`. There is no silent
-lexical fallback, because the same strategy name must always denote one vector
-space. It is enabled with the normal embedded worker, queues a full rebuild at
-every server startup, and becomes the default structured-search strategy as
-`builtin.sbol-text-vector.v2`. See [the model release contract](builtin-bge-small-model.md)
-for the upstream pin, per-file checksums, and relevance gate.
+image carries its verified weights. Source builds automatically discover the
+verified cache populated by `make model/bge-small`, and their default Cargo
+feature carries a compatible checksum-verified ONNX Runtime. There is no
+silent lexical fallback, because the same strategy name must always denote one
+vector space. It is enabled with the normal embedded worker, queues a full
+rebuild at every server startup, and becomes the default structured-search
+strategy as `builtin.sbol-text-vector.v2`. See
+[the model release contract](builtin-bge-small-model.md) for the upstream pin,
+per-file checksums, source-build feature choices, and relevance gate.
 
 The built-in backend is exact-flat and intentionally lives in the API/worker
 process, so `--no-worker` disables this default index. Use a configured shared

@@ -29,6 +29,7 @@ import type {
   SqlSchemaTable,
 } from "@/lib/api";
 import { type Dialect, useLabStore } from "@/lib/store";
+import { adminPath } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 export default function SchemaRoute() {
@@ -39,7 +40,7 @@ export default function SchemaRoute() {
 
   const launch = (dialect: Dialect, query: string) => {
     setBuffer(dialect, query);
-    navigate(`/${dialect}`);
+    navigate(adminPath(`/${dialect}`));
   };
 
   return (

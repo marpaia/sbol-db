@@ -496,19 +496,12 @@ mod tests {
         pool.close().await;
     }
 
-    #[tokio::test]
-    async fn migrates_a_synthetic_mini_dump() {
-        let workdir = tempfile::tempdir().expect("tempdir");
+    async fn assert_migration_rehearsal(backend: Backend, workdir: &tempfile::TempDir) {
         let fixtures = fixtures_dir();
 
         // A classic sqlite is synthesized next to the shipped static fixtures.
         let sqlite_path = workdir.path().join("synbiohub.sqlite");
         write_classic_sqlite(&sqlite_path).await;
-
-        let db_path = workdir.path().join("sbol-db.sqlite");
-        let backend = Backend::open(&format!("sqlite://{}", db_path.display()))
-            .await
-            .expect("open sbol-db sqlite backend");
 
         let blob_root = workdir.path().join("blobs");
         let inputs = MigrateInputs {
@@ -604,5 +597,40 @@ mod tests {
 
         // (e) The search-index rebuild was enqueued.
         assert!(report.reindex_job.is_some(), "reindex job enqueued");
+    }
+
+    #[tokio::test]
+    async fn migrates_a_synthetic_mini_dump_on_sqlite() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let db_path = workdir.path().join("sbol-db.sqlite");
+        let backend = Backend::open(&format!("sqlite://{}", db_path.display()))
+            .await
+            .expect("open sbol-db SQLite backend");
+        assert_migration_rehearsal(backend, &workdir).await;
+    }
+
+    #[tokio::test]
+    async fn migrates_a_synthetic_mini_dump_on_rocksdb() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let db_path = workdir.path().join("sbol-db.rocksdb");
+        let backend = Backend::open(&format!("rocksdb://{}", db_path.display()))
+            .await
+            .expect("open sbol-db RocksDB backend");
+        assert_migration_rehearsal(backend, &workdir).await;
+    }
+
+    #[tokio::test]
+    async fn migrates_a_synthetic_mini_dump_on_postgres_when_configured() {
+        let Ok(database_url) = std::env::var("SBOL_DB_MIGRATION_TEST_POSTGRES_URL") else {
+            eprintln!(
+                "SBOL_DB_MIGRATION_TEST_POSTGRES_URL is unset; skipping live Postgres rehearsal"
+            );
+            return;
+        };
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let backend = Backend::open(&database_url)
+            .await
+            .expect("open sbol-db Postgres backend");
+        assert_migration_rehearsal(backend, &workdir).await;
     }
 }

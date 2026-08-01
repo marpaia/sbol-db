@@ -8,9 +8,11 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && npm run bundle:check",
+    "bundle:check": "node scripts/check-public-bundle.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
+    "test": "node --test src/features/portal/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\""

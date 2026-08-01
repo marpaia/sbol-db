@@ -58,6 +58,10 @@ pub const DATABASE_PREFIX_KEY: &str = "databasePrefix";
 pub const INSTANCE_NAME_KEY: &str = "instanceName";
 /// The instance's front-page description text.
 pub const FRONT_PAGE_TEXT_KEY: &str = "frontPageText";
+/// Legacy instance identity fields are also stored together in this object by
+/// the native instance-settings command. Reading it as a fallback keeps one
+/// atomic configuration write without breaking older independent keys.
+const THEME_KEY: &str = "theme";
 
 /// The `/sbol` suffix appended to a remote object URI to fetch its RDF closure
 /// from the hosting instance.
@@ -464,6 +468,24 @@ impl FederationService {
             if let Some(s) = value.as_str() {
                 if !s.is_empty() {
                     return Ok(s.to_owned());
+                }
+            }
+        }
+        let theme_key = match key {
+            DATABASE_PREFIX_KEY => Some("uriPrefix"),
+            INSTANCE_URL_KEY => Some("instanceUrl"),
+            INSTANCE_NAME_KEY => Some("instanceName"),
+            FRONT_PAGE_TEXT_KEY => Some("frontPageText"),
+            _ => None,
+        };
+        if let Some(theme_key) = theme_key {
+            if let Some(Value::Object(theme)) = self.config.get(THEME_KEY).await? {
+                if let Some(value) = theme
+                    .get(theme_key)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                {
+                    return Ok(value.to_owned());
                 }
             }
         }

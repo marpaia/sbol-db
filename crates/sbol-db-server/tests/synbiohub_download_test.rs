@@ -133,6 +133,14 @@ async fn sbol_returns_the_object_closure() {
     assert_eq!(content_type, "application/rdf+xml");
 
     let body = body_string(res).await;
+    assert!(
+        body.contains("http://sbols.org/v2#ComponentDefinition"),
+        "the V1 download default must remain classic SBOL2: {body}"
+    );
+    assert!(
+        !body.contains("http://sbols.org/v3#Component"),
+        "the V1 default must not silently switch legacy clients to SBOL3: {body}"
+    );
     // The RDF closure carries both the object and the referenced sequence it
     // reaches transitively, so the residues appear in the serialization.
     assert!(
@@ -142,6 +150,23 @@ async fn sbol_returns_the_object_closure() {
     assert!(
         body.contains(ELEMENTS),
         "the recursive SBOL closure should include the referenced sequence: {body}"
+    );
+}
+
+#[tokio::test]
+async fn sbol_allows_explicit_native_sbol3() {
+    let (app, _dir) = app_with_corpus().await;
+    let res = get(&app, "/public/testcoll/testcd/1/sbol?version=sbol3").await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "explicit SBOL3 should answer 200"
+    );
+
+    let body = body_string(res).await;
+    assert!(
+        body.contains("http://sbols.org/v3#Component"),
+        "an explicit SBOL3 request should return the native view: {body}"
     );
 }
 

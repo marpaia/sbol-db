@@ -292,6 +292,194 @@ pub async fn track_explorer_metrics(req: Request, next: Next) -> Response {
     response
 }
 
+/// Record use of the SynBioHub V1 compatibility adapter without retaining a
+/// caller-supplied path, object identity, username, query, or request body.
+///
+/// The `family` label is selected from a fixed vocabulary. In particular, the
+/// normal HTTP route label is deliberately not reused here: even a templated
+/// compatibility route can contain a wildcard search expression, while the
+/// retirement signal only needs to answer which workflow families remain in
+/// use.
+pub async fn track_synbiohub_v1_usage(req: Request, next: Next) -> Response {
+    track_compatibility_usage(req, next, "synbiohub_v1").await
+}
+
+/// Record use of the Virtuoso-compatible graph protocol separately from the
+/// SynBioHub application adapter. It follows the same privacy and cardinality
+/// contract as [`track_synbiohub_v1_usage`].
+pub async fn track_virtuoso_compatibility_usage(req: Request, next: Next) -> Response {
+    track_compatibility_usage(req, next, "virtuoso_protocol").await
+}
+
+async fn track_compatibility_usage(req: Request, next: Next, surface: &'static str) -> Response {
+    let method = req.method().clone();
+    let path = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or_else(|| req.uri().path());
+    let family = compatibility_family(path);
+    let response = next.run(req).await;
+    metrics::counter!(
+        "sbol_db_compatibility_requests_total",
+        "surface" => surface,
+        "family" => family,
+        "method" => method.as_str().to_owned(),
+        "status" => response.status().as_u16().to_string(),
+    )
+    .increment(1);
+    response
+}
+
+/// Count transitional `/lab` page bookmarks without exporting the deep-link
+/// value. API calls and static assets are excluded; the metric represents only
+/// browser navigations that can be migrated to `/admin`.
+pub async fn track_legacy_ui_usage(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let bookmark = legacy_ui_bookmark(&req);
+    let response = next.run(req).await;
+    if let Some(bookmark) = bookmark {
+        metrics::counter!(
+            "sbol_db_legacy_ui_requests_total",
+            "bookmark" => bookmark,
+            "method" => method.as_str().to_owned(),
+            "status" => response.status().as_u16().to_string(),
+        )
+        .increment(1);
+    }
+    response
+}
+
+fn compatibility_family(path: &str) -> &'static str {
+    if path.starts_with("/sparql-auth") || path.starts_with("/sparql-graph-crud-auth") {
+        return "graph_protocol";
+    }
+    if path == "/login"
+        || path == "/logout"
+        || path == "/register"
+        || path == "/profile"
+        || path == "/resetPassword"
+        || path == "/setNewPassword"
+        || path == "/setup"
+    {
+        return "identity";
+    }
+    if path == "/admin" || path.starts_with("/admin/") {
+        return "administration";
+    }
+    if path.starts_with("/remote")
+        || path == "/updateWebOfRegistries"
+        || path.ends_with("/copyFromRemote")
+    {
+        return "federation";
+    }
+    if path == "/callPlugin" || path.starts_with("/expose/") || path.starts_with("/stream/") {
+        return "plugins";
+    }
+    if path.starts_with("/actions/job/") || path == "/corruptLog" {
+        return "jobs";
+    }
+    if path == "/search"
+        || path.starts_with("/search/")
+        || path == "/searchCount"
+        || path.starts_with("/searchCount/")
+        || path.ends_with("/count")
+        || path == "/rootCollections"
+        || path == "/browse"
+        || path.starts_with("/autocomplete/")
+        || path == "/api/datatables"
+        || path.starts_with("/api/stream/")
+        || path == "/sbsearch"
+    {
+        return "discovery";
+    }
+    if path == "/submit" || path == "/submit/" {
+        return "submission";
+    }
+    if path == "/manage" || path == "/shared" {
+        return "workspace";
+    }
+    if path.contains("/share") || path.ends_with("/shareLink") {
+        return "sharing";
+    }
+    if path.ends_with("/attach") || path.ends_with("/attachUrl") || path.ends_with("/download") {
+        return "attachments";
+    }
+    if [
+        "/sbol", "/sbolnr", "/gb", "/fasta", "/gff", "/omex", "/summary", "/full", "/icon",
+    ]
+    .iter()
+    .any(|suffix| path.ends_with(suffix))
+    {
+        return "representations";
+    }
+    if [
+        "/metadata",
+        "/uses",
+        "/usesCount",
+        "/similar",
+        "/similarCount",
+        "/twins",
+        "/twinsCount",
+        "/subCollections",
+    ]
+    .iter()
+    .any(|suffix| path.ends_with(suffix))
+    {
+        return "object_reads";
+    }
+    if path.starts_with("/updateMutable")
+        || path == "/updateCitations"
+        || [
+            "/remove",
+            "/replace",
+            "/removeCollection",
+            "/removeMembership",
+            "/addToCollection",
+            "/addOwner",
+            "/makePublic",
+        ]
+        .iter()
+        .any(|suffix| path.ends_with(suffix))
+        || path.contains("/edit/")
+        || path.contains("/add/")
+        || path.contains("/remove/")
+        || path.contains("/removeOwner/")
+    {
+        return "object_mutations";
+    }
+    "other"
+}
+
+fn legacy_ui_bookmark(req: &Request) -> Option<&'static str> {
+    if req.method() != axum::http::Method::GET && req.method() != axum::http::Method::HEAD {
+        return None;
+    }
+    let path = req.uri().path();
+    if path == "/lab" || path == "/lab/" {
+        return accepts_html(req).then_some("root");
+    }
+    if !path.starts_with("/lab/")
+        || path.starts_with("/lab/api/")
+        || path == "/lab/api"
+        || path.starts_with("/lab/assets/")
+    {
+        return None;
+    }
+    accepts_html(req).then_some("deep_link")
+}
+
+fn accepts_html(req: &Request) -> bool {
+    req.headers()
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|item| item.trim().starts_with("text/html"))
+        })
+}
+
 // ---------- Rolling in-process traffic stats (powers /lab/api/observability/summary)
 
 /// Width of each rolling bucket, in seconds.

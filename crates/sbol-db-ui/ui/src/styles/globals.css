@@ -131,3 +131,25 @@
     border-color: hsl(var(--border));
   }
 }
+
+@layer utilities {
+  .portal-hero-grid {
+    background-color: hsl(var(--background));
+    background-image:
+      linear-gradient(hsl(var(--border) / 0.34) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.34) 1px, transparent 1px);
+    background-size: 32px 32px;
+    background-position: center center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
