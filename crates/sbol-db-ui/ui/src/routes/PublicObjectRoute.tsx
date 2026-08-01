@@ -1,4 +1,4 @@
-import { Boxes } from "lucide-react";
+import { Boxes, Wrench } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
 import {
@@ -22,12 +22,14 @@ import { SurfaceState } from "@/components/portal/SurfaceState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PortalApiError } from "@/features/portal/api";
-import { usePortalObjectDetails } from "@/features/portal/queries";
+import { usePortalObjectDetails, useSession } from "@/features/portal/queries";
+import { adminPath } from "@/lib/routes";
 
 export default function PublicObjectRoute() {
   const params = useParams<{ iri: string }>();
   const iri = decodeURIComponent(params.iri || "");
   const object = usePortalObjectDetails(iri);
+  const session = useSession();
 
   if (object.isLoading) return <ObjectPageSkeleton />;
 
@@ -78,6 +80,27 @@ export default function PublicObjectRoute() {
             className="space-y-4 lg:sticky lg:top-24"
             aria-label="Object actions"
           >
+            {session.data?.user?.is_admin && (
+              <Button
+                asChild
+                variant="outline"
+                className="h-auto w-full justify-start px-4 py-3 text-left"
+              >
+                <Link
+                  to={adminPath(`/objects/${encodeURIComponent(data.iri)}`)}
+                >
+                  <Wrench className="size-4" />
+                  <span>
+                    <span className="block text-sm font-medium">
+                      Technical inspector
+                    </span>
+                    <span className="mt-0.5 block text-[11px] font-normal text-muted-foreground">
+                      Open the storage-level object view
+                    </span>
+                  </span>
+                </Link>
+              </Button>
+            )}
             <ObjectCollaboration object={data} />
             <ObjectReview object={data} />
             <CollectionManagement object={data} />

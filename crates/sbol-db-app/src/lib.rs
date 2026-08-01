@@ -188,16 +188,7 @@ impl AppServices {
         jobs: Arc<dyn JobQueue>,
         acl: Arc<dyn AclStore>,
     ) -> Self {
-        Self::assemble(
-            store,
-            sparql,
-            sparql_update,
-            jobs,
-            acl,
-            Arc::new(memory::InMemoryUserStore::new()),
-            Arc::new(memory::InMemoryTokenStore::new()),
-            Arc::new(memory::InMemoryOAuthStore::new()),
-        )
+        Self::assemble(store, sparql, sparql_update, jobs, acl)
     }
 
     /// Build the facade from an open [`Backend`]. The SPARQL engines are
@@ -216,10 +207,9 @@ impl AppServices {
             sparql_update,
             backend.jobs.clone(),
             backend.acl.clone(),
-            backend.users.clone(),
-            backend.tokens.clone(),
-            backend.oauth.clone(),
         )
+        .with_identity(backend.users.clone(), backend.tokens.clone())
+        .with_oauth(backend.oauth.clone())
         .with_sequence_stores(
             backend.pagerank.clone(),
             backend.cluster.clone(),
@@ -465,10 +455,10 @@ impl AppServices {
         sparql_update: Arc<SparqlUpdateEngine>,
         jobs: Arc<dyn JobQueue>,
         acl: Arc<dyn AclStore>,
-        users: Arc<dyn UserStore>,
-        tokens: Arc<dyn TokenStore>,
-        oauth_store: Arc<dyn OAuthStore>,
     ) -> Self {
+        let users: Arc<dyn UserStore> = Arc::new(memory::InMemoryUserStore::new());
+        let tokens: Arc<dyn TokenStore> = Arc::new(memory::InMemoryTokenStore::new());
+        let oauth_store: Arc<dyn OAuthStore> = Arc::new(memory::InMemoryOAuthStore::new());
         let acl_service = AclService::new(store.clone(), acl.clone());
         let auth = AuthService::new(users.clone(), tokens.clone());
         let oauth = OAuthService::new(oauth_store.clone());

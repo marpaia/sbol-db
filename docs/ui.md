@@ -1,9 +1,20 @@
 # SBOL DB application and admin UI
 
 SBOL DB ships an embedded React application at `/`, alongside the HTTP APIs.
-The public shell supports instance setup, account sessions, faceted registry
-discovery at `/search`, nucleotide discovery at `/sequence-search`, and public
-object pages with typed identity, provenance, biological relationships,
+The public shell supports instance setup, account sessions, and a unified
+registry search at `/search`. One search surface exposes faceted design
+discovery, nucleotide matching, and every configured structured search index
+reported by `GET /api/v2/search/strategies`. The primary choices describe user
+intent—names and filters, biological meaning, DNA sequence, or related
+designs. Every intent uses one **How this search works** disclosure: it leads
+with biological behavior in plain language, then exposes advanced strategy
+selection, capability contracts, embedding profiles, candidate sources, and
+index names in the same panel. The React component hierarchy mirrors that
+single user-facing motif through `HowSearchWorks`. The legacy
+`/sequence-search` URL redirects into the DNA-sequence method without losing
+its query state. Public object pages
+provide typed
+identity, provenance, biological relationships,
 attachments, similarity, and machine representations. Empty, partial, and
 unsupported biological content is called out rather than silently omitted.
 Signed-in members use `/workspace` for their owned collections and
@@ -180,14 +191,14 @@ compiled assets that ship to production.
 
 All run from `crates/sbol-db-ui/ui/`:
 
-| Command            | Purpose                                                |
-| ------------------ | ------------------------------------------------------ |
-| `pnpm dev`       | Vite dev server on `:5173` with HMR.                    |
+| Command          | Purpose                                                                            |
+| ---------------- | ---------------------------------------------------------------------------------- |
+| `pnpm dev`       | Vite dev server on `:5173` with HMR.                                               |
 | `pnpm build`     | Production build. Normally driven by Cargo; useful manually for output inspection. |
-| `pnpm lint`      | ESLint over `src/`.                                     |
-| `pnpm test`      | URL-state and presentation-contract tests.              |
-| `pnpm typecheck` | `tsc --noEmit` over the project.                         |
-| `pnpm format`    | Prettier write.                                          |
+| `pnpm lint`      | ESLint over `src/`.                                                                |
+| `pnpm test`      | URL-state and presentation-contract tests.                                         |
+| `pnpm typecheck` | `tsc --noEmit` over the project.                                                   |
+| `pnpm format`    | Prettier write.                                                                    |
 
 ### Opt-outs and edge cases
 
