@@ -165,7 +165,7 @@ pub fn load_corpus(manifest_path: &Path, root: &Path) -> Result<Corpus> {
         fingerprint.update(document.relative_path.as_bytes());
         fingerprint.update([0]);
         fingerprint.update(document.sha256.as_bytes());
-        fingerprint.update([b'\n']);
+        fingerprint.update(*b"\n");
     }
 
     Ok(Corpus {
