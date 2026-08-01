@@ -100,10 +100,6 @@ async fn docs_page_renders_three_surfaces_in_one_reference() {
         body.contains("Scalar.createApiReference"),
         "the docs page mounts via the explicit createApiReference call that drives multi-source"
     );
-    assert!(
-        body.contains("data-sbol-docs-shell") && body.contains("theme: \"none\""),
-        "the docs page uses the shared SBOL DB reference shell"
-    );
     for source in [
         "/openapi.json",
         "/synbiohub/openapi.json",
@@ -121,10 +117,49 @@ async fn docs_page_renders_three_surfaces_in_one_reference() {
         v2_body.contains("data-url=\"/api/v2/openapi.json\""),
         "the V2 docs page renders the V2 spec"
     );
-    assert!(
-        v2_body.contains("data-sbol-docs-shell") && v2_body.contains("V2 API reference"),
-        "the V2 docs page uses the same SBOL DB reference shell"
-    );
+
+    for (name, docs_body) in [("combined", &body), ("V2", &v2_body)] {
+        assert!(
+            docs_body.contains("theme: \"none\""),
+            "the {name} docs page disables Scalar's stock color theme"
+        );
+        assert!(
+            !docs_body.contains("theme: \"purple\""),
+            "the {name} docs page does not retain Scalar's purple theme"
+        );
+        assert!(
+            docs_body.contains("--scalar-color-accent: hsl(171 66% 25%)")
+                && docs_body.contains("--scalar-sidebar-background-1")
+                && docs_body.contains("--scalar-custom-header-height: 64px"),
+            "the {name} docs page carries the shared SBOL DB Scalar theme"
+        );
+        assert!(
+            docs_body.contains("const storageKey = \"sbol-lab:theme\"")
+                && docs_body.contains("localStorage.getItem(storageKey)")
+                && docs_body.contains("darkMode: window.sbolDocsDarkMode")
+                && docs_body
+                    .contains("forceDarkModeState: window.sbolDocsDarkMode ? \"dark\" : \"light\"")
+                && docs_body.contains("hideDarkModeToggle: true")
+                && docs_body.contains("window.addEventListener(\"storage\"")
+                && docs_body.contains("systemTheme.addEventListener(\"change\""),
+            "the {name} docs page follows the registry's selected color mode"
+        );
+        assert!(
+            docs_body.contains("mcp:")
+                && docs_body.contains("disabled: true")
+                && docs_body.contains(
+                    ".scalar-app .darklight-reference a[href=\"https://www.scalar.com\"]"
+                ),
+            "the {name} docs page hides Scalar's MCP controls and attribution"
+        );
+        assert!(
+            docs_body.contains("class=\"sbol-docs-header\"")
+                && docs_body.contains("data-sbol-docs-shell")
+                && docs_body.contains("sbol-mark-promoter")
+                && docs_body.contains(">Back to registry</span>"),
+            "the {name} docs page includes the product identity and return affordance"
+        );
+    }
 }
 
 #[tokio::test]

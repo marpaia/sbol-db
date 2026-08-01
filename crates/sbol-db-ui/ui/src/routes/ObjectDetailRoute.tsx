@@ -19,7 +19,9 @@ import {
 } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
+import { AdminPage } from "@/components/admin/AdminPage";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
+import { Button } from "@/components/ui/button";
 import { useObjectByIri } from "@/hooks/useObjects";
 import {
   ApiError,
@@ -30,7 +32,7 @@ import {
   type SerializationFormat,
 } from "@/lib/api";
 import { describeError } from "@/lib/utils";
-import { adminPath } from "@/lib/routes";
+import { adminPath, publicObjectPath } from "@/lib/routes";
 
 const FORMAT_EXTENSION: Record<SerializationFormat, string> = {
   turtle: "ttl",
@@ -44,55 +46,69 @@ export default function ObjectDetailRoute() {
   const iri = decodeURIComponent(params.iri ?? "");
   const navigate = useNavigate();
   const { data, error, isLoading } = useObjectByIri(iri);
+  const title = data?.name ?? data?.display_id ?? "Technical object inspector";
 
   return (
-    <div className="h-full w-full overflow-y-auto">
-      <div className="mx-auto max-w-5xl space-y-6 px-8 py-10">
-        <Link
-          to={adminPath("/objects")}
-          className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ChevronLeft size={12} />
-          Object browser
-        </Link>
+    <AdminPage
+      title={title}
+      description="Storage-level object projection, typed properties, raw data, graph traversal, and serialization controls."
+      eyebrow="Data model · Technical inspector"
+      maxWidth="5xl"
+      action={
+        data ? (
+          <Button asChild variant="outline" size="sm">
+            <Link to={publicObjectPath(data.iri)}>
+              <ExternalLink />
+              Open registry view
+            </Link>
+          </Button>
+        ) : undefined
+      }
+    >
+      <Link
+        to={adminPath("/objects")}
+        className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronLeft size={12} />
+        Object browser
+      </Link>
 
-        {error instanceof ApiError && error.status === 404 ? (
-          <NotFound iri={iri} />
-        ) : error ? (
-          <ErrorBanner
-            title="Couldn't load object"
-            body={(error as Error).message}
+      {error instanceof ApiError && error.status === 404 ? (
+        <NotFound iri={iri} />
+      ) : error ? (
+        <ErrorBanner
+          title="Couldn't load object"
+          body={(error as Error).message}
+        />
+      ) : isLoading || !data ? (
+        <Skeleton />
+      ) : (
+        <>
+          <Header object={data} />
+          <Actions
+            object={data}
+            onNeighborhood={() =>
+              navigate(
+                adminPath(`/neighborhood?iri=${encodeURIComponent(data.iri)}`)
+              )
+            }
           />
-        ) : isLoading || !data ? (
-          <Skeleton />
-        ) : (
-          <>
-            <Header object={data} />
-            <Actions
-              object={data}
-              onNeighborhood={() =>
-                navigate(
-                  adminPath(`/neighborhood?iri=${encodeURIComponent(data.iri)}`)
-                )
-              }
-            />
-            <Properties object={data} />
-            <RawData object={data} />
-          </>
-        )}
-      </div>
-    </div>
+          <Properties object={data} />
+          <RawData object={data} />
+        </>
+      )}
+    </AdminPage>
   );
 }
 
 function Header({ object }: { object: SbolObjectRecord }) {
   const queryClient = useQueryClient();
   return (
-    <header className="space-y-1.5">
+    <section className="rounded-lg border bg-card px-4 py-3">
       <div className="flex items-center gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {object.name ?? object.display_id ?? "Untitled object"}
-        </h1>
+        <div className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground/80">
+          {object.iri}
+        </div>
         <button
           type="button"
           onClick={() => {
@@ -106,15 +122,12 @@ function Header({ object }: { object: SbolObjectRecord }) {
           <Copy size={14} />
         </button>
       </div>
-      <div className="truncate font-mono text-[11px] text-muted-foreground/80">
-        {object.iri}
-      </div>
       {object.sbol_class && (
-        <div className="font-mono text-[11px] text-muted-foreground">
+        <div className="mt-1 font-mono text-[11px] text-muted-foreground">
           a <span className="text-foreground">{object.sbol_class}</span>
         </div>
       )}
-    </header>
+    </section>
   );
 }
 

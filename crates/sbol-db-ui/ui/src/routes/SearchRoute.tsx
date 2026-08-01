@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle,
   ArrowDownNarrowWide,
   ArrowUpNarrowWide,
   ChevronLeft,
@@ -16,9 +15,9 @@ import {
   DiscoveryFilterSummary,
   type DiscoveryFilterKey,
 } from "@/components/portal/DiscoveryFilters";
-import { DiscoveryModeNav } from "@/components/portal/DiscoveryModeNav";
 import { ObjectResultCard } from "@/components/portal/ObjectResultCard";
-import { SearchBox } from "@/components/portal/SearchBox";
+import { SearchCompatibilityNotice } from "@/components/portal/SearchCompatibilityNotice";
+import { UnifiedSearchInput } from "@/components/portal/UnifiedSearchInput";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
 import {
@@ -41,8 +40,20 @@ import {
   parseDiscoveryParams,
   translateClassicSearchPath,
 } from "@/features/portal/discovery";
-import { useDiscoveryFacets, usePortalSearch } from "@/features/portal/queries";
+import {
+  useDiscoveryFacets,
+  useInstance,
+  usePortalSearch,
+  useSearchStrategies,
+} from "@/features/portal/queries";
+import {
+  activeSearchMethod,
+  buildSearchMethods,
+  paramsForSearchMethod,
+} from "@/features/portal/search-methods";
 import { cn } from "@/lib/utils";
+import { SequenceSearchExperience } from "@/routes/SequenceSearchRoute";
+import { StructuredSearchExperience } from "@/routes/StructuredSearchExperience";
 
 const FILTER_PARAM: Record<DiscoveryFilterKey, string> = {
   q: "q",
@@ -74,7 +85,82 @@ export default function SearchRoute() {
       replace
     />
   ) : (
-    <DiscoverySearch />
+    <SearchExperience />
+  );
+}
+
+function SearchExperience() {
+  const [params, setParams] = useSearchParams();
+  const strategies = useSearchStrategies();
+  const instance = useInstance();
+  const methods = useMemo(
+    () =>
+      buildSearchMethods(
+        strategies.data,
+        instance.data?.capabilities.sequence_search !== false
+      ),
+    [instance.data?.capabilities.sequence_search, strategies.data]
+  );
+  const method = activeSearchMethod(params, methods);
+  const query = params.get("q") || "";
+  const requestedStrategy = params.get("strategy");
+  const selectedStrategyMissing =
+    !strategies.isLoading && requestedStrategy && method.kind !== "structured";
+
+  const selectMethod = (nextMethod: (typeof methods)[number]) => {
+    setParams(paramsForSearchMethod(params, nextMethod));
+  };
+
+  const submit = (value: string) => {
+    const next = new URLSearchParams(params);
+    const normalized =
+      method.input === "sequence"
+        ? value.replace(/\s+/g, "").toUpperCase()
+        : value.trim();
+    if (normalized) next.set("q", normalized);
+    else next.delete("q");
+    next.delete("offset");
+    next.delete("cursor");
+    setParams(next);
+  };
+
+  return (
+    <div className="mx-auto w-full max-w-[90rem] px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
+      <header className="max-w-4xl">
+        <p className="ledger-label text-primary">Registry search</p>
+        <h1 className="mt-3 text-4xl font-medium tracking-[-0.03em] sm:text-5xl">
+          Search biological designs
+        </h1>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+          Search the full corpus visible to your account by design information,
+          biological meaning, or DNA sequence.
+        </p>
+      </header>
+
+      <UnifiedSearchInput
+        methods={methods}
+        method={method}
+        query={query}
+        strategiesLoading={strategies.isLoading}
+        strategiesError={
+          selectedStrategyMissing
+            ? `The requested index “${requestedStrategy}” is not configured.`
+            : strategies.error instanceof Error
+              ? strategies.error.message
+              : undefined
+        }
+        onMethodChange={selectMethod}
+        onSearch={submit}
+      />
+
+      {method.kind === "sequence" ? (
+        <SequenceSearchExperience />
+      ) : method.kind === "structured" ? (
+        <StructuredSearchExperience method={method} query={query} />
+      ) : (
+        <DiscoverySearch />
+      )}
+    </div>
   );
 }
 
@@ -157,7 +243,7 @@ function DiscoverySearch() {
 
   const setView = (view: "grid" | "list") => {
     const next = new URLSearchParams(params);
-    setStringParam(next, "view", view, "list");
+    setStringParam(next, "view", view, "grid");
     setParams(next, { replace: true });
   };
 
@@ -180,29 +266,9 @@ function DiscoverySearch() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[90rem] px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
-      <header className="max-w-4xl">
-        <p className="ledger-label text-primary">Registry discovery</p>
-        <h1 className="mt-3 text-4xl font-medium tracking-[-0.03em] sm:text-5xl">
-          {state.query.q
-            ? `Results for “${state.query.q}”`
-            : "Explore biological designs"}
-        </h1>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-          Search the full corpus visible to your account, then narrow it by
-          biological meaning, ownership, provenance, or time.
-        </p>
-        <DiscoveryModeNav />
-        <SearchBox
-          initialQuery={state.query.q}
-          onSearch={(q) => updateFilters({ q: q || undefined })}
-          className="mt-6"
-          autoFocus={!state.query.q}
-        />
-      </header>
-
+    <>
       {state.translatedFromClassic && (
-        <CompatibilityNotice
+        <SearchCompatibilityNotice
           warnings={state.compatibilityWarnings}
           onDismiss={dismissCompatibilityNotice}
         />
@@ -210,7 +276,7 @@ function DiscoverySearch() {
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[260px_minmax(0,1fr)]">
         <aside className="hidden lg:block">
-          <div className="sticky top-24 border-l-2 border-primary bg-muted/20 p-5">
+          <div className="sticky top-24 rounded-xl border bg-muted/10 p-5">
             <DiscoveryFilters {...filtersProps} />
           </div>
         </aside>
@@ -315,7 +381,7 @@ function DiscoverySearch() {
                 "mt-5",
                 state.view === "grid"
                   ? "grid gap-4 md:grid-cols-2 xl:grid-cols-3"
-                  : "divide-y divide-foreground/15 border-y border-foreground/15"
+                  : "space-y-3"
               )}
             >
               {results.data.items.map((hit) => (
@@ -327,7 +393,7 @@ function DiscoverySearch() {
               ))}
             </div>
           ) : (
-            <div className="mt-5 border-y border-dashed border-foreground/25 bg-muted/10 px-6 py-16 text-center">
+            <div className="mt-5 rounded-xl border border-dashed bg-muted/10 px-6 py-16 text-center">
               <h2 className="font-medium">No matching designs</h2>
               <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
                 No visible object satisfies every active filter. Remove one or
@@ -356,7 +422,7 @@ function DiscoverySearch() {
           )}
         </section>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -454,55 +520,6 @@ function DiscoveryToolbar({
   );
 }
 
-function CompatibilityNotice({
-  warnings,
-  onDismiss,
-}: {
-  warnings: string[];
-  onDismiss: () => void;
-}) {
-  const hasWarnings = warnings.length > 0;
-  return (
-    <div
-      className={cn(
-        "mt-6 flex items-start gap-3 rounded-xl border p-4 text-sm",
-        hasWarnings
-          ? "border-amber-500/30 bg-amber-500/5"
-          : "border-primary/20 bg-primary/5"
-      )}
-      role={hasWarnings ? "alert" : "status"}
-    >
-      <AlertTriangle
-        className={cn(
-          "mt-0.5 size-4 shrink-0",
-          hasWarnings ? "text-amber-600 dark:text-amber-400" : "text-primary"
-        )}
-      />
-      <div className="min-w-0 flex-1">
-        <p className="font-medium">
-          {hasWarnings
-            ? "This compatibility link was only partly translated"
-            : "Compatibility link translated to native discovery"}
-        </p>
-        {hasWarnings ? (
-          <ul className="mt-1 list-disc space-y-1 pl-4 text-xs leading-5 text-muted-foreground">
-            {warnings.map((warning) => (
-              <li key={warning}>{warning} It was not applied.</li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            Its supported filters now live in this shareable SBOL DB URL.
-          </p>
-        )}
-      </div>
-      <Button variant="ghost" size="sm" onClick={onDismiss}>
-        Dismiss
-      </Button>
-    </div>
-  );
-}
-
 function ResultSkeleton({ view }: { view: "grid" | "list" }) {
   return (
     <div
@@ -510,14 +527,14 @@ function ResultSkeleton({ view }: { view: "grid" | "list" }) {
         "mt-5",
         view === "grid"
           ? "grid gap-4 md:grid-cols-2 xl:grid-cols-3"
-          : "divide-y divide-foreground/15 border-y border-foreground/15"
+          : "space-y-3"
       )}
       aria-label="Loading search results"
     >
       {Array.from({ length: view === "grid" ? 9 : 6 }).map((_, index) => (
         <Skeleton
           key={index}
-          className={cn("rounded-none", view === "grid" ? "h-52" : "h-32")}
+          className={cn("rounded-xl", view === "grid" ? "h-52" : "h-40")}
         />
       ))}
     </div>

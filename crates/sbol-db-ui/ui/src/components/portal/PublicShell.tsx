@@ -1,26 +1,23 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
+  Cable,
   ChevronDown,
-  Dna,
   FilePlus2,
   FolderKanban,
-  LayoutDashboard,
   LogIn,
-  LogOut,
   Menu,
   Monitor,
   Moon,
   Search,
-  Settings,
   Sun,
   UserRound,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
 
 import { BrandMark } from "@/components/lab/BrandMark";
 import { SbolDesignRail } from "@/components/portal/SbolDesignRail";
+import { ProductAccountMenu } from "@/components/product/ProductAccountMenu";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -32,8 +29,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { deleteSession } from "@/features/portal/api";
-import { portalKeys, useInstance, useSession } from "@/features/portal/queries";
+import { useInstance, useSession } from "@/features/portal/queries";
 import { deploymentName, PRODUCT_NAME, PRODUCT_TAGLINE } from "@/lib/product";
 import { useTheme, type Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -46,8 +42,8 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
-  { to: "/search", label: "Browse", icon: Search },
-  { to: "/sequence-search", label: "Sequence search", icon: Dna },
+  { to: "/search", label: "Search", icon: Search },
+  { to: "/connect", label: "Connect", icon: Cable },
   { to: "/api/v2/docs", label: "API", icon: BookOpen, external: true },
 ];
 
@@ -61,7 +57,7 @@ export default function PublicShell() {
   const session = useSession();
   const deployment = deploymentName(instance.data?.name);
   const visibleNavItems = session.data?.authenticated
-    ? [...navItems.slice(0, 2), ...accountNavItems, ...navItems.slice(2)]
+    ? [...navItems.slice(0, 1), ...accountNavItems, ...navItems.slice(1)]
     : navItems;
 
   return (
@@ -76,7 +72,7 @@ export default function PublicShell() {
         <div className="mx-auto flex h-[4.25rem] w-full max-w-[90rem] items-center gap-7 px-4 sm:px-6 lg:px-8">
           <Link
             to="/"
-            className="flex min-w-0 items-center gap-3 rounded-[4px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            className="flex min-w-0 shrink-0 items-center gap-3 rounded-[4px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
             <BrandMark className="size-10" />
             <div className="min-w-0">
@@ -91,7 +87,7 @@ export default function PublicShell() {
 
           <nav
             aria-label="Primary navigation"
-            className="hidden h-full items-stretch border-l border-foreground/10 md:flex"
+            className="hidden h-full items-stretch border-l border-foreground/10 xl:flex"
           >
             {visibleNavItems.map((item) =>
               item.external ? (
@@ -100,8 +96,9 @@ export default function PublicShell() {
                   href={item.to}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center border-r border-foreground/10 px-4 text-sm text-muted-foreground transition-colors duration-150 hover:bg-accent/65 hover:text-foreground"
+                  className="inline-flex items-center gap-2 border-r border-foreground/10 px-4 text-sm text-muted-foreground transition-colors duration-150 hover:bg-accent/65 hover:text-foreground"
                 >
+                  <item.icon className="size-3.5" />
                   {item.label}
                 </a>
               ) : (
@@ -110,13 +107,14 @@ export default function PublicShell() {
                   to={item.to}
                   className={({ isActive }) =>
                     cn(
-                      "relative inline-flex items-center border-r border-foreground/10 px-4 text-sm transition-colors duration-150 after:absolute after:inset-x-4 after:bottom-0 after:h-0.5 after:origin-left after:scale-x-0 after:bg-primary after:transition-transform after:duration-150 after:[transition-timing-function:var(--ease-out)]",
+                      "relative inline-flex items-center gap-2 border-r border-foreground/10 px-4 text-sm transition-colors duration-150 after:absolute after:inset-x-4 after:bottom-0 after:h-0.5 after:origin-left after:scale-x-0 after:bg-primary after:transition-transform after:duration-150 after:[transition-timing-function:var(--ease-out)]",
                       isActive
                         ? "bg-accent/55 text-accent-foreground after:scale-x-100"
                         : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
                     )
                   }
                 >
+                  <item.icon className="size-3.5" />
                   {item.label}
                 </NavLink>
               )
@@ -129,10 +127,20 @@ export default function PublicShell() {
             />
             <ThemeMenu />
             {session.data?.authenticated && session.data.user ? (
-              <AccountMenu
-                name={session.data.user.name}
-                isAdmin={session.data.user.is_admin}
-              />
+              <ProductAccountMenu user={session.data.user} surface="registry">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="max-w-48"
+                  aria-label={`Account menu for ${session.data.user.name}`}
+                >
+                  <UserRound />
+                  <span className="hidden truncate sm:inline">
+                    {session.data.user.name}
+                  </span>
+                  <ChevronDown className="size-3 text-muted-foreground" />
+                </Button>
+              </ProductAccountMenu>
             ) : (
               <Button asChild variant="outline" size="sm">
                 <Link to="/login">
@@ -147,7 +155,7 @@ export default function PublicShell() {
 
       {instance.data?.setup_required && (
         <div className="border-b border-primary/20 bg-primary/5">
-          <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-2.5 text-sm sm:px-6 lg:px-8">
+          <div className="mx-auto flex max-w-[90rem] items-center justify-between gap-4 px-4 py-2.5 text-sm sm:px-6 lg:px-8">
             <span>This registry needs its first administrator.</span>
             <Button asChild size="sm">
               <Link to="/setup">Set up instance</Link>
@@ -179,6 +187,12 @@ export default function PublicShell() {
             </div>
           </div>
           <div className="flex flex-wrap content-start gap-x-5 gap-y-3 sm:justify-end">
+            <Link
+              className="text-background/70 hover:text-background"
+              to="/connect"
+            >
+              Connect tools
+            </Link>
             <a
               className="text-background/70 hover:text-background"
               href="/api/v2/docs"
@@ -202,7 +216,7 @@ export default function PublicShell() {
 
 function MobileNavigation({ authenticated }: { authenticated: boolean }) {
   const visibleNavItems = authenticated
-    ? [...navItems.slice(0, 2), ...accountNavItems, ...navItems.slice(2)]
+    ? [...navItems.slice(0, 1), ...accountNavItems, ...navItems.slice(1)]
     : navItems;
   return (
     <DropdownMenu>
@@ -210,13 +224,13 @@ function MobileNavigation({ authenticated }: { authenticated: boolean }) {
         <Button
           variant="ghost"
           size="icon"
-          className="md:hidden"
+          className="xl:hidden"
           aria-label="Open navigation"
         >
           <Menu />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56 md:hidden">
+      <DropdownMenuContent align="end" className="w-56 xl:hidden">
         <DropdownMenuLabel>Registry index</DropdownMenuLabel>
         <DropdownMenuSeparator />
         {visibleNavItems.map((item) =>
@@ -236,63 +250,6 @@ function MobileNavigation({ authenticated }: { authenticated: boolean }) {
             </DropdownMenuItem>
           )
         )}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function AccountMenu({ name, isAdmin }: { name: string; isAdmin: boolean }) {
-  const queryClient = useQueryClient();
-  const navigate = useNavigate();
-  const logout = useMutation({
-    mutationFn: deleteSession,
-    onSuccess: () => {
-      queryClient.setQueryData(portalKeys.session, {
-        authenticated: false,
-        user: null,
-      });
-      navigate("/");
-    },
-  });
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          className="max-w-48"
-          aria-label={`Account menu for ${name}`}
-        >
-          <UserRound />
-          <span className="hidden truncate sm:inline">{name}</span>
-          <ChevronDown className="size-3 text-muted-foreground" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel className="truncate">{name}</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {isAdmin && (
-          <DropdownMenuItem asChild>
-            <Link to="/admin">
-              <LayoutDashboard />
-              Admin workspace
-            </Link>
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuItem asChild>
-          <Link to="/account">
-            <Settings />
-            Account settings
-          </Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={logout.isPending}
-          onSelect={() => logout.mutate()}
-        >
-          <LogOut />
-          {logout.isPending ? "Signing out…" : "Sign out"}
-        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

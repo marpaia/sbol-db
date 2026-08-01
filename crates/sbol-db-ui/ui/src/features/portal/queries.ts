@@ -13,8 +13,11 @@ import {
   fetchSharedObjects,
   fetchSimilarObjects,
   fetchReviews,
+  fetchSearchStrategies,
   type PortalSearchQuery,
+  type StructuredSearchRequest,
   searchPortalSequences,
+  searchPortalStructured,
   searchPortal,
 } from "./api";
 
@@ -23,6 +26,9 @@ export const portalKeys = {
   session: ["portal", "session"] as const,
   search: (query: PortalSearchQuery) => ["portal", "search", query] as const,
   facets: ["portal", "search", "facets"] as const,
+  strategies: ["portal", "search", "strategies"] as const,
+  structuredSearch: (request: StructuredSearchRequest) =>
+    ["portal", "search", "structured", request] as const,
   sequenceSearch: (q: string, mode: string, limit: number) =>
     ["portal", "sequence-search", q, mode, limit] as const,
   similar: (iri: string) => ["portal", "similar", iri] as const,
@@ -128,6 +134,28 @@ export function useDiscoveryFacets(enabled = true) {
     queryFn: ({ signal }) => fetchDiscoveryFacets(signal),
     enabled,
     staleTime: 60_000,
+  });
+}
+
+export function useSearchStrategies() {
+  return useQuery({
+    queryKey: portalKeys.strategies,
+    queryFn: ({ signal }) => fetchSearchStrategies(signal),
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+export function useStructuredSearch(
+  request: StructuredSearchRequest,
+  enabled = true
+) {
+  return useQuery({
+    queryKey: portalKeys.structuredSearch(request),
+    queryFn: ({ signal }) => searchPortalStructured(request, signal),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
   });
 }
 

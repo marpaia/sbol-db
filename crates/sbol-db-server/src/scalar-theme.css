@@ -1,0 +1,266 @@
+/* Scalar's public variables mapped onto the SBOL DB product palette. This
+   stylesheet is embedded in both documentation pages and intentionally stays
+   outside Scalar's cascade layers so these values override its stock theme. */
+
+:root {
+  --scalar-custom-header-height: 64px;
+  --scalar-font:
+    "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --scalar-font-code:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --scalar-radius: 0.375rem;
+  --sbol-promoter: hsl(30 88% 48%);
+  --sbol-rbs: hsl(269 46% 55%);
+  --sbol-cds: hsl(171 66% 31%);
+  --sbol-terminator: hsl(353 65% 52%);
+}
+
+body {
+  margin: 0;
+}
+
+/* Scalar has no public configuration switch for its attribution link. Keep
+   this selector scoped to the sidebar footer and the pinned Scalar markup. */
+.scalar-app .darklight-reference a[href="https://www.scalar.com"] {
+  display: none;
+}
+
+.light-mode {
+  --scalar-color-1: hsl(218 36% 13%);
+  --scalar-color-2: hsl(215 12% 43%);
+  --scalar-color-3: hsl(215 10% 55%);
+  --scalar-color-accent: hsl(171 66% 25%);
+  --scalar-color-danger: hsl(348 65% 52%);
+  --scalar-color-alert: hsl(38 90% 50%);
+  --scalar-background-1: hsl(42 35% 97%);
+  --scalar-background-2: hsl(39 22% 92%);
+  --scalar-background-3: hsl(39 18% 88%);
+  --scalar-background-card: hsl(42 45% 99%);
+  --scalar-background-accent: hsl(169 33% 89%);
+  --scalar-border-color: hsl(39 15% 80%);
+  --scalar-button-1: hsl(171 66% 25%);
+  --scalar-button-1-hover: hsl(171 68% 20%);
+  --scalar-button-1-color: hsl(42 40% 98%);
+  --scalar-link-color: hsl(171 66% 25%);
+  --scalar-link-color-hover: hsl(171 68% 17%);
+  --scalar-header-background-1: hsl(42 35% 97%);
+  --scalar-header-background-2: hsl(39 22% 92%);
+  --scalar-header-border-color: hsl(39 15% 80%);
+  --scalar-header-color-1: hsl(218 36% 13%);
+  --scalar-header-color-2: hsl(215 12% 43%);
+  --scalar-scrollbar-color: hsl(39 12% 72%);
+  --scalar-scrollbar-color-active: hsl(171 66% 25%);
+}
+
+.dark-mode {
+  --scalar-color-1: hsl(40 25% 92%);
+  --scalar-color-2: hsl(39 10% 64%);
+  --scalar-color-3: hsl(39 8% 49%);
+  --scalar-color-accent: hsl(168 57% 57%);
+  --scalar-color-danger: hsl(348 60% 62%);
+  --scalar-color-alert: hsl(38 85% 60%);
+  --scalar-background-1: hsl(218 29% 8%);
+  --scalar-background-2: hsl(217 25% 11%);
+  --scalar-background-3: hsl(216 20% 16%);
+  --scalar-background-card: hsl(217 25% 11%);
+  --scalar-background-accent: hsl(169 29% 17%);
+  --scalar-border-color: hsl(215 18% 24%);
+  --scalar-button-1: hsl(168 57% 57%);
+  --scalar-button-1-hover: hsl(168 57% 64%);
+  --scalar-button-1-color: hsl(218 35% 9%);
+  --scalar-link-color: hsl(168 57% 57%);
+  --scalar-link-color-hover: hsl(168 60% 72%);
+  --scalar-header-background-1: hsl(218 29% 8%);
+  --scalar-header-background-2: hsl(216 20% 16%);
+  --scalar-header-border-color: hsl(215 18% 24%);
+  --scalar-header-color-1: hsl(40 25% 92%);
+  --scalar-header-color-2: hsl(39 10% 64%);
+  --scalar-scrollbar-color: hsl(215 14% 30%);
+  --scalar-scrollbar-color-active: hsl(168 57% 57%);
+}
+
+.light-mode .sidebar {
+  --scalar-sidebar-background-1: hsl(218 35% 13%);
+  --scalar-sidebar-color-1: hsl(40 18% 83%);
+  --scalar-sidebar-color-2: hsl(40 12% 63%);
+  --scalar-sidebar-color-active: hsl(42 28% 94%);
+  --scalar-sidebar-border-color: hsl(215 22% 23%);
+  --scalar-sidebar-item-hover-color: hsl(42 28% 94%);
+  --scalar-sidebar-item-hover-background: hsl(214 24% 20%);
+  --scalar-sidebar-item-active-background: hsl(214 28% 24%);
+  --scalar-sidebar-search-background: hsl(217 30% 16%);
+  --scalar-sidebar-search-border-color: hsl(215 22% 28%);
+  --scalar-sidebar-search-color: hsl(40 12% 68%);
+}
+
+.dark-mode .sidebar {
+  --scalar-sidebar-background-1: hsl(200 15% 6%);
+  --scalar-sidebar-color-1: hsl(200 12% 72%);
+  --scalar-sidebar-color-2: hsl(200 8% 55%);
+  --scalar-sidebar-color-active: hsl(178 60% 90%);
+  --scalar-sidebar-border-color: hsl(200 12% 14%);
+  --scalar-sidebar-item-hover-color: hsl(178 30% 88%);
+  --scalar-sidebar-item-hover-background: hsl(178 25% 16%);
+  --scalar-sidebar-item-active-background: hsl(178 45% 18%);
+  --scalar-sidebar-search-background: hsl(240 6% 9%);
+  --scalar-sidebar-search-border-color: hsl(200 12% 14%);
+  --scalar-sidebar-search-color: hsl(200 8% 55%);
+}
+
+.sbol-docs-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  height: var(--scalar-custom-header-height);
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  box-sizing: border-box;
+  padding: 0 1.25rem;
+  border-bottom: 1px solid var(--scalar-border-color);
+  background: var(--scalar-background-1);
+  background: color-mix(in srgb, var(--scalar-background-1) 88%, transparent);
+  color: var(--scalar-color-1);
+  font-family: var(--scalar-font);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+}
+
+.sbol-docs-header::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  content: "";
+  background: linear-gradient(
+    90deg,
+    var(--sbol-promoter) 0 20%,
+    var(--sbol-cds) 20% 60%,
+    var(--sbol-rbs) 60% 80%,
+    var(--sbol-terminator) 80% 100%
+  );
+}
+
+.sbol-docs-brand {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.75rem;
+  color: inherit;
+  text-decoration: none;
+}
+
+.sbol-docs-brand:focus-visible,
+.sbol-docs-back:focus-visible {
+  outline: 2px solid var(--scalar-color-accent);
+  outline-offset: 3px;
+}
+
+.sbol-docs-mark {
+  display: inline-flex;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 1px solid var(--scalar-border-color);
+  border-radius: 4px;
+  background: var(--scalar-background-card);
+}
+
+.sbol-docs-mark svg {
+  width: 1.4rem;
+  height: 1.4rem;
+}
+
+.sbol-mark-rail { stroke: var(--scalar-color-3); }
+.sbol-mark-promoter { stroke: var(--sbol-promoter); }
+.sbol-mark-cds { fill: color-mix(in srgb, var(--sbol-cds) 15%, transparent); stroke: var(--sbol-cds); }
+.sbol-mark-terminator { stroke: var(--sbol-terminator); }
+
+.sbol-docs-title-group {
+  display: grid;
+  min-width: 0;
+  gap: 0.125rem;
+}
+
+.sbol-docs-title {
+  overflow: hidden;
+  color: var(--scalar-color-1);
+  font-size: 0.875rem;
+  font-family: var(--scalar-font-code);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sbol-docs-subtitle {
+  overflow: hidden;
+  color: var(--scalar-color-2);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sbol-docs-back {
+  display: inline-flex;
+  height: 2.25rem;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.5rem;
+  box-sizing: border-box;
+  padding: 0 0.75rem;
+  border: 1px solid var(--scalar-border-color);
+  border-radius: calc(var(--scalar-radius) - 0.125rem);
+  background: var(--scalar-background-1);
+  color: var(--scalar-color-2);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease,
+    transform 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.sbol-docs-back:hover {
+  border-color: var(--scalar-color-accent);
+  background: var(--scalar-background-accent);
+  color: var(--scalar-color-1);
+}
+
+.sbol-docs-back:active {
+  transform: scale(0.97);
+}
+
+.sbol-docs-back svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+@media (max-width: 40rem) {
+  .sbol-docs-header {
+    padding: 0 0.75rem;
+  }
+
+  .sbol-docs-back-label {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sbol-docs-back {
+    transition: none;
+  }
+
+  .sbol-docs-back:active {
+    transform: none;
+  }
+}

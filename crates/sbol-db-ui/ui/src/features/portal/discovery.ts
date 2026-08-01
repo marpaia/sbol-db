@@ -18,8 +18,16 @@ export interface DiscoveryRouteState {
 }
 
 export interface ClassicSearchLocation {
-  pathname: "/search" | "/sequence-search";
+  pathname: "/search";
   params: URLSearchParams;
+}
+
+export function canonicalSequenceSearchParams(
+  params: URLSearchParams
+): URLSearchParams {
+  const canonical = new URLSearchParams(params);
+  canonical.set("kind", "sequence");
+  return canonical;
 }
 
 const SORTS = new Set<DiscoverySort>([
@@ -98,6 +106,7 @@ export function translateClassicSearchPath(
     const key = sequenceFacet.slice(0, separator);
     const value = stripAngles(sequenceFacet.slice(separator + 1).trim());
     if (value) params.set("q", value);
+    params.set("kind", "sequence");
     params.set("mode", key === "exactsequence" ? "exact" : "global");
     for (const part of parts) {
       if (part === sequenceFacet) continue;
@@ -106,7 +115,7 @@ export function translateClassicSearchPath(
         `The classic sequence handler ignores the additional segment “${part}”.`
       );
     }
-    return { pathname: "/sequence-search", params };
+    return { pathname: "/search", params };
   }
 
   parts.forEach((part, index) => {
