@@ -15,7 +15,9 @@ readonly container_name="sbol-db-test-suite-e2e-$$"
 readonly projection_container_name="${container_name}-projection"
 readonly volume_name="sbol-db-test-suite-e2e-$$"
 readonly host_port="${SBOL_DB_TEST_SUITE_SMOKE_PORT:-18082}"
+readonly operations_host_port="${SBOL_DB_TEST_SUITE_SMOKE_OPERATIONS_PORT:-19092}"
 readonly base_url="http://127.0.0.1:${host_port}"
+readonly operations_url="http://127.0.0.1:${operations_host_port}"
 readonly public_graph="http://synbiohub.org/public"
 readonly public_graph_parameter="http%3A%2F%2Fsynbiohub.org%2Fpublic"
 readonly top_level_predicate="http://wiki.synbiohub.org/wiki/Terms/synbiohub#topLevel"
@@ -54,7 +56,7 @@ done
 wait_for_health() {
   local label="$1"
   for attempt in $(seq 1 60); do
-    if curl -fsS "$base_url/healthz" >/dev/null 2>&1; then
+    if curl -fsS "$operations_url/healthz" >/dev/null 2>&1; then
       return 0
     fi
     if [ "$attempt" -eq 60 ]; then
@@ -166,9 +168,13 @@ split -l 50000 "$test_root/full-corpus.nt" "$test_root/public-corpus-part-"
 
 docker run --detach --name "$projection_container_name" \
   --publish "127.0.0.1:${host_port}:8080" \
+  --publish "127.0.0.1:${operations_host_port}:9090" \
   --volume "$volume_name:/var/lib/sbol-db" \
   --env DATABASE_URL=sqlite:///var/lib/sbol-db/sbol.db \
-  "$image" server --bind 0.0.0.0:8080 --no-worker >/dev/null
+  "$image" server \
+    --bind 0.0.0.0:8080 \
+    --operations-bind 0.0.0.0:9090 \
+    --no-worker >/dev/null
 wait_for_health "SBOLTestSuite discovery projection"
 
 expected_discovery="$(jq -r '.public_discovery_corpus.expected_objects' "$manifest")"
@@ -262,10 +268,13 @@ fi
 
 docker run --detach --name "$container_name" \
   --publish "127.0.0.1:${host_port}:8080" \
+  --publish "127.0.0.1:${operations_host_port}:9090" \
   --volume "$volume_name:/var/lib/sbol-db" \
   --env DATABASE_URL=sqlite:///var/lib/sbol-db/sbol.db \
   "${search_runtime_args[@]}" \
-  "$image" >/dev/null
+  "$image" server \
+    --bind 0.0.0.0:8080 \
+    --operations-bind 0.0.0.0:9090 >/dev/null
 wait_for_health "SBOLTestSuite acceptance"
 
 if [ "$bge_enabled" = true ]; then
