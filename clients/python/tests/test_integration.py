@@ -10,7 +10,7 @@ after a delete the object is gone from both ``get_graph`` and the search view.
 from __future__ import annotations
 
 import pytest
-from conftest import NAMESPACE, fasta
+from conftest import NAMESPACE, LiveServer, fasta
 
 from sbol_db import BadRequestError, ImportReport, NotFoundError, PartShop, SbolDbClient
 
@@ -109,10 +109,10 @@ def test_overwrite_zero_requires_document_iri_for_replace(client: SbolDbClient, 
         client.create_graph(fasta(f"noiri_{unique}"), format="fasta", namespace=NAMESPACE, overwrite=1)
 
 
-def test_partshop_facade_roundtrip(live_server: str, unique: str) -> None:
+def test_partshop_facade_roundtrip(live_server: LiveServer, unique: str) -> None:
     display_id = f"shop_{unique}"
     doc_iri = f"{NAMESPACE}/{unique}/partshop"
-    with PartShop(live_server) as shop:
+    with PartShop(live_server.base_url) as shop:
         shop.login("dba", "dba")
         assert shop.getUser() == "dba"
         assert shop.getKey() == ""
@@ -128,8 +128,8 @@ def test_partshop_facade_roundtrip(live_server: str, unique: str) -> None:
             shop.remove(doc_iri)
 
 
-def test_partshop_attachments_not_implemented(live_server: str) -> None:
-    with PartShop(live_server) as shop:
+def test_partshop_attachments_not_implemented(live_server: LiveServer) -> None:
+    with PartShop(live_server.base_url) as shop:
         with pytest.raises(NotImplementedError):
             shop.attachFile("https://ex.org/x", "/tmp/f")
         with pytest.raises(NotImplementedError):

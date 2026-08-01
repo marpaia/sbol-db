@@ -34,14 +34,23 @@ class SbolDbClient:
         *,
         user: Optional[str] = None,
         password: str = "",
+        operations_url: Optional[str] = None,
         timeout: float = 30.0,
         transport: Optional[Any] = None,
     ) -> None:
         auth = (user, password) if user is not None else None
         self._t = Transport(base_url, auth=auth, timeout=timeout, transport=transport)
         self.base_url = base_url.rstrip("/")
+        self.operations_url = (operations_url or base_url).rstrip("/")
+        self._operations_t = (
+            self._t
+            if self.operations_url == self.base_url
+            else Transport(self.operations_url, timeout=timeout, transport=transport)
+        )
 
     def close(self) -> None:
+        if self._operations_t is not self._t:
+            self._operations_t.close()
         self._t.close()
 
     def __enter__(self) -> "SbolDbClient":
@@ -53,12 +62,12 @@ class SbolDbClient:
     # -- health / ops -----------------------------------------------------
 
     def healthz(self) -> bool:
-        """True when the server is up."""
-        return self._t.request("GET", "/healthz").text.strip() == "ok"
+        """True when the configured operations listener is up."""
+        return self._operations_t.request("GET", "/healthz").text.strip() == "ok"
 
     def readyz(self) -> Dict[str, Any]:
-        """Readiness detail, including database connectivity."""
-        return self._t.request("GET", "/readyz").json()
+        """Readiness detail from the configured operations listener."""
+        return self._operations_t.request("GET", "/readyz").json()
 
     # -- objects ----------------------------------------------------------
 
