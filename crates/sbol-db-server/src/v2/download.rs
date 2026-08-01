@@ -31,6 +31,12 @@ pub enum DownloadFormat {
     Sbol,
     /// The non-recursive RDF closure as RDF/XML (`sbolnr`).
     SbolNonRecursive,
+    /// The recursive SBOL closure as Turtle.
+    Turtle,
+    /// The recursive SBOL closure as JSON-LD.
+    JsonLd,
+    /// The recursive SBOL closure as N-Triples.
+    NTriples,
     /// The recursive closure as GenBank (`gb`).
     GenBank,
     /// The recursive closure as FASTA (`fasta`).
@@ -48,6 +54,9 @@ impl DownloadFormat {
         match value.to_ascii_lowercase().as_str() {
             "sbol" => Some(Self::Sbol),
             "sbolnr" => Some(Self::SbolNonRecursive),
+            "ttl" | "turtle" => Some(Self::Turtle),
+            "jsonld" | "json-ld" => Some(Self::JsonLd),
+            "nt" | "ntriples" => Some(Self::NTriples),
             "gb" | "genbank" => Some(Self::GenBank),
             "fasta" => Some(Self::Fasta),
             "gff" | "gff3" => Some(Self::Gff3),
@@ -60,6 +69,9 @@ impl DownloadFormat {
     fn extension(self) -> &'static str {
         match self {
             Self::Sbol | Self::SbolNonRecursive => "xml",
+            Self::Turtle => "ttl",
+            Self::JsonLd => "jsonld",
+            Self::NTriples => "nt",
             Self::GenBank => "gb",
             Self::Fasta => "fasta",
             Self::Gff3 => "gff",
@@ -79,6 +91,20 @@ pub async fn render_download(
     sbol2: bool,
     scope: GraphScope,
 ) -> Result<Response, V2Error> {
+    let serialized = serialize_download(state, uri, format, sbol2, scope).await?;
+    attachment(serialized, display_id, format.extension())
+}
+
+/// Crawl and serialize an ACL-scoped closure without wrapping it in an HTTP
+/// response. Machine adapters such as MCP use the same exact download pipeline
+/// as V2 rather than duplicating format and federation behavior.
+pub(crate) async fn serialize_download(
+    state: &AppState,
+    uri: &str,
+    format: DownloadFormat,
+    sbol2: bool,
+    scope: GraphScope,
+) -> Result<Serialized, V2Error> {
     let triples = fetch_closure(state, uri, format, scope).await?;
     if triples.is_empty() {
         return Err(V2Error::from(ApiError::NotFound(format!("object {uri}"))));
@@ -90,13 +116,13 @@ pub async fn render_download(
         DownloadFormat::Omex => Some(PrefetchedAttachments(omex_members(state, &triples).await?)),
         _ => None,
     };
-    let serialized = render(
+    render(
         &triples,
         format,
         sbol2,
         attachments.as_ref().map(|a| a as &dyn OmexAttachmentSource),
-    )?;
-    attachment(serialized, display_id, format.extension())
+    )
+    .map_err(V2Error::from)
 }
 
 /// Fetch the object's closure: `sbolnr` narrows to the non-recursive closure,
@@ -110,7 +136,9 @@ async fn fetch_closure(
     scope: GraphScope,
 ) -> Result<Vec<Triple>, V2Error> {
     let resolver = Arc::new(state.app.federation());
-    let downloader = Downloader::new(state.app.sparql.clone()).with_remote_resolver(resolver);
+    let downloader = Downloader::new(state.app.sparql.clone())
+        .with_database_prefix(state.app.database_prefix())
+        .with_remote_resolver(resolver);
     let triples = match format {
         DownloadFormat::SbolNonRecursive => downloader.fetch_non_recursive(uri, scope).await?,
         _ => downloader.fetch_recursive(uri, scope).await?,
@@ -130,6 +158,11 @@ fn render(
     match format {
         DownloadFormat::Sbol | DownloadFormat::SbolNonRecursive => {
             serialize_closure(triples, SerializationFormat::RdfXml, sbol2)
+        }
+        DownloadFormat::Turtle => serialize_closure(triples, SerializationFormat::Turtle, sbol2),
+        DownloadFormat::JsonLd => serialize_closure(triples, SerializationFormat::JsonLd, sbol2),
+        DownloadFormat::NTriples => {
+            serialize_closure(triples, SerializationFormat::NTriples, sbol2)
         }
         DownloadFormat::GenBank => serialize_closure(triples, SerializationFormat::GenBank, false),
         DownloadFormat::Fasta => serialize_closure(triples, SerializationFormat::Fasta, false),

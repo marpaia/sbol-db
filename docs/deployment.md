@@ -466,6 +466,10 @@ inline comments for every key.
 |---|---|---|---|
 | `config.server.requestTimeoutSecs` | `SBOL_DB_REQUEST_TIMEOUT_SECS` | `60` | Outer wall-clock timeout per HTTP request; returns 408. |
 | `config.server.maxBodyBytes` | `SBOL_DB_MAX_BODY_BYTES` | `33554432` (32 MiB) | Max request body; oversize returns 413. |
+| `extraEnv` | `SBOL_DB_PUBLIC_ORIGIN` | Bound listener origin | Externally reachable HTTP(S) origin advertised to CLI, OAuth/OIDC, and MCP clients. Required behind an ingress or reverse proxy; do not include a path. |
+| `extraEnv` | `SBOL_DB_DATABASE_PREFIX` | Public origin plus `/` | Base IRI for newly minted account graphs and designs. Set this to the historical SynBioHub `databasePrefix` when migrating an existing registry. |
+| `extraEnv` | `SBOL_DB_IDENTITY_SIGNING_KEY` | Ephemeral local key | Base64-encoded Ed25519 PKCS#8 private key for OIDC ID tokens. Required and shared across replicas in production; keep it in a secret manager. |
+| `extraEnv` | `SBOL_DB_MCP_ENABLED` | `true` | Mount SBOL Identity-authorized MCP at `/mcp` and advertise it from `/api/v2/instance`. |
 | `extraEnv` | `SBOL_DB_LAB_ENABLED` | `true` | Mount embedded portal/admin assets and `/lab/api`. False leaves non-UI APIs only. |
 | `extraEnv` | `SBOL_DB_PORTAL_ENABLED` | `true` | Serve public browser navigation from `/` while preserving machine route dispatch. False retains the admin/login/setup UI. |
 | `extraEnv` | `SBOL_DB_ADMIN_API_AUTH_REQUIRED` | `true` | Require an administrator session or bearer token for `/lab/api/*`. Do not disable on a public deployment. |

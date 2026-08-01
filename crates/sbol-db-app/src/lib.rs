@@ -18,6 +18,7 @@ mod audit;
 mod auth;
 mod blob;
 mod collection;
+mod collection_sync;
 mod config;
 mod download;
 mod edit;
@@ -25,9 +26,11 @@ mod federation;
 mod maintenance;
 pub mod memory;
 mod mutation;
+mod oauth;
 mod object;
 mod permission;
 mod plugin;
+mod prepared_mutation;
 mod review;
 mod search;
 mod sequence;
@@ -42,6 +45,7 @@ pub use audit::{AuditAction, AuditEvent, AuditService};
 pub use auth::{share_hash, AuthService, PasswordReset, ProfileUpdate, Registration};
 pub use blob::FsBlobStore;
 pub use collection::{CollectionService, MintScope, MintedSubmission, Submission};
+pub use collection_sync::{CollectionContent, CollectionSyncService, CollectionUpdatePreview};
 pub use config::{ConfigError, ConfigService};
 pub use download::{Downloader, RemoteObjectResolver, DEFAULT_DATABASE_PREFIX};
 pub use edit::{EditService, FieldValue};
@@ -51,6 +55,7 @@ pub use federation::{
 };
 pub use maintenance::{MaintenanceScheduleReceipt, SearchMaintenanceScheduler};
 pub use mutation::{MakePublicOutcome, MakePublicRequest, MutationError, MutationService};
+pub use oauth::{OAuthService, OAuthTokenPair};
 pub use object::{
     ObjectAttachment, ObjectAttachmentSection, ObjectContentState, ObjectDetails, ObjectProperty,
     ObjectPropertyValue, ObjectProvenance, ObjectReference, ObjectReferenceSection,
@@ -61,6 +66,10 @@ pub use permission::PermissionService;
 pub use plugin::{
     CallPluginRequest, ExposeRegistry, HttpPluginClient, PluginClient, PluginError, PluginResponse,
     PluginService, StreamOutcome, StreamRegistry, StreamServe, PLUGIN_CATEGORIES,
+};
+pub use prepared_mutation::{
+    PreparedMutationBinding, PreparedMutationError, PreparedMutationReceipt,
+    PreparedMutationService,
 };
 pub use review::{ReviewCase, ReviewDecision, ReviewService, ReviewStatus};
 pub use sbol_db_search::ranked_text::Hit;
@@ -84,14 +93,17 @@ use sbol_db_search::{SearchDeployment, SearchRuntime, VectorRouter};
 use sbol_db_search_sdk::{IndexMaintenanceEvent, IndexMaintenanceRegistry, IndexMutationSource};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
-    AclStore, BlobStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore,
-    SketchStore, TokenStore, UserStore,
+    AclStore, BlobStore, ClusterStore, ConfigStore, JobQueue, OAuthStore, PageRankStore,
+    PreparedMutationStore, SbolStore, SketchStore, TokenStore, UserStore,
 };
 
 /// The application facade: the neutral trait objects plus the identity-aware
 /// subsystems every HTTP adapter shares.
 #[derive(Clone)]
 pub struct AppServices {
+    /// Base IRI used for newly minted users, private submissions, and public
+    /// designs. Existing imported identities remain unchanged.
+    database_prefix: String,
     /// The SBOL-aware store: ingest plus every derived-view read surface.
     pub store: Arc<dyn SbolStore>,
     /// SPARQL query evaluation over the derived triple view.
@@ -136,6 +148,13 @@ pub struct AppServices {
     pub tokens: Arc<dyn TokenStore>,
     /// Password and API-token authentication over the identity stores.
     pub auth: AuthService,
+    /// Durable OAuth client/grant persistence for SBOL Identity.
+    pub oauth_store: Arc<dyn OAuthStore>,
+    /// Authorization-code, PKCE, audience, scope, refresh, and revocation
+    /// behavior shared by MCP and ecosystem sign-in adapters.
+    pub oauth: OAuthService,
+    /// Durable one-time prepared changes for agent and CLI mutations.
+    pub prepared_mutations: Arc<dyn PreparedMutationStore>,
     /// The shared ranked text index backing native free-text search. The
     /// rebuild job writes it and the search adapters read it; a caller that
     /// needs a persistent, filesystem-backed index swaps one in with
@@ -181,15 +200,7 @@ impl AppServices {
         jobs: Arc<dyn JobQueue>,
         acl: Arc<dyn AclStore>,
     ) -> Self {
-        Self::assemble(
-            store,
-            sparql,
-            sparql_update,
-            jobs,
-            acl,
-            Arc::new(memory::InMemoryUserStore::new()),
-            Arc::new(memory::InMemoryTokenStore::new()),
-        )
+        Self::assemble(store, sparql, sparql_update, jobs, acl)
     }
 
     /// Build the facade from an open [`Backend`]. The SPARQL engines are
@@ -208,9 +219,10 @@ impl AppServices {
             sparql_update,
             backend.jobs.clone(),
             backend.acl.clone(),
-            backend.users.clone(),
-            backend.tokens.clone(),
         )
+        .with_identity(backend.users.clone(), backend.tokens.clone())
+        .with_oauth(backend.oauth.clone())
+        .with_prepared_mutations(backend.prepared_mutations.clone())
         .with_sequence_stores(
             backend.pagerank.clone(),
             backend.cluster.clone(),
@@ -244,6 +256,22 @@ impl AppServices {
     pub fn with_config(mut self, config: Arc<dyn ConfigStore>) -> Self {
         self.config = config;
         self
+    }
+
+    /// Configure the base IRI used for identities minted by this application
+    /// instance. The public HTTP origin is the normal default for a new SBOL DB
+    /// deployment; migrated registries can provide their historical
+    /// `databasePrefix` explicitly.
+    pub fn with_database_prefix(mut self, prefix: impl Into<String>) -> Self {
+        let prefix = format!("{}/", prefix.into().trim().trim_end_matches('/'));
+        self.auth = self.auth.with_database_prefix(prefix.clone());
+        self.database_prefix = prefix;
+        self
+    }
+
+    /// The normalized identity prefix, including its trailing slash.
+    pub fn database_prefix(&self) -> &str {
+        &self.database_prefix
     }
 
     /// The admin-gated configuration facade over the durable config store.
@@ -296,10 +324,31 @@ impl AppServices {
     /// the neutral handles directly yet must exercise the real per-backend
     /// identity persistence.
     pub fn with_identity(mut self, users: Arc<dyn UserStore>, tokens: Arc<dyn TokenStore>) -> Self {
-        self.auth = AuthService::new(users.clone(), tokens.clone());
+        self.auth = AuthService::new(users.clone(), tokens.clone())
+            .with_database_prefix(self.database_prefix.clone());
         self.users = users;
         self.tokens = tokens;
         self
+    }
+
+    /// Replace the process-local OAuth store, rebuilding the SBOL Identity
+    /// service over a durable backend implementation.
+    pub fn with_oauth(mut self, oauth_store: Arc<dyn OAuthStore>) -> Self {
+        self.oauth = OAuthService::new(oauth_store.clone());
+        self.oauth_store = oauth_store;
+        self
+    }
+
+    pub fn with_prepared_mutations(
+        mut self,
+        prepared_mutations: Arc<dyn PreparedMutationStore>,
+    ) -> Self {
+        self.prepared_mutations = prepared_mutations;
+        self
+    }
+
+    pub fn prepared_mutation_service(&self) -> PreparedMutationService {
+        PreparedMutationService::new(self.prepared_mutations.clone())
     }
 
     /// Replace the in-RAM default ranked text index with a caller-provided one,
@@ -373,7 +422,17 @@ impl AppServices {
     pub fn submission_service(&self) -> SubmissionService {
         SubmissionService::with_maintenance(
             self.store.clone(),
-            CollectionService::new(),
+            CollectionService::new().with_database_prefix(self.database_prefix.clone()),
+            self.search_maintenance.clone(),
+        )
+    }
+
+    /// Whole-collection machine synchronization with ACL checks, content-only
+    /// validators, server-managed ownership stamps, and search maintenance.
+    pub fn collection_sync_service(&self) -> CollectionSyncService {
+        CollectionSyncService::with_maintenance(
+            self.store.clone(),
+            self.acl_service.clone(),
             self.search_maintenance.clone(),
         )
     }
@@ -385,6 +444,7 @@ impl AppServices {
             self.sparql_update.clone(),
             self.acl_service.clone(),
         )
+        .with_database_prefix(self.database_prefix.clone())
         .with_maintenance(self.search_maintenance.clone())
     }
 
@@ -448,11 +508,15 @@ impl AppServices {
         sparql_update: Arc<SparqlUpdateEngine>,
         jobs: Arc<dyn JobQueue>,
         acl: Arc<dyn AclStore>,
-        users: Arc<dyn UserStore>,
-        tokens: Arc<dyn TokenStore>,
     ) -> Self {
+        let users: Arc<dyn UserStore> = Arc::new(memory::InMemoryUserStore::new());
+        let tokens: Arc<dyn TokenStore> = Arc::new(memory::InMemoryTokenStore::new());
+        let oauth_store: Arc<dyn OAuthStore> = Arc::new(memory::InMemoryOAuthStore::new());
+        let prepared_mutations: Arc<dyn PreparedMutationStore> =
+            Arc::new(memory::InMemoryPreparedMutationStore::new());
         let acl_service = AclService::new(store.clone(), acl.clone());
         let auth = AuthService::new(users.clone(), tokens.clone());
+        let oauth = OAuthService::new(oauth_store.clone());
         let text_search = Arc::new(
             RankedTextIndex::in_ram().expect("in-RAM ranked text index construction cannot fail"),
         );
@@ -474,6 +538,7 @@ impl AppServices {
             Arc::new(IndexMaintenanceRegistry::default()),
         ));
         Self {
+            database_prefix: DEFAULT_DATABASE_PREFIX.to_owned(),
             store,
             sparql,
             sparql_update,
@@ -488,6 +553,9 @@ impl AppServices {
             users,
             tokens,
             auth,
+            oauth_store,
+            oauth,
+            prepared_mutations,
             text_search,
             search_runtime,
             search_vectors: None,

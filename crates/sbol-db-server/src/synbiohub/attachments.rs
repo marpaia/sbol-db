@@ -249,7 +249,8 @@ pub async fn public_download(
 /// `/download`: a missing attachment or blob is a `404`.
 async fn download(state: AppState, user: Option<User>, uri: String) -> Result<Response, ApiError> {
     let scope = scope_for(&state, &user).await?;
-    let downloader = Downloader::new(state.app.sparql.clone());
+    let downloader =
+        Downloader::new(state.app.sparql.clone()).with_database_prefix(state.app.database_prefix());
     let triples = downloader.fetch_recursive(&uri, scope).await?;
     let attachment =
         read_attachment(&triples, &uri).ok_or_else(|| ApiError::NotFound(uri.clone()))?;

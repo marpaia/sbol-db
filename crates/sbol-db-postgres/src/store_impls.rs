@@ -17,13 +17,14 @@ use sbol_db_core::{
 };
 use sbol_db_storage::{
     distinct_graph_iris, distinct_object_iris, AccelSolutions, AcceleratedQuery, AclStore,
-    BatchSequenceMatch, ClassCount, CorpusCounts, EnqueueOutcome, GraphFilter, GraphOverview,
-    GraphStore, GraphTriplesPage, GraphWriteMode, ImportInput, JobAttempt, JobLogRecord, JobQueue,
-    JobStatus, LabStore, ListGraphsFilter, ListJobsFilter, ListObjectsFilter, NeighborhoodStore,
-    NewJob, ObjectStore, OldestQueuedAge, OntologyLoadReport, OntologyRecord, OntologyStore,
-    OntologyTermRecord, PatternObject, PatternSubject, QueueDepthRow, SbolJob, SbolStore,
-    SequenceMatch, SequenceSearchOptions, SequenceSearchStore, TextSearchQuery, TextSearchStore,
-    TripleChange, TripleSource, TripleWriter, UpdateOutcome, SBH_CAN_VIEW, SBH_OWNED_BY,
+    BatchSequenceMatch, ClassCount, ConditionalContentWrite, CorpusCounts, EnqueueOutcome,
+    GraphFilter, GraphOverview, GraphStore, GraphTriplesPage, GraphWriteMode, ImportInput,
+    JobAttempt, JobLogRecord, JobQueue, JobStatus, LabStore, ListGraphsFilter, ListJobsFilter,
+    ListObjectsFilter, NeighborhoodStore, NewJob, ObjectStore, OldestQueuedAge, OntologyLoadReport,
+    OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject, PatternSubject,
+    QueueDepthRow, SbolJob, SbolStore, SequenceMatch, SequenceSearchOptions, SequenceSearchStore,
+    TextSearchQuery, TextSearchStore, TripleChange, TripleSource, TripleWriter, UpdateOutcome,
+    SBH_CAN_VIEW, SBH_OWNED_BY,
 };
 use serde_json::Value;
 use tokio::runtime::Handle;
@@ -447,6 +448,22 @@ impl SbolStore for SbolObjectService {
 
     async fn graph_store_clear(&self, graph: &str) -> Result<usize, DomainError> {
         self.graph_store_clear(graph).await
+    }
+
+    async fn graph_store_write_content_if_match(
+        &self,
+        graph: &str,
+        incoming: Vec<Triple>,
+        server_managed: Vec<Triple>,
+        expected_content_etag: Option<&str>,
+    ) -> Result<ConditionalContentWrite, DomainError> {
+        self.graph_store_write_content_if_match(
+            graph,
+            incoming,
+            server_managed,
+            expected_content_etag,
+        )
+        .await
     }
 
     async fn graph_store_read(&self, graph: &str) -> Result<Vec<Triple>, DomainError> {

@@ -14,13 +14,15 @@ use sbol_db_core::{
 use sbol_db_derive::{build_import_plan, compose_merged_input, to_rdf_format};
 use sbol_db_rdf::{rdf_graph_to_triples, GRAPH_IRI_PREFIX};
 use sbol_db_storage::{
-    distinct_graph_iris, distinct_object_iris, AccelSolutions, AcceleratedQuery, AclStore,
-    BatchSequenceMatch, ClassCount, CorpusCounts, GraphFilter, GraphOverview, GraphStore,
-    GraphTriplesPage, GraphWriteMode, ImportInput, ImportOverwrite, LabStore, ListGraphsFilter,
-    ListObjectsFilter, NeighborhoodStore, ObjectStore, OntologyLoadReport, OntologyRecord,
-    OntologyStore, OntologyTermRecord, PatternObject, PatternSubject, SbolStore, SequenceMatch,
-    SequenceSearchOptions, SequenceSearchStore, TextSearchQuery, TextSearchStore, TripleChange,
-    TripleSource, TripleWriter, UpdateOutcome, SBH_CAN_VIEW, SBH_OWNED_BY,
+    collection_content_etag, distinct_graph_iris, distinct_object_iris,
+    replacement_graph_with_management, AccelSolutions, AcceleratedQuery, AclStore,
+    BatchSequenceMatch, ClassCount, ConditionalContentWrite, CorpusCounts, GraphFilter,
+    GraphOverview, GraphStore, GraphTriplesPage, GraphWriteMode, ImportInput, ImportOverwrite,
+    LabStore, ListGraphsFilter, ListObjectsFilter, NeighborhoodStore, ObjectStore,
+    OntologyLoadReport, OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject,
+    PatternSubject, SbolStore, SequenceMatch, SequenceSearchOptions, SequenceSearchStore,
+    TextSearchQuery, TextSearchStore, TripleChange, TripleSource, TripleWriter, UpdateOutcome,
+    SBH_CAN_VIEW, SBH_OWNED_BY,
 };
 use tokio::runtime::Handle;
 
@@ -219,6 +221,67 @@ impl SqliteStore {
         self.accel.refresh_graph(&mut tx, graph).await?;
         tx.commit().await.map_err(db_err)?;
         Ok(inserted)
+    }
+
+    pub async fn graph_store_write_content_if_match(
+        &self,
+        graph: &str,
+        incoming: Vec<Triple>,
+        server_managed: Vec<Triple>,
+        expected_content_etag: Option<&str>,
+    ) -> Result<ConditionalContentWrite, DomainError> {
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let created = sqlx::query(
+            "INSERT OR IGNORE INTO sbol_graphs (iri, id, kind, created_at, updated_at) \
+             VALUES (?, ?, 'collection-sync', ?, ?)",
+        )
+        .bind(graph)
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?
+        .rows_affected()
+            == 1;
+
+        // The INSERT (including its conflict path) obtains SQLite's write
+        // serialization before the current graph is read.
+        let current = self.triples.scan_graph_in_conn(&mut tx, graph).await?;
+        let current_content_etag = collection_content_etag(&current);
+        let precondition_holds = match expected_content_etag {
+            None => created,
+            Some(expected) => !created && current_content_etag.as_deref() == Some(expected),
+        };
+        if !precondition_holds {
+            return Ok(ConditionalContentWrite::PreconditionFailed {
+                current_content_etag,
+            });
+        }
+
+        let replacement =
+            replacement_graph_with_management(&current, &incoming, &server_managed, graph);
+        let content_etag = collection_content_etag(&replacement).ok_or_else(|| {
+            DomainError::InvalidInput("collection content cannot be empty".to_owned())
+        })?;
+        self.triples.clear_graph(&mut tx, Some(graph)).await?;
+        let triple_count = self
+            .triples
+            .insert_triples(&mut tx, &replacement, "collection-sync")
+            .await?;
+        self.accel.refresh_graph(&mut tx, graph).await?;
+        sqlx::query("UPDATE sbol_graphs SET updated_at = ? WHERE iri = ?")
+            .bind(&now)
+            .bind(graph)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(ConditionalContentWrite::Applied {
+            triple_count,
+            content_etag,
+        })
     }
 
     pub async fn graph_store_clear(&self, graph: &str) -> Result<usize, DomainError> {
@@ -622,6 +685,22 @@ impl SbolStore for SqliteStore {
 
     async fn graph_store_clear(&self, graph: &str) -> Result<usize, DomainError> {
         self.graph_store_clear(graph).await
+    }
+
+    async fn graph_store_write_content_if_match(
+        &self,
+        graph: &str,
+        incoming: Vec<Triple>,
+        server_managed: Vec<Triple>,
+        expected_content_etag: Option<&str>,
+    ) -> Result<ConditionalContentWrite, DomainError> {
+        self.graph_store_write_content_if_match(
+            graph,
+            incoming,
+            server_managed,
+            expected_content_etag,
+        )
+        .await
     }
 
     async fn graph_store_read(&self, graph: &str) -> Result<Vec<Triple>, DomainError> {

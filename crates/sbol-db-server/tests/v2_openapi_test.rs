@@ -338,6 +338,7 @@ async fn openapi_json_is_served_and_wellformed() {
         "/collections",
         "/collections/validate",
         "/collections/{iri}",
+        "/collections/{iri}/content",
         "/collections/{iri}/members",
         "/collections/{iri}/members/{member}",
         "/admin",
@@ -385,6 +386,15 @@ async fn openapi_json_is_served_and_wellformed() {
     assert!(
         spec["paths"]["/collections"].get("post").is_some(),
         "POST creates a collection"
+    );
+    assert!(
+        spec["paths"]["/collections/{iri}/content"]
+            .get("get")
+            .is_some()
+            && spec["paths"]["/collections/{iri}/content"]
+                .get("put")
+                .is_some(),
+        "collection synchronization content is read and replaced through GET/PUT"
     );
 
     // API and browser auth are both declared; bearer is selected first by the

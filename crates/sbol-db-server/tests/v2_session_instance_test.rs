@@ -112,7 +112,14 @@ fn cookie_pair(response: &Response<Body>) -> String {
 
 #[tokio::test]
 async fn instance_contract_is_safe_and_matches_enforced_registration_policy() {
-    let (app, services, _dir) = app_with(ServerConfig::default()).await;
+    let mut config = ServerConfig {
+        public_origin: Some("https://sbol.io/".to_owned()),
+        ..ServerConfig::default()
+    };
+    config
+        .resolve_public_origin("http://127.0.0.1:8888")
+        .expect("valid public origin");
+    let (app, services, _dir) = app_with(config).await;
 
     let response = send(&app, "GET", "/api/v2/instance", &[], Body::empty()).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -121,6 +128,15 @@ async fn instance_contract_is_safe_and_matches_enforced_registration_policy() {
     assert_eq!(initial["setup_required"], true);
     assert_eq!(initial["policies"]["allow_public_signup"], true);
     assert_eq!(initial["capabilities"]["browser_sessions"], true);
+    assert_eq!(
+        initial["machine_access"]["api_url"],
+        "https://sbol.io/api/v2"
+    );
+    assert_eq!(initial["machine_access"]["mcp_url"], "https://sbol.io/mcp");
+    assert_eq!(
+        initial["machine_access"]["authorization_issuer"],
+        "https://sbol.io"
+    );
 
     register(&services, "admin", "admin@example.org", true).await;
     services

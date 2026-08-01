@@ -20,7 +20,11 @@ import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 
 const CLI_REFERENCE =
   "https://github.com/SynBioDex/sbol-rs/tree/master/crates/sbol-cli";
-const MCP_SERVER_ADDRESS = "https://sbol.io/mcp";
+
+function currentMcpServerAddress() {
+  if (typeof window === "undefined") return "/mcp";
+  return new URL("/mcp", window.location.origin).toString();
+}
 
 const steps: CapabilityStepProps[] = [
   {
@@ -35,7 +39,7 @@ const steps: CapabilityStepProps[] = [
     icon: RefreshCw,
     title: "Sync with a registry",
     description:
-      "Pull canonical designs, inspect changes, and publish through an authenticated SBOL DB profile.",
+      "Check out collections, inspect local and remote changes, and synchronize through your SBOL account.",
   },
   {
     number: "03",
@@ -84,9 +88,9 @@ const capabilityGroups: CapabilityGroupProps[] = [
           "Validate structure and identity collisions without changing the registry.",
       },
       {
-        title: "Add a collection",
+        title: "Add or synchronize a collection",
         description:
-          "Create, replace, or merge SBOL, FASTA, and GenBank designs.",
+          "Create a collection or prepare a safe update to its biological content.",
       },
       {
         title: "Improve an existing record",
@@ -124,7 +128,11 @@ const capabilityGroups: CapabilityGroupProps[] = [
   },
 ];
 
-export function MachineAccessSection() {
+export function MachineAccessSection({
+  mcpServerAddress,
+}: {
+  mcpServerAddress?: string;
+}) {
   return (
     <section
       id="machine-access"
@@ -178,7 +186,9 @@ export function MachineAccessSection() {
           <RegistryPromise />
         </div>
 
-        <McpDocumentation />
+        <McpDocumentation
+          serverAddress={mcpServerAddress ?? currentMcpServerAddress()}
+        />
 
         <div className="mt-6 flex flex-col gap-3 border-t pt-5 text-sm sm:flex-row sm:items-center sm:justify-between">
           <p className="max-w-2xl text-muted-foreground">
@@ -259,13 +269,14 @@ function CliPreview() {
             Carry the same design into the registry
           </div>
           <Command>sbol registry login</Command>
+          <Command>sbol init</Command>
           <Command>
             {
-              "sbol registry pull https://sbol.io/public/igem/BBa_J23100/1 -o design.ttl"
+              "sbol registry pull https://sbol.io/public/igem/BBa_J23100/1"
             }
           </Command>
-          <Command>sbol registry sync design.ttl --preview</Command>
-          <Command>sbol registry push design.ttl</Command>
+          <Command>sbol sync --dry-run</Command>
+          <Command>sbol sync</Command>
         </div>
       </div>
     </div>
@@ -334,7 +345,7 @@ function Command({ children }: { children: React.ReactNode }) {
   );
 }
 
-function McpDocumentation() {
+function McpDocumentation({ serverAddress }: { serverAddress: string }) {
   const clipboard = useCopyToClipboard();
   const copyLabel = clipboard.copied
     ? "Server address copied"
@@ -392,11 +403,11 @@ function McpDocumentation() {
             </p>
             <div className="mt-2 flex items-center gap-3">
               <code className="min-w-0 flex-1 break-all text-[13px] font-medium text-zinc-100">
-                {MCP_SERVER_ADDRESS}
+                {serverAddress}
               </code>
               <button
                 type="button"
-                onClick={() => clipboard.copy(MCP_SERVER_ADDRESS)}
+                onClick={() => clipboard.copy(serverAddress)}
                 aria-label={copyLabel}
                 title={copyLabel}
                 className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sky-300 text-zinc-950 shadow-sm shadow-sky-500/20 transition-colors hover:bg-sky-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
@@ -421,8 +432,8 @@ function McpDocumentation() {
             />
             <ConnectionStep
               number="2"
-              title="Sign in to SBOL DB"
-              description="Use your normal registry account when your agent prompts you."
+              title="Sign in with SBOL"
+              description="Your registry opens a secure sign-in and shows the capabilities your agent is requesting."
             />
             <ConnectionStep
               number="3"
@@ -437,12 +448,11 @@ function McpDocumentation() {
                 <LockKeyhole className="mt-0.5 size-4 shrink-0 text-sky-300" />
                 <div>
                   <p className="text-xs font-medium text-zinc-100">
-                    Your access rules still apply.
+                    You stay in control.
                   </p>
                   <p className="mt-1 text-xs leading-5 text-zinc-400">
-                    Your agent can only see and change what you can. Public,
-                    shared, and private designs continue to follow your SBOL DB
-                    permissions.
+                    Your agent receives only the capabilities you approve, and
+                    it can only see or change designs your SBOL account can.
                   </p>
                 </div>
               </div>

@@ -28,6 +28,11 @@ Want to see how a design flows through the tables? See the
 Virtuoso? See [**docs/benchmarks.md**](docs/benchmarks.md) and the
 [`bench/`](bench/) harness.
 
+For authenticated CLI and agent workflows, see
+[**CLI and agent access**](docs/machine-access.md). The `sbol` CLI stays in the
+`sbol-rs` repository and calls SBOL DB's V2 API; SBOL DB owns registry state,
+ACLs, submission previews, SBOL Identity, and the scoped MCP endpoint.
+
 ## Scope
 
 `sbol-db` is deliberately narrow: a *best-in-class SBOL query

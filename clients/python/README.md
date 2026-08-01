@@ -23,6 +23,42 @@ The import name is `sbol_db`:
 from sbol_db import SbolDbClient, PartShop
 ```
 
+## Sign in with SBOL
+
+`SbolIdentityClient` supplies the typed OAuth/OpenID Connect pieces an
+ecosystem application such as Flapjack or SBOL Canvas needs. It discovers the
+provider, registers a public client, creates a state- and S256-PKCE-bound
+authorization URL, validates the callback, and exchanges the code. The host
+application remains responsible for opening or redirecting the browser and
+storing the rotating tokens appropriately for its platform.
+
+```python
+from sbol_db import SbolIdentityClient
+
+redirect_uri = "https://canvas.example/oauth/callback"
+
+with SbolIdentityClient("https://sbol.io") as identity:
+    provider = identity.discover()
+    client = identity.register(
+        "SBOL Canvas", [redirect_uri], metadata=provider
+    )
+    authorization = identity.begin_authorization(
+        client, redirect_uri, metadata=provider
+    )
+
+    # Redirect the user's browser to authorization.url. In the callback route:
+    code = authorization.code_from_callback(complete_callback_url)
+    tokens = identity.exchange_code(authorization, code, metadata=provider)
+    profile = identity.userinfo(tokens.access_token, metadata=provider)
+```
+
+The same helper can request `sbol:read` / `sbol:write` for an advertised API
+resource, refresh with rotation, and revoke either credential. Secrets are
+redacted from dataclass representations. Applications that consume
+`tokens.id_token` locally must still verify its EdDSA signature through the
+provider's `jwks_uri` and check issuer, audience, expiry, and the
+`authorization.nonce`; calling UserInfo is the dependency-free identity path.
+
 ## Broad client
 
 ```python

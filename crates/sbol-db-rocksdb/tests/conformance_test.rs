@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use sbol_db_app::AppServices;
 use sbol_db_rocksdb::{
-    connect, Db, RocksdbClusterStore, RocksdbConfigStore, RocksdbJobs, RocksdbPageRankStore,
-    RocksdbSketchStore, RocksdbStore, RocksdbTokenStore, RocksdbUserStore,
+    connect, Db, RocksdbClusterStore, RocksdbConfigStore, RocksdbJobs, RocksdbOAuthStore,
+    RocksdbPageRankStore, RocksdbSketchStore, RocksdbStore, RocksdbTokenStore, RocksdbUserStore,
 };
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
@@ -76,9 +76,11 @@ async fn rocksdb_passes_full_conformance_suite() {
     let pagerank: Arc<dyn PageRankStore> = Arc::new(RocksdbPageRankStore::new(db.clone()));
     let cluster: Arc<dyn ClusterStore> = Arc::new(RocksdbClusterStore::new(db.clone()));
     let sketch: Arc<dyn SketchStore> = Arc::new(RocksdbSketchStore::new(db.clone()));
+    let oauth = Arc::new(RocksdbOAuthStore::new(db.clone()));
     let config: Arc<dyn ConfigStore> = Arc::new(RocksdbConfigStore::new(db));
     let app = AppServices::new(store_dyn, sparql, sparql_update, jobs, acl)
         .with_identity(users, tokens)
+        .with_oauth(oauth)
         .with_sequence_stores(pagerank, cluster, sketch)
         .with_config(config);
     sbol_db_conformance::run_all(&app).await;

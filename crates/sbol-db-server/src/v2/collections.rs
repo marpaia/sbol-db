@@ -11,13 +11,17 @@
 
 use axum::body::Bytes;
 use axum::extract::{FromRequest, Multipart, Path, Request, State};
-use axum::http::header::{CONTENT_TYPE, LOCATION};
-use axum::http::StatusCode;
+use axum::http::header::{
+    ACCEPT, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, LOCATION,
+};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use axum::Json;
 use sbol_db_app::SubmitRequest;
-use sbol_db_core::{IriString, User};
+use sbol_db_core::{IriString, SerializationFormat, User};
+use sbol_db_rdf::triples_to_rdf;
+use sbol_db_storage::ConditionalContentWrite;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -58,6 +62,149 @@ struct CreateForm {
 #[derive(Debug, Default, Deserialize)]
 struct MemberBody {
     member: Option<String>,
+}
+
+/// `GET /api/v2/collections/{iri}` — a compact synchronization descriptor.
+/// The resource is hidden as `404` when it is absent or outside the caller's
+/// public/owned/shared scope.
+pub async fn get_collection(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(collection): Path<String>,
+) -> Result<Response, V2Error> {
+    validate_iri(&collection, "collection")?;
+    let caller_graph = identity.0.as_ref().map(|user| user.graph_uri.as_str());
+    let content = state
+        .app
+        .collection_sync_service()
+        .read(caller_graph, &collection)
+        .await?
+        .ok_or_else(|| not_found(&collection))?;
+    let content_url = format!(
+        "/api/v2/collections/{}/content",
+        encode_iri_segment(&collection)
+    );
+    let display_id = content.triples.iter().find_map(|triple| {
+        if !matches!(&triple.subject, sbol_db_core::SubjectTerm::Iri(subject) if subject.as_str() == collection)
+            || !matches!(
+                triple.predicate.as_str(),
+                "http://sbols.org/v2#displayId" | "http://sbols.org/v3#displayId"
+            )
+        {
+            return None;
+        }
+        match &triple.object {
+            sbol_db_core::ObjectTerm::Literal { value, .. } => Some(value.clone()),
+            _ => None,
+        }
+    });
+    let mut response = Json(json!({
+        "iri": collection,
+        "content_url": content_url,
+        "content_etag": content.content_etag,
+        "triple_count": content.triples.len(),
+        "display_id": display_id,
+    }))
+    .into_response();
+    attach_content_headers(&mut response, &content.content_etag)?;
+    Ok(response)
+}
+
+/// `GET /api/v2/collections/{iri}/content` — the biological SBOL document,
+/// excluding server-managed collaboration and audit metadata. Turtle is the
+/// default; the four lossless RDF media types are accepted explicitly.
+pub async fn get_collection_content(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(collection): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, V2Error> {
+    validate_iri(&collection, "collection")?;
+    let format = response_content_format(&headers)?;
+    let caller_graph = identity.0.as_ref().map(|user| user.graph_uri.as_str());
+    let content = state
+        .app
+        .collection_sync_service()
+        .read(caller_graph, &collection)
+        .await?
+        .ok_or_else(|| not_found(&collection))?;
+    let body = triples_to_rdf(&content.triples, format)?;
+    let mut response = ([(CONTENT_TYPE, media_type(format))], body).into_response();
+    attach_content_headers(&mut response, &content.content_etag)?;
+    Ok(response)
+}
+
+/// `PUT /api/v2/collections/{iri}/content` — strict create-or-CAS replacement.
+/// A create sends `If-None-Match: *`; an update sends the exact strong ETag
+/// returned by GET in `If-Match`. There is no unconditional overwrite path.
+pub async fn put_collection_content(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(collection): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, V2Error> {
+    let user = require_contributor(&identity)?;
+    validate_iri(&collection, "collection")?;
+    let (expected_content_etag, creating) = request_precondition(&headers)?;
+    let format = request_content_format(&headers)?;
+    let body = std::str::from_utf8(&body).map_err(|error| {
+        V2Error::from(ApiError::BadRequest(format!(
+            "collection content must be UTF-8 RDF: {error}"
+        )))
+    })?;
+
+    let outcome = state
+        .app
+        .collection_sync_service()
+        .write(
+            &user.graph_uri,
+            user.is_admin,
+            &collection,
+            body,
+            format,
+            expected_content_etag.as_deref(),
+        )
+        .await?;
+    match outcome {
+        ConditionalContentWrite::Applied {
+            triple_count,
+            content_etag,
+        } => {
+            let payload = json!({
+                "collection_uri": collection,
+                "content_etag": content_etag,
+                "triple_count": triple_count,
+            });
+            let status = if creating {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            };
+            let mut response = (status, Json(payload)).into_response();
+            attach_content_headers(&mut response, &content_etag)?;
+            Ok(response)
+        }
+        ConditionalContentWrite::PreconditionFailed {
+            current_content_etag,
+        } => {
+            let mut response = V2Error::from(ApiError::PreconditionFailed(
+                "the collection changed or the requested create identity already exists".to_owned(),
+            ))
+            .into_response();
+            if let Some(etag) = current_content_etag {
+                response.headers_mut().insert(
+                    ETAG,
+                    HeaderValue::from_str(&etag).map_err(|error| {
+                        V2Error::from(ApiError::Domain(sbol_db_core::DomainError::Serialization(
+                            error.to_string(),
+                        )))
+                    })?,
+                );
+            }
+            Ok(response)
+        }
+    }
 }
 
 /// `POST /api/v2/collections` — mint a submission into the caller's user
@@ -178,6 +325,154 @@ fn require_contributor(identity: &Identity) -> Result<User, V2Error> {
         )));
     }
     Ok(user)
+}
+
+fn not_found(collection: &str) -> V2Error {
+    ApiError::NotFound(format!(
+        "collection {collection} was not found or is not visible"
+    ))
+    .into()
+}
+
+fn attach_content_headers(response: &mut Response, etag: &str) -> Result<(), V2Error> {
+    response.headers_mut().insert(
+        ETAG,
+        HeaderValue::from_str(etag).map_err(|error| {
+            V2Error::from(ApiError::Domain(sbol_db_core::DomainError::Serialization(
+                error.to_string(),
+            )))
+        })?,
+    );
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-cache"));
+    Ok(())
+}
+
+fn request_precondition(headers: &HeaderMap) -> Result<(Option<String>, bool), V2Error> {
+    let if_match = headers.get(IF_MATCH).and_then(|value| value.to_str().ok());
+    let if_none_match = headers
+        .get(IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok());
+    match (if_match, if_none_match) {
+        (Some(_), Some(_)) => Err(ApiError::BadRequest(
+            "send either If-Match or If-None-Match, not both".to_owned(),
+        )
+        .into()),
+        (Some(value), None) => {
+            let value = value.trim();
+            if value == "*"
+                || value.starts_with("W/")
+                || value.contains(',')
+                || !value.starts_with('"')
+                || !value.ends_with('"')
+            {
+                return Err(ApiError::BadRequest(
+                    "If-Match must contain one exact strong collection content ETag".to_owned(),
+                )
+                .into());
+            }
+            Ok((Some(value.to_owned()), false))
+        }
+        (None, Some(value)) if value.trim() == "*" => Ok((None, true)),
+        (None, Some(_)) => Err(ApiError::BadRequest(
+            "collection creation requires If-None-Match: *".to_owned(),
+        )
+        .into()),
+        (None, None) => Err(ApiError::PreconditionRequired(
+            "send If-None-Match: * to create or the current ETag in If-Match to update".to_owned(),
+        )
+        .into()),
+    }
+}
+
+fn request_content_format(headers: &HeaderMap) -> Result<SerializationFormat, V2Error> {
+    let media = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    format_for_media_type(&media).ok_or_else(|| {
+        ApiError::BadRequest(
+            "Content-Type must be text/turtle, application/rdf+xml, application/ld+json, or application/n-triples"
+                .to_owned(),
+        )
+        .into()
+    })
+}
+
+fn response_content_format(headers: &HeaderMap) -> Result<SerializationFormat, V2Error> {
+    let accept = headers
+        .get(ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .trim();
+    if accept.is_empty() {
+        return Ok(SerializationFormat::Turtle);
+    }
+    let mut ranges = accept
+        .split(',')
+        .enumerate()
+        .filter_map(|(index, raw)| {
+            let mut parts = raw.split(';');
+            let media = parts.next()?.trim().to_ascii_lowercase();
+            let quality = parts
+                .find_map(|part| {
+                    part.trim()
+                        .strip_prefix("q=")
+                        .and_then(|value| value.parse::<f32>().ok())
+                })
+                .unwrap_or(1.0);
+            Some((index, media, quality))
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_by(|left, right| {
+        right
+            .2
+            .total_cmp(&left.2)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    for (_, media, quality) in ranges {
+        if quality <= 0.0 {
+            continue;
+        }
+        if matches!(media.as_str(), "*/*" | "application/*") {
+            return Ok(SerializationFormat::Turtle);
+        }
+        if let Some(format) = format_for_media_type(&media) {
+            return Ok(format);
+        }
+    }
+    Err(
+        ApiError::Sparql(sbol_db_sparql::SparqlError::UnsupportedFormat(
+            accept.to_owned(),
+        ))
+        .into(),
+    )
+}
+
+fn format_for_media_type(media: &str) -> Option<SerializationFormat> {
+    match media {
+        "text/turtle" | "application/x-turtle" => Some(SerializationFormat::Turtle),
+        "application/rdf+xml" => Some(SerializationFormat::RdfXml),
+        "application/ld+json" => Some(SerializationFormat::JsonLd),
+        "application/n-triples" => Some(SerializationFormat::NTriples),
+        _ => None,
+    }
+}
+
+fn media_type(format: SerializationFormat) -> &'static str {
+    match format {
+        SerializationFormat::Turtle => "text/turtle",
+        SerializationFormat::RdfXml => "application/rdf+xml",
+        SerializationFormat::JsonLd => "application/ld+json",
+        SerializationFormat::NTriples => "application/n-triples",
+        _ => "application/octet-stream",
+    }
 }
 
 async fn parse_create_form(request: Request, state: &AppState) -> Result<CreateForm, V2Error> {

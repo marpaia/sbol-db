@@ -7,6 +7,7 @@
 
 mod accel;
 mod capabilities;
+mod collection_sync;
 mod graph;
 mod import;
 mod job;
@@ -29,6 +30,10 @@ pub use accel::{
     SO_PREFIX,
 };
 pub use capabilities::{BackendKind, Capabilities, MaintenanceStyle};
+pub use collection_sync::{
+    biological_content, collection_content_etag, replacement_graph,
+    replacement_graph_with_management, server_managed_content, ConditionalContentWrite,
+};
 pub use graph::ListGraphsFilter;
 pub use import::{GraphWriteMode, ImportInput, ImportOverwrite};
 pub use job::{
@@ -52,9 +57,9 @@ pub use stats::{
 };
 pub use traits::{
     distinct_graph_iris, distinct_object_iris, AclStore, BlobStore, ClusterStore, ConfigStore,
-    GraphStore, JobQueue, NeighborhoodStore, ObjectStore, OntologyStore, PageRankStore, SbolStore,
-    SequenceSearchStore, SketchStore, TextSearchStore, TokenStore, TripleSource, TripleWriter,
-    UserStore, SBH_CAN_VIEW, SBH_OWNED_BY,
+    GraphStore, JobQueue, NeighborhoodStore, OAuthStore, ObjectStore, OntologyStore, PageRankStore,
+    PreparedMutationStore, SbolStore, SequenceSearchStore, SketchStore, TextSearchStore,
+    TokenStore, TripleSource, TripleWriter, UserStore, SBH_CAN_VIEW, SBH_OWNED_BY,
 };
 
 /// Re-exported so backends and consumers name the cluster id and similarity

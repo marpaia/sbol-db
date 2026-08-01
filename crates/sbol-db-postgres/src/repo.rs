@@ -5,10 +5,12 @@ pub mod graph;
 pub mod job;
 pub mod lab;
 pub mod neighborhood;
+pub mod oauth;
 pub mod object;
 pub mod ontology;
 pub mod pagerank;
 pub mod pg_stats;
+pub mod prepared_mutation;
 pub mod projection;
 pub mod projections;
 pub mod sequence_search;
@@ -26,6 +28,7 @@ pub use graph::GraphRepository;
 pub use job::JobRepository;
 pub use lab::LabRepository;
 pub use neighborhood::NeighborhoodRepository;
+pub use oauth::PgOAuthStore;
 pub use object::SbolObjectRepository;
 pub use ontology::OntologyRepository;
 pub use pagerank::PgPageRankStore;
@@ -33,6 +36,7 @@ pub use pg_stats::{
     Activity, BlockingLock, DatabaseSize, IncomingForeignKey, IndexStats, OutgoingForeignKey,
     PgStatsRepository, SlowQuery, TableColumn, TableSchema, TableStats,
 };
+pub use prepared_mutation::PgPreparedMutationStore;
 pub use projection::{ProjectionEvent, ProjectionEventRepository};
 pub use projections::{TypedProjectionCounts, TypedProjectionRepository};
 pub use sequence_search::SequenceSearchRepository;

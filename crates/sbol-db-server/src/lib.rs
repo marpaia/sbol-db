@@ -5,9 +5,12 @@ mod docs;
 mod error;
 mod explorer;
 mod export;
+mod identity;
+mod identity_signing;
 mod instance;
 #[cfg(feature = "lab")]
 mod lab;
+mod mcp;
 pub mod metrics;
 #[cfg(feature = "lab")]
 mod portal;
@@ -19,6 +22,7 @@ mod v2;
 
 pub use error::ApiError;
 pub use export::export_subject_rdf;
+pub use identity_signing::IdentitySigningKey;
 #[cfg(feature = "lab")]
 pub use lab::SchemaCache;
 pub use metrics::Metrics;
@@ -93,6 +97,26 @@ pub struct AppState {
 pub struct ServerConfig {
     pub request_timeout: Duration,
     pub max_body_bytes: usize,
+    /// Canonical origin used to advertise absolute machine-access endpoints.
+    ///
+    /// Production deployments should set `SBOL_DB_PUBLIC_ORIGIN` to the
+    /// externally reachable HTTPS origin. The `sbol-db server` binary fills in
+    /// a loopback HTTP origin from its bound listener for local development
+    /// when this is absent. Library consumers that construct a router directly
+    /// may leave it unset; `/api/v2/instance` will then omit `machine_access`.
+    pub public_origin: Option<String>,
+    /// Mount the authenticated Streamable HTTP MCP endpoint at `/mcp` and
+    /// advertise it from `/api/v2/instance`. The transport remains stateless;
+    /// every request requires a scoped SBOL Identity OAuth token issued for
+    /// this exact MCP resource.
+    pub mcp_enabled: bool,
+    /// Ed25519 key used to sign SBOL Identity OpenID Connect ID tokens.
+    ///
+    /// [`Default`] generates a process-local key for tests and loopback
+    /// development. Production deployments must set
+    /// `SBOL_DB_IDENTITY_SIGNING_KEY` to a stable base64-encoded Ed25519
+    /// PKCS#8 document shared by every replica.
+    pub identity_signing_key: IdentitySigningKey,
     /// When true (and the `lab` cargo feature is enabled), embedded application
     /// assets, the transitional `/lab` entry, and `/lab/api` are available.
     /// The root application additionally requires `portal_enabled`. This toggle is
@@ -145,6 +169,9 @@ impl Default for ServerConfig {
             // returns its 504-equivalent before the outer timer fires.
             request_timeout: Duration::from_secs(60),
             max_body_bytes: 32 * 1024 * 1024,
+            public_origin: None,
+            mcp_enabled: true,
+            identity_signing_key: IdentitySigningKey::default(),
             lab_enabled: true,
             portal_enabled: true,
             session_cookie_secure: false,
@@ -173,6 +200,23 @@ impl ServerConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(defaults.max_body_bytes),
+            public_origin: std::env::var("SBOL_DB_PUBLIC_ORIGIN")
+                .ok()
+                .map(|value| value.trim().trim_end_matches('/').to_owned())
+                .filter(|value| !value.is_empty())
+                .or(defaults.public_origin),
+            mcp_enabled: std::env::var("SBOL_DB_MCP_ENABLED")
+                .ok()
+                .map(|value| parse_bool(&value))
+                .unwrap_or(defaults.mcp_enabled),
+            identity_signing_key: std::env::var("SBOL_DB_IDENTITY_SIGNING_KEY")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| {
+                    IdentitySigningKey::from_pkcs8_base64(&value)
+                        .unwrap_or_else(|message| panic!("{message}"))
+                })
+                .unwrap_or(defaults.identity_signing_key),
             lab_enabled: std::env::var("SBOL_DB_LAB_ENABLED")
                 .ok()
                 .map(|v| parse_bool(&v))
@@ -211,6 +255,45 @@ impl ServerConfig {
                 .map(|v| parse_bool(&v))
                 .unwrap_or(defaults.allow_public_signup),
         }
+    }
+
+    /// Validate and normalize the configured public origin, falling back to a
+    /// trusted listener-derived origin when no deployment override is set.
+    ///
+    /// The result is always an HTTP(S) origin with no credentials, path,
+    /// query, or fragment. Keeping this separate from request headers avoids
+    /// turning an untrusted `Host` value into advertised OAuth or MCP URLs.
+    pub fn resolve_public_origin(&mut self, fallback: &str) -> Result<(), String> {
+        let candidate = self.public_origin.as_deref().unwrap_or(fallback);
+        let url = url::Url::parse(candidate)
+            .map_err(|error| format!("invalid SBOL DB public origin `{candidate}`: {error}"))?;
+        let secure_transport = match url.scheme() {
+            "https" => url.host().is_some(),
+            "http" => match url.host() {
+                Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+                Some(url::Host::Ipv4(address)) => address.is_loopback(),
+                Some(url::Host::Ipv6(address)) => address.is_loopback(),
+                None => false,
+            },
+            _ => false,
+        };
+        if !secure_transport {
+            return Err(format!(
+                "SBOL DB public origin must use HTTPS, or HTTP on a loopback host: `{candidate}`"
+            ));
+        }
+        if !url.username().is_empty()
+            || url.password().is_some()
+            || !matches!(url.path(), "" | "/")
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(format!(
+                "SBOL DB public origin must not include credentials, a path, query, or fragment: `{candidate}`"
+            ));
+        }
+        self.public_origin = Some(url.origin().ascii_serialization());
+        Ok(())
     }
 }
 
@@ -369,11 +452,37 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
     // behind the `X-authorization` middleware. It is independent of the
     // Basic-auth `/sparql-auth*` write path above.
     let synbiohub_routes = synbiohub::router(state.clone());
+    if !config.identity_signing_key.is_persistent()
+        && config.public_origin.as_deref().is_some_and(|origin| {
+            url::Url::parse(origin)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_owned))
+                .is_some_and(|host| !matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"))
+        })
+    {
+        tracing::warn!(
+            "SBOL Identity is using an ephemeral signing key; set SBOL_DB_IDENTITY_SIGNING_KEY before production deployment"
+        );
+    }
+    let identity_routes = identity::router(state.clone());
+    let mcp_routes = if config.mcp_enabled {
+        mcp::router()
+    } else {
+        tracing::info!("MCP endpoint disabled via SBOL_DB_MCP_ENABLED");
+        Router::new()
+    };
 
     let app = mount_portal(
-        mount_lab(api.merge(authed).merge(synbiohub_routes), &config, &state)
-            .fallback(not_found_handler)
-            .with_state(state),
+        mount_lab(
+            api.merge(authed)
+                .merge(synbiohub_routes)
+                .merge(identity_routes)
+                .merge(mcp_routes),
+            &config,
+            &state,
+        )
+        .fallback(not_found_handler)
+        .with_state(state),
         &config,
     );
 
@@ -519,4 +628,69 @@ fn mount_portal(router: Router, config: &ServerConfig) -> Router {
 #[cfg(not(feature = "lab"))]
 fn mount_portal(router: Router, _config: &ServerConfig) -> Router {
     router
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::ServerConfig;
+
+    #[test]
+    fn public_origin_uses_and_normalizes_the_listener_fallback() {
+        let mut config = ServerConfig::default();
+        config
+            .resolve_public_origin("http://127.0.0.1:43127/")
+            .expect("valid local origin");
+        assert_eq!(
+            config.public_origin.as_deref(),
+            Some("http://127.0.0.1:43127")
+        );
+    }
+
+    #[test]
+    fn configured_public_origin_wins_and_must_be_an_origin() {
+        let mut config = ServerConfig {
+            public_origin: Some("https://sbol.io/".to_owned()),
+            ..ServerConfig::default()
+        };
+        config
+            .resolve_public_origin("http://127.0.0.1:8888")
+            .expect("valid production origin");
+        assert_eq!(config.public_origin.as_deref(), Some("https://sbol.io"));
+
+        config.public_origin = Some("https://sbol.io/registry".to_owned());
+        assert!(config
+            .resolve_public_origin("http://127.0.0.1:8888")
+            .is_err());
+    }
+
+    #[test]
+    fn public_origin_rejects_cleartext_non_loopback_hosts() {
+        for origin in [
+            "http://example.org",
+            "http://localhost.example.org:8888",
+            "http://192.168.1.20:8888",
+        ] {
+            let mut config = ServerConfig {
+                public_origin: Some(origin.to_owned()),
+                ..ServerConfig::default()
+            };
+            assert!(config
+                .resolve_public_origin("http://127.0.0.1:8888")
+                .is_err());
+        }
+
+        for origin in [
+            "http://localhost:8888",
+            "http://127.8.9.10:8888",
+            "http://[::1]:8888",
+        ] {
+            let mut config = ServerConfig {
+                public_origin: Some(origin.to_owned()),
+                ..ServerConfig::default()
+            };
+            config
+                .resolve_public_origin("http://127.0.0.1:8888")
+                .unwrap_or_else(|error| panic!("{origin}: {error}"));
+        }
+    }
 }

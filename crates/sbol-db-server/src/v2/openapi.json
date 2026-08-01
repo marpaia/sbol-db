@@ -85,7 +85,17 @@
               "data_lab": { "type": "boolean" },
               "sql_console": { "type": "boolean" }
             }
-          }
+          },
+          "machine_access": { "$ref": "#/components/schemas/MachineAccess" }
+        }
+      },
+      "MachineAccess": {
+        "type": "object",
+        "required": ["api_url"],
+        "properties": {
+          "api_url": { "type": "string", "format": "uri", "description": "Absolute base URL of the registry's V2 machine API." },
+          "mcp_url": { "type": "string", "format": "uri", "description": "Authenticated MCP endpoint, present only when the service is mounted." },
+          "authorization_issuer": { "type": "string", "format": "uri", "description": "OAuth/OIDC issuer for Sign in with SBOL, present only when supported." }
         }
       },
       "LoginRequest": {
@@ -708,6 +718,26 @@
           "persistent_identity": { "type": "string" },
           "members": { "type": "array", "items": { "type": "string" } },
           "graph": { "type": ["string", "null"] },
+          "triple_count": { "type": "integer" }
+        }
+      },
+      "CollectionSyncDescriptor": {
+        "type": "object",
+        "required": ["iri", "content_url", "content_etag", "triple_count", "display_id"],
+        "properties": {
+          "iri": { "type": "string", "format": "uri" },
+          "content_url": { "type": "string", "description": "Relative V2 URL for the biological collection document." },
+          "content_etag": { "type": "string", "description": "Strong representation-independent ETag over biological content only." },
+          "triple_count": { "type": "integer" },
+          "display_id": { "type": ["string", "null"] }
+        }
+      },
+      "CollectionSyncWrite": {
+        "type": "object",
+        "required": ["collection_uri", "content_etag", "triple_count"],
+        "properties": {
+          "collection_uri": { "type": "string", "format": "uri" },
+          "content_etag": { "type": "string", "description": "New biological-content ETag after the atomic write." },
           "triple_count": { "type": "integer" }
         }
       },
@@ -1444,6 +1474,27 @@
       }
     },
     "/collections/{iri}": {
+      "get": {
+        "tags": ["Collections"],
+        "summary": "Inspect collection synchronization state",
+        "description": "Returns an ACL-scoped descriptor and strong ETag over biological content. Sharing, review, audit, and other server-managed metadata do not change this ETag.",
+        "operationId": "v2GetCollectionSyncDescriptor",
+        "parameters": [{ "$ref": "#/components/parameters/iri" }],
+        "responses": {
+          "200": {
+            "description": "Visible collection synchronization state.",
+            "headers": {
+              "ETag": { "description": "The biological-content ETag, identical to `content_etag`.", "schema": { "type": "string" } },
+              "Cache-Control": { "description": "Private revalidation policy.", "schema": { "type": "string" } }
+            },
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/CollectionSyncDescriptor" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      },
       "delete": {
         "tags": ["Collections"],
         "summary": "Remove a collection submission",
@@ -1454,6 +1505,71 @@
           "204": { "description": "The collection submission was removed." },
           "403": { "$ref": "#/components/responses/Error" },
           "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/collections/{iri}/content": {
+      "get": {
+        "tags": ["Collections"],
+        "summary": "Download synchronized biological content",
+        "description": "Returns the complete ACL-scoped collection document without server-managed ownership, sharing, review, audit, or timestamp facts. Content negotiation supports the four lossless RDF serializations.",
+        "operationId": "v2GetCollectionSyncContent",
+        "parameters": [{ "$ref": "#/components/parameters/iri" }],
+        "responses": {
+          "200": {
+            "description": "The biological collection document.",
+            "headers": {
+              "ETag": { "description": "Strong representation-independent biological-content ETag.", "schema": { "type": "string" } },
+              "Cache-Control": { "description": "Private revalidation policy.", "schema": { "type": "string" } }
+            },
+            "content": {
+              "text/turtle": { "schema": { "type": "string" } },
+              "application/rdf+xml": { "schema": { "type": "string" } },
+              "application/ld+json": { "schema": { "type": "string" } },
+              "application/n-triples": { "schema": { "type": "string" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "406": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "put": {
+        "tags": ["Collections"],
+        "summary": "Atomically replace synchronized biological content",
+        "description": "Strict create-or-compare-and-swap write. Send `If-None-Match: *` to create or the exact current strong ETag in `If-Match` to update. Unconditional replacement, implicit deletion, and RDF merge are not supported; server-managed metadata is preserved.",
+        "operationId": "v2PutCollectionSyncContent",
+        "parameters": [
+          { "$ref": "#/components/parameters/iri" },
+          { "name": "If-Match", "in": "header", "required": false, "schema": { "type": "string" }, "description": "Exact strong ETag required for an update." },
+          { "name": "If-None-Match", "in": "header", "required": false, "schema": { "type": "string", "const": "*" }, "description": "Use `*` for create-only semantics." }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/turtle": { "schema": { "type": "string" } },
+            "application/rdf+xml": { "schema": { "type": "string" } },
+            "application/ld+json": { "schema": { "type": "string" } },
+            "application/n-triples": { "schema": { "type": "string" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Existing collection content replaced atomically.",
+            "headers": { "ETag": { "description": "New biological-content ETag.", "schema": { "type": "string" } } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CollectionSyncWrite" } } }
+          },
+          "201": {
+            "description": "Collection content created atomically.",
+            "headers": { "ETag": { "description": "New biological-content ETag.", "schema": { "type": "string" } } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CollectionSyncWrite" } } }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "412": { "$ref": "#/components/responses/Error" },
+          "415": { "$ref": "#/components/responses/Error" },
+          "428": { "$ref": "#/components/responses/Error" }
         }
       }
     },

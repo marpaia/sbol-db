@@ -61,18 +61,36 @@ pub struct ProfileUpdate {
 pub struct AuthService {
     users: Arc<dyn UserStore>,
     tokens: Arc<dyn TokenStore>,
+    database_prefix: String,
 }
 
 impl AuthService {
     /// Build the service over the identity stores.
     pub fn new(users: Arc<dyn UserStore>, tokens: Arc<dyn TokenStore>) -> Self {
-        Self { users, tokens }
+        Self {
+            users,
+            tokens,
+            database_prefix: crate::DEFAULT_DATABASE_PREFIX.to_owned(),
+        }
+    }
+
+    /// Mint graph identities under a deployment-specific database prefix.
+    /// Existing accounts retain their stored graph identities; this controls
+    /// only accounts created after the service is configured.
+    pub fn with_database_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.database_prefix = normalize_database_prefix(prefix.into());
+        self
     }
 
     /// The named graph an account owns, the identity-to-RDF bridge ACL scoping
     /// keys on. Matches SynBioHub's `databasePrefix + user/<username>`.
     pub fn graph_uri(username: &str) -> String {
         format!("http://synbiohub.org/user/{username}")
+    }
+
+    /// The configured graph identity for a newly-created account.
+    pub fn configured_graph_uri(&self, username: &str) -> String {
+        format!("{}user/{username}", self.database_prefix)
     }
 
     /// Whether the instance has any administrator. A fresh instance has none and
@@ -100,7 +118,7 @@ impl AuthService {
             }
         }
         let password_hash = hash_password(&registration.password)?;
-        let graph_uri = Self::graph_uri(&registration.username);
+        let graph_uri = self.configured_graph_uri(&registration.username);
         let new_user = NewUser {
             username: registration.username,
             name: registration.name,
@@ -258,6 +276,10 @@ impl AuthService {
     }
 }
 
+fn normalize_database_prefix(prefix: String) -> String {
+    format!("{}/", prefix.trim().trim_end_matches('/'))
+}
+
 /// Whether a stored hash is an argon2 PHC string (as opposed to a legacy
 /// SynBioHub digest).
 fn is_argon2(stored_hash: &str) -> bool {
@@ -384,6 +406,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(by_email.id, user.id);
+    }
+
+    #[tokio::test]
+    async fn configured_database_prefix_controls_only_new_graph_identities() {
+        let (auth, _) = service();
+        let auth = auth.with_database_prefix("http://127.0.0.1:54321/registry/");
+        let user = auth.register(registration("s3cret")).await.unwrap();
+        assert_eq!(user.graph_uri, "http://127.0.0.1:54321/registry/user/alice");
+        assert_eq!(
+            AuthService::graph_uri("legacy"),
+            "http://synbiohub.org/user/legacy"
+        );
     }
 
     #[tokio::test]
