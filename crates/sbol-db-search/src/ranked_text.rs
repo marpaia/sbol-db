@@ -548,23 +548,16 @@ mod tests {
             part("http://example.org/a", "promoter", "same text", 1.0),
             part("http://example.org/b", "promoter", "same text", 1.0),
         ]);
-        let mut clusters = ClusterMap::new();
-        // The first-ranked subject declares the second its duplicate, halving it.
-        let unpenalized = search(&index, "promoter");
-        let leader = unpenalized[0].subject.clone();
-        let follower = unpenalized[1].subject.clone();
-        clusters.insert(leader, vec![follower.clone()]);
+        let clusters = cluster_map(vec![
+            ("http://example.org/a".to_owned(), crate::cluster::ClusterId(0)),
+            ("http://example.org/b".to_owned(), crate::cluster::ClusterId(0)),
+        ]);
 
         let hits = index
             .search("promoter", 0, 100, &GraphFilter::Any, &clusters)
             .expect("search");
-        let follower_hit = hits.iter().find(|h| h.subject == follower).unwrap();
-        let follower_base = unpenalized
-            .iter()
-            .find(|h| h.subject == follower)
-            .unwrap()
-            .score;
-        assert!((follower_base / follower_hit.score - 2.0).abs() < 1e-6);
+        assert_eq!(hits.len(), 2);
+        assert!((hits[0].score / hits[1].score - 2.0).abs() < 1e-6);
     }
 
     #[test]
