@@ -71,10 +71,11 @@ impl JobHandler for CompleteBackupHandler {
         )
         .await;
         let started = std::time::Instant::now();
-        let created = backups
+        let completed = backups
             .create(ctx.job_id.as_uuid(), payload.requested_at)
             .await
             .map_err(|error| HandlerError::Other(format!("complete backup failed: {error:#}")))?;
+        let created = &completed.local;
         let elapsed = started.elapsed().as_secs_f64();
         metrics::counter!(
             "sbol_db_backups_completed_total",
@@ -101,11 +102,12 @@ impl JobHandler for CompleteBackupHandler {
                 "files": created.files,
                 "referenced_blobs": created.referenced_blobs,
                 "reused": created.reused,
+                "remote": &completed.remote,
                 "elapsed_secs": elapsed,
             }),
         )
         .await;
-        let mut result = serde_json::to_value(&created)?;
+        let mut result = serde_json::to_value(&completed)?;
         if let Some(object) = result.as_object_mut() {
             object.insert("trigger".to_owned(), serde_json::to_value(payload.trigger)?);
             object.insert(

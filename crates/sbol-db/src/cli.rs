@@ -161,6 +161,12 @@ pub struct ServerArgs {
     /// outside this server. Required by the production profile.
     #[arg(long, env = "SBOL_DB_BACKUP_RECOVERY_RECIPIENT")]
     pub backup_recovery_recipient: Option<String>,
+
+    /// External repository as `s3://bucket/instance-prefix` or
+    /// `gs://bucket/instance-prefix`. Credentials come from the provider's
+    /// standard environment or workload identity. Required in production.
+    #[arg(long, env = "SBOL_DB_BACKUP_REPOSITORY_URL")]
+    pub backup_repository_url: Option<String>,
 }
 
 impl BackendKind {

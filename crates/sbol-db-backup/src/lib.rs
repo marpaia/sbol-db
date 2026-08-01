@@ -22,14 +22,22 @@ use std::sync::Arc;
 use age::secrecy::ExposeSecret;
 use age::x25519;
 use anyhow::{bail, Context, Result};
+use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use flate2::read::GzDecoder;
+use futures::StreamExt;
+use object_store::aws::AmazonS3Builder;
+use object_store::gcp::GoogleCloudStorageBuilder;
+use object_store::path::Path as ObjectPath;
+use object_store::{Error as ObjectStoreError, ObjectStore, ObjectStoreExt, WriteMultipart};
 use sbol_db_core::ObjectTerm;
 use sbol_db_rocksdb::{Db, RocksdbStore};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use url::Url;
 use uuid::Uuid;
 
 pub const BACKUP_FORMAT: &str = "sbol-db-complete-backup";
@@ -274,6 +282,272 @@ pub struct CreatedBackup {
     pub reused: bool,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct PublishedBackup {
+    pub provider: String,
+    pub bucket: String,
+    pub object_key: String,
+    pub artifact_sha256: String,
+    pub artifact_bytes: u64,
+    pub e_tag: Option<String>,
+    pub version: Option<String>,
+    pub verified_at: DateTime<Utc>,
+    pub reused: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CompletedBackup {
+    #[serde(flatten)]
+    pub local: CreatedBackup,
+    pub remote: Option<PublishedBackup>,
+}
+
+#[async_trait]
+pub trait BackupRepository: Send + Sync + 'static {
+    async fn publish_verified(
+        &self,
+        local: &CreatedBackup,
+        verification_identity: &x25519::Identity,
+        staging_parent: &Path,
+    ) -> Result<PublishedBackup>;
+}
+
+/// S3/GCS repository backed by Apache Arrow's provider-neutral object-store
+/// client. Credentials come only from the providers' standard environment or
+/// workload identity; the repository URL contains only bucket and prefix.
+pub struct ObjectStoreBackupRepository {
+    store: Arc<dyn ObjectStore>,
+    provider: String,
+    bucket: String,
+    prefix: ObjectPath,
+}
+
+impl ObjectStoreBackupRepository {
+    pub fn from_url(repository_url: &str) -> Result<Self> {
+        let url = Url::parse(repository_url).context("parse backup repository URL")?;
+        if !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || url.port().is_some()
+        {
+            bail!("backup repository URL may contain only scheme, bucket, and object prefix");
+        }
+        let bucket = url
+            .host_str()
+            .filter(|bucket| !bucket.is_empty())
+            .context("backup repository URL is missing its bucket")?
+            .to_owned();
+        let raw_prefix = url.path().trim_matches('/');
+        if raw_prefix.is_empty() {
+            bail!("backup repository URL must include a non-empty instance prefix");
+        }
+        let prefix = ObjectPath::from_url_path(raw_prefix)
+            .context("backup repository URL has an invalid object prefix")?;
+        if prefix.is_root() {
+            bail!("backup repository URL must include a non-empty instance prefix");
+        }
+        let (provider, store): (&str, Arc<dyn ObjectStore>) = match url.scheme() {
+            "s3" => {
+                if environment_flag("AWS_ALLOW_HTTP") {
+                    bail!("AWS_ALLOW_HTTP cannot be enabled for backup repositories");
+                }
+                let store = AmazonS3Builder::from_env()
+                    .with_bucket_name(&bucket)
+                    .build()
+                    .context("configure S3 backup repository")?;
+                ("s3", Arc::new(store))
+            }
+            "gs" => {
+                let store = GoogleCloudStorageBuilder::from_env()
+                    .with_bucket_name(&bucket)
+                    .build()
+                    .context("configure GCS backup repository")?;
+                ("gcs", Arc::new(store))
+            }
+            scheme => {
+                bail!("unsupported backup repository scheme `{scheme}`; expected s3:// or gs://")
+            }
+        };
+        Ok(Self::new(store, provider, bucket, prefix))
+    }
+
+    pub fn new(
+        store: Arc<dyn ObjectStore>,
+        provider: impl Into<String>,
+        bucket: impl Into<String>,
+        prefix: ObjectPath,
+    ) -> Self {
+        Self {
+            store,
+            provider: provider.into(),
+            bucket: bucket.into(),
+            prefix,
+        }
+    }
+
+    fn object_key(&self, backup: &CreatedBackup) -> Result<ObjectPath> {
+        let file_name = backup
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("local backup artifact has no UTF-8 filename")?;
+        Ok(self
+            .prefix
+            .clone()
+            .join(backup.created_at.format("%Y").to_string())
+            .join(backup.created_at.format("%m").to_string())
+            .join(backup.created_at.format("%d").to_string())
+            .join(file_name))
+    }
+
+    async fn verify_remote(
+        &self,
+        object_key: &ObjectPath,
+        local: &CreatedBackup,
+        verification_identity: &x25519::Identity,
+        staging_parent: &Path,
+        reused: bool,
+    ) -> Result<PublishedBackup> {
+        let result = self
+            .store
+            .get(object_key)
+            .await
+            .with_context(|| format!("read back remote backup `{object_key}`"))?;
+        if result.meta.size != local.artifact_bytes {
+            bail!(
+                "remote backup size mismatch for `{object_key}`: local={}, remote={}",
+                local.artifact_bytes,
+                result.meta.size
+            );
+        }
+        let e_tag = result.meta.e_tag.clone();
+        let version = result.meta.version.clone();
+        let temporary = tempfile::Builder::new()
+            .prefix(".remote-backup-readback-")
+            .suffix(".partial")
+            .tempfile_in(staging_parent)
+            .context("create remote backup readback file")?;
+        let mut output = tokio::fs::File::from_std(
+            temporary
+                .reopen()
+                .context("reopen remote backup readback file")?,
+        );
+        let mut stream = result.into_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.with_context(|| format!("stream remote backup `{object_key}`"))?;
+            output
+                .write_all(&chunk)
+                .await
+                .context("write remote backup readback")?;
+        }
+        output
+            .sync_all()
+            .await
+            .context("sync remote backup readback")?;
+        drop(output);
+        let verified =
+            verify_encrypted_backup(temporary.path(), verification_identity, staging_parent)
+                .context("semantic verification of remote backup readback")?;
+        if verified.manifest.backup_id != local.backup_id
+            || verified.artifact_sha256 != local.artifact_sha256
+            || verified.artifact_bytes != local.artifact_bytes
+        {
+            bail!("remote backup readback does not match the local verified artifact");
+        }
+        Ok(PublishedBackup {
+            provider: self.provider.clone(),
+            bucket: self.bucket.clone(),
+            object_key: object_key.to_string(),
+            artifact_sha256: verified.artifact_sha256,
+            artifact_bytes: verified.artifact_bytes,
+            e_tag,
+            version,
+            verified_at: Utc::now(),
+            reused,
+        })
+    }
+
+    async fn upload(&self, object_key: &ObjectPath, local: &CreatedBackup) -> Result<()> {
+        let mut input = tokio::fs::File::open(&local.path)
+            .await
+            .with_context(|| format!("open local backup {}", local.path.display()))?;
+        let multipart = self
+            .store
+            .put_multipart(object_key)
+            .await
+            .with_context(|| format!("start remote backup upload `{object_key}`"))?;
+        let mut upload = WriteMultipart::new(multipart);
+        let mut buffer = vec![0_u8; 1024 * 1024];
+        loop {
+            let read = match input.read(&mut buffer).await {
+                Ok(read) => read,
+                Err(error) => {
+                    let _ = upload.abort().await;
+                    return Err(error).context("read local backup for remote upload");
+                }
+            };
+            if read == 0 {
+                break;
+            }
+            if let Err(error) = upload.wait_for_capacity(4).await {
+                let _ = upload.abort().await;
+                return Err(error).context("wait for remote backup upload capacity");
+            }
+            upload.write(&buffer[..read]);
+        }
+        upload
+            .finish()
+            .await
+            .with_context(|| format!("complete remote backup upload `{object_key}`"))?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl BackupRepository for ObjectStoreBackupRepository {
+    async fn publish_verified(
+        &self,
+        local: &CreatedBackup,
+        verification_identity: &x25519::Identity,
+        staging_parent: &Path,
+    ) -> Result<PublishedBackup> {
+        let object_key = self.object_key(local)?;
+        match self.store.head(&object_key).await {
+            Ok(_) => {
+                return self
+                    .verify_remote(
+                        &object_key,
+                        local,
+                        verification_identity,
+                        staging_parent,
+                        true,
+                    )
+                    .await;
+            }
+            Err(ObjectStoreError::NotFound { .. }) => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("inspect remote backup `{object_key}`"));
+            }
+        }
+        self.upload(&object_key, local).await?;
+        self.verify_remote(
+            &object_key,
+            local,
+            verification_identity,
+            staging_parent,
+            false,
+        )
+        .await
+    }
+}
+
+fn environment_flag(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+}
+
 #[derive(Clone)]
 pub struct CompleteBackupConfig {
     pub db: Db,
@@ -294,6 +568,7 @@ pub struct CompleteBackupService {
     config: Arc<CompleteBackupConfig>,
     encryption: Arc<BackupEncryption>,
     operation: Arc<tokio::sync::Mutex<()>>,
+    repository: Option<Arc<dyn BackupRepository>>,
 }
 
 impl CompleteBackupService {
@@ -302,18 +577,24 @@ impl CompleteBackupService {
             config: Arc::new(config),
             encryption: Arc::new(encryption),
             operation: Arc::new(tokio::sync::Mutex::new(())),
+            repository: None,
         }
+    }
+
+    pub fn with_repository(mut self, repository: Arc<dyn BackupRepository>) -> Self {
+        self.repository = Some(repository);
+        self
     }
 
     pub async fn create(
         &self,
         backup_id: Uuid,
         requested_at: DateTime<Utc>,
-    ) -> Result<CreatedBackup> {
+    ) -> Result<CompletedBackup> {
         let _operation = self.operation.lock().await;
         let config = self.config.clone();
         let encryption = self.encryption.clone();
-        tokio::task::spawn_blocking(move || {
+        let local = tokio::task::spawn_blocking(move || {
             create_complete_backup_with_id(
                 CompleteBackupSource {
                     db: &config.db,
@@ -331,7 +612,20 @@ impl CompleteBackupService {
             )
         })
         .await
-        .context("complete backup blocking task panicked")?
+        .context("complete backup blocking task panicked")??;
+        let remote = match &self.repository {
+            Some(repository) => Some(
+                repository
+                    .publish_verified(
+                        &local,
+                        self.encryption.verification_identity(),
+                        &self.config.backups_root,
+                    )
+                    .await?,
+            ),
+            None => None,
+        };
+        Ok(CompletedBackup { local, remote })
     }
 }
 
@@ -1338,6 +1632,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn uploads_and_semantically_verifies_object_store_readback() {
+        use object_store::memory::InMemory;
+
+        let (root, db, _hash) = fixture(true).await;
+        let recovery = x25519::Identity::generate();
+        let verification = x25519::Identity::generate();
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let repository = Arc::new(ObjectStoreBackupRepository::new(
+            store.clone(),
+            "memory",
+            "test-bucket",
+            ObjectPath::parse("registry/production").unwrap(),
+        ));
+        let service = CompleteBackupService::new(
+            CompleteBackupConfig {
+                db,
+                blobs_root: root.path().join("blobs"),
+                search_root: root.path().join("search"),
+                acme_root: root.path().join("acme"),
+                backups_root: root.path().join("backups"),
+                generation: Uuid::new_v4(),
+                layout_version: "1".to_owned(),
+                application_version: "test".to_owned(),
+            },
+            BackupEncryption::new(recovery.to_public(), verification),
+        )
+        .with_repository(repository);
+        let backup_id = Uuid::new_v4();
+        let requested_at = Utc::now();
+
+        let first = service.create(backup_id, requested_at).await.unwrap();
+        let first_remote = first.remote.as_ref().expect("remote result");
+        assert!(!first_remote.reused);
+        assert_eq!(first_remote.artifact_sha256, first.local.artifact_sha256);
+        assert_eq!(
+            store
+                .head(&ObjectPath::parse(&first_remote.object_key).unwrap())
+                .await
+                .unwrap()
+                .size,
+            first.local.artifact_bytes
+        );
+
+        let retried = service.create(backup_id, requested_at).await.unwrap();
+        assert!(retried.local.reused);
+        assert!(retried.remote.unwrap().reused);
+    }
+
+    #[tokio::test]
     async fn refuses_to_publish_when_a_referenced_blob_is_missing() {
         let (root, db, _hash) = fixture(false).await;
         let (encryption, _recovery) = encryption();
@@ -1399,5 +1742,13 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[test]
+    fn repository_urls_require_a_supported_scheme_bucket_and_prefix() {
+        assert!(ObjectStoreBackupRepository::from_url("https://bucket/prefix").is_err());
+        assert!(ObjectStoreBackupRepository::from_url("s3://bucket").is_err());
+        assert!(ObjectStoreBackupRepository::from_url("gs:///prefix").is_err());
+        assert!(ObjectStoreBackupRepository::from_url("s3://user:secret@bucket/prefix").is_err());
     }
 }

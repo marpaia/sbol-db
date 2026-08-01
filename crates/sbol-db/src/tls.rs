@@ -712,6 +712,7 @@ mod tests {
             worker_id: None,
             search_config: None,
             backup_recovery_recipient: None,
+            backup_repository_url: None,
         }
     }
 

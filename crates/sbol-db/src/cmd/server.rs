@@ -9,7 +9,10 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use sbol_db_app::{AppServices, FsBlobStore, LegacyExplorerStrategy};
 use sbol_db_backend::Backend;
-use sbol_db_backup::{load_or_create_encryption, CompleteBackupConfig, CompleteBackupService};
+use sbol_db_backup::{
+    load_or_create_encryption, CompleteBackupConfig, CompleteBackupService,
+    ObjectStoreBackupRepository,
+};
 use sbol_db_jobs::{default_registry, SearchIndexHandles, Worker, WorkerConfig};
 use sbol_db_search::VectorIndexMaintainerRegistry;
 use sbol_db_search_sdk::IndexMutationSource;
@@ -43,6 +46,7 @@ pub async fn run(
         worker_id,
         search_config,
         backup_recovery_recipient,
+        backup_repository_url,
         ..
     } = args;
     let EdgeHttpConfig {
@@ -98,23 +102,30 @@ pub async fn run(
         let recovery_recipient = backup_recovery_recipient
             .as_deref()
             .context("production requires SBOL_DB_BACKUP_RECOVERY_RECIPIENT")?;
+        let repository_url = backup_repository_url
+            .as_deref()
+            .context("production requires SBOL_DB_BACKUP_REPOSITORY_URL")?;
         let verification_identity_path =
             layout.backups_root().join(".verification-identity.agekey");
         let encryption =
             load_or_create_encryption(recovery_recipient, &verification_identity_path)?;
-        let service = Arc::new(CompleteBackupService::new(
-            CompleteBackupConfig {
-                db: rocksdb.db.clone(),
-                blobs_root: layout.blob_root().to_path_buf(),
-                search_root: layout.search_root().to_path_buf(),
-                acme_root: layout.acme_root().to_path_buf(),
-                backups_root: layout.backups_root().to_path_buf(),
-                generation: layout.generation(),
-                layout_version: layout.layout_version().to_owned(),
-                application_version: env!("CARGO_PKG_VERSION").to_owned(),
-            },
-            encryption,
-        ));
+        let repository = Arc::new(ObjectStoreBackupRepository::from_url(repository_url)?);
+        let service = Arc::new(
+            CompleteBackupService::new(
+                CompleteBackupConfig {
+                    db: rocksdb.db.clone(),
+                    blobs_root: layout.blob_root().to_path_buf(),
+                    search_root: layout.search_root().to_path_buf(),
+                    acme_root: layout.acme_root().to_path_buf(),
+                    backups_root: layout.backups_root().to_path_buf(),
+                    generation: layout.generation(),
+                    layout_version: layout.layout_version().to_owned(),
+                    application_version: env!("CARGO_PKG_VERSION").to_owned(),
+                },
+                encryption,
+            )
+            .with_repository(repository),
+        );
         worker_setup
             .as_mut()
             .expect("production requires the embedded worker")
