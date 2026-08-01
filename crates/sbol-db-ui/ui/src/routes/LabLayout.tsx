@@ -148,7 +148,7 @@ const TOP_LEVEL_SECTIONS: Array<{
   {
     prefix: adminPath("/operations/backup"),
     section: "Administration",
-    page: "Backup & restore",
+    page: "Backups & recovery",
   },
   {
     prefix: adminPath("/operations/audit"),

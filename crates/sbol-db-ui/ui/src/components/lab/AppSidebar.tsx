@@ -174,7 +174,7 @@ function navGroups(capabilities?: Capabilities): NavGroup[] {
         {
           to: adminPath("/operations/backup"),
           icon: <ArchiveRestore />,
-          label: "Backup & restore",
+          label: "Backups & recovery",
         },
         {
           to: adminPath("/operations/audit"),

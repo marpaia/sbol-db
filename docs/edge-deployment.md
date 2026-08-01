@@ -31,12 +31,13 @@ Use an absolute data path on a durable local filesystem. Production creates:
     acme/
   backups/                         # encrypted local artifacts and proof sidecars
   restore/                         # private restore staging and journal
+    history/                       # bounded recovery-event records
 ```
 
 `CURRENT` is the only activation pointer. RocksDB, blobs, search state, and
 ACME account/certificate state always move together as one generation.
 
-## Required production configuration
+## Required first-launch configuration
 
 ```bash
 export SBOL_DB_PROFILE=production
@@ -61,6 +62,14 @@ S3 and GCS credentials come from the object-store provider's standard
 environment or workload identity. Do not put credentials in the repository
 URL. The production runtime rejects URL credentials and insecure S3 HTTP.
 
+On first launch, these arguments and environment variables bootstrap a
+validated settings document in the RocksDB configuration store. On later
+launches, the durable document is authoritative and is applied before the
+listener, ACME client, scheduler, object-store client, and disk policy are
+constructed. This prevents a partial runtime reconfiguration. The document is
+inside the RocksDB checkpoint and therefore participates in the same complete
+backup and restore contract as the rest of the generation.
+
 Useful bounded settings are:
 
 | Environment variable | Default | Contract |
@@ -84,6 +93,31 @@ installed in rustls. Renewal events and expiration are exported as metrics.
 The hostname must be a DNS name, not an IP address or wildcard. Point its A/AAAA
 records at the server before first launch and make TCP 443 reachable from the
 public internet.
+
+## Administrator operations
+
+The embedded administrator workspace exposes the production controls without
+turning secret material or live listener replacement into browser operations:
+
+- `/admin/settings/edge` reads the active and pending settings, validates and
+  persists changes, shows TLS/ACME/disk health, and marks when a process restart
+  is required. It manages the hostname, ACME contact and directory, redirect
+  policy, TLS handshake timeout, public age recipient, credential-free object
+  repository URL, backup cadence and retention, and disk reserve.
+- `/admin/operations/backup` triggers the one complete-backup job, shows its
+  local and remote verification evidence, links to durable job attempts and
+  logs, reports active and previous generations, and supplies copyable offline
+  verify/restore/rollback commands.
+- `/admin/observability` adds TLS lifetime, ACME lifecycle, disk reserve,
+  complete-backup freshness, object-store readback, and pending-restart signals
+  to the application metrics already shown there.
+
+Every settings mutation is administrator-authenticated and audited. Cloud
+credentials continue to come only from workload identity or provider
+environment variables. The private age recovery identity is deliberately not
+accepted, stored, or returned by the API. Settings changes become active only
+after a deliberate restart; an interrupted request cannot half-reconfigure the
+running process.
 
 ## The one complete-backup path
 
@@ -151,6 +185,11 @@ sbol-db backup rollback \
 A pristine disaster-recovery target has no prior valid generation, so rollback
 is deliberately unavailable.
 
+Recovery remains an offline, server-stopped operation. The administrator UI
+may report the bounded recovery history and generate commands, but it never
+uploads an encrypted artifact, accepts a recovery identity, or activates a
+generation from the running web process.
+
 ## Grafana and alerts
 
 Scrape `http://127.0.0.1:9090/metrics` from a collector on the same host and
@@ -159,10 +198,13 @@ forward it to the chosen Prometheus-compatible backend. Import
 Grafana. Load [`sbol-db-edge-alerts.yml`](../ops/prometheus/sbol-db-edge-alerts.yml)
 as Prometheus-compatible recording/alert rules.
 
-The dashboard covers disk reserve and backup working space, local and remote
-backup freshness, backup outcomes/duration, TLS expiration, ACME/scheduler
-events, HTTP rate/latency/errors, and durable queue state. The alert rules treat
-stale remote verification, low disk, and missing TLS as production-critical.
+The external dashboard covers disk reserve and backup working space, local and
+remote backup freshness, backup outcomes/duration, TLS expiration,
+ACME/scheduler events, HTTP rate/latency/errors, and durable queue state. The
+alert rules treat stale remote verification, low disk, and missing TLS as
+production-critical.
+The built-in `/admin/observability` view exposes the most important edge health
+signals for an administrator without making the loopback listener public.
 
 The three loopback endpoints have distinct meanings:
 

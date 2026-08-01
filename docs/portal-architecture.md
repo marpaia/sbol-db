@@ -127,8 +127,9 @@ remain available so the portal can bootstrap and offer sign-in.
 
 The native admin control plane now lives entirely under `/api/v2/admin/*` and
 uses one `require_admin` policy. Instance configuration, accounts,
-integrations, jobs, ontology loading, search maintenance, backup/restore, and
-the admin audit stream all use that boundary. The older root management and V1
+integrations, jobs, ontology loading, search maintenance, edge runtime status
+and settings, complete backup status and triggers, and the admin audit stream
+all use that boundary. The older root management and V1
 compatibility routes retain their existing contracts for compatible clients;
 they are classified migration inputs, not authority for the native UI. Changing
 or removing one remains an endpoint-by-endpoint compatibility decision.
@@ -331,11 +332,14 @@ administrator middleware and a typed frontend client. It separates read-only
 status from mutations; recursively redacts remote secrets; protects account
 administration against self-deletion, self-demotion, and removal of the final
 administrator; and requires exact target-bearing confirmations for destructive
-actions. Backup archives are canonical, checksum-verified registry-graph
-snapshots and restore atomically before search maintenance is queued. The
-append-only RDF audit graph records attempted, successful, and failed admin
-actions. Backend-neutral user/config/storage conformance and HTTP tests cover
-the policy, redaction, destructive guards, backup integrity, and audit results.
+actions. In the self-contained production profile, every manual, scheduled,
+and pre-deploy backup uses one encrypted, remotely read-back, semantically
+verified RocksDB/blob/search/ACME artifact. The UI exposes backup evidence and
+offline recovery guidance, while atomic generation restore stays outside the
+running process. The append-only RDF audit graph records attempted, successful,
+and failed admin actions. Backend-neutral user/config/storage conformance and
+HTTP tests cover the policy, redaction, destructive guards, backup integrity,
+and audit results.
 
 ### Slice 6: compatibility cutover and retirement — implemented
 

@@ -40,8 +40,9 @@ claimed by the page dispatcher.
 
 The UI opens on an Overview and fans out into registry data, query,
 operations, and administration views from the left nav. The Administration
-group contains Instance, Users, Integrations, Search indexes, Backup & restore,
-and Activity. These pages share `AdminPage`, `AdminSection`, form, feedback,
+group contains Instance, Users, Integrations, Edge runtime, Search indexes,
+Backups & recovery, and Activity. These pages share `AdminPage`, `AdminSection`,
+form, feedback,
 and deliberate-confirmation compositions built from the same ShadCN/Radix and
 Tailwind primitives as the public application; route code orchestrates typed
 queries rather than inventing a second component system.
@@ -68,8 +69,10 @@ table list one click away:
 </p>
 
 Operations > Metrics is a live observability view: request rate, p95
-latency, connection pools, and the job runner, sampled every few
-seconds:
+latency, connection pools, and the job runner, sampled every few seconds. In
+the self-contained production profile it also surfaces TLS expiration, ACME
+lifecycle, disk reserve, complete-backup freshness, remote readback
+verification, and pending-restart state:
 
 <p align="center">
   <img src="images/metrics.png" alt="SBOL Data Lab observability metrics view" width="900">
@@ -108,7 +111,13 @@ The application is fronted by these controls:
 The native `/api/v2/admin/*` control plane is always administrator-gated; the
 legacy workbench override applies only to `/lab/api/*` and cannot weaken the
 native policy. The UI uses the native control plane for instance policy, users,
-integrations, search maintenance, jobs, ontologies, backup/restore, and audit.
+integrations, search maintenance, jobs, ontologies, complete-backup operations,
+and audit.
+In the self-contained production profile, Edge runtime persists validated
+pending settings and Backups & recovery operates the unified encrypted
+RocksDB/blob/search/ACME artifact. Object-store credentials and the private age
+recovery identity are never browser-managed, and restore activation remains an
+offline command while the server is stopped.
 
 ## Development
 

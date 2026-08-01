@@ -98,6 +98,7 @@ async fn overview(State(state): State<AppState>) -> Json<Value> {
             { "id": "jobs", "read": true, "mutate": true },
             { "id": "ontologies", "read": true, "mutate": true },
             { "id": "backup", "read": true, "mutate": true },
+            { "id": "edge", "read": true, "mutate": true },
             { "id": "audit", "read": true, "mutate": false }
         ],
         "search": {

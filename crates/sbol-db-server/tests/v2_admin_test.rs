@@ -459,7 +459,10 @@ async fn edge_settings_are_validated_persisted_and_report_restart_state() {
     assert_eq!(initial["health"]["tls"]["required"], true);
     assert_eq!(initial["health"]["disk"]["ready"], true);
     assert_eq!(initial["recovery"]["activation_mode"], "offline_cli");
-    assert!(initial["recovery"]["history"].as_array().unwrap().is_empty());
+    assert!(initial["recovery"]["history"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 
     let updated = send(
         &app,

@@ -311,7 +311,7 @@
         "properties": {
           "enabled": { "type": "boolean" },
           "strategy": { "type": "string", "const": "complete_encrypted_checkpoint" },
-          "components": { "type": "array", "items": { "type": "string", "enum": ["rocksdb", "blobs", "search", "acme"] } },
+          "components": { "type": "array", "description": "Generation roots in the artifact. The RocksDB checkpoint includes accounts and durable runtime configuration.", "items": { "type": "string", "enum": ["rocksdb", "blobs", "search", "acme"] } },
           "recent": { "type": "array", "items": { "type": "object" } }
         }
       },
@@ -350,6 +350,83 @@
           "minimum_free_bytes": { "type": "integer", "minimum": 1 }
         }
       },
+      "EdgeRuntimeIdentity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["profile", "layout_version", "generation", "data_dir"],
+        "properties": {
+          "profile": { "type": "string", "const": "production" },
+          "layout_version": { "type": "string" },
+          "generation": { "type": "string", "format": "uuid" },
+          "data_dir": { "type": "string" }
+        }
+      },
+      "TlsHealthSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["required", "ready", "certificate_not_after", "certificate_expires_in_secs"],
+        "properties": {
+          "required": { "type": "boolean" },
+          "ready": { "type": "boolean" },
+          "certificate_not_after": { "type": ["string", "null"], "format": "date-time" },
+          "certificate_expires_in_secs": { "type": ["integer", "null"] }
+        }
+      },
+      "AcmeHealthSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["last_success_at", "last_failure_at"],
+        "properties": {
+          "last_success_at": { "type": ["string", "null"], "format": "date-time" },
+          "last_failure_at": { "type": ["string", "null"], "format": "date-time" }
+        }
+      },
+      "DiskHealthSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ready", "available_bytes", "minimum_free_bytes", "error"],
+        "properties": {
+          "ready": { "type": "boolean" },
+          "available_bytes": { "type": ["integer", "null"], "minimum": 0 },
+          "minimum_free_bytes": { "type": "integer", "minimum": 1 },
+          "error": { "type": ["string", "null"] }
+        }
+      },
+      "EdgeHealthSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tls", "acme", "disk"],
+        "properties": {
+          "tls": { "$ref": "#/components/schemas/TlsHealthSnapshot" },
+          "acme": { "$ref": "#/components/schemas/AcmeHealthSnapshot" },
+          "disk": { "oneOf": [{ "$ref": "#/components/schemas/DiskHealthSnapshot" }, { "type": "null" }] }
+        }
+      },
+      "EdgeRecoveryEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "backup_id", "artifact_sha256", "previous_generation", "target_generation", "updated_at"],
+        "properties": {
+          "status": { "type": "string", "enum": ["staged", "activated", "rollback_pending", "rolled_back"] },
+          "backup_id": { "type": "string", "format": "uuid" },
+          "artifact_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "previous_generation": { "type": ["string", "null"], "format": "uuid" },
+          "target_generation": { "type": "string", "format": "uuid" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "EdgeRecoverySnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["activation_mode", "active_generation", "previous_generation", "last_operation", "history"],
+        "properties": {
+          "activation_mode": { "type": "string", "const": "offline_cli" },
+          "active_generation": { "type": "string", "format": "uuid" },
+          "previous_generation": { "type": ["string", "null"], "format": "uuid" },
+          "last_operation": { "oneOf": [{ "$ref": "#/components/schemas/EdgeRecoveryEvent" }, { "type": "null" }] },
+          "history": { "type": "array", "maxItems": 50, "items": { "$ref": "#/components/schemas/EdgeRecoveryEvent" } }
+        }
+      },
       "EdgeAdminSnapshot": {
         "type": "object",
         "required": ["active", "pending", "restart_required", "runtime", "health", "recovery"],
@@ -357,9 +434,9 @@
           "active": { "$ref": "#/components/schemas/EdgeSettings" },
           "pending": { "$ref": "#/components/schemas/EdgeSettings" },
           "restart_required": { "type": "boolean" },
-          "runtime": { "type": "object", "description": "Active managed-layout identity." },
-          "health": { "type": "object", "description": "Live TLS, ACME lifecycle, and managed-disk health." },
-          "recovery": { "type": "object", "description": "Active/previous generations, last recovery operation, and bounded offline restore history." }
+          "runtime": { "$ref": "#/components/schemas/EdgeRuntimeIdentity" },
+          "health": { "$ref": "#/components/schemas/EdgeHealthSnapshot" },
+          "recovery": { "$ref": "#/components/schemas/EdgeRecoverySnapshot" }
         }
       },
       "Error": {
@@ -1724,7 +1801,7 @@
         "responses": { "200": { "description": "Complete-backup status.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CompleteBackupStatus" } } } } }
       },
       "post": {
-        "tags": ["Administration"], "summary": "Enqueue a complete encrypted backup", "description": "Manual UI and pre-deploy requests enqueue the same durable complete_backup job used by the scheduler. The artifact includes RocksDB, blobs, search state, and ACME state.", "operationId": "v2AdminTriggerBackup",
+        "tags": ["Administration"], "summary": "Enqueue a complete encrypted backup", "description": "Manual UI and pre-deploy requests enqueue the same durable complete_backup job used by the scheduler. The artifact includes RocksDB data, accounts and durable configuration, blobs, search state, and ACME state.", "operationId": "v2AdminTriggerBackup",
         "requestBody": { "required": false, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CompleteBackupTrigger" } } } },
         "responses": { "202": { "description": "Complete-backup job accepted.", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "$ref": "#/components/responses/Error" }, "501": { "$ref": "#/components/responses/Error" } }
       }

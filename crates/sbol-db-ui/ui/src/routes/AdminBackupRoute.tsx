@@ -58,7 +58,7 @@ export default function AdminBackupRoute() {
   return (
     <AdminPage
       title="Backups and recovery"
-      description="Create, verify, and publish one complete encrypted recovery artifact containing RocksDB, attachments, search state, and ACME state. Manual, scheduled, and deployment backups use this same workflow."
+      description="Create, verify, and publish one complete encrypted recovery artifact containing RocksDB data and durable settings, attachments, search state, and ACME state. Manual, scheduled, and deployment backups use this same workflow."
       action={
         <Button
           disabled={!status.data?.enabled || trigger.isPending}
