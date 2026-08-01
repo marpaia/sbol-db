@@ -110,25 +110,25 @@ bio = "4"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.16", default-features = false }
 
-sbol-db-core = { path = "crates/sbol-db-core", version = "0.1.2" }
-sbol-db-search-sdk = { path = "crates/sbol-db-search-sdk", version = "0.1.2" }
-sbol-db-search-eval = { path = "crates/sbol-db-search-eval", version = "0.1.2" }
-sbol-db-vector-conformance = { path = "crates/sbol-db-vector-conformance", version = "0.1.2" }
-sbol-db-embedding-fastembed = { path = "crates/sbol-db-embedding-fastembed", version = "0.1.2", default-features = false }
-sbol-db-vector-flat = { path = "crates/sbol-db-vector-flat", version = "0.1.2" }
-sbol-db-vector-qdrant = { path = "crates/sbol-db-vector-qdrant", version = "0.1.2" }
-sbol-db-search-faiss = { path = "crates/sbol-db-search-faiss", version = "0.1.2" }
-sbol-db-storage = { path = "crates/sbol-db-storage", version = "0.1.2" }
-sbol-db-rdf = { path = "crates/sbol-db-rdf", version = "0.1.2" }
-sbol-db-derive = { path = "crates/sbol-db-derive", version = "0.1.2" }
-sbol-db-postgres = { path = "crates/sbol-db-postgres", version = "0.1.2" }
-sbol-db-sqlite = { path = "crates/sbol-db-sqlite", version = "0.1.2" }
-sbol-db-rocksdb = { path = "crates/sbol-db-rocksdb", version = "0.1.2" }
-sbol-db-backend = { path = "crates/sbol-db-backend", version = "0.1.2" }
-sbol-db-conformance = { path = "crates/sbol-db-conformance", version = "0.1.2" }
-sbol-db-sparql = { path = "crates/sbol-db-sparql", version = "0.1.2" }
-sbol-db-search = { path = "crates/sbol-db-search", version = "0.1.2" }
-sbol-db-app = { path = "crates/sbol-db-app", version = "0.1.2" }
-sbol-db-jobs = { path = "crates/sbol-db-jobs", version = "0.1.2" }
-sbol-db-ui = { path = "crates/sbol-db-ui", version = "0.1.2" }
-sbol-db-server = { path = "crates/sbol-db-server", version = "0.1.2", default-features = false }
+sbol-db-core = { path = "crates/sbol-db-core", version = "0.1.3" }
+sbol-db-search-sdk = { path = "crates/sbol-db-search-sdk", version = "0.1.3" }
+sbol-db-search-eval = { path = "crates/sbol-db-search-eval", version = "0.1.3" }
+sbol-db-vector-conformance = { path = "crates/sbol-db-vector-conformance", version = "0.1.3" }
+sbol-db-embedding-fastembed = { path = "crates/sbol-db-embedding-fastembed", version = "0.1.3", default-features = false }
+sbol-db-vector-flat = { path = "crates/sbol-db-vector-flat", version = "0.1.3" }
+sbol-db-vector-qdrant = { path = "crates/sbol-db-vector-qdrant", version = "0.1.3" }
+sbol-db-search-faiss = { path = "crates/sbol-db-search-faiss", version = "0.1.3" }
+sbol-db-storage = { path = "crates/sbol-db-storage", version = "0.1.3" }
+sbol-db-rdf = { path = "crates/sbol-db-rdf", version = "0.1.3" }
+sbol-db-derive = { path = "crates/sbol-db-derive", version = "0.1.3" }
+sbol-db-postgres = { path = "crates/sbol-db-postgres", version = "0.1.3" }
+sbol-db-sqlite = { path = "crates/sbol-db-sqlite", version = "0.1.3" }
+sbol-db-rocksdb = { path = "crates/sbol-db-rocksdb", version = "0.1.3" }
+sbol-db-backend = { path = "crates/sbol-db-backend", version = "0.1.3" }
+sbol-db-conformance = { path = "crates/sbol-db-conformance", version = "0.1.3" }
+sbol-db-sparql = { path = "crates/sbol-db-sparql", version = "0.1.3" }
+sbol-db-search = { path = "crates/sbol-db-search", version = "0.1.3" }
+sbol-db-app = { path = "crates/sbol-db-app", version = "0.1.3" }
+sbol-db-jobs = { path = "crates/sbol-db-jobs", version = "0.1.3" }
+sbol-db-ui = { path = "crates/sbol-db-ui", version = "0.1.3" }
+sbol-db-server = { path = "crates/sbol-db-server", version = "0.1.3", default-features = false }

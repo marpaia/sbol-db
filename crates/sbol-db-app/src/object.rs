@@ -548,7 +548,7 @@ impl AppServices {
                     .as_ref()
                     .is_some_and(|graph| graphs.iter().any(|allowed| allowed == graph));
                 let physical_allowed = graphs.iter().any(|allowed| allowed == &physical);
-                if (logical_allowed || physical_allowed) && !physical_allowed {
+                if logical_allowed && !physical_allowed {
                     graphs.push(physical);
                     graphs.sort();
                     graphs.dedup();

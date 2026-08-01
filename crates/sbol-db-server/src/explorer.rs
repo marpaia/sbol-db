@@ -3,12 +3,12 @@
 //! ranked-text search, so sbol-db is a drop-in for SBOLExplorer as well as a
 //! native REST provider.
 //!
-//! The public `/sparql` handler recognizes a shape before generic evaluation
-//! and routes it here: `# SIMILAR:<uri>` to the cluster-mate lookup, a
-//! `sbol2:elements "<seq>"` literal to the aligner, and the
-//! `CONTAINS(lcase(?displayId), …)` free-text shape to the ranked-text index.
-//! Every response carries SBOLExplorer's exact `head.vars`. The public endpoint
-//! imposes no authorization ceiling, so reads run under the union scope.
+//! The dedicated compatibility listener recognizes a shape and routes it here:
+//! `# SIMILAR:<uri>` to the cluster-mate lookup, a `sbol2:elements "<seq>"`
+//! literal to the aligner, and the `CONTAINS(lcase(?displayId), …)` free-text
+//! shape to the ranked-text index. Every response carries SBOLExplorer's exact
+//! `head.vars`. The main `/sparql` endpoint remains a literal triplestore
+//! surface and never enters this adapter.
 
 use axum::body::Bytes;
 use axum::extract::{Query, State};
