@@ -28,17 +28,18 @@ import {
   Share2,
 } from "lucide-react";
 
+import { AdminPage } from "@/components/admin/AdminPage";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { OntologyLoaderDialog } from "@/components/lab/OntologyLoaderDialog";
+import { KpiTile } from "@/components/observability/KpiTile";
+import {
+  ProductSurface,
+  ProductSurfaceBody,
+  ProductSurfaceHeader,
+} from "@/components/product/ProductSurface";
 import { useOverview } from "@/hooks/useOverview";
 import { type Dialect, useLabStore } from "@/lib/store";
 import { adminPath } from "@/lib/routes";
-import { cn } from "@/lib/utils";
-
-function greeting(): string {
-  const h = new Date().getHours();
-  return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
-}
 
 export default function DashboardRoute() {
   const { data, isLoading, error } = useOverview();
@@ -62,79 +63,61 @@ export default function DashboardRoute() {
 
   if (error) {
     return (
-      <div className="p-6">
+      <AdminPage
+        title="Registry overview"
+        description="Corpus health and operational entry points for this deployment."
+      >
         <ErrorBanner
           title="Couldn't load the overview"
           body={(error as Error).message}
         />
-      </div>
+      </AdminPage>
     );
   }
 
   const c = data?.counts;
 
   return (
-    <div className="h-full w-full overflow-y-auto">
-      <div className="mx-auto max-w-6xl px-8 py-10 space-y-10">
-        <header>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {greeting()}! 👋
-          </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Welcome to the SBOL DB admin workspace. Query your corpus with
-            SPARQL or SQL, browse the schema, or load ontology packs. The panels
-            below show what's loaded, with a few templates to get you started.
-          </p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            SBOL DB is an open data management system for synthetic biology.
-            View the project on{" "}
-            <a
-              href="https://github.com/marpaia/sbol-db"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline underline-offset-2 transition-colors hover:text-foreground"
-            >
-              GitHub
-            </a>
-            !
-          </p>
-        </header>
-
+    <>
+      <AdminPage
+        title="Registry overview"
+        description="Inspect the loaded corpus, check its operational shape, and move into focused data or query tools."
+      >
         <section>
           <SectionLabel>Corpus</SectionLabel>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <CountCard
-              icon={<Boxes className="size-4" />}
+            <KpiTile
+              icon={Boxes}
               label="Objects"
               value={c?.objects}
               loading={isLoading}
             />
-            <CountCard
-              icon={<Share2 className="size-4" />}
+            <KpiTile
+              icon={Share2}
               label="Graphs"
               value={c?.graphs}
               loading={isLoading}
             />
-            <CountCard
-              icon={<GitGraph className="size-4" />}
+            <KpiTile
+              icon={GitGraph}
               label="Triples"
               value={c?.triples}
               loading={isLoading}
             />
-            <CountCard
-              icon={<Database className="size-4" />}
+            <KpiTile
+              icon={Database}
               label="Sequences"
               value={c?.sequences}
               loading={isLoading}
             />
-            <CountCard
-              icon={<ShieldCheck className="size-4" />}
+            <KpiTile
+              icon={ShieldCheck}
               label="Validation runs"
               value={c?.validation_runs}
               loading={isLoading}
             />
-            <CountCard
-              icon={<Library className="size-4" />}
+            <KpiTile
+              icon={Library}
               label="Ontologies"
               value={c?.ontologies}
               loading={isLoading}
@@ -331,14 +314,14 @@ export default function DashboardRoute() {
             />
           </div>
         </section>
-      </div>
+      </AdminPage>
       <OntologyLoaderDialog
         open={loaderOpen}
         onOpenChange={setLoaderOpen}
         onLoaded={onLoaded}
         loadedPrefixes={data?.loaded_ontologies.map((o) => o.prefix) ?? []}
       />
-    </div>
+    </>
   );
 }
 
@@ -347,35 +330,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
     <h2 className="mb-3 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
       {children}
     </h2>
-  );
-}
-
-function CountCard({
-  icon,
-  label,
-  value,
-  loading,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: number | undefined;
-  loading: boolean;
-}) {
-  return (
-    <div className="rounded-lg border bg-card p-4 transition-colors hover:border-primary/40">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="text-primary">{icon}</span>
-        <span>{label}</span>
-      </div>
-      <div
-        className={cn(
-          "mt-2 text-2xl font-semibold tabular-nums",
-          loading ? "text-muted-foreground/40" : "text-foreground"
-        )}
-      >
-        {loading || value === undefined ? "—" : value.toLocaleString()}
-      </div>
-    </div>
   );
 }
 
@@ -391,16 +345,17 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="overflow-hidden rounded-lg border bg-card">
-      <header className="flex items-center gap-2 border-b border-primary/15 bg-primary/5 px-4 py-2.5">
-        <h3 className="text-sm font-medium text-primary">{title}</h3>
-        {subtitle && (
-          <span className="text-xs text-muted-foreground">{subtitle}</span>
-        )}
-        {action && <div className="ml-auto">{action}</div>}
-      </header>
-      <div className="px-4 py-2">{children}</div>
-    </section>
+    <ProductSurface density="compact">
+      <ProductSurfaceHeader
+        density="compact"
+        title={title}
+        description={subtitle}
+        action={action}
+      />
+      <ProductSurfaceBody density="compact" className="py-2">
+        {children}
+      </ProductSurfaceBody>
+    </ProductSurface>
   );
 }
 

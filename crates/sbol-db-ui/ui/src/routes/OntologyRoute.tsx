@@ -27,8 +27,10 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
+import { AdminPage } from "@/components/admin/AdminPage";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { OntologyLoaderDialog } from "@/components/lab/OntologyLoaderDialog";
+import { Button } from "@/components/ui/button";
 import {
   useOntologies,
   useOntologyDescendants,
@@ -50,28 +52,18 @@ export default function OntologyRoute() {
   }, [queryClient]);
 
   return (
-    <div className="h-full w-full overflow-y-auto">
-      <div className="mx-auto max-w-6xl space-y-8 px-8 py-10">
-        <header className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">
-              Ontologies
-            </h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Browse the OBO ontologies loaded into this database, look up terms
-              by CURIE or IRI, and explore their <code>is_a</code> descendants.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setLoaderOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            <Plus size={14} />
+    <>
+      <AdminPage
+        title="Ontologies"
+        description="Browse the OBO ontologies loaded into this database, look up terms by CURIE or IRI, and explore their is_a descendants."
+        eyebrow="Data model"
+        action={
+          <Button size="sm" type="button" onClick={() => setLoaderOpen(true)}>
+            <Plus />
             Load ontology
-          </button>
-        </header>
-
+          </Button>
+        }
+      >
         <section>
           <SectionLabel>Loaded</SectionLabel>
           {error ? (
@@ -106,7 +98,7 @@ export default function OntologyRoute() {
           <SectionLabel>Term lookup</SectionLabel>
           <TermLookup />
         </section>
-      </div>
+      </AdminPage>
 
       <OntologyLoaderDialog
         open={loaderOpen}
@@ -114,7 +106,7 @@ export default function OntologyRoute() {
         onLoaded={onLoaded}
         loadedPrefixes={ontologies?.map((o) => o.prefix) ?? []}
       />
-    </div>
+    </>
   );
 }
 

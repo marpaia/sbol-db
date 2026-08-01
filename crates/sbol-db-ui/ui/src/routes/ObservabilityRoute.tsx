@@ -435,7 +435,7 @@ function PoolCard({
       <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
         <div
           className={cn(
-            "h-full transition-all",
+            "h-full transition-[width,background-color] duration-200 [transition-timing-function:cubic-bezier(0.23,1,0.32,1)]",
             utilization >= 80
               ? "bg-amber-500"
               : utilization >= 95

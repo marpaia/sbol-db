@@ -132,6 +132,90 @@ export interface SequenceSearchResponse {
   total: number;
 }
 
+export type StructuredSearchInputKind = "text" | "similar" | "sequence";
+export type StructuredFilterKind = "graph" | "object_type" | "predicate";
+
+export interface SearchStrategyDescriptor {
+  id: string;
+  version: string;
+  display_name: string;
+  description: string;
+  capabilities: {
+    inputs: StructuredSearchInputKind[];
+    filters: StructuredFilterKind[];
+    filter_execution: "none" | "post_filter" | "native";
+    pagination: "offset" | "cursor" | "first_page_only";
+    totals: "exact" | "lower_bound" | "unknown";
+    deterministic: boolean;
+    explanations: boolean;
+    data_egress: "none" | "configured_remote";
+  };
+  requirements: {
+    embedding_profiles?: string[];
+    vector_indexes?: string[];
+    candidate_sources?: string[];
+  };
+}
+
+export interface SearchStrategiesResponse {
+  default_strategy: string;
+  items: SearchStrategyDescriptor[];
+}
+
+export type StructuredSearchQuery =
+  | { kind: "text"; text: string }
+  | { kind: "similar"; uri: string }
+  | { kind: "sequence"; sequence: string; exact: boolean };
+
+export interface StructuredSearchRequest {
+  strategy: string;
+  query: StructuredSearchQuery;
+  filters?: {
+    graphs?: string[];
+    object_types?: string[];
+    predicates?: Array<{ predicate: string; value: string }>;
+  };
+  page?: { limit: number; cursor?: string };
+  options?: { explain?: boolean; timeout_ms?: number };
+}
+
+export interface StructuredSearchHit {
+  document_id: string;
+  uri: string;
+  graph?: string;
+  score: number;
+  score_kind: unknown;
+  display_id?: string;
+  version?: string;
+  name?: string;
+  description?: string;
+  object_types: string[];
+  evidence?: Array<{
+    source: string;
+    rank?: number;
+    score?: number;
+    details?: Record<string, unknown>;
+  }>;
+}
+
+export type StructuredSearchTotal =
+  | { kind: "exact"; value: number }
+  | { kind: "lower_bound"; value: number }
+  | { kind: "unknown" };
+
+export interface StructuredSearchResponse {
+  strategy: { id: string; version: string };
+  items: StructuredSearchHit[];
+  total: StructuredSearchTotal;
+  next_cursor?: string;
+  execution: {
+    artifact_generations?: Record<string, string>;
+    warnings?: string[];
+    trace_id?: string;
+    elapsed_ms?: number;
+  };
+}
+
 export interface SimilarHit extends PortalObjectSummary {
   pagerank: number;
 }
@@ -477,6 +561,26 @@ export async function fetchDiscoveryFacets(
   signal?: AbortSignal
 ): Promise<DiscoveryFacets> {
   return requestJson<DiscoveryFacets>("/api/v2/search/facets", { signal });
+}
+
+export async function fetchSearchStrategies(
+  signal?: AbortSignal
+): Promise<SearchStrategiesResponse> {
+  return requestJson<SearchStrategiesResponse>("/api/v2/search/strategies", {
+    signal,
+  });
+}
+
+export async function searchPortalStructured(
+  request: StructuredSearchRequest,
+  signal?: AbortSignal
+): Promise<StructuredSearchResponse> {
+  return requestJson<StructuredSearchResponse>("/api/v2/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+    signal,
+  });
 }
 
 export async function searchPortalSequences(

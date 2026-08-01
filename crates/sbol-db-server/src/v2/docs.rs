@@ -8,33 +8,27 @@
 use axum::http::header::CONTENT_TYPE;
 use axum::response::IntoResponse;
 
+use crate::docs::render_scalar_docs_page;
+
 const OPENAPI_JSON: &str = include_str!("openapi.json");
 
-const DOCS_HTML: &str = r#"<!doctype html>
-<html lang="en">
-  <head>
-    <title>sbol-db V2 API</title>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" href="data:," />
-    <style>
-      body { margin: 0; }
-    </style>
-  </head>
-  <body>
-    <script id="api-reference" data-url="/api/v2/openapi.json"></script>
-    <script>
+const REFERENCE_MARKUP: &str =
+    r#"<script id="api-reference" data-url="/api/v2/openapi.json"></script>"#;
+
+const MOUNT_SCRIPT: &str = r#"
       var configuration = {
-        theme: "purple",
+        theme: "none",
         layout: "modern",
-        hideClientButton: false
+        darkMode: window.sbolDocsDarkMode,
+        forceDarkModeState: window.sbolDocsDarkMode ? "dark" : "light",
+        hideDarkModeToggle: true,
+        hideClientButton: false,
+        mcp: {
+          disabled: true
+        }
       };
       document.getElementById("api-reference").dataset.configuration =
         JSON.stringify(configuration);
-    </script>
-    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.62.9"></script>
-  </body>
-</html>
 "#;
 
 /// `GET /api/v2/openapi.json` — the embedded V2 OpenAPI 3.1 schema.
@@ -44,5 +38,13 @@ pub async fn openapi_json() -> impl IntoResponse {
 
 /// `GET /api/v2/docs` — the interactive V2 API reference.
 pub async fn docs_html() -> impl IntoResponse {
-    ([(CONTENT_TYPE, "text/html; charset=utf-8")], DOCS_HTML)
+    (
+        [(CONTENT_TYPE, "text/html; charset=utf-8")],
+        render_scalar_docs_page(
+            "SBOL DB V2 API Reference",
+            "V2 API reference",
+            REFERENCE_MARKUP,
+            MOUNT_SCRIPT,
+        ),
+    )
 }

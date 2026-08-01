@@ -10,34 +10,132 @@
 //! v1-compatibility API), and `/api/v2/openapi.json` (the native V2 API). The
 //! multi-document `sources` configuration is driven through the explicit
 //! `createApiReference` call; the attribute-based auto-mount does not honor it.
-//! The look-and-feel is closest to FastAPI's auto-generated `/docs` of the
-//! modern OpenAPI UIs.
+//! Both reference pages use the same small product shell and map Scalar's
+//! supported theme variables onto the SBOL DB light and dark palettes.
 
 use axum::http::header::CONTENT_TYPE;
 use axum::response::IntoResponse;
 
 const OPENAPI_JSON: &str = include_str!("openapi.json");
 const SYNBIOHUB_OPENAPI_JSON: &str = include_str!("synbiohub_openapi.json");
+const SCALAR_THEME_CSS: &str = include_str!("scalar-theme.css");
+const SCALAR_CDN_URL: &str = "https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.62.9";
 
-const DOCS_HTML: &str = r#"<!doctype html>
+const INITIAL_THEME_SCRIPT: &str = r#"
+      (() => {
+        const storageKey = "sbol-lab:theme";
+        const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
+
+        const readPreference = () => {
+          try {
+            const stored = localStorage.getItem(storageKey);
+            if (stored === "light" || stored === "dark" || stored === "system") {
+              return stored;
+            }
+          } catch (_) {
+            // A blocked localStorage should not prevent the reference from loading.
+          }
+          return "system";
+        };
+
+        const applyRegistryTheme = () => {
+          const preference = readPreference();
+          const darkMode =
+            preference === "dark" ||
+            (preference === "system" && systemTheme.matches);
+
+          window.sbolDocsDarkMode = darkMode;
+          document.documentElement.classList.toggle("dark", darkMode);
+          document.documentElement.style.colorScheme = darkMode ? "dark" : "light";
+          document.body.classList.toggle("dark-mode", darkMode);
+          document.body.classList.toggle("light-mode", !darkMode);
+        };
+
+        applyRegistryTheme();
+        systemTheme.addEventListener("change", () => {
+          if (readPreference() === "system") applyRegistryTheme();
+        });
+        window.addEventListener("storage", (event) => {
+          if (event.key === storageKey || event.key === null) applyRegistryTheme();
+        });
+      })();
+"#;
+
+fn docs_header(subtitle: &str) -> String {
+    format!(
+        r#"<header class="sbol-docs-header">
+      <a class="sbol-docs-brand" href="/" aria-label="Back to SBOL DB">
+        <span class="sbol-docs-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 9c5 0 6 14 11 14s6-14 11-14" />
+            <path d="M5 23c5 0 6-14 11-14s6 14 11 14" />
+            <path d="M8 11v10" />
+            <path d="M24 11v10" />
+            <path d="M16 13v6" />
+          </svg>
+        </span>
+        <span class="sbol-docs-title-group">
+          <span class="sbol-docs-title">SBOL DB</span>
+          <span class="sbol-docs-subtitle">{subtitle}</span>
+        </span>
+      </a>
+      <a class="sbol-docs-back" href="/">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="m15 18-6-6 6-6" />
+        </svg>
+        <span class="sbol-docs-back-label">Back to registry</span>
+      </a>
+    </header>"#
+    )
+}
+
+pub(crate) fn render_scalar_docs_page(
+    title: &str,
+    subtitle: &str,
+    reference_markup: &str,
+    mount_script: &str,
+) -> String {
+    let header = docs_header(subtitle);
+    format!(
+        r##"<!doctype html>
 <html lang="en">
   <head>
-    <title>SBOL DB API</title>
+    <title>{title}</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" href="data:," />
+    <meta name="theme-color" content="#218380" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <style>
-      body { margin: 0; }
+{SCALAR_THEME_CSS}
     </style>
   </head>
   <body>
-    <div id="app"></div>
-    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.62.9"></script>
-    <script>
+    <script>{INITIAL_THEME_SCRIPT}
+    </script>
+    {header}
+    {reference_markup}
+    <script src="{SCALAR_CDN_URL}"></script>
+    <script>{mount_script}
+    </script>
+  </body>
+</html>
+"##
+    )
+}
+
+const REFERENCE_MARKUP: &str = r#"<div id="app"></div>"#;
+
+const MOUNT_SCRIPT: &str = r#"
       Scalar.createApiReference(document.getElementById("app"), {
-        theme: "purple",
+        theme: "none",
         layout: "modern",
+        darkMode: window.sbolDocsDarkMode,
+        forceDarkModeState: window.sbolDocsDarkMode ? "dark" : "light",
+        hideDarkModeToggle: true,
         hideClientButton: false,
+        mcp: {
+          disabled: true
+        },
         sources: [
           {
             title: "SBOL DB native API",
@@ -57,9 +155,6 @@ const DOCS_HTML: &str = r#"<!doctype html>
           }
         ]
       });
-    </script>
-  </body>
-</html>
 "#;
 
 pub async fn openapi_json() -> impl IntoResponse {
@@ -72,5 +167,13 @@ pub async fn synbiohub_openapi_json() -> impl IntoResponse {
 }
 
 pub async fn docs_html() -> impl IntoResponse {
-    ([(CONTENT_TYPE, "text/html; charset=utf-8")], DOCS_HTML)
+    (
+        [(CONTENT_TYPE, "text/html; charset=utf-8")],
+        render_scalar_docs_page(
+            "SBOL DB API Reference",
+            "API reference",
+            REFERENCE_MARKUP,
+            MOUNT_SCRIPT,
+        ),
+    )
 }
