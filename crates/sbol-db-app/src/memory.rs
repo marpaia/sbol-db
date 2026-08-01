@@ -14,10 +14,13 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use sbol_db_core::{ConfigEntry, DomainError, NewUser, User, UserId};
+use sbol_db_core::{
+    ConfigEntry, DomainError, NewUser, OAuthAccessToken, OAuthAuthorizationCode, OAuthClient,
+    OAuthRefreshToken, User, UserId,
+};
 use sbol_db_storage::{
-    ClusterId, ClusterStore, ConfigStore, PageRankStore, RankRow, Signature, SketchStore,
-    TokenStore, UserStore,
+    ClusterId, ClusterStore, ConfigStore, OAuthStore, PageRankStore, RankRow, Signature,
+    SketchStore, TokenStore, UserStore,
 };
 use serde_json::Value;
 
@@ -180,6 +183,98 @@ impl TokenStore for InMemoryTokenStore {
 
     async fn revoke(&self, token_hash: &str) -> Result<bool, DomainError> {
         Ok(self.tokens.lock().unwrap().remove(token_hash).is_some())
+    }
+}
+
+/// Process-local OAuth persistence used by tests and explicitly in-memory
+/// application assemblies.
+#[derive(Default)]
+pub struct InMemoryOAuthStore {
+    clients: Mutex<HashMap<String, OAuthClient>>,
+    codes: Mutex<HashMap<String, OAuthAuthorizationCode>>,
+    access_tokens: Mutex<HashMap<String, OAuthAccessToken>>,
+    refresh_tokens: Mutex<HashMap<String, OAuthRefreshToken>>,
+}
+
+impl InMemoryOAuthStore {
+    /// An empty OAuth store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl OAuthStore for InMemoryOAuthStore {
+    async fn register_client(&self, client: OAuthClient) -> Result<(), DomainError> {
+        let mut clients = self.clients.lock().unwrap();
+        if clients.contains_key(&client.client_id) {
+            return Err(DomainError::InvalidInput(
+                "OAuth client id is already registered".to_owned(),
+            ));
+        }
+        clients.insert(client.client_id.clone(), client);
+        Ok(())
+    }
+
+    async fn get_client(&self, client_id: &str) -> Result<Option<OAuthClient>, DomainError> {
+        Ok(self.clients.lock().unwrap().get(client_id).cloned())
+    }
+
+    async fn issue_authorization_code(
+        &self,
+        code: OAuthAuthorizationCode,
+    ) -> Result<(), DomainError> {
+        self.codes
+            .lock()
+            .unwrap()
+            .insert(code.code_hash.clone(), code);
+        Ok(())
+    }
+
+    async fn consume_authorization_code(
+        &self,
+        code_hash: &str,
+    ) -> Result<Option<OAuthAuthorizationCode>, DomainError> {
+        Ok(self.codes.lock().unwrap().remove(code_hash))
+    }
+
+    async fn issue_access_token(&self, token: OAuthAccessToken) -> Result<(), DomainError> {
+        self.access_tokens
+            .lock()
+            .unwrap()
+            .insert(token.token_hash.clone(), token);
+        Ok(())
+    }
+
+    async fn resolve_access_token(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<OAuthAccessToken>, DomainError> {
+        Ok(self.access_tokens.lock().unwrap().get(token_hash).cloned())
+    }
+
+    async fn revoke_access_token(&self, token_hash: &str) -> Result<bool, DomainError> {
+        Ok(self
+            .access_tokens
+            .lock()
+            .unwrap()
+            .remove(token_hash)
+            .is_some())
+    }
+
+    async fn issue_refresh_token(&self, token: OAuthRefreshToken) -> Result<(), DomainError> {
+        self.refresh_tokens
+            .lock()
+            .unwrap()
+            .insert(token.token_hash.clone(), token);
+        Ok(())
+    }
+
+    async fn consume_refresh_token(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<OAuthRefreshToken>, DomainError> {
+        Ok(self.refresh_tokens.lock().unwrap().remove(token_hash))
     }
 }
 

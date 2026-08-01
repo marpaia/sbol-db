@@ -79,10 +79,7 @@ pub(super) async fn get(State(state): State<AppState>) -> Result<impl IntoRespon
         .map(|origin| MachineAccess {
             api_url: format!("{origin}/api/v2"),
             mcp_url: state.config.mcp_enabled.then(|| format!("{origin}/mcp")),
-            // This becomes Some only when the corresponding OAuth/OIDC
-            // provider is actually mounted. Advertising it early would make
-            // capability discovery indistinguishable from forward-looking copy.
-            authorization_issuer: None,
+            authorization_issuer: Some(origin.clone()),
         });
 
     Ok((

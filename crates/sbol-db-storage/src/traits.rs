@@ -11,8 +11,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use sbol_db_core::{
     BlobRef, ConfigEntry, DomainError, GraphId, GraphRecord, ImportReport, JobId,
-    NeighborhoodQuery, NeighborhoodResult, NewUser, ObjectId, ObjectTerm, SbolObjectRecord,
-    SerializationFormat, Triple, User, UserId,
+    NeighborhoodQuery, NeighborhoodResult, NewUser, OAuthAccessToken, OAuthAuthorizationCode,
+    OAuthClient, OAuthRefreshToken, ObjectId, ObjectTerm, SbolObjectRecord, SerializationFormat,
+    Triple, User, UserId,
 };
 use sbol_db_search::{ClusterId, Signature};
 use serde_json::Value;
@@ -488,6 +489,55 @@ pub trait TokenStore: Send + Sync {
     /// Revoke the token with the given hash, returning whether a token was
     /// removed.
     async fn revoke(&self, token_hash: &str) -> Result<bool, DomainError>;
+}
+
+/// Durable OAuth client and grant persistence for SBOL Identity.
+///
+/// All secret-bearing keys are one-way hashes computed by the application
+/// layer. Code and refresh-token reads are destructive so they remain
+/// single-use even when multiple server processes share a backend.
+#[async_trait]
+pub trait OAuthStore: Send + Sync {
+    /// Register a public OAuth client. Re-registering an existing client id is
+    /// rejected by the concrete store.
+    async fn register_client(&self, client: OAuthClient) -> Result<(), DomainError>;
+
+    /// Look up a client by its exact client id.
+    async fn get_client(&self, client_id: &str) -> Result<Option<OAuthClient>, DomainError>;
+
+    /// Persist a short-lived authorization code grant.
+    async fn issue_authorization_code(
+        &self,
+        code: OAuthAuthorizationCode,
+    ) -> Result<(), DomainError>;
+
+    /// Atomically remove and return an authorization code grant.
+    async fn consume_authorization_code(
+        &self,
+        code_hash: &str,
+    ) -> Result<Option<OAuthAuthorizationCode>, DomainError>;
+
+    /// Persist an audience-bound access token.
+    async fn issue_access_token(&self, token: OAuthAccessToken) -> Result<(), DomainError>;
+
+    /// Resolve a live access-token hash. Expiry is enforced by the application
+    /// service so every backend uses identical clock semantics.
+    async fn resolve_access_token(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<OAuthAccessToken>, DomainError>;
+
+    /// Revoke an access token by hash.
+    async fn revoke_access_token(&self, token_hash: &str) -> Result<bool, DomainError>;
+
+    /// Persist a rotating refresh token.
+    async fn issue_refresh_token(&self, token: OAuthRefreshToken) -> Result<(), DomainError>;
+
+    /// Atomically remove and return a refresh token during rotation.
+    async fn consume_refresh_token(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<OAuthRefreshToken>, DomainError>;
 }
 
 /// The full SBOL-aware store: ingest plus every derived-view read surface.

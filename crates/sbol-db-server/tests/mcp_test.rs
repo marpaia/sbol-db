@@ -6,17 +6,21 @@ use std::sync::Arc;
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, Response, StatusCode};
 use axum::Router;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use sbol_db_app::{AppServices, Registration, SubmitRequest};
 use sbol_db_backend::Backend;
-use sbol_db_core::SerializationFormat;
+use sbol_db_core::{SerializationFormat, User};
 use sbol_db_server::{router, AppState, Metrics, SchemaCache, ServerConfig};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::ImportOverwrite;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
 const BODY_LIMIT: usize = 4 * 1024 * 1024;
+const MCP_RESOURCE: &str = "http://127.0.0.1:8888/mcp";
 
 const FIXTURE: &str = r#"
 @prefix sbol: <http://sbols.org/v2#> .
@@ -75,8 +79,8 @@ async fn app() -> (Router, Arc<AppServices>, TempDir) {
     (router(state, config), services, dir)
 }
 
-async fn register(services: &AppServices, username: &str) -> String {
-    let user = services
+async fn register_user(services: &AppServices, username: &str) -> User {
+    services
         .auth
         .register(Registration {
             username: username.to_owned(),
@@ -89,8 +93,51 @@ async fn register(services: &AppServices, username: &str) -> String {
             is_member: true,
         })
         .await
-        .expect("register user");
-    services.auth.issue_token(user.id).await.expect("token")
+        .expect("register user")
+}
+
+async fn oauth_token(services: &AppServices, user: &User, scopes: &[&str]) -> String {
+    let redirect_uri = "http://127.0.0.1:43123/callback";
+    let client = services
+        .oauth
+        .register_public_client(
+            "MCP integration test".to_owned(),
+            vec![redirect_uri.to_owned()],
+        )
+        .await
+        .expect("register OAuth client");
+    let verifier = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let code = services
+        .oauth
+        .issue_authorization_code(
+            user.id,
+            &client.client_id,
+            redirect_uri,
+            MCP_RESOURCE,
+            scopes.iter().map(|scope| (*scope).to_owned()).collect(),
+            &challenge,
+            None,
+        )
+        .await
+        .expect("issue authorization code");
+    services
+        .oauth
+        .exchange_authorization_code(
+            &code,
+            &client.client_id,
+            redirect_uri,
+            Some(MCP_RESOURCE),
+            verifier,
+        )
+        .await
+        .expect("exchange authorization code")
+        .access_token
+}
+
+async fn register(services: &AppServices, username: &str, scopes: &[&str]) -> String {
+    let user = register_user(services, username).await;
+    oauth_token(services, &user, scopes).await
 }
 
 async fn send(
@@ -123,10 +170,27 @@ async fn json_body(response: Response<Body>) -> Value {
     serde_json::from_slice(&bytes).expect("JSON response")
 }
 
+async fn call_tool(app: &Router, token: &str, id: i32, name: &str, arguments: Value) -> Value {
+    let response = send(
+        app,
+        Some(token),
+        None,
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": name, "arguments": arguments }
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK, "tool {name}");
+    json_body(response).await
+}
+
 #[tokio::test]
 async fn mcp_requires_a_live_bearer_and_rejects_cross_origin_requests() {
     let (app, services, _dir) = app().await;
-    let token = register(&services, "alice").await;
+    let token = register(&services, "alice", &["sbol:read"]).await;
     let request = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -169,9 +233,48 @@ async fn mcp_requires_a_live_bearer_and_rejects_cross_origin_requests() {
 }
 
 #[tokio::test]
-async fn mcp_initializes_and_lists_a_deterministic_read_only_tool_set() {
+async fn mcp_rejects_general_session_tokens_and_challenges_for_incremental_scope() {
     let (app, services, _dir) = app().await;
-    let token = register(&services, "alice").await;
+    let user = register_user(&services, "alice").await;
+    let session_token = services.auth.issue_token(user.id).await.unwrap();
+    let initialize = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2025-11-25" }
+    });
+    let response = send(&app, Some(&session_token), None, initialize).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let challenge = response.headers()["www-authenticate"].to_str().unwrap();
+    assert!(challenge.contains("resource_metadata="));
+    assert!(challenge.contains("sbol:read"));
+
+    let read_token = oauth_token(&services, &user, &["sbol:read"]).await;
+    let response = send(
+        &app,
+        Some(&read_token),
+        None,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "upload_design_collection",
+                "arguments": {}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let challenge = response.headers()["www-authenticate"].to_str().unwrap();
+    assert!(challenge.contains("insufficient_scope"));
+    assert!(challenge.contains("sbol:read sbol:write"));
+}
+
+#[tokio::test]
+async fn mcp_initializes_and_lists_the_complete_capability_set() {
+    let (app, services, _dir) = app().await;
+    let token = register(&services, "alice", &["sbol:read"]).await;
     let response = send(
         &app,
         Some(&token),
@@ -213,11 +316,31 @@ async fn mcp_initializes_and_lists_a_deterministic_read_only_tool_set() {
         .collect();
     assert_eq!(
         names,
-        vec!["search_designs", "get_design", "validate_design_upload"]
+        vec![
+            "search_designs",
+            "get_design",
+            "download_design",
+            "search_sequences",
+            "find_similar_designs",
+            "validate_design_upload",
+            "upload_design_collection",
+            "update_design_metadata",
+            "publish_design",
+            "list_design_collaborators",
+            "share_design",
+            "list_reviews",
+            "start_design_review",
+            "record_review_decision",
+            "get_design_activity",
+        ]
     );
     assert!(tools
         .iter()
-        .all(|tool| tool["annotations"]["readOnlyHint"] == true));
+        .any(|tool| tool["name"] == "upload_design_collection"
+            && tool["annotations"]["readOnlyHint"] == false));
+    assert!(tools.iter().any(
+        |tool| tool["name"] == "search_designs" && tool["annotations"]["readOnlyHint"] == true
+    ));
 
     let response = app
         .clone()
@@ -238,22 +361,9 @@ async fn mcp_initializes_and_lists_a_deterministic_read_only_tool_set() {
 #[tokio::test]
 async fn mcp_reads_private_designs_only_for_the_authenticated_acl_scope() {
     let (app, services, _dir) = app().await;
-    let alice = services
-        .auth
-        .register(Registration {
-            username: "alice".to_owned(),
-            name: "Alice Example".to_owned(),
-            email: "alice@example.org".to_owned(),
-            affiliation: None,
-            password: "s3cret".to_owned(),
-            is_admin: false,
-            is_curator: false,
-            is_member: true,
-        })
-        .await
-        .unwrap();
-    let alice_token = services.auth.issue_token(alice.id).await.unwrap();
-    let bob_token = register(&services, "bob").await;
+    let alice = register_user(&services, "alice").await;
+    let alice_token = oauth_token(&services, &alice, &["sbol:read"]).await;
+    let bob_token = register(&services, "bob", &["sbol:read"]).await;
     let created = services
         .submission_service()
         .submit(SubmitRequest {
@@ -295,7 +405,7 @@ async fn mcp_reads_private_designs_only_for_the_authenticated_acl_scope() {
 #[tokio::test]
 async fn mcp_validation_reports_the_exact_future_identity_without_writing() {
     let (app, services, _dir) = app().await;
-    let token = register(&services, "alice").await;
+    let token = register(&services, "alice", &["sbol:read"]).await;
     let response = send(
         &app,
         Some(&token),
@@ -349,4 +459,188 @@ async fn mcp_validation_reports_the_exact_future_identity_without_writing() {
         .as_str()
         .unwrap()
         .contains("content must not be empty"));
+}
+
+#[tokio::test]
+async fn mcp_executes_confirmed_contribution_sharing_review_and_publication_workflows() {
+    let (app, services, _dir) = app().await;
+    let alice = register_user(&services, "alice").await;
+    let bob = register_user(&services, "bob").await;
+    let curator = services
+        .auth
+        .register(Registration {
+            username: "curator".to_owned(),
+            name: "Curator Example".to_owned(),
+            email: "curator@example.org".to_owned(),
+            affiliation: None,
+            password: "s3cret".to_owned(),
+            is_admin: false,
+            is_curator: true,
+            is_member: true,
+        })
+        .await
+        .unwrap();
+    let alice_token = oauth_token(
+        &services,
+        &alice,
+        &["sbol:read", "sbol:write", "sbol:share", "sbol:review"],
+    )
+    .await;
+    let bob_token = oauth_token(&services, &bob, &["sbol:read"]).await;
+    let curator_token = oauth_token(&services, &curator, &["sbol:read", "sbol:review"]).await;
+
+    let upload = json!({
+        "id": "agent_workflow",
+        "version": "1",
+        "name": "Agent workflow",
+        "format": "turtle",
+        "collision": "fail",
+        "content": FIXTURE
+    });
+    let preview = call_tool(
+        &app,
+        &alice_token,
+        1,
+        "validate_design_upload",
+        upload.clone(),
+    )
+    .await;
+    assert_eq!(preview["result"]["isError"], false);
+    let confirmation = preview["result"]["structuredContent"]["confirmation"].clone();
+
+    let mut commit = upload.as_object().unwrap().clone();
+    commit.insert("confirm".to_owned(), json!(true));
+    commit.insert(
+        "expected_collection_uri".to_owned(),
+        confirmation["expected_collection_uri"].clone(),
+    );
+    commit.insert(
+        "expected_consequence".to_owned(),
+        confirmation["expected_consequence"].clone(),
+    );
+    let committed = call_tool(
+        &app,
+        &alice_token,
+        2,
+        "upload_design_collection",
+        Value::Object(commit),
+    )
+    .await;
+    assert_eq!(committed["result"]["isError"], false);
+    let member = committed["result"]["structuredContent"]["members"][0]
+        .as_str()
+        .unwrap();
+
+    let updated = call_tool(
+        &app,
+        &alice_token,
+        3,
+        "update_design_metadata",
+        json!({
+            "iri": member,
+            "name": "Reviewed private promoter",
+            "mutable_notes": "Prepared through the agent workflow",
+            "confirm": true
+        }),
+    )
+    .await;
+    assert_eq!(updated["result"]["isError"], false);
+    assert_eq!(
+        updated["result"]["structuredContent"]["name"],
+        "Reviewed private promoter"
+    );
+
+    let shared = call_tool(
+        &app,
+        &alice_token,
+        4,
+        "share_design",
+        json!({ "iri": member, "user": "bob", "action": "grant", "confirm": true }),
+    )
+    .await;
+    assert_eq!(shared["result"]["isError"], false);
+    let bob_view = call_tool(&app, &bob_token, 5, "get_design", json!({ "iri": member })).await;
+    assert_eq!(bob_view["result"]["isError"], false);
+
+    let collaborators = call_tool(
+        &app,
+        &alice_token,
+        6,
+        "list_design_collaborators",
+        json!({ "iri": member }),
+    )
+    .await;
+    assert!(collaborators["result"]["structuredContent"]["viewers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|viewer| viewer["username"] == "bob"));
+
+    let review = call_tool(
+        &app,
+        &alice_token,
+        7,
+        "start_design_review",
+        json!({
+            "iri": member,
+            "curator": "curator",
+            "note": "Please inspect the promoter metadata",
+            "confirm": true
+        }),
+    )
+    .await;
+    assert_eq!(review["result"]["isError"], false);
+    let decision = call_tool(
+        &app,
+        &curator_token,
+        8,
+        "record_review_decision",
+        json!({
+            "iri": member,
+            "decision": "approve",
+            "note": "Identity and provenance look correct",
+            "confirm": true
+        }),
+    )
+    .await;
+    assert_eq!(decision["result"]["isError"], false);
+    assert_eq!(
+        decision["result"]["structuredContent"]["status"],
+        "approved"
+    );
+
+    let activity = call_tool(
+        &app,
+        &alice_token,
+        9,
+        "get_design_activity",
+        json!({ "iri": member }),
+    )
+    .await;
+    assert!(
+        activity["result"]["structuredContent"]["total"]
+            .as_u64()
+            .unwrap()
+            >= 3
+    );
+
+    let published = call_tool(
+        &app,
+        &alice_token,
+        10,
+        "publish_design",
+        json!({
+            "iri": member,
+            "id": "agent_public",
+            "version": "1",
+            "collision": "fail",
+            "confirm": true
+        }),
+    )
+    .await;
+    assert_eq!(published["result"]["isError"], false);
+    assert!(published["result"]["structuredContent"]["collection_uri"]
+        .as_str()
+        .unwrap()
+        .contains("/public/agent_public/agent_public_collection/1"));
 }

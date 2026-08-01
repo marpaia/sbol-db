@@ -133,9 +133,10 @@ async fn instance_contract_is_safe_and_matches_enforced_registration_policy() {
         "https://sbol.io/api/v2"
     );
     assert_eq!(initial["machine_access"]["mcp_url"], "https://sbol.io/mcp");
-    assert!(initial["machine_access"]
-        .get("authorization_issuer")
-        .is_none());
+    assert_eq!(
+        initial["machine_access"]["authorization_issuer"],
+        "https://sbol.io"
+    );
 
     register(&services, "admin", "admin@example.org", true).await;
     services

@@ -15,7 +15,7 @@ pub(crate) mod auth;
 mod collaboration;
 mod collections;
 mod docs;
-mod download;
+pub(crate) mod download;
 mod error;
 mod instance;
 mod negotiate;

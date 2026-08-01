@@ -5,6 +5,8 @@ mod docs;
 mod error;
 mod explorer;
 mod export;
+mod identity;
+mod identity_signing;
 mod instance;
 #[cfg(feature = "lab")]
 mod lab;
@@ -20,6 +22,7 @@ mod v2;
 
 pub use error::ApiError;
 pub use export::export_subject_rdf;
+pub use identity_signing::IdentitySigningKey;
 #[cfg(feature = "lab")]
 pub use lab::SchemaCache;
 pub use metrics::Metrics;
@@ -103,9 +106,17 @@ pub struct ServerConfig {
     /// may leave it unset; `/api/v2/instance` will then omit `machine_access`.
     pub public_origin: Option<String>,
     /// Mount the authenticated Streamable HTTP MCP endpoint at `/mcp` and
-    /// advertise it from `/api/v2/instance`. The server remains stateless and
-    /// read/validate-only; every request requires a live SBOL DB bearer token.
+    /// advertise it from `/api/v2/instance`. The transport remains stateless;
+    /// every request requires a scoped SBOL Identity OAuth token issued for
+    /// this exact MCP resource.
     pub mcp_enabled: bool,
+    /// Ed25519 key used to sign SBOL Identity OpenID Connect ID tokens.
+    ///
+    /// [`Default`] generates a process-local key for tests and loopback
+    /// development. Production deployments must set
+    /// `SBOL_DB_IDENTITY_SIGNING_KEY` to a stable base64-encoded Ed25519
+    /// PKCS#8 document shared by every replica.
+    pub identity_signing_key: IdentitySigningKey,
     /// When true (and the `lab` cargo feature is enabled), embedded application
     /// assets, the transitional `/lab` entry, and `/lab/api` are available.
     /// The root application additionally requires `portal_enabled`. This toggle is
@@ -160,6 +171,7 @@ impl Default for ServerConfig {
             max_body_bytes: 32 * 1024 * 1024,
             public_origin: None,
             mcp_enabled: true,
+            identity_signing_key: IdentitySigningKey::default(),
             lab_enabled: true,
             portal_enabled: true,
             session_cookie_secure: false,
@@ -197,6 +209,14 @@ impl ServerConfig {
                 .ok()
                 .map(|value| parse_bool(&value))
                 .unwrap_or(defaults.mcp_enabled),
+            identity_signing_key: std::env::var("SBOL_DB_IDENTITY_SIGNING_KEY")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| {
+                    IdentitySigningKey::from_pkcs8_base64(&value)
+                        .unwrap_or_else(|message| panic!("{message}"))
+                })
+                .unwrap_or(defaults.identity_signing_key),
             lab_enabled: std::env::var("SBOL_DB_LAB_ENABLED")
                 .ok()
                 .map(|v| parse_bool(&v))
@@ -422,6 +442,19 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
     // behind the `X-authorization` middleware. It is independent of the
     // Basic-auth `/sparql-auth*` write path above.
     let synbiohub_routes = synbiohub::router(state.clone());
+    if !config.identity_signing_key.is_persistent()
+        && config.public_origin.as_deref().is_some_and(|origin| {
+            url::Url::parse(origin)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_owned))
+                .is_some_and(|host| !matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"))
+        })
+    {
+        tracing::warn!(
+            "SBOL Identity is using an ephemeral signing key; set SBOL_DB_IDENTITY_SIGNING_KEY before production deployment"
+        );
+    }
+    let identity_routes = identity::router(state.clone());
     let mcp_routes = if config.mcp_enabled {
         mcp::router()
     } else {
@@ -431,7 +464,10 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
 
     let app = mount_portal(
         mount_lab(
-            api.merge(authed).merge(synbiohub_routes).merge(mcp_routes),
+            api.merge(authed)
+                .merge(synbiohub_routes)
+                .merge(identity_routes)
+                .merge(mcp_routes),
             &config,
             &state,
         )

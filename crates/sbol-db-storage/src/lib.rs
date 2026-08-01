@@ -52,9 +52,9 @@ pub use stats::{
 };
 pub use traits::{
     distinct_graph_iris, distinct_object_iris, AclStore, BlobStore, ClusterStore, ConfigStore,
-    GraphStore, JobQueue, NeighborhoodStore, ObjectStore, OntologyStore, PageRankStore, SbolStore,
-    SequenceSearchStore, SketchStore, TextSearchStore, TokenStore, TripleSource, TripleWriter,
-    UserStore, SBH_CAN_VIEW, SBH_OWNED_BY,
+    GraphStore, JobQueue, NeighborhoodStore, OAuthStore, ObjectStore, OntologyStore, PageRankStore,
+    SbolStore, SequenceSearchStore, SketchStore, TextSearchStore, TokenStore, TripleSource,
+    TripleWriter, UserStore, SBH_CAN_VIEW, SBH_OWNED_BY,
 };
 
 /// Re-exported so backends and consumers name the cluster id and similarity

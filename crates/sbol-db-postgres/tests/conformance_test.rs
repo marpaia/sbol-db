@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use sbol_db_app::AppServices;
 use sbol_db_postgres::{
-    connect, run_migrations, JobRepository, PgClusterStore, PgConfigStore, PgPageRankStore,
-    PgSketchStore, PgTokenStore, PgUserStore, SbolObjectService,
+    connect, run_migrations, JobRepository, PgClusterStore, PgConfigStore, PgOAuthStore,
+    PgPageRankStore, PgSketchStore, PgTokenStore, PgUserStore, SbolObjectService,
 };
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
@@ -26,7 +26,7 @@ async fn fresh_app() -> AppServices {
          sbol_sequences, sbol_features, sbol_locations, sbol_constraints, \
          sbol_interactions, sbol_participations, sbol_sequence_kmers, sbol_ontologies, \
          sbol_ontology_terms, sbol_ontology_term_aliases, sbol_ontology_closure, \
-         sbol_jobs, sbol_job_attempts, sbol_job_logs, sbh_user, sbh_api_token, \
+         sbol_jobs, sbol_job_attempts, sbol_job_logs, sbol_oauth_client, sbh_user, sbh_api_token, \
          object_pagerank, sbol_sequence_cluster, sbh_app_config \
          RESTART IDENTITY CASCADE",
     )
@@ -48,9 +48,11 @@ async fn fresh_app() -> AppServices {
     let pagerank: Arc<dyn PageRankStore> = Arc::new(PgPageRankStore::new(pool.clone()));
     let cluster: Arc<dyn ClusterStore> = Arc::new(PgClusterStore::new(pool.clone()));
     let sketch: Arc<dyn SketchStore> = Arc::new(PgSketchStore::new(pool.clone()));
+    let oauth = Arc::new(PgOAuthStore::new(pool.clone()));
     let config: Arc<dyn ConfigStore> = Arc::new(PgConfigStore::new(pool));
     AppServices::new(store, sparql, sparql_update, jobs, acl)
         .with_identity(users, tokens)
+        .with_oauth(oauth)
         .with_sequence_stores(pagerank, cluster, sketch)
         .with_config(config)
 }

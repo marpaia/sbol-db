@@ -25,6 +25,7 @@ mod federation;
 mod maintenance;
 pub mod memory;
 mod mutation;
+mod oauth;
 mod object;
 mod permission;
 mod plugin;
@@ -51,6 +52,7 @@ pub use federation::{
 };
 pub use maintenance::{MaintenanceScheduleReceipt, SearchMaintenanceScheduler};
 pub use mutation::{MakePublicOutcome, MakePublicRequest, MutationError, MutationService};
+pub use oauth::{OAuthService, OAuthTokenPair};
 pub use object::{
     ObjectAttachment, ObjectAttachmentSection, ObjectContentState, ObjectDetails, ObjectProperty,
     ObjectPropertyValue, ObjectProvenance, ObjectReference, ObjectReferenceSection,
@@ -84,7 +86,7 @@ use sbol_db_search::{SearchDeployment, SearchRuntime, VectorRouter};
 use sbol_db_search_sdk::{IndexMaintenanceEvent, IndexMaintenanceRegistry, IndexMutationSource};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
-    AclStore, BlobStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore,
+    AclStore, BlobStore, ClusterStore, ConfigStore, JobQueue, OAuthStore, PageRankStore, SbolStore,
     SketchStore, TokenStore, UserStore,
 };
 
@@ -136,6 +138,11 @@ pub struct AppServices {
     pub tokens: Arc<dyn TokenStore>,
     /// Password and API-token authentication over the identity stores.
     pub auth: AuthService,
+    /// Durable OAuth client/grant persistence for SBOL Identity.
+    pub oauth_store: Arc<dyn OAuthStore>,
+    /// Authorization-code, PKCE, audience, scope, refresh, and revocation
+    /// behavior shared by MCP and ecosystem sign-in adapters.
+    pub oauth: OAuthService,
     /// The shared ranked text index backing native free-text search. The
     /// rebuild job writes it and the search adapters read it; a caller that
     /// needs a persistent, filesystem-backed index swaps one in with
@@ -189,6 +196,7 @@ impl AppServices {
             acl,
             Arc::new(memory::InMemoryUserStore::new()),
             Arc::new(memory::InMemoryTokenStore::new()),
+            Arc::new(memory::InMemoryOAuthStore::new()),
         )
     }
 
@@ -210,6 +218,7 @@ impl AppServices {
             backend.acl.clone(),
             backend.users.clone(),
             backend.tokens.clone(),
+            backend.oauth.clone(),
         )
         .with_sequence_stores(
             backend.pagerank.clone(),
@@ -299,6 +308,14 @@ impl AppServices {
         self.auth = AuthService::new(users.clone(), tokens.clone());
         self.users = users;
         self.tokens = tokens;
+        self
+    }
+
+    /// Replace the process-local OAuth store, rebuilding the SBOL Identity
+    /// service over a durable backend implementation.
+    pub fn with_oauth(mut self, oauth_store: Arc<dyn OAuthStore>) -> Self {
+        self.oauth = OAuthService::new(oauth_store.clone());
+        self.oauth_store = oauth_store;
         self
     }
 
@@ -450,9 +467,11 @@ impl AppServices {
         acl: Arc<dyn AclStore>,
         users: Arc<dyn UserStore>,
         tokens: Arc<dyn TokenStore>,
+        oauth_store: Arc<dyn OAuthStore>,
     ) -> Self {
         let acl_service = AclService::new(store.clone(), acl.clone());
         let auth = AuthService::new(users.clone(), tokens.clone());
+        let oauth = OAuthService::new(oauth_store.clone());
         let text_search = Arc::new(
             RankedTextIndex::in_ram().expect("in-RAM ranked text index construction cannot fail"),
         );
@@ -488,6 +507,8 @@ impl AppServices {
             users,
             tokens,
             auth,
+            oauth_store,
+            oauth,
             text_search,
             search_runtime,
             search_vectors: None,

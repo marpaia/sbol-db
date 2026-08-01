@@ -2,11 +2,16 @@
 //!
 //! [`attach_identity`] prefers an `Authorization: Bearer <token>` header and,
 //! when no Authorization header is present, accepts the shared `HttpOnly`
-//! browser cookie. Both resolve through the facade's
-//! [`AuthService`](sbol_db_app::AuthService) to a [`User`]. Authentication is
-//! tolerant when public browsing is enabled: a missing, malformed, stale, or
-//! unrecognized token is anonymous rather than rejected, and an anonymous
-//! caller is scoped to the public graph by [`AclService`](sbol_db_app::AclService).
+//! browser cookie. First-party tokens resolve through
+//! [`AuthService`](sbol_db_app::AuthService); audience-bound OAuth tokens
+//! resolve through the OAuth service and carry delegated scopes. Both map to a
+//! [`User`]. Authentication is
+//! tolerant of legacy compatibility credentials when public browsing is
+//! enabled: an absent or unrecognized legacy token is anonymous, and an
+//! anonymous caller is scoped to the public graph by
+//! [`AclService`](sbol_db_app::AclService). An explicitly presented SBOL
+//! Identity access token is instead held to the OAuth protected-resource
+//! contract and rejected when invalid or issued for another audience.
 //! An instance configured with `requireLogin` rejects anonymous resource
 //! requests while keeping bootstrap, instance, session, and API-doc routes
 //! public.
@@ -16,15 +21,19 @@
 //! read from JavaScript without turning V2 mutations into CSRF targets.
 
 use axum::extract::{Request, State};
-use axum::http::header::{AUTHORIZATION, HOST, ORIGIN};
+use axum::http::header::{AUTHORIZATION, HOST, ORIGIN, WWW_AUTHENTICATE};
 use axum::http::{HeaderMap, Method};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use sbol_db_core::User;
+use sbol_db_core::{DomainError, OAuthAccessToken, User};
 use sbol_db_sparql::GraphScope;
 use url::Url;
 
 use crate::error::ApiError;
+use crate::identity::{
+    api_protected_resource_metadata_url, api_resource, SCOPE_READ, SCOPE_REVIEW, SCOPE_SHARE,
+    SCOPE_WRITE,
+};
 use crate::session::token_from_cookie;
 use crate::v2::error::V2Error;
 use crate::AppState;
@@ -75,10 +84,39 @@ pub async fn attach_identity(
     next: Next,
 ) -> Response {
     let credential = presented_credential(req.headers());
-    let user = match credential.token() {
-        Some(token) => resolve_user(&state, token).await,
-        None => None,
+    let (user, oauth_grant) = match credential.token() {
+        Some(token) => match resolve_identity(&state, token).await {
+            Ok(identity) => identity,
+            Err(error) => return V2Error::from(error).into_response(),
+        },
+        None => (None, None),
     };
+    if credential.source == CredentialSource::Bearer
+        && credential
+            .token()
+            .is_some_and(|token| token.starts_with("sbol_at_"))
+        && (oauth_grant.is_none() || user.is_none())
+    {
+        return oauth_invalid_token(&state);
+    }
+    if let Some(grant) = &oauth_grant {
+        let Some(required) = required_oauth_scopes(req.method(), req.uri().path()) else {
+            return V2Error::from(ApiError::Forbidden(
+                "this endpoint is not available to delegated OAuth clients".to_owned(),
+            ))
+            .into_response();
+        };
+        if !required
+            .iter()
+            .all(|required| grant.scopes.iter().any(|scope| scope == required))
+        {
+            return oauth_scope_error(
+                &state,
+                required,
+                "the SBOL Identity token does not grant this API operation",
+            );
+        }
+    }
     if user.is_some()
         && credential.source == CredentialSource::Cookie
         && is_unsafe(req.method())
@@ -104,6 +142,96 @@ pub async fn attach_identity(
     req.extensions_mut().insert(Identity(user));
     req.extensions_mut().insert(credential);
     next.run(req).await
+}
+
+/// Attach only the normal first-party browser session. SBOL Identity uses this
+/// middleware for its authorization page: an API or MCP bearer token must
+/// never substitute for an interactive resource-owner session and thereby
+/// mint a broader delegated grant.
+pub(crate) async fn attach_browser_identity(
+    State(state): State<AppState>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    let user = match token_from_cookie(req.headers()) {
+        Some(token) => match state.app.auth.resolve_token(token).await {
+            Ok(Some(user_id)) => match state.app.users.get_by_id(user_id).await {
+                Ok(user) => user,
+                Err(error) => return V2Error::from(error).into_response(),
+            },
+            Ok(None) => None,
+            Err(error) => return V2Error::from(error).into_response(),
+        },
+        None => None,
+    };
+    if user.is_some() && is_unsafe(req.method()) && !same_origin(req.headers()) {
+        return V2Error::from(ApiError::Forbidden(
+            "cookie-authenticated authorization decisions require a same-origin request".to_owned(),
+        ))
+        .into_response();
+    }
+    req.extensions_mut().insert(Identity(user));
+    next.run(req).await
+}
+
+fn required_oauth_scopes(method: &Method, path: &str) -> Option<&'static [&'static str]> {
+    let path = path.strip_prefix("/api/v2").unwrap_or(path);
+    if matches!(path, "" | "/" | "/instance" | "/openapi.json" | "/docs") {
+        return Some(&[]);
+    }
+    if path.starts_with("/admin") {
+        return None;
+    }
+    if (path == "/account" || path == "/account/password") && is_unsafe(method) {
+        return None;
+    }
+    if path == "/session" {
+        return Some(&[]);
+    }
+    if path == "/collections/validate" || path == "/search" {
+        return Some(&[SCOPE_READ]);
+    }
+    if path == "/reviews" || path.contains("/reviews") || path.ends_with("/activity") {
+        return Some(&[SCOPE_READ, SCOPE_REVIEW]);
+    }
+    if path.contains("/shares") || path.ends_with("/owner") {
+        return Some(&[SCOPE_READ, SCOPE_SHARE]);
+    }
+    if is_unsafe(method) {
+        Some(&[SCOPE_READ, SCOPE_WRITE])
+    } else {
+        Some(&[SCOPE_READ])
+    }
+}
+
+fn oauth_scope_error(state: &AppState, required: &[&str], message: &str) -> Response {
+    let mut response = V2Error::from(ApiError::Forbidden(message.to_owned())).into_response();
+    let scopes = required.join(" ");
+    let challenge = api_protected_resource_metadata_url(state)
+        .map(|metadata| {
+            format!(
+                "Bearer error=\"insufficient_scope\", scope=\"{scopes}\", resource_metadata=\"{metadata}\""
+            )
+        })
+        .unwrap_or_else(|| format!("Bearer error=\"insufficient_scope\", scope=\"{scopes}\""));
+    if let Ok(challenge) = challenge.parse() {
+        response.headers_mut().insert(WWW_AUTHENTICATE, challenge);
+    }
+    response
+}
+
+fn oauth_invalid_token(state: &AppState) -> Response {
+    let mut response = V2Error::from(ApiError::Unauthorized(
+        "the SBOL Identity token is expired, revoked, or not issued for this API".to_owned(),
+    ))
+    .into_response();
+    let challenge = api_protected_resource_metadata_url(state)
+        .map(|metadata| format!("Bearer error=\"invalid_token\", resource_metadata=\"{metadata}\""))
+        .unwrap_or_else(|| "Bearer error=\"invalid_token\"".to_owned());
+    if let Ok(challenge) = challenge.parse() {
+        response.headers_mut().insert(WWW_AUTHENTICATE, challenge);
+    }
+    response
 }
 
 /// Reject an explicitly cross-origin browser request. Used by login itself,
@@ -181,6 +309,12 @@ fn is_unsafe(method: &Method) -> bool {
 }
 
 fn is_public_bootstrap_path(path: &str) -> bool {
+    if path.starts_with("/.well-known/oauth-")
+        || path == "/.well-known/openid-configuration"
+        || path.starts_with("/oauth/")
+    {
+        return true;
+    }
     let path = path.strip_prefix("/api/v2").unwrap_or(path);
     matches!(
         path,
@@ -220,11 +354,29 @@ fn same_origin(headers: &HeaderMap) -> bool {
     origin.port_or_known_default() == request_port
 }
 
-/// Resolve a plaintext bearer token to the account it authenticates, tolerating
-/// a stale or bogus token (which resolves to `None`).
-async fn resolve_user(state: &AppState, token: &str) -> Option<User> {
-    let user_id = state.app.auth.resolve_token(token).await.ok().flatten()?;
-    state.app.users.get_by_id(user_id).await.ok().flatten()
+/// Resolve either a first-party compatibility token or a scoped OAuth token
+/// issued for this exact V2 API resource. The caller decides whether an absent
+/// result is an anonymous legacy request or an invalid SBOL Identity token.
+async fn resolve_identity(
+    state: &AppState,
+    token: &str,
+) -> Result<(Option<User>, Option<OAuthAccessToken>), DomainError> {
+    if let Some(user_id) = state.app.auth.resolve_token(token).await? {
+        return Ok((state.app.users.get_by_id(user_id).await?, None));
+    }
+    let Some(resource) = api_resource(state) else {
+        return Ok((None, None));
+    };
+    let Some(grant) = state
+        .app
+        .oauth
+        .resolve_access_token(token, &resource)
+        .await?
+    else {
+        return Ok((None, None));
+    };
+    let user = state.app.users.get_by_id(grant.user_id).await?;
+    Ok((user, Some(grant)))
 }
 
 #[cfg(test)]
@@ -294,11 +446,37 @@ mod tests {
             "/openapi.json",
             "/docs",
             "/api/v2/instance",
+            "/.well-known/openid-configuration",
+            "/.well-known/oauth-protected-resource/api/v2",
         ] {
             assert!(is_public_bootstrap_path(path), "{path}");
         }
         for path in ["/search", "/objects", "/api/v2/search"] {
             assert!(!is_public_bootstrap_path(path), "{path}");
         }
+    }
+
+    #[test]
+    fn delegated_scope_policy_distinguishes_reads_writes_sharing_and_review() {
+        assert_eq!(
+            required_oauth_scopes(&Method::POST, "/api/v2/collections/validate"),
+            Some(&[SCOPE_READ][..])
+        );
+        assert_eq!(
+            required_oauth_scopes(&Method::POST, "/api/v2/collections"),
+            Some(&[SCOPE_READ, SCOPE_WRITE][..])
+        );
+        assert_eq!(
+            required_oauth_scopes(&Method::DELETE, "/api/v2/objects/x/shares/alice"),
+            Some(&[SCOPE_READ, SCOPE_SHARE][..])
+        );
+        assert_eq!(
+            required_oauth_scopes(&Method::POST, "/api/v2/objects/x/reviews/decision"),
+            Some(&[SCOPE_READ, SCOPE_REVIEW][..])
+        );
+        assert_eq!(
+            required_oauth_scopes(&Method::GET, "/api/v2/admin/users"),
+            None
+        );
     }
 }

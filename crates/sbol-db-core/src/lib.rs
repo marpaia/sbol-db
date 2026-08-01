@@ -9,6 +9,7 @@ mod ids;
 mod iri;
 pub mod kmer;
 mod neighborhood;
+mod oauth;
 pub mod obo;
 mod projections;
 mod record;
@@ -25,6 +26,7 @@ pub use neighborhood::{
     group_by_depth, Direction, EdgeInfo, EdgeObject, NeighborhoodQuery, NeighborhoodResult,
     NodeInfo,
 };
+pub use oauth::{OAuthAccessToken, OAuthAuthorizationCode, OAuthClient, OAuthRefreshToken};
 pub use projections::{
     ComponentProjection, ConstraintProjection, FeatureProjection, InteractionProjection,
     LocationProjection, ParticipationProjection, SequenceAlphabet, SequenceProjection,

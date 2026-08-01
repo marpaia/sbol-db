@@ -24,8 +24,8 @@ Entry points to the project's documentation, organized by topic.
 
 - **[CLI and agent access](machine-access.md)**: the ownership boundary
   between the `sbol` CLI and SBOL DB, runtime endpoint discovery,
-  collision-safe submission preview, authenticated MCP tools, and the OAuth
-  and tracked-sync integrity gates.
+  collision-safe submission preview, SBOL Identity OAuth/OIDC, scoped MCP and
+  API access, and the tracked-sync integrity boundary.
 
 - **[Registry discovery contract](discovery-contract.md)**: normalized text
   and biological facets, exact totals, deterministic paging, public URL state,

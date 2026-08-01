@@ -26,6 +26,12 @@ pub struct V2Error {
     message: String,
 }
 
+impl std::fmt::Display for V2Error {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
 impl From<ApiError> for V2Error {
     fn from(err: ApiError) -> Self {
         let (status, code) = err.status_and_code();

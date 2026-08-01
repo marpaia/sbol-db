@@ -431,8 +431,8 @@ function McpDocumentation({ serverAddress }: { serverAddress: string }) {
             />
             <ConnectionStep
               number="2"
-              title="Sign in to SBOL DB"
-              description="Use your normal registry account when your agent prompts you."
+              title="Sign in with SBOL"
+              description="Your registry opens a secure sign-in and shows the capabilities your agent is requesting."
             />
             <ConnectionStep
               number="3"
@@ -447,12 +447,11 @@ function McpDocumentation({ serverAddress }: { serverAddress: string }) {
                 <LockKeyhole className="mt-0.5 size-4 shrink-0 text-sky-300" />
                 <div>
                   <p className="text-xs font-medium text-zinc-100">
-                    Your access rules still apply.
+                    You stay in control.
                   </p>
                   <p className="mt-1 text-xs leading-5 text-zinc-400">
-                    Your agent can only see and change what you can. Public,
-                    shared, and private designs continue to follow your SBOL DB
-                    permissions.
+                    Your agent receives only the capabilities you approve, and
+                    it can only see or change designs your SBOL account can.
                   </p>
                 </div>
               </div>

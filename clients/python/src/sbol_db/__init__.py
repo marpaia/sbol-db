@@ -15,6 +15,14 @@ from .errors import (
     SparqlError,
     TimeoutError_,
 )
+from .identity import (
+    AuthorizationRequest,
+    IdentityProviderMetadata,
+    OAuthTokens,
+    PublicClientRegistration,
+    SbolIdentityClient,
+    SbolIdentityError,
+)
 from .models import GraphRecord, ImportReport, SbolObject
 from .partshop import PartShop
 from .sparql import SparqlResult
@@ -34,4 +42,10 @@ __all__ = [
     "SparqlError",
     "TimeoutError_",
     "BackendUnsupportedError",
+    "SbolIdentityClient",
+    "SbolIdentityError",
+    "IdentityProviderMetadata",
+    "PublicClientRegistration",
+    "AuthorizationRequest",
+    "OAuthTokens",
 ]

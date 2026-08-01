@@ -25,8 +25,8 @@ use async_trait::async_trait;
 use sbol_db_app::{
     AppServices, AttachmentService, AuthService, Downloader, EditService, FacetedSearch,
     FederationError, FederationService, FsBlobStore, JoinPayload, JoinResponse, MutationError,
-    MutationService, PermissionService, Registration, SubmissionService, SubmitRequest,
-    WebOfRegistriesClient, WorInstance, PUBLIC_GRAPH,
+    MutationService, OAuthService, PermissionService, Registration, SubmissionService,
+    SubmitRequest, WebOfRegistriesClient, WorInstance, PUBLIC_GRAPH,
 };
 use sbol_db_core::{
     Direction, DomainError, GraphId, IriString, NeighborhoodQuery, NewUser, ObjectTerm,
@@ -130,12 +130,122 @@ pub async fn run_all(app: &AppServices) {
     write_authz_matrix(app).await;
     user_crud(app).await;
     token_issue_resolve_revoke(app).await;
+    oauth_grant_lifecycle(app).await;
     legacy_sha1_rehash_on_login(app).await;
     config_store_roundtrip(app).await;
     config_roundtrip(app).await;
     admin_user_crud(app).await;
     wor_map_persisted(app).await;
     v1_v2_data_parity(app).await;
+}
+
+/// OAuth clients and every secret-bearing grant persist through the backend
+/// store, while codes and refresh tokens remain single-use and access tokens
+/// remain bound to their exact protected resource.
+pub async fn oauth_grant_lifecycle(app: &AppServices) {
+    const REDIRECT: &str = "http://127.0.0.1:43123/callback";
+    const RESOURCE: &str = "https://registry.example/api/v2";
+    const OTHER_RESOURCE: &str = "https://registry.example/mcp";
+    const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+
+    let user = app
+        .auth
+        .register(Registration {
+            username: "conformance_oauth".to_owned(),
+            name: "OAuth Conformance".to_owned(),
+            email: "conformance-oauth@example.org".to_owned(),
+            affiliation: None,
+            password: "not-a-real-secret".to_owned(),
+            is_admin: false,
+            is_curator: false,
+            is_member: true,
+        })
+        .await
+        .expect("register OAuth conformance account");
+    let client = app
+        .oauth
+        .register_public_client("Conformance client".to_owned(), vec![REDIRECT.to_owned()])
+        .await
+        .expect("register OAuth client");
+    let code = app
+        .oauth
+        .issue_authorization_code(
+            user.id,
+            &client.client_id,
+            REDIRECT,
+            RESOURCE,
+            vec!["sbol:read".to_owned(), "sbol:write".to_owned()],
+            CHALLENGE,
+            Some("conformance-nonce".to_owned()),
+        )
+        .await
+        .expect("issue authorization code");
+
+    // Rebuild the service over the same handle so this path exercises the
+    // backend, not service-local state.
+    let reloaded = OAuthService::new(app.oauth_store.clone());
+    let other_service = reloaded.clone();
+    let (left, right) = tokio::join!(
+        reloaded.exchange_authorization_code(
+            &code,
+            &client.client_id,
+            REDIRECT,
+            Some(RESOURCE),
+            VERIFIER
+        ),
+        other_service.exchange_authorization_code(
+            &code,
+            &client.client_id,
+            REDIRECT,
+            Some(RESOURCE),
+            VERIFIER
+        )
+    );
+    let pair = match (left, right) {
+        (Ok(pair), Err(_)) | (Err(_), Ok(pair)) => pair,
+        (left, right) => panic!(
+            "exactly one concurrent authorization-code exchange must succeed; left={left:?}, right={right:?}"
+        ),
+    };
+    assert_eq!(pair.nonce.as_deref(), Some("conformance-nonce"));
+    assert!(reloaded
+        .resolve_access_token(&pair.access_token, OTHER_RESOURCE)
+        .await
+        .expect("wrong-audience lookup")
+        .is_none());
+    assert!(reloaded
+        .resolve_access_token(&pair.access_token, RESOURCE)
+        .await
+        .expect("right-audience lookup")
+        .is_some());
+
+    let rotated = reloaded
+        .refresh(
+            &pair.refresh_token,
+            &client.client_id,
+            Some(RESOURCE),
+            Some(vec!["sbol:read".to_owned()]),
+        )
+        .await
+        .expect("rotate refresh token with narrowed scope");
+    assert_eq!(rotated.scopes, vec!["sbol:read"]);
+    assert!(
+        reloaded
+            .refresh(&pair.refresh_token, &client.client_id, Some(RESOURCE), None,)
+            .await
+            .is_err(),
+        "refresh token is single-use"
+    );
+    reloaded
+        .revoke(&rotated.access_token)
+        .await
+        .expect("revoke access token");
+    assert!(reloaded
+        .resolve_access_token(&rotated.access_token, RESOURCE)
+        .await
+        .expect("revoked lookup")
+        .is_none());
 }
 
 /// The durable configuration store's contract: an unset key reads back absent,

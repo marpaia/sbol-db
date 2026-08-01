@@ -9,10 +9,10 @@ pub use pool::{connect, connect_with_retry, run_migrations, PgMigrator, PgPool, 
 pub use repo::{
     AccelRepository, Activity, BlockingLock, DatabaseSize, GraphRepository, IncomingForeignKey,
     IndexStats, JobRepository, NeighborhoodRepository, OntologyRepository, OutgoingForeignKey,
-    PgClusterStore, PgConfigStore, PgPageRankStore, PgSketchStore, PgSqlConsole, PgStatsRepository,
-    PgTokenStore, PgUserStore, ProjectionEvent, ProjectionEventRepository, RecordedValidation,
-    SbolObjectRepository, SequenceSearchRepository, SlowQuery, TableColumn, TableSchema,
-    TableStats, TripleRepository, TypedProjectionCounts, TypedProjectionRepository,
+    PgClusterStore, PgConfigStore, PgOAuthStore, PgPageRankStore, PgSketchStore, PgSqlConsole,
+    PgStatsRepository, PgTokenStore, PgUserStore, ProjectionEvent, ProjectionEventRepository,
+    RecordedValidation, SbolObjectRepository, SequenceSearchRepository, SlowQuery, TableColumn,
+    TableSchema, TableStats, TripleRepository, TypedProjectionCounts, TypedProjectionRepository,
     ValidationRepository,
 };
 pub use service::SbolObjectService;

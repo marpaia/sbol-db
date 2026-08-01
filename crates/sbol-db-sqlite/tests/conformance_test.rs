@@ -7,8 +7,8 @@ use sbol_db_app::AppServices;
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_sqlite::{
     connect_and_migrate, SqliteClusterStore, SqliteConfigStore, SqliteJobRepository,
-    SqlitePageRankStore, SqlitePool, SqliteSketchStore, SqliteStore, SqliteTokenStore,
-    SqliteUserStore,
+    SqliteOAuthStore, SqlitePageRankStore, SqlitePool, SqliteSketchStore, SqliteStore,
+    SqliteTokenStore, SqliteUserStore,
 };
 use sbol_db_storage::{
     AclStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore, SketchStore,
@@ -77,9 +77,11 @@ async fn sqlite_passes_full_conformance_suite() {
     let pagerank: Arc<dyn PageRankStore> = Arc::new(SqlitePageRankStore::new(pool.clone()));
     let cluster: Arc<dyn ClusterStore> = Arc::new(SqliteClusterStore::new(pool.clone()));
     let sketch: Arc<dyn SketchStore> = Arc::new(SqliteSketchStore::new(pool.clone()));
+    let oauth = Arc::new(SqliteOAuthStore::new(pool.clone()));
     let config: Arc<dyn ConfigStore> = Arc::new(SqliteConfigStore::new(pool));
     let app = AppServices::new(store_dyn, sparql, sparql_update, jobs, acl)
         .with_identity(users, tokens)
+        .with_oauth(oauth)
         .with_sequence_stores(pagerank, cluster, sketch)
         .with_config(config);
     sbol_db_conformance::run_all(&app).await;
