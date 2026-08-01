@@ -1,16 +1,17 @@
 import {
   ArrowRight,
-  BookOpen,
   Boxes,
+  Cable,
   DatabaseZap,
   Dna,
+  FilePlus2,
+  FolderKanban,
   Search,
   ShieldCheck,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { ObjectResultCard } from "@/components/portal/ObjectResultCard";
-import { MachineAccessSection } from "@/components/portal/MachineAccessSection";
 import { SearchBox } from "@/components/portal/SearchBox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ export default function HomeRoute() {
   const instance = useInstance();
   const session = useSession();
   const recent = usePortalSearch({ limit: 6 });
+  const user = session.data?.authenticated ? session.data.user : null;
 
   return (
     <>
@@ -81,35 +83,53 @@ export default function HomeRoute() {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <EntryPoint
             icon={<Search />}
-            title="Browse the registry"
+            title={user ? "Search the registry" : "Browse the registry"}
             description="Explore the full visible corpus, then narrow by keyword or SBOL type."
             to="/search"
           />
           <EntryPoint
-            icon={<Dna />}
-            title="Search by sequence"
-            description="Find exact or aligned nucleotide matches across the sequences visible to you."
-            to="/sequence-search"
+            icon={user ? <FilePlus2 /> : <Dna />}
+            title={user ? "Contribute designs" : "Search by sequence"}
+            description={
+              user
+                ? "Import SBOL documents into your workspace, validate them, and prepare them for publication."
+                : "Find exact or aligned nucleotide matches across the sequences visible to you."
+            }
+            to={user ? "/contribute" : "/search?kind=sequence"}
           />
           <EntryPoint
-            icon={<BookOpen />}
-            title="Build on the API"
-            description="Use the documented V2 REST surface or download native RDF representations."
-            href="/api/v2/docs"
+            icon={user ? <FolderKanban /> : <Cable />}
+            title={user ? "Open your workspace" : "Connect your tools"}
+            description={
+              user
+                ? "Review your designs, collections, drafts, and recent contribution activity."
+                : "Use the sbol CLI, connect an AI agent over MCP, or build on the V2 REST API."
+            }
+            to={user ? "/workspace" : "/connect"}
           />
           <EntryPoint
             icon={<DatabaseZap />}
             title={
               session.data?.user?.is_admin
                 ? "Open admin workspace"
-                : "Manage your designs"
+                : user
+                  ? "Account and access"
+                  : "Manage your designs"
             }
             description={
               session.data?.user?.is_admin
                 ? "Inspect data, run queries, and operate this instance from the admin workspace."
-                : "Sign in to work with private designs and account-scoped data."
+                : user
+                  ? "Review your profile, membership, and account security settings."
+                  : "Sign in to work with private designs and account-scoped data."
             }
-            to={session.data?.user?.is_admin ? "/admin" : "/login"}
+            to={
+              session.data?.user?.is_admin
+                ? "/admin"
+                : user
+                  ? "/account"
+                  : "/login"
+            }
           />
         </div>
       </section>
@@ -122,7 +142,7 @@ export default function HomeRoute() {
                 Registry
               </p>
               <h2 className="mt-2 text-2xl font-semibold tracking-tight">
-                Explore recent designs
+                {user ? "Recent designs" : "Explore recent designs"}
               </h2>
               <p className="mt-2 text-sm text-muted-foreground">
                 A starting point from the objects visible to your current
@@ -159,8 +179,6 @@ export default function HomeRoute() {
           )}
         </div>
       </section>
-
-      <MachineAccessSection />
     </>
   );
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  canonicalSequenceSearchParams,
   parseDiscoveryParams,
   translateClassicSearchPath,
 } from "./discovery.ts";
@@ -87,18 +88,30 @@ test("keeps every lossy metadata translation visible", () => {
   assert.equal(translated.has("q"), false);
 });
 
-test("sends classic sequence grammar to the dedicated public workflow", () => {
+test("sends classic sequence grammar to the unified search workflow", () => {
   const translation = translateClassicSearchPath(
     "objectType=Sequence&exactsequence=ATGC"
   );
 
-  assert.equal(translation.pathname, "/sequence-search");
+  assert.equal(translation.pathname, "/search");
+  assert.equal(translation.params.get("kind"), "sequence");
   assert.equal(translation.params.get("q"), "ATGC");
   assert.equal(translation.params.get("mode"), "exact");
   assert.match(
     translation.params.get("compat_warning") || "",
     /ignores the additional segment/
   );
+});
+
+test("canonicalizes the legacy sequence-search URL without losing its state", () => {
+  const canonical = canonicalSequenceSearchParams(
+    new URLSearchParams("q=ATGC&mode=exact&limit=100")
+  );
+
+  assert.equal(canonical.get("kind"), "sequence");
+  assert.equal(canonical.get("q"), "ATGC");
+  assert.equal(canonical.get("mode"), "exact");
+  assert.equal(canonical.get("limit"), "100");
 });
 
 test("expands SBOL 3 object types and rejects unknown CURIE prefixes", () => {

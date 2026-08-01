@@ -12,6 +12,7 @@ import {
   BookOpen,
   Boxes,
   Building2,
+  ChevronDown,
   ChevronRight,
   Command as CommandIcon,
   Database,
@@ -29,14 +30,17 @@ import {
   SearchCheck,
   Share2,
   Table2,
-  Undo2,
+  UserRound,
   Users,
 } from "lucide-react";
 import { NavLink, useMatch } from "react-router-dom";
 
 import { useBackendInfo } from "@/hooks/useBackendInfo";
 import type { Capabilities } from "@/lib/api";
-import { PRODUCT_NAME } from "@/lib/product";
+import { ProductAccountMenu } from "@/components/product/ProductAccountMenu";
+import { ProductModeSwitch } from "@/components/product/ProductModeSwitch";
+import { useInstance, useSession } from "@/features/portal/queries";
+import { deploymentName, PRODUCT_NAME } from "@/lib/product";
 import { adminPath } from "@/lib/routes";
 import {
   Collapsible,
@@ -117,7 +121,7 @@ function navGroups(capabilities?: Capabilities): NavGroup[] {
 
   return [
     {
-      label: "Data",
+      label: "Data model",
       icon: <Boxes className="text-sbol-rbs" />,
       items: [
         { to: adminPath("/import"), icon: <Import />, label: "Import" },
@@ -182,7 +186,10 @@ function navGroups(capabilities?: Capabilities): NavGroup[] {
 
 export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
   const { data: info } = useBackendInfo();
+  const instance = useInstance();
+  const session = useSession();
   const groups = navGroups(info?.capabilities);
+  const deployment = deploymentName(instance.data?.name);
   return (
     <Sidebar collapsible="icon" variant="sidebar">
       <SidebarHeader>
@@ -196,18 +203,22 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
                     {PRODUCT_NAME}
                   </span>
                   <span className="truncate text-xs text-sidebar-foreground/60">
-                    Admin workspace
+                    {deployment || "Admin workspace"}
                   </span>
                 </div>
               </NavLink>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
+        <ProductModeSwitch
+          mode="admin"
+          className="w-full justify-stretch bg-sidebar-accent/35 [&>a]:flex-1 [&>a]:justify-center group-data-[collapsible=icon]:hidden"
+        />
       </SidebarHeader>
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+          <SidebarGroupLabel>Admin tools</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               <NavItem
@@ -227,14 +238,6 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton asChild tooltip="Return to registry">
-              <NavLink to="/">
-                <Undo2 />
-                <span>Return to registry</span>
-              </NavLink>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
             <SidebarMenuButton
               onClick={onOpenPalette}
               tooltip="Command palette (⌘K)"
@@ -247,15 +250,40 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            <SidebarMenuButton asChild tooltip="API docs">
-              <a href="/docs" target="_blank" rel="noopener noreferrer">
+            <SidebarMenuButton asChild tooltip="API reference">
+              <a href="/api/v2/docs" target="_blank" rel="noopener noreferrer">
                 <BookOpen />
-                <span>API docs</span>
+                <span>API reference</span>
               </a>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarSeparator className="my-1" />
           <ThemeToggle />
+          {session.data?.user && (
+            <SidebarMenuItem>
+              <ProductAccountMenu
+                user={session.data.user}
+                surface="admin"
+                align="start"
+              >
+                <SidebarMenuButton
+                  size="lg"
+                  tooltip={`Account: ${session.data.user.name}`}
+                >
+                  <UserRound />
+                  <div className="grid min-w-0 flex-1 text-left leading-tight">
+                    <span className="truncate text-xs font-medium">
+                      {session.data.user.name}
+                    </span>
+                    <span className="truncate text-[10px] text-sidebar-foreground/55">
+                      {session.data.user.is_admin ? "Administrator" : "Member"}
+                    </span>
+                  </div>
+                  <ChevronDown className="ml-auto size-3 text-sidebar-foreground/50" />
+                </SidebarMenuButton>
+              </ProductAccountMenu>
+            </SidebarMenuItem>
+          )}
         </SidebarMenu>
       </SidebarFooter>
 
@@ -304,7 +332,7 @@ function CollapsibleNavGroup({ group }: { group: NavGroup }) {
           <SidebarMenuButton tooltip={group.label}>
             {group.icon}
             <span>{group.label}</span>
-            <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+            <ChevronRight className="ml-auto transition-transform duration-150 [transition-timing-function:cubic-bezier(0.23,1,0.32,1)] group-data-[state=open]/collapsible:rotate-90" />
           </SidebarMenuButton>
         </CollapsibleTrigger>
         <CollapsibleContent>

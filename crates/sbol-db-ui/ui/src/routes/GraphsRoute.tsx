@@ -12,9 +12,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { ChevronLeft, ChevronRight, Plus, Share2 } from "lucide-react";
 
+import { AdminPage } from "@/components/admin/AdminPage";
 import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
 import { ImportDialog } from "@/components/lab/ImportDialog";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
+import { ProductEmptyState } from "@/components/product/ProductEmptyState";
+import { Button } from "@/components/ui/button";
 import { useGraphs } from "@/hooks/useGraphs";
 import type { GraphSummary, ImportReport } from "@/lib/api";
 import { adminPath } from "@/lib/routes";
@@ -101,28 +104,18 @@ export default function GraphsRoute() {
   ];
 
   return (
-    <div className="h-full w-full overflow-y-auto">
-      <div className="mx-auto max-w-6xl space-y-6 px-8 py-10">
-        <header className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Graphs</h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Every named graph in the store. <strong>SBOL3</strong> graphs are
-              imported documents with a derived object view;{" "}
-              <strong>verbatim</strong> graphs are raw RDF written through the
-              triplestore endpoints.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setImporterOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            <Plus size={14} />
+    <>
+      <AdminPage
+        title="Graphs"
+        description="Every named graph in the store. SBOL3 graphs are imported documents with a derived object view; verbatim graphs are raw RDF written through the triplestore endpoints."
+        eyebrow="Data model"
+        action={
+          <Button size="sm" type="button" onClick={() => setImporterOpen(true)}>
+            <Plus />
             Import
-          </button>
-        </header>
-
+          </Button>
+        }
+      >
         {error ? (
           <ErrorBanner
             title="Couldn't list graphs"
@@ -147,14 +140,14 @@ export default function GraphsRoute() {
             <Pagination page={page} totalPages={totalPages} onPage={setPage} />
           </>
         )}
-      </div>
+      </AdminPage>
 
       <ImportDialog
         open={importerOpen}
         onOpenChange={setImporterOpen}
         onImported={onImported}
       />
-    </div>
+    </>
   );
 }
 
@@ -238,22 +231,18 @@ function Pagination({
 
 function Empty({ onImport }: { onImport: () => void }) {
   return (
-    <div className="rounded-lg border bg-card px-6 py-10 text-center">
-      <Share2 size={20} className="mx-auto text-muted-foreground/60" />
-      <p className="mt-3 text-sm text-foreground">No graphs yet.</p>
-      <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
-        Import an SBOL document, or write RDF through the Graph Store endpoints,
-        to populate the store.
-      </p>
-      <button
-        type="button"
-        onClick={onImport}
-        className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-      >
-        <Plus size={14} />
-        Import a document
-      </button>
-    </div>
+    <ProductEmptyState
+      density="compact"
+      icon={Share2}
+      title="No graphs yet"
+      description="Import an SBOL document, or write RDF through the Graph Store endpoints, to populate the store."
+      action={
+        <Button type="button" size="sm" onClick={onImport}>
+          <Plus />
+          Import a document
+        </Button>
+      }
+    />
   );
 }
 

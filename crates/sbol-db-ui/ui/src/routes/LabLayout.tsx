@@ -111,12 +111,24 @@ const TOP_LEVEL_SECTIONS: Array<{
   section: string;
   page: string;
 }> = [
-  { prefix: adminPath("/import"), section: "Data", page: "Import" },
-  { prefix: adminPath("/graphs"), section: "Data", page: "Graphs" },
-  { prefix: adminPath("/objects"), section: "Data", page: "Objects" },
-  { prefix: adminPath("/sequences"), section: "Data", page: "Sequences" },
-  { prefix: adminPath("/ontologies"), section: "Data", page: "Ontologies" },
-  { prefix: adminPath("/neighborhood"), section: "Data", page: "Neighborhood" },
+  { prefix: adminPath("/import"), section: "Data model", page: "Import" },
+  { prefix: adminPath("/graphs"), section: "Data model", page: "Graphs" },
+  { prefix: adminPath("/objects"), section: "Data model", page: "Objects" },
+  {
+    prefix: adminPath("/sequences"),
+    section: "Data model",
+    page: "Sequences",
+  },
+  {
+    prefix: adminPath("/ontologies"),
+    section: "Data model",
+    page: "Ontologies",
+  },
+  {
+    prefix: adminPath("/neighborhood"),
+    section: "Data model",
+    page: "Neighborhood",
+  },
   { prefix: adminPath("/schema"), section: "Query", page: "Schema" },
   { prefix: adminPath("/sparql"), section: "Query", page: "SPARQL" },
   { prefix: adminPath("/sql"), section: "Query", page: "SQL" },

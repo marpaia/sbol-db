@@ -1,24 +1,45 @@
 import { CheckCircle2, Loader2, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 
+import {
+  ProductSurface,
+  ProductSurfaceBody,
+  ProductSurfaceHeader,
+} from "@/components/product/ProductSurface";
 import { cn } from "@/lib/utils";
 
 export function AdminPage({
   title,
   description,
+  eyebrow = "Admin workspace",
   action,
   children,
+  maxWidth = "6xl",
 }: {
   title: string;
   description: string;
+  eyebrow?: string;
   action?: ReactNode;
   children: ReactNode;
+  maxWidth?: "5xl" | "6xl" | "7xl";
 }) {
   return (
     <div className="h-full w-full overflow-y-auto">
-      <div className="mx-auto max-w-6xl space-y-8 px-5 py-8 sm:px-8 sm:py-10">
+      <div
+        className={cn(
+          "mx-auto space-y-8 px-5 py-8 sm:px-8 sm:py-10",
+          maxWidth === "5xl"
+            ? "max-w-5xl"
+            : maxWidth === "7xl"
+              ? "max-w-7xl"
+              : "max-w-6xl"
+        )}
+      >
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-2xl">
+            <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-primary">
+              {eyebrow}
+            </p>
             <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               {description}
@@ -44,20 +65,15 @@ export function AdminSection({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border bg-card shadow-sm">
-      <header className="flex flex-wrap items-start justify-between gap-4 border-b px-5 py-4 sm:px-6">
-        <div>
-          <h2 className="text-sm font-semibold">{title}</h2>
-          {description && (
-            <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
-              {description}
-            </p>
-          )}
-        </div>
-        {action}
-      </header>
-      <div className="p-5 sm:p-6">{children}</div>
-    </section>
+    <ProductSurface density="compact">
+      <ProductSurfaceHeader
+        density="compact"
+        title={title}
+        description={description}
+        action={action}
+      />
+      <ProductSurfaceBody density="compact">{children}</ProductSurfaceBody>
+    </ProductSurface>
   );
 }
 
