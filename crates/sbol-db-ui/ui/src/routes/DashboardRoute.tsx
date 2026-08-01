@@ -35,11 +35,6 @@ import { type Dialect, useLabStore } from "@/lib/store";
 import { adminPath } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
-function greeting(): string {
-  const h = new Date().getHours();
-  return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
-}
-
 export default function DashboardRoute() {
   const { data, isLoading, error } = useOverview();
   const navigate = useNavigate();
@@ -75,19 +70,20 @@ export default function DashboardRoute() {
 
   return (
     <div className="h-full w-full overflow-y-auto">
-      <div className="mx-auto max-w-6xl px-8 py-10 space-y-10">
-        <header>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {greeting()}! 👋
+      <div className="mx-auto max-w-[90rem] space-y-10 px-5 py-8 sm:px-8 sm:py-10">
+        <header className="border-b border-foreground/15 pb-7">
+          <p className="ledger-label text-primary">Admin control plane</p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-[-0.025em]">
+            Registry operations
           </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
+          <p className="mt-2 max-w-4xl text-sm leading-6 text-muted-foreground">
             Welcome to the SBOL DB admin workspace. Query your corpus with
             SPARQL or SQL, browse the schema, or load ontology packs. The panels
             below show what's loaded, with a few templates to get you started.
           </p>
           <p className="mt-2 text-sm text-muted-foreground">
-            SBOL DB is an open data management system for synthetic biology.
-            View the project on{" "}
+            This workspace is the operational view of the same registry. View
+            the implementation on{" "}
             <a
               href="https://github.com/marpaia/sbol-db"
               target="_blank"
@@ -344,9 +340,7 @@ export default function DashboardRoute() {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <h2 className="mb-3 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-      {children}
-    </h2>
+    <h2 className="ledger-label mb-3 text-muted-foreground">{children}</h2>
   );
 }
 
@@ -362,7 +356,7 @@ function CountCard({
   loading: boolean;
 }) {
   return (
-    <div className="rounded-lg border bg-card p-4 transition-colors hover:border-primary/40">
+    <div className="border border-foreground/15 border-t-2 border-t-primary/60 bg-card p-4 transition-colors hover:border-primary/40">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span className="text-primary">{icon}</span>
         <span>{label}</span>
@@ -391,8 +385,8 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="overflow-hidden rounded-lg border bg-card">
-      <header className="flex items-center gap-2 border-b border-primary/15 bg-primary/5 px-4 py-2.5">
+    <section className="overflow-hidden border border-foreground/15 bg-card">
+      <header className="flex items-center gap-2 border-b border-foreground/15 bg-muted/10 px-4 py-2.5">
         <h3 className="text-sm font-medium text-primary">{title}</h3>
         {subtitle && (
           <span className="text-xs text-muted-foreground">{subtitle}</span>
@@ -421,7 +415,7 @@ function Template({
     <button
       type="button"
       onClick={onClick}
-      className="group rounded-lg border bg-card p-4 text-left transition-colors hover:border-primary/40 hover:bg-accent"
+      className="group border border-foreground/15 bg-card p-4 text-left transition-colors hover:border-primary/40 hover:bg-accent"
     >
       <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-primary">
         <span>{icon}</span>

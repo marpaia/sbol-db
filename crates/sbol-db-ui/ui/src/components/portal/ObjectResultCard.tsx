@@ -20,21 +20,21 @@ export function ObjectResultCard({
     <Link
       to={publicObjectPath(hit.uri)}
       className={cn(
-        "group flex rounded-xl border bg-card shadow-sm transition-[border-color,box-shadow,transform] duration-150 [transition-timing-function:cubic-bezier(0.23,1,0.32,1)] hover:border-primary/35 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:scale-[0.995] motion-reduce:transition-none",
+        "group relative flex bg-card transition-[background-color,border-color,transform] duration-150 [transition-timing-function:var(--ease-out)] hover:bg-accent/25 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset active:scale-[0.998] motion-reduce:transition-none",
         variant === "card"
-          ? "min-h-52 flex-col p-5"
-          : "items-start gap-4 p-4 sm:p-5"
+          ? "min-h-56 flex-col border border-foreground/15 p-5 before:absolute before:inset-x-0 before:top-0 before:h-0.5 before:bg-primary/70"
+          : "items-start gap-4 bg-transparent px-2 py-5 sm:px-3 sm:py-6"
       )}
     >
       <ObjectTypeMark
         objectType={hit.object_type}
-        className={cn("rounded-lg", variant === "card" ? "size-9" : "size-10")}
+        className={cn(variant === "card" ? "size-9" : "size-10")}
       />
 
       <div className="flex min-w-0 flex-1 flex-col self-stretch">
         <div className="flex min-w-0 items-start gap-3">
           <div className="min-w-0 flex-1">
-            <h3 className="truncate font-semibold tracking-tight text-foreground group-hover:text-primary">
+            <h3 className="record-title truncate text-lg font-medium tracking-tight text-foreground group-hover:text-primary">
               {hit.name || hit.display_id || shortIri(hit.uri)}
             </h3>
             <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
@@ -42,7 +42,7 @@ export function ObjectResultCard({
               {hit.version ? ` · v${hit.version}` : ""}
             </div>
           </div>
-          <ArrowUpRight className="size-4 shrink-0 text-muted-foreground/50 group-hover:text-primary" />
+          <ArrowUpRight className="size-4 shrink-0 text-muted-foreground/50 transition-transform duration-150 [transition-timing-function:var(--ease-out)] group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-primary motion-reduce:transition-none" />
         </div>
 
         <p
@@ -58,7 +58,7 @@ export function ObjectResultCard({
         <div className="mt-auto flex flex-wrap items-center gap-x-3 gap-y-2 pt-4 text-[11px] text-muted-foreground">
           <Badge
             variant="secondary"
-            className="max-w-full font-mono text-[10px]"
+            className="max-w-full rounded-[2px] border border-foreground/10 bg-transparent font-mono text-[10px]"
           >
             <span className="truncate">{shortIri(hit.object_type)}</span>
           </Badge>

@@ -25,10 +25,12 @@ export function StatusBar({
   onExportJson,
 }: StatusBarProps) {
   return (
-    <footer className="border-t bg-background text-xs">
+    <footer className="border-t border-t-foreground/15 bg-card/60 font-mono text-xs">
       <div className="mx-auto flex max-w-full items-center gap-4 px-4 py-1.5 text-muted-foreground">
         <StatusDot status={status} />
-        <span className="text-[10px] uppercase tracking-wider">{dialect}</span>
+        <span className="border-l-2 border-l-sbol-cds pl-2 text-[10px] uppercase tracking-[0.16em]">
+          {dialect}
+        </span>
         <span className="ml-auto flex items-center gap-4">
           {(onExportCsv || onExportJson) && (
             <span className="flex items-center gap-1">
@@ -36,7 +38,7 @@ export function StatusBar({
                 <button
                   type="button"
                   onClick={onExportCsv}
-                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  className="inline-flex items-center gap-1 rounded-[2px] px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                   title="Download CSV"
                 >
                   <Download size={12} />
@@ -47,7 +49,7 @@ export function StatusBar({
                 <button
                   type="button"
                   onClick={onExportJson}
-                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  className="inline-flex items-center gap-1 rounded-[2px] px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                   title="Download JSON"
                 >
                   <Download size={12} />

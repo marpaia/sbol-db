@@ -7,6 +7,15 @@ export default {
   theme: {
     extend: {
       fontFamily: {
+        display: [
+          "Iowan Old Style",
+          "Palatino Linotype",
+          "Book Antiqua",
+          "Palatino",
+          "Georgia",
+          "ui-serif",
+          "serif",
+        ],
         sans: [
           "Inter",
           "ui-sans-serif",

@@ -157,7 +157,7 @@ function DiscoverySearch() {
 
   const setView = (view: "grid" | "list") => {
     const next = new URLSearchParams(params);
-    setStringParam(next, "view", view, "grid");
+    setStringParam(next, "view", view, "list");
     setParams(next, { replace: true });
   };
 
@@ -180,12 +180,10 @@ function DiscoverySearch() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
+    <div className="mx-auto w-full max-w-[90rem] px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
       <header className="max-w-4xl">
-        <p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">
-          Registry discovery
-        </p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-[-0.025em] sm:text-4xl">
+        <p className="ledger-label text-primary">Registry discovery</p>
+        <h1 className="mt-3 text-4xl font-medium tracking-[-0.03em] sm:text-5xl">
           {state.query.q
             ? `Results for “${state.query.q}”`
             : "Explore biological designs"}
@@ -212,7 +210,7 @@ function DiscoverySearch() {
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[260px_minmax(0,1fr)]">
         <aside className="hidden lg:block">
-          <div className="sticky top-24 rounded-xl border bg-muted/10 p-5">
+          <div className="sticky top-24 border-l-2 border-primary bg-muted/20 p-5">
             <DiscoveryFilters {...filtersProps} />
           </div>
         </aside>
@@ -317,7 +315,7 @@ function DiscoverySearch() {
                 "mt-5",
                 state.view === "grid"
                   ? "grid gap-4 md:grid-cols-2 xl:grid-cols-3"
-                  : "space-y-3"
+                  : "divide-y divide-foreground/15 border-y border-foreground/15"
               )}
             >
               {results.data.items.map((hit) => (
@@ -329,7 +327,7 @@ function DiscoverySearch() {
               ))}
             </div>
           ) : (
-            <div className="mt-5 rounded-xl border border-dashed bg-muted/10 px-6 py-16 text-center">
+            <div className="mt-5 border-y border-dashed border-foreground/25 bg-muted/10 px-6 py-16 text-center">
               <h2 className="font-medium">No matching designs</h2>
               <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
                 No visible object satisfies every active filter. Remove one or
@@ -512,14 +510,14 @@ function ResultSkeleton({ view }: { view: "grid" | "list" }) {
         "mt-5",
         view === "grid"
           ? "grid gap-4 md:grid-cols-2 xl:grid-cols-3"
-          : "space-y-3"
+          : "divide-y divide-foreground/15 border-y border-foreground/15"
       )}
       aria-label="Loading search results"
     >
       {Array.from({ length: view === "grid" ? 9 : 6 }).map((_, index) => (
         <Skeleton
           key={index}
-          className={cn("rounded-xl", view === "grid" ? "h-52" : "h-40")}
+          className={cn("rounded-none", view === "grid" ? "h-52" : "h-32")}
         />
       ))}
     </div>

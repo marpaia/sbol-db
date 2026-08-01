@@ -16,10 +16,13 @@ export function AdminPage({
 }) {
   return (
     <div className="h-full w-full overflow-y-auto">
-      <div className="mx-auto max-w-6xl space-y-8 px-5 py-8 sm:px-8 sm:py-10">
-        <header className="flex flex-wrap items-start justify-between gap-4">
+      <div className="mx-auto max-w-[90rem] space-y-8 px-5 py-8 sm:px-8 sm:py-10">
+        <header className="flex flex-wrap items-start justify-between gap-4 border-b border-foreground/15 pb-6">
           <div className="max-w-2xl">
-            <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+            <p className="ledger-label text-primary">Admin control plane</p>
+            <h1 className="mt-2 text-3xl font-semibold tracking-[-0.025em]">
+              {title}
+            </h1>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               {description}
             </p>
@@ -44,8 +47,8 @@ export function AdminSection({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border bg-card shadow-sm">
-      <header className="flex flex-wrap items-start justify-between gap-4 border-b px-5 py-4 sm:px-6">
+    <section className="border border-foreground/15 bg-card/80">
+      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-foreground/15 bg-muted/10 px-5 py-4 sm:px-6">
         <div>
           <h2 className="text-sm font-semibold">{title}</h2>
           {description && (

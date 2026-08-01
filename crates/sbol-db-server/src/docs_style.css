@@ -1,0 +1,182 @@
+:root {
+  color-scheme: light dark;
+  --sbol-paper: #faf8f2;
+  --sbol-paper-raised: #fffdf8;
+  --sbol-ink: #172033;
+  --sbol-muted: #667085;
+  --sbol-rule: #d9d5ca;
+  --sbol-cds: #167866;
+  --sbol-promoter: #d9772b;
+  --sbol-rbs: #7557a6;
+  --sbol-terminator: #c94f43;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--sbol-paper);
+  color: var(--sbol-ink);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--sbol-cds) 22%, transparent);
+}
+
+.api-masthead {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  min-height: 4rem;
+  align-items: center;
+  gap: 1.5rem;
+  border-bottom: 1px solid var(--sbol-rule);
+  background: color-mix(in srgb, var(--sbol-paper-raised) 94%, transparent);
+  padding: 0.65rem clamp(1rem, 3vw, 2.5rem);
+}
+
+.api-masthead::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  content: "";
+  background: linear-gradient(
+    90deg,
+    var(--sbol-promoter) 0 25%,
+    var(--sbol-rbs) 25% 50%,
+    var(--sbol-cds) 50% 75%,
+    var(--sbol-terminator) 75% 100%
+  );
+}
+
+.api-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  color: var(--sbol-ink);
+  text-decoration: none;
+}
+
+.api-mark {
+  width: 2.2rem;
+  height: 2.2rem;
+  flex: none;
+  border: 1px solid var(--sbol-rule);
+  border-radius: 4px;
+  background: var(--sbol-paper-raised);
+}
+
+.api-brand-copy {
+  display: grid;
+  gap: 0.05rem;
+}
+
+.api-brand-name,
+.api-surface,
+.api-nav {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.api-brand-name {
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.api-surface {
+  color: var(--sbol-muted);
+  font-size: 0.62rem;
+}
+
+.api-nav {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-left: auto;
+  font-size: 0.65rem;
+}
+
+.api-nav a {
+  border-bottom: 1px solid transparent;
+  color: var(--sbol-muted);
+  padding-block: 0.25rem;
+  text-decoration: none;
+}
+
+.api-nav a:hover,
+.api-nav a:focus-visible {
+  border-color: var(--sbol-cds);
+  color: var(--sbol-ink);
+  outline: none;
+}
+
+#app {
+  min-height: calc(100vh - 4rem);
+}
+
+/* Scalar's stable design tokens. Keeping these here gives both documentation
+   routes the same registry identity without forking Scalar's component CSS. */
+.light-mode {
+  --scalar-background-1: var(--sbol-paper);
+  --scalar-background-2: var(--sbol-paper-raised);
+  --scalar-background-3: #f1eee6;
+  --scalar-background-accent: #e5f1ed;
+  --scalar-color-1: var(--sbol-ink);
+  --scalar-color-2: #4f5b6d;
+  --scalar-color-3: var(--sbol-muted);
+  --scalar-color-accent: var(--sbol-cds);
+  --scalar-border-color: var(--sbol-rule);
+  --scalar-radius: 4px;
+  --scalar-radius-lg: 6px;
+}
+
+.dark-mode {
+  --sbol-paper: #111826;
+  --sbol-paper-raised: #182132;
+  --sbol-ink: #f4f0e7;
+  --sbol-muted: #a8b0bd;
+  --sbol-rule: #354052;
+  --scalar-background-1: var(--sbol-paper);
+  --scalar-background-2: var(--sbol-paper-raised);
+  --scalar-background-3: #202b3e;
+  --scalar-background-accent: #163c37;
+  --scalar-color-1: var(--sbol-ink);
+  --scalar-color-2: #d0d5dd;
+  --scalar-color-3: var(--sbol-muted);
+  --scalar-color-accent: #59bfa8;
+  --scalar-border-color: var(--sbol-rule);
+  --scalar-radius: 4px;
+  --scalar-radius-lg: 6px;
+}
+
+@media (max-width: 42rem) {
+  .api-masthead {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+
+  .api-nav {
+    margin-left: 2.9rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -10,22 +10,11 @@ use axum::response::IntoResponse;
 
 const OPENAPI_JSON: &str = include_str!("openapi.json");
 
-const DOCS_HTML: &str = r#"<!doctype html>
-<html lang="en">
-  <head>
-    <title>sbol-db V2 API</title>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" href="data:," />
-    <style>
-      body { margin: 0; }
-    </style>
-  </head>
-  <body>
+const DOCS_BODY: &str = r#"
     <script id="api-reference" data-url="/api/v2/openapi.json"></script>
     <script>
       var configuration = {
-        theme: "purple",
+        theme: "none",
         layout: "modern",
         hideClientButton: false
       };
@@ -33,8 +22,6 @@ const DOCS_HTML: &str = r#"<!doctype html>
         JSON.stringify(configuration);
     </script>
     <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.62.9"></script>
-  </body>
-</html>
 "#;
 
 /// `GET /api/v2/openapi.json` — the embedded V2 OpenAPI 3.1 schema.
@@ -44,5 +31,8 @@ pub async fn openapi_json() -> impl IntoResponse {
 
 /// `GET /api/v2/docs` — the interactive V2 API reference.
 pub async fn docs_html() -> impl IntoResponse {
-    ([(CONTENT_TYPE, "text/html; charset=utf-8")], DOCS_HTML)
+    (
+        [(CONTENT_TYPE, "text/html; charset=utf-8")],
+        crate::docs::docs_page("SBOL DB / V2 API", "V2 API reference", DOCS_BODY),
+    )
 }

@@ -23,26 +23,27 @@ export function ObjectHeader({ object }: { object: PortalObjectDetails }) {
   );
 
   return (
-    <header className="relative overflow-hidden border-b bg-muted/10">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_82%_10%,hsl(var(--primary)/0.10),transparent_35%)]" />
-      <div className="relative mx-auto max-w-7xl px-4 pb-9 pt-7 sm:px-6 sm:pb-11 lg:px-8">
+    <header className="registry-field overflow-hidden border-b border-foreground/15">
+      <div className="mx-auto max-w-[90rem] px-4 pb-10 pt-7 sm:px-6 sm:pb-12 lg:px-8">
         <Link
           to="/search"
-          className="mb-7 inline-flex min-h-9 items-center gap-1.5 rounded-md pr-2 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          className="mb-8 inline-flex min-h-9 items-center gap-1.5 rounded-[3px] pr-2 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           <ArrowLeft className="size-4" /> Back to search
         </Link>
         <div className="flex items-start gap-4 sm:gap-5">
           <ObjectTypeMark
             objectType={object.object_type}
-            className="mt-0.5 size-12 sm:size-14"
+            className="mt-0.5 size-12 bg-card/75 sm:size-14"
           />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge>{shortIri(object.object_type)}</Badge>
+              <Badge className="rounded-[2px] font-mono text-[10px] uppercase tracking-[0.08em]">
+                {shortIri(object.object_type)}
+              </Badge>
               <Badge
                 variant="outline"
-                className="gap-1.5 bg-background/70 text-[10px]"
+                className="gap-1.5 rounded-[2px] bg-background/70 text-[10px]"
               >
                 {object.visibility === "public" ? (
                   <Globe2 className="size-3" />
@@ -55,7 +56,7 @@ export function ObjectHeader({ object }: { object: PortalObjectDetails }) {
                 <Badge
                   key={type}
                   variant="outline"
-                  className="max-w-full font-mono text-[10px]"
+                  className="max-w-full rounded-[2px] font-mono text-[10px]"
                   title={type}
                 >
                   <span className="truncate">{shortIri(type)}</span>
@@ -68,7 +69,7 @@ export function ObjectHeader({ object }: { object: PortalObjectDetails }) {
               )}
             </div>
 
-            <h1 className="mt-4 max-w-4xl text-balance text-3xl font-semibold tracking-[-0.025em] sm:text-4xl">
+            <h1 className="record-title mt-5 max-w-4xl text-balance text-4xl font-medium leading-tight tracking-[-0.035em] sm:text-5xl">
               {title}
             </h1>
             {object.description ? (
@@ -81,7 +82,7 @@ export function ObjectHeader({ object }: { object: PortalObjectDetails }) {
               </p>
             )}
 
-            <div className="mt-6 flex max-w-4xl items-center gap-2 rounded-lg border bg-background/80 p-2 pl-3 shadow-sm backdrop-blur">
+            <div className="mt-7 flex max-w-4xl items-center gap-2 border-y border-foreground/20 bg-background/70 py-2 pl-3">
               <code className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                 {object.iri}
               </code>

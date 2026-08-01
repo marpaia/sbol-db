@@ -64,17 +64,20 @@ export default function LabLayout() {
   }, [paletteOpen]);
 
   return (
-    <SidebarProvider className="h-svh">
+    <SidebarProvider className="admin-instrument h-svh">
       <AppSidebar onOpenPalette={() => setPaletteOpen(true)} />
       <SidebarInset className="h-svh overflow-hidden">
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
+        <header className="flex h-[3.25rem] shrink-0 items-center gap-2 border-b border-foreground/15 bg-card/75 px-3 backdrop-blur">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mx-1 h-4" />
-          <Breadcrumb pathname={pathname} rootLabel={`${PRODUCT_NAME} Admin`} />
+          <Breadcrumb
+            pathname={pathname}
+            rootLabel={`${PRODUCT_NAME} / ADMIN`}
+          />
           <button
             type="button"
             onClick={() => setPaletteOpen(true)}
-            className="ml-auto inline-flex items-center gap-2 rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            className="ml-auto inline-flex items-center gap-2 rounded-[3px] border bg-background px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
           >
             <CommandIcon size={12} />
             <span>Search…</span>

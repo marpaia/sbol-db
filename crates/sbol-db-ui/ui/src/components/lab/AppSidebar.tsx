@@ -195,14 +195,20 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
                   <span className="truncate font-semibold tracking-tight">
                     {PRODUCT_NAME}
                   </span>
-                  <span className="truncate text-xs text-sidebar-foreground/60">
-                    Admin workspace
+                  <span className="truncate font-mono text-[9px] uppercase tracking-[0.12em] text-sidebar-foreground/60">
+                    Registry instrument
                   </span>
                 </div>
               </NavLink>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
+        <div className="mt-1 flex h-0.5 overflow-hidden" aria-hidden="true">
+          <span className="flex-1 bg-sbol-promoter" />
+          <span className="flex-[2] bg-sbol-cds" />
+          <span className="flex-1 bg-sbol-rbs" />
+          <span className="flex-1 bg-sbol-terminator" />
+        </div>
       </SidebarHeader>
 
       <SidebarContent>

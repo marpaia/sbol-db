@@ -17,6 +17,9 @@ Entry points to the project's documentation, organized by topic.
   and measurable exit criteria for every application phase.
 - **[Application and admin UI guide](ui.md)**: current routes, screenshots,
   configuration switches, local development, and production-shaped testing.
+- **[SBOL DB Design Ledger](design-ledger.md)**: the product-owned visual
+  identity, semantic SBOL palette, cross-surface rules, and UI acceptance
+  checklist for the registry, administrator control plane, and API reference.
 
 ## Query primitives
 

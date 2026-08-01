@@ -57,6 +57,7 @@ test("normalizes invalid presentation state without sending malformed API values
   assert.equal(state.query.offset, 0);
   assert.equal(state.query.limit, 24);
   assert.equal(state.query.createdAfter, undefined);
+  assert.equal(state.view, "list");
 });
 
 test("translates supported classic facets into a canonical native query", () => {

@@ -55,12 +55,10 @@ export default function SequenceSearchRoute() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
+    <div className="mx-auto w-full max-w-[90rem] px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
       <header className="max-w-4xl">
-        <p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">
-          Registry discovery
-        </p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-[-0.025em] sm:text-4xl">
+        <p className="ledger-label text-primary">Registry discovery</p>
+        <h1 className="mt-3 text-4xl font-medium tracking-[-0.03em] sm:text-5xl">
           Search by DNA sequence
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
@@ -72,7 +70,7 @@ export default function SequenceSearchRoute() {
 
       <form
         role="search"
-        className="mt-6 rounded-xl border bg-card p-4 shadow-sm sm:p-5"
+        className="mt-6 border border-foreground/15 border-l-2 border-l-sbol-promoter bg-card p-4 sm:p-5"
         onSubmit={(event) => {
           event.preventDefault();
           submit(draft);
@@ -81,7 +79,7 @@ export default function SequenceSearchRoute() {
         <label htmlFor="sequence-query" className="text-xs font-medium">
           Nucleotide sequence
         </label>
-        <div className="mt-2 flex items-center rounded-lg border bg-background p-1.5 focus-within:border-primary/50 focus-within:ring-4 focus-within:ring-primary/10">
+        <div className="mt-2 flex items-center border bg-background focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/10">
           <Dna className="ml-2 size-4 shrink-0 text-muted-foreground" />
           <Input
             id="sequence-query"
@@ -153,7 +151,7 @@ export default function SequenceSearchRoute() {
               <button
                 key={example}
                 type="button"
-                className="rounded-md border bg-background px-2 py-1 font-mono text-[11px] text-foreground transition-colors duration-150 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:bg-primary/10"
+                className="rounded-[3px] border bg-background px-2 py-1 font-mono text-[11px] text-foreground transition-colors duration-150 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:bg-primary/10"
                 onClick={() => {
                   setDraft(example);
                   submit(example);
@@ -175,7 +173,7 @@ export default function SequenceSearchRoute() {
       {translatedFromClassic && (
         <div
           className={cn(
-            "mt-5 flex items-start gap-3 rounded-xl border p-4 text-sm",
+            "mt-5 flex items-start gap-3 border-l-2 p-4 text-sm",
             warnings.length
               ? "border-amber-500/30 bg-amber-500/5"
               : "border-primary/20 bg-primary/5"
@@ -214,7 +212,7 @@ export default function SequenceSearchRoute() {
 
       <section className="mt-8" aria-busy={results.isFetching}>
         {!query ? (
-          <div className="rounded-xl border border-dashed bg-muted/10 px-6 py-14 text-center">
+          <div className="border-y border-dashed border-foreground/25 bg-muted/10 px-6 py-14 text-center">
             <Dna className="mx-auto size-7 text-primary" />
             <h2 className="mt-4 font-medium">Enter a nucleotide sequence</h2>
             <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
@@ -225,7 +223,7 @@ export default function SequenceSearchRoute() {
           </div>
         ) : results.error ? (
           <div
-            className="rounded-xl border border-destructive/25 bg-destructive/5 p-5"
+            className="border-l-2 border-destructive bg-destructive/5 p-5"
             role="alert"
           >
             <h2 className="font-medium text-destructive">
@@ -244,9 +242,12 @@ export default function SequenceSearchRoute() {
             </Button>
           </div>
         ) : results.isLoading || !results.data ? (
-          <div className="space-y-3" aria-label="Loading sequence matches">
+          <div
+            className="divide-y divide-foreground/15 border-y border-foreground/15"
+            aria-label="Loading sequence matches"
+          >
             {Array.from({ length: 5 }).map((_, index) => (
-              <Skeleton key={index} className="h-40 rounded-xl" />
+              <Skeleton key={index} className="h-32 rounded-none" />
             ))}
           </div>
         ) : results.data.items.length > 0 ? (
@@ -260,14 +261,14 @@ export default function SequenceSearchRoute() {
               </span>{" "}
               {results.data.total === 1 ? "sequence match" : "sequence matches"}
             </div>
-            <div className="space-y-3">
+            <div className="divide-y divide-foreground/15 border-y border-foreground/15">
               {results.data.items.map((hit) => (
                 <ObjectSummaryLink
                   key={hit.uri}
                   object={hit}
                   metadata={
                     <>
-                      <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-primary">
+                      <span className="border border-primary/20 bg-primary/5 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-primary">
                         {(hit.percent_match * 100).toFixed(1)}% identity
                       </span>
                       <span className="font-mono text-[11px] text-muted-foreground">
@@ -280,7 +281,7 @@ export default function SequenceSearchRoute() {
             </div>
           </>
         ) : (
-          <div className="rounded-xl border border-dashed bg-muted/10 px-6 py-14 text-center">
+          <div className="border-y border-dashed border-foreground/25 bg-muted/10 px-6 py-14 text-center">
             <h2 className="font-medium">No sequence matches</h2>
             <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
               Try exact mode for a known motif or a longer, more representative

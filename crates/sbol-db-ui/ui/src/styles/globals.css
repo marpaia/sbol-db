@@ -2,35 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
-/* SBOL-native palette. The chrome reads as synthetic biology tooling:
-   primary affordances use CDS-arrow teal, and the three top-level nav
-   groups carry their corresponding SBOL Visual category hues
-   (promoter / CDS / terminator). Status colors are amplified slightly
-   so success / warning / destructive read confidently against the
-   teal chrome. */
+/* The Design Ledger palette is intentionally warmer and more material than
+   a conventional SaaS dashboard. Ink and paper carry the interface; color is
+   reserved for SBOL meaning, status, and interaction. */
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 240 10% 4%;
+    --background: 42 35% 97%;
+    --foreground: 218 36% 13%;
 
-    --card: 0 0% 100%;
-    --card-foreground: 240 10% 4%;
+    --card: 42 45% 99%;
+    --card-foreground: 218 36% 13%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 4%;
+    --popover: 42 45% 99%;
+    --popover-foreground: 218 36% 13%;
 
-    --primary: 178 60% 32%;
-    --primary-foreground: 0 0% 98%;
+    --primary: 171 66% 25%;
+    --primary-foreground: 42 40% 98%;
 
-    --secondary: 240 5% 96%;
-    --secondary-foreground: 240 6% 10%;
+    --secondary: 39 22% 92%;
+    --secondary-foreground: 218 28% 18%;
 
-    --muted: 240 5% 96%;
-    --muted-foreground: 240 4% 46%;
+    --muted: 39 22% 92%;
+    --muted-foreground: 215 12% 43%;
 
-    --accent: 178 35% 93%;
-    --accent-foreground: 178 60% 22%;
+    --accent: 169 33% 89%;
+    --accent-foreground: 171 68% 17%;
 
     --destructive: 348 65% 52%;
     --destructive-foreground: 0 0% 98%;
@@ -38,49 +35,52 @@
     --success: 152 60% 40%;
     --warning: 38 90% 50%;
 
-    --border: 240 6% 90%;
-    --input: 240 6% 90%;
-    --ring: 178 60% 36%;
+    --border: 39 15% 80%;
+    --input: 39 15% 76%;
+    --ring: 171 66% 30%;
 
-    --radius: 0.5rem;
+    --radius: 0.375rem;
+    --rule: 218 25% 22%;
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
 
     /* SBOL Visual category hues. Bound to top-level nav groups. */
-    --sbol-promoter: 28 80% 50%;
-    --sbol-cds: 178 60% 32%;
-    --sbol-terminator: 348 65% 50%;
-    --sbol-rbs: 268 50% 55%;
+    --sbol-promoter: 30 88% 48%;
+    --sbol-cds: 171 66% 31%;
+    --sbol-terminator: 353 65% 52%;
+    --sbol-rbs: 269 46% 55%;
 
-    --sidebar-background: 178 30% 97%;
-    --sidebar-foreground: 200 15% 26%;
-    --sidebar-primary: 178 60% 32%;
-    --sidebar-primary-foreground: 0 0% 98%;
-    --sidebar-accent: 178 55% 88%;
-    --sidebar-accent-foreground: 178 70% 18%;
-    --sidebar-border: 178 20% 88%;
-    --sidebar-ring: 178 60% 36%;
+    --sidebar-background: 218 35% 13%;
+    --sidebar-foreground: 40 18% 83%;
+    --sidebar-primary: 168 57% 57%;
+    --sidebar-primary-foreground: 218 35% 10%;
+    --sidebar-accent: 214 24% 20%;
+    --sidebar-accent-foreground: 42 28% 94%;
+    --sidebar-border: 215 22% 23%;
+    --sidebar-ring: 168 57% 57%;
   }
 
   .dark {
-    --background: 240 6% 7%;
-    --foreground: 0 0% 95%;
+    --background: 218 29% 8%;
+    --foreground: 40 25% 92%;
 
-    --card: 240 6% 9%;
-    --card-foreground: 0 0% 95%;
+    --card: 217 25% 11%;
+    --card-foreground: 40 25% 92%;
 
-    --popover: 240 5% 14%;
-    --popover-foreground: 0 0% 95%;
+    --popover: 217 23% 13%;
+    --popover-foreground: 40 25% 92%;
 
-    --primary: 178 55% 60%;
-    --primary-foreground: 178 50% 10%;
+    --primary: 168 57% 57%;
+    --primary-foreground: 218 35% 9%;
 
-    --secondary: 240 4% 14%;
-    --secondary-foreground: 0 0% 95%;
+    --secondary: 216 20% 17%;
+    --secondary-foreground: 40 25% 92%;
 
-    --muted: 240 4% 14%;
-    --muted-foreground: 240 5% 64%;
+    --muted: 216 20% 16%;
+    --muted-foreground: 39 10% 64%;
 
-    --accent: 178 25% 16%;
-    --accent-foreground: 178 30% 88%;
+    --accent: 169 29% 17%;
+    --accent-foreground: 165 35% 88%;
 
     --destructive: 348 60% 62%;
     --destructive-foreground: 0 0% 98%;
@@ -88,23 +88,24 @@
     --success: 152 55% 55%;
     --warning: 38 85% 60%;
 
-    --border: 240 4% 16%;
-    --input: 240 4% 16%;
-    --ring: 178 55% 60%;
+    --border: 215 18% 24%;
+    --input: 215 18% 27%;
+    --ring: 168 57% 57%;
+    --rule: 40 20% 82%;
 
     --sbol-promoter: 28 75% 62%;
     --sbol-cds: 178 55% 60%;
     --sbol-terminator: 348 60% 65%;
     --sbol-rbs: 268 55% 70%;
 
-    --sidebar-background: 200 15% 6%;
-    --sidebar-foreground: 200 12% 72%;
-    --sidebar-primary: 178 55% 60%;
-    --sidebar-primary-foreground: 178 50% 10%;
-    --sidebar-accent: 178 45% 18%;
-    --sidebar-accent-foreground: 178 60% 90%;
-    --sidebar-border: 200 12% 14%;
-    --sidebar-ring: 178 55% 60%;
+    --sidebar-background: 219 34% 7%;
+    --sidebar-foreground: 40 17% 76%;
+    --sidebar-primary: 168 57% 57%;
+    --sidebar-primary-foreground: 218 35% 9%;
+    --sidebar-accent: 216 23% 14%;
+    --sidebar-accent-foreground: 40 25% 92%;
+    --sidebar-border: 215 20% 17%;
+    --sidebar-ring: 168 57% 57%;
   }
 
   html,
@@ -121,6 +122,17 @@
     -webkit-font-smoothing: antialiased;
   }
 
+  ::selection {
+    background: hsl(var(--primary) / 0.18);
+    color: hsl(var(--foreground));
+  }
+
+  a,
+  button,
+  [role="button"] {
+    -webkit-tap-highlight-color: transparent;
+  }
+
   code,
   pre,
   .font-mono {
@@ -133,13 +145,43 @@
 }
 
 @layer utilities {
-  .portal-hero-grid {
+  .font-display {
+    font-family: theme("fontFamily.display");
+  }
+
+  .registry-field {
     background-color: hsl(var(--background));
     background-image:
-      linear-gradient(hsl(var(--border) / 0.34) 1px, transparent 1px),
-      linear-gradient(90deg, hsl(var(--border) / 0.34) 1px, transparent 1px);
-    background-size: 32px 32px;
-    background-position: center center;
+      linear-gradient(90deg, hsl(var(--sbol-promoter) / 0.08), transparent 24%),
+      repeating-linear-gradient(
+        0deg,
+        transparent 0,
+        transparent 31px,
+        hsl(var(--border) / 0.34) 31px,
+        hsl(var(--border) / 0.34) 32px
+      );
+  }
+
+  .ledger-rule {
+    border-color: hsl(var(--rule) / 0.28);
+  }
+
+  .ledger-label {
+    font-family: theme("fontFamily.mono");
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .public-registry h1,
+  .public-registry h2,
+  .public-registry .record-title {
+    font-family: theme("fontFamily.display");
+  }
+
+  .admin-instrument {
+    font-variant-numeric: tabular-nums;
   }
 }
 

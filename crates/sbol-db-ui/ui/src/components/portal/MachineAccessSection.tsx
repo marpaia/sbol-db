@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
+import { SbolDesignRail } from "@/components/portal/SbolDesignRail";
 import { Badge } from "@/components/ui/badge";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 
@@ -128,16 +129,13 @@ export function MachineAccessSection() {
   return (
     <section
       id="machine-access"
-      className="relative scroll-mt-16 overflow-hidden border-y bg-muted/20"
+      className="scroll-mt-16 overflow-hidden border-y border-foreground/15 bg-muted/20"
     >
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_85%_8%,hsl(var(--primary)/0.12),transparent_28%)]" />
-      <div className="relative mx-auto max-w-7xl px-4 py-14 sm:px-6 sm:py-16 lg:px-8">
+      <div className="mx-auto max-w-[90rem] px-4 py-14 sm:px-6 sm:py-16 lg:px-8">
         <div className="grid gap-8 lg:grid-cols-[1.05fr_0.95fr] lg:items-end">
           <div>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-primary">
-              Machine access
-            </p>
-            <h2 className="mt-3 max-w-3xl text-balance text-3xl font-semibold tracking-[-0.025em] sm:text-4xl">
+            <p className="ledger-label text-primary">Machine access</p>
+            <h2 className="mt-3 max-w-3xl text-balance text-4xl font-medium tracking-[-0.03em] sm:text-5xl">
               One design language for people, pipelines, and agents.
             </h2>
           </div>
@@ -164,7 +162,7 @@ export function MachineAccessSection() {
         <div className="relative mt-10">
           <div
             aria-hidden="true"
-            className="absolute left-[16.67%] right-[16.67%] top-7 hidden border-t border-dashed border-primary/25 md:block"
+            className="absolute left-[16.67%] right-[16.67%] top-7 hidden border-t border-foreground/20 md:block"
           />
           <ol className="relative grid gap-5 md:grid-cols-3">
             {steps.map((step) => (
@@ -220,10 +218,17 @@ function CapabilityStep({
   title,
   description,
 }: CapabilityStepProps) {
+  const tone = {
+    "01": "border-t-sbol-promoter",
+    "02": "border-t-sbol-cds",
+    "03": "border-t-sbol-rbs",
+  }[number];
   return (
-    <li className="relative rounded-2xl border bg-card/90 p-4 shadow-sm backdrop-blur sm:p-5">
+    <li
+      className={`relative border border-t-2 border-foreground/15 bg-card/75 p-4 sm:p-5 ${tone}`}
+    >
       <div className="flex items-center justify-between gap-3">
-        <span className="relative z-10 flex size-12 items-center justify-center rounded-xl border bg-background text-primary shadow-sm">
+        <span className="relative z-10 flex size-11 items-center justify-center border-l-2 border-primary bg-background text-primary">
           <Icon className="size-5" />
         </span>
         <span className="font-mono text-[10px] tracking-[0.18em] text-muted-foreground">
@@ -240,11 +245,10 @@ function CapabilityStep({
 
 function CliPreview() {
   return (
-    <div className="self-start overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 text-zinc-100 shadow-xl shadow-primary/5">
-      <div className="flex items-center gap-2 border-b border-white/10 px-5 py-3.5">
-        <span className="size-2.5 rounded-full bg-red-400/80" />
-        <span className="size-2.5 rounded-full bg-amber-300/80" />
-        <span className="size-2.5 rounded-full bg-emerald-400/80" />
+    <div className="self-start overflow-hidden border border-white/10 bg-zinc-950 text-zinc-100 shadow-[0_8px_24px_hsl(var(--foreground)/0.08)]">
+      <div className="flex items-center justify-between gap-2 border-b border-white/10 px-5 py-3.5 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+        <span>Local / SBOL CLI</span>
+        <span>Validated workflow</span>
       </div>
       <div className="space-y-5 px-5 py-5 font-mono text-xs leading-6 sm:px-6 sm:text-[13px]">
         <div>
@@ -295,17 +299,15 @@ function RegistryPromise() {
   ];
 
   return (
-    <div className="rounded-2xl border bg-card p-5 shadow-sm sm:p-6">
-      <p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">
-        SBOL DB CLI
-      </p>
-      <h3 className="mt-2 text-xl font-semibold tracking-tight">
+    <div className="border border-foreground/15 bg-card p-5 sm:p-6">
+      <p className="ledger-label text-primary">SBOL DB CLI</p>
+      <h3 className="mt-2 text-2xl font-medium tracking-tight">
         Keep the biological and social context together.
       </h3>
       <div className="mt-5 space-y-4">
         {promises.map(({ icon: Icon, title, description }) => (
           <div key={title} className="flex gap-3">
-            <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center border-l-2 border-primary text-primary">
               <Icon className="size-4" />
             </span>
             <div>
@@ -345,12 +347,16 @@ function McpDocumentation() {
   return (
     <div
       id="mcp"
-      className="mt-8 scroll-mt-24 overflow-hidden rounded-3xl border bg-card shadow-sm"
+      className="mt-8 scroll-mt-24 overflow-hidden border border-foreground/15 bg-card"
     >
+      <SbolDesignRail
+        compact
+        className="border-0 border-b border-foreground/15"
+      />
       <div className="grid lg:grid-cols-[1.35fr_0.65fr]">
         <div className="p-6 sm:p-8">
           <div className="flex items-start gap-3.5">
-            <span className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-xl border border-primary/10 bg-primary/10 text-primary shadow-sm">
+            <span className="mt-0.5 flex size-10 shrink-0 items-center justify-center border-l-2 border-primary text-primary">
               <Bot className="size-[18px]" />
             </span>
             <div className="max-w-2xl">

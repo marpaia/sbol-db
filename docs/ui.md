@@ -29,6 +29,12 @@ set a deployment name, but it appears only as secondary context. Legacy
 SynBioHub theme fields remain available to compatibility clients and do not
 rename or recolor the native UI.
 
+The shared visual identity is specified in the
+[SBOL DB Design Ledger](design-ledger.md). The public registry uses a warm
+record-ledger treatment, the administrator workspace presents a compact
+registry instrument, and both Scalar API references carry the same signature
+mark and semantic SBOL palette.
+
 The public object route consumes `GET /api/v2/objects/{iri}/details`; it does
 not interpret raw RDF predicates in React. The details resource owns ACL-aware
 graph selection, inverse relationships, provenance, and availability states in

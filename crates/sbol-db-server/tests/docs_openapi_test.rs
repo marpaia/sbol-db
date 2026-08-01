@@ -100,6 +100,10 @@ async fn docs_page_renders_three_surfaces_in_one_reference() {
         body.contains("Scalar.createApiReference"),
         "the docs page mounts via the explicit createApiReference call that drives multi-source"
     );
+    assert!(
+        body.contains("data-sbol-docs-shell") && body.contains("theme: \"none\""),
+        "the docs page uses the shared SBOL DB reference shell"
+    );
     for source in [
         "/openapi.json",
         "/synbiohub/openapi.json",
@@ -116,6 +120,10 @@ async fn docs_page_renders_three_surfaces_in_one_reference() {
     assert!(
         v2_body.contains("data-url=\"/api/v2/openapi.json\""),
         "the V2 docs page renders the V2 spec"
+    );
+    assert!(
+        v2_body.contains("data-sbol-docs-shell") && v2_body.contains("V2 API reference"),
+        "the V2 docs page uses the same SBOL DB reference shell"
     );
 }
 
