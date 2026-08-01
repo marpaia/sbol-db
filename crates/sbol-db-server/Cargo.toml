@@ -48,6 +48,7 @@ tracing.workspace = true
 url.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
+fs2.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

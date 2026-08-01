@@ -47,6 +47,9 @@ pub async fn run(
         search_config,
         backup_recovery_recipient,
         backup_repository_url,
+        backup_interval_secs,
+        minimum_free_bytes,
+        backup_local_retention,
         ..
     } = args;
     let EdgeHttpConfig {
@@ -67,6 +70,13 @@ pub async fn run(
             "production --operations-bind must use a loopback address; \
              run the local telemetry collector on the same server"
         );
+    }
+    let backup_interval = Duration::from_secs(backup_interval_secs);
+    if production {
+        crate::backup_scheduler::validate_interval(backup_interval)?;
+        if !(1..=30).contains(&backup_local_retention) {
+            bail!("production local backup retention must be between 1 and 30 artifacts");
+        }
     }
     let database_url = runtime.database_url().to_owned();
     let engine = Arc::new(SparqlEngine::new(backend.triple_source.clone()));
@@ -114,6 +124,7 @@ pub async fn run(
             CompleteBackupService::new(
                 CompleteBackupConfig {
                     db: rocksdb.db.clone(),
+                    database_root: layout.database_path().to_path_buf(),
                     blobs_root: layout.blob_root().to_path_buf(),
                     search_root: layout.search_root().to_path_buf(),
                     acme_root: layout.acme_root().to_path_buf(),
@@ -121,6 +132,8 @@ pub async fn run(
                     generation: layout.generation(),
                     layout_version: layout.layout_version().to_owned(),
                     application_version: env!("CARGO_PKG_VERSION").to_owned(),
+                    minimum_free_bytes,
+                    local_retention: backup_local_retention,
                 },
                 encryption,
             )
@@ -143,6 +156,10 @@ pub async fn run(
         metrics.require_tls();
     }
     let metrics = metrics.with_jobs_repo(backend.jobs.clone());
+    let metrics = match runtime.layout() {
+        Some(layout) => metrics.with_data_disk(layout.root().to_path_buf(), minimum_free_bytes),
+        None => metrics,
+    };
     let metrics = match worker_setup.as_ref().and_then(|s| s.listener_pool.as_ref()) {
         Some(pool) => metrics.with_worker_pool(pool.clone()),
         None => metrics,
@@ -350,6 +367,18 @@ pub async fn run(
     }
 
     let mut tasks = tokio::task::JoinSet::<Result<()>>::new();
+    if production {
+        let scheduler_jobs = backend.jobs.clone();
+        let scheduler_cancel = cancel.clone();
+        tasks.spawn(async move {
+            crate::backup_scheduler::run(scheduler_jobs, backup_interval, scheduler_cancel.clone())
+                .await?;
+            if !scheduler_cancel.is_cancelled() {
+                bail!("complete-backup scheduler exited unexpectedly");
+            }
+            Ok(())
+        });
+    }
     match tls_runtime {
         Some((acceptor, acme_state, certificate_state)) => {
             let std_listener = listener

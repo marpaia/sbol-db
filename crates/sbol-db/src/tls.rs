@@ -716,6 +716,9 @@ mod tests {
             search_config: None,
             backup_recovery_recipient: None,
             backup_repository_url: None,
+            backup_interval_secs: 86_400,
+            minimum_free_bytes: 2_147_483_648,
+            backup_local_retention: 2,
         }
     }
 

@@ -167,6 +167,22 @@ pub struct ServerArgs {
     /// standard environment or workload identity. Required in production.
     #[arg(long, env = "SBOL_DB_BACKUP_REPOSITORY_URL")]
     pub backup_repository_url: Option<String>,
+
+    /// Complete-backup cadence in seconds. Restarts deduplicate within the
+    /// current wall-clock interval. Production accepts 15 minutes to 30 days.
+    #[arg(long, env = "SBOL_DB_BACKUP_INTERVAL_SECS", default_value_t = 86_400)]
+    pub backup_interval_secs: u64,
+
+    /// Free bytes kept in reserve for ordinary operation. Readiness fails below
+    /// this threshold; backup admission also reserves this much after staging.
+    #[arg(long, env = "SBOL_DB_MIN_FREE_BYTES", default_value_t = 2_147_483_648)]
+    pub minimum_free_bytes: u64,
+
+    /// Number of newest remotely verified complete artifacts retained locally.
+    /// Older artifacts are pruned only when their remote-verification sidecar
+    /// and local checksum agree.
+    #[arg(long, env = "SBOL_DB_BACKUP_LOCAL_RETENTION", default_value_t = 2)]
+    pub backup_local_retention: usize,
 }
 
 impl BackendKind {

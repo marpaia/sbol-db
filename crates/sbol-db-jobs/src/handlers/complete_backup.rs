@@ -71,10 +71,31 @@ impl JobHandler for CompleteBackupHandler {
         )
         .await;
         let started = std::time::Instant::now();
-        let completed = backups
+        let completed = match backups
             .create(ctx.job_id.as_uuid(), payload.requested_at)
             .await
-            .map_err(|error| HandlerError::Other(format!("complete backup failed: {error:#}")))?;
+        {
+            Ok(completed) => completed,
+            Err(error) => {
+                let elapsed = started.elapsed().as_secs_f64();
+                metrics::counter!(
+                    "sbol_db_backups_completed_total",
+                    "trigger" => trigger_label(payload.trigger),
+                    "status" => "failed",
+                )
+                .increment(1);
+                metrics::histogram!(
+                    "sbol_db_backup_duration_seconds",
+                    "trigger" => trigger_label(payload.trigger),
+                )
+                .record(elapsed);
+                metrics::gauge!("sbol_db_backup_last_failure_timestamp_seconds")
+                    .set(Utc::now().timestamp() as f64);
+                return Err(HandlerError::Other(format!(
+                    "complete backup failed: {error:#}"
+                )));
+            }
+        };
         let created = &completed.local;
         let elapsed = started.elapsed().as_secs_f64();
         metrics::counter!(
@@ -91,6 +112,10 @@ impl JobHandler for CompleteBackupHandler {
         metrics::gauge!("sbol_db_backup_last_success_timestamp_seconds")
             .set(Utc::now().timestamp() as f64);
         metrics::gauge!("sbol_db_backup_last_artifact_bytes").set(created.artifact_bytes as f64);
+        if let Some(remote) = &completed.remote {
+            metrics::gauge!("sbol_db_backup_last_remote_verification_timestamp_seconds")
+                .set(remote.verified_at.timestamp() as f64);
+        }
         ctx.log(
             "info",
             "complete backup verified and published",
@@ -103,6 +128,7 @@ impl JobHandler for CompleteBackupHandler {
                 "referenced_blobs": created.referenced_blobs,
                 "reused": created.reused,
                 "remote": &completed.remote,
+                "disk_preflight": &completed.disk_preflight,
                 "elapsed_secs": elapsed,
             }),
         )
