@@ -52,6 +52,15 @@ pub enum RuntimeProfile {
     Production,
 }
 
+/// TLS policy for the public HTTP listener.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum TlsMode {
+    /// Serve plaintext HTTP. Available only in the development profile.
+    Disabled,
+    /// Terminate TLS in-process and obtain certificates with ACME TLS-ALPN-01.
+    Acme,
+}
+
 /// Arguments that configure the HTTP server and its embedded worker.
 #[derive(Args, Debug)]
 pub struct ServerArgs {
@@ -75,8 +84,41 @@ pub struct ServerArgs {
     #[arg(long, env = "SBOL_DB_BLOB_ROOT")]
     pub blob_root: Option<PathBuf>,
 
-    #[arg(long, env = "SBOL_DB_BIND", default_value = "127.0.0.1:8888")]
-    pub bind: SocketAddr,
+    /// Public listener. Defaults to `127.0.0.1:8888` in development and
+    /// `0.0.0.0:443` in production.
+    #[arg(long, env = "SBOL_DB_BIND")]
+    pub bind: Option<SocketAddr>,
+
+    /// Public-listener TLS policy. Defaults to disabled in development and
+    /// ACME in production. Production cannot disable TLS.
+    #[arg(long, value_enum, env = "SBOL_DB_TLS_MODE")]
+    pub tls_mode: Option<TlsMode>,
+
+    /// Canonical DNS name placed on the ACME certificate.
+    #[arg(long, env = "SBOL_DB_HOSTNAME")]
+    pub hostname: Option<String>,
+
+    /// ACME account contact email. Required whenever ACME is enabled.
+    #[arg(long, env = "SBOL_DB_ACME_CONTACT")]
+    pub acme_contact: Option<String>,
+
+    /// ACME directory URL. Production defaults to Let's Encrypt production;
+    /// development defaults to Let's Encrypt staging.
+    #[arg(long, env = "SBOL_DB_ACME_DIRECTORY_URL")]
+    pub acme_directory_url: Option<String>,
+
+    /// Optional plaintext listener that redirects to the configured hostname.
+    /// Production defaults to `0.0.0.0:80` unless redirects are disabled.
+    #[arg(long, env = "SBOL_DB_HTTP_BIND")]
+    pub http_bind: Option<SocketAddr>,
+
+    /// Disable the production port-80 redirect listener.
+    #[arg(long, env = "SBOL_DB_HTTP_REDIRECT_DISABLED")]
+    pub no_http_redirect: bool,
+
+    /// Maximum time allowed for a client TLS handshake.
+    #[arg(long, env = "SBOL_DB_TLS_HANDSHAKE_TIMEOUT_SECS", default_value_t = 10)]
+    pub tls_handshake_timeout_secs: u64,
 
     /// Loopback listener for health, readiness, and Prometheus metrics.
     #[arg(

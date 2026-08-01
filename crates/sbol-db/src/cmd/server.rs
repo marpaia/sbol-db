@@ -4,6 +4,7 @@
 //! backends open through the factory.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use sbol_db_app::{AppServices, FsBlobStore, LegacyExplorerStrategy};
@@ -21,13 +22,18 @@ use tokio_util::sync::CancellationToken;
 use crate::cli::ServerArgs;
 use crate::runtime::ServerRuntime;
 use crate::signal::shutdown_signal;
+use crate::tls::{run_acme, EdgeHttpConfig};
 
-pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> Result<()> {
+pub async fn run(
+    backend: Backend,
+    runtime: ServerRuntime,
+    args: ServerArgs,
+    edge_http: EdgeHttpConfig,
+) -> Result<()> {
     let ServerArgs {
         profile: _,
         data_dir: _,
         blob_root: _,
-        bind,
         operations_bind,
         explorer_bind,
         no_worker,
@@ -35,7 +41,14 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> 
         worker_queues,
         worker_id,
         search_config,
+        ..
     } = args;
+    let EdgeHttpConfig {
+        public_bind: bind,
+        redirect_bind,
+        tls,
+        tls_handshake_timeout,
+    } = edge_http;
     let production = runtime.profile() == crate::cli::RuntimeProfile::Production;
     if production && !operations_bind.ip().is_loopback() {
         bail!(
@@ -70,6 +83,9 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> 
     // gauges; poolless backends simply omit them.
     let api_pool = backend.postgres.as_ref().map(|pg| pg.pool.clone());
     let metrics = Metrics::install(api_pool, env!("CARGO_PKG_VERSION"));
+    if tls.is_some() {
+        metrics.require_tls();
+    }
     let metrics = metrics.with_jobs_repo(backend.jobs.clone());
     let metrics = match worker_setup.as_ref().and_then(|s| s.listener_pool.as_ref()) {
         Some(pool) => metrics.with_worker_pool(pool.clone()),
@@ -198,6 +214,7 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> 
         #[cfg(feature = "lab")]
         schema_cache: Arc::new(sbol_db_server::SchemaCache::new()),
     };
+    let lifecycle_metrics = state.metrics.clone();
     let app = public_router(state.clone(), config.clone());
     let operations_app = operations_router(state.clone(), config.clone());
     let explorer_app = explorer_bind.map(|_| explorer_router(state, config.clone()));
@@ -227,99 +244,180 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> 
         }
         None => None,
     };
+    let redirect_listener = match redirect_bind {
+        Some(redirect_bind) => {
+            let listener = tokio::net::TcpListener::bind(redirect_bind)
+                .await
+                .with_context(|| format!("bind HTTP redirect listener at {redirect_bind}"))?;
+            let redirect_bind = listener
+                .local_addr()
+                .context("read HTTP redirect listener address")?;
+            Some((redirect_bind, listener))
+        }
+        None => None,
+    };
+    let tls_runtime = match tls.as_ref() {
+        Some(config) => Some(config.build(tls_handshake_timeout)?),
+        None => None,
+    };
     let worker_handle = worker_setup.map(|setup| setup.spawn(cancel.clone()));
-    tracing::info!(%bind, %operations_bind, worker = worker_handle.is_some(), "sbol-db serving");
-    println!("sbol-db listening on http://{bind}");
+    tracing::info!(
+        %bind,
+        %operations_bind,
+        tls = tls.is_some(),
+        worker = worker_handle.is_some(),
+        "sbol-db serving"
+    );
+    let public_scheme = if tls.is_some() { "https" } else { "http" };
+    println!("sbol-db listening on {public_scheme}://{bind}");
     println!("sbol-db operations listening on http://{operations_bind}");
+    if let (Some(config), Some((redirect_bind, _))) = (tls.as_ref(), redirect_listener.as_ref()) {
+        tracing::info!(
+            %redirect_bind,
+            hostname = config.hostname(),
+            "HTTP-to-HTTPS redirect listener serving"
+        );
+        println!("sbol-db HTTP redirect listening on http://{redirect_bind}");
+    }
+    if let Some(config) = tls.as_ref() {
+        tracing::info!(
+            hostname = config.hostname(),
+            directory_url = config.directory_url(),
+            cache_root = %config.cache_root().display(),
+            "native ACME TLS enabled"
+        );
+    }
     if let Some((explorer_bind, _)) = explorer_listener.as_ref() {
         tracing::info!(%explorer_bind, "SBOLExplorer compatibility listener serving");
         println!("sbol-db Explorer compatibility listening on http://{explorer_bind}");
     }
 
-    let main_cancel = cancel.clone();
-    let mut main_server = tokio::spawn(async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(main_cancel.cancelled_owned())
-            .await
-    });
-    let operations_cancel = cancel.clone();
-    let mut operations_server = tokio::spawn(async move {
-        axum::serve(operations_listener, operations_app)
-            .with_graceful_shutdown(operations_cancel.cancelled_owned())
-            .await
-    });
-    let mut explorer_server = match (explorer_listener, explorer_app) {
-        (Some((_bind, listener)), Some(app)) => {
-            let explorer_cancel = cancel.clone();
-            Some(tokio::spawn(async move {
-                axum::serve(listener, app)
-                    .with_graceful_shutdown(explorer_cancel.cancelled_owned())
-                    .await
-            }))
+    let mut tasks = tokio::task::JoinSet::<Result<()>>::new();
+    match tls_runtime {
+        Some((acceptor, acme_state, certificate_state)) => {
+            let std_listener = listener
+                .into_std()
+                .context("convert public listener for rustls")?;
+            let main_cancel = cancel.clone();
+            tasks.spawn(async move {
+                let handle = axum_server::Handle::new();
+                let server = axum_server::from_tcp(std_listener)
+                    .context("construct native TLS server")?
+                    .acceptor(acceptor)
+                    .handle(handle.clone())
+                    .serve(app.into_make_service());
+                tokio::pin!(server);
+                tokio::select! {
+                    result = &mut server => {
+                        result.context("public HTTPS listener")?;
+                        bail!("public HTTPS listener exited unexpectedly");
+                    }
+                    _ = main_cancel.cancelled() => {
+                        handle.graceful_shutdown(Some(Duration::from_secs(30)));
+                        server.await.context("draining public HTTPS listener")?;
+                    }
+                }
+                Ok(())
+            });
+            let acme_cancel = cancel.clone();
+            tasks.spawn(async move {
+                run_acme(
+                    acme_state,
+                    certificate_state,
+                    lifecycle_metrics,
+                    acme_cancel.clone(),
+                )
+                .await?;
+                if !acme_cancel.is_cancelled() {
+                    bail!("ACME lifecycle task exited unexpectedly");
+                }
+                Ok(())
+            });
         }
-        _ => None,
-    };
-
-    enum FirstExit {
-        Signal,
-        Main(std::result::Result<std::io::Result<()>, tokio::task::JoinError>),
-        Operations(std::result::Result<std::io::Result<()>, tokio::task::JoinError>),
-        Explorer(std::result::Result<std::io::Result<()>, tokio::task::JoinError>),
+        None => {
+            let main_cancel = cancel.clone();
+            tasks.spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(main_cancel.clone().cancelled_owned())
+                    .await
+                    .context("public HTTP listener")?;
+                if !main_cancel.is_cancelled() {
+                    bail!("public HTTP listener exited unexpectedly");
+                }
+                Ok(())
+            });
+        }
+    }
+    let operations_cancel = cancel.clone();
+    tasks.spawn(async move {
+        axum::serve(operations_listener, operations_app)
+            .with_graceful_shutdown(operations_cancel.clone().cancelled_owned())
+            .await
+            .context("operations HTTP listener")?;
+        if !operations_cancel.is_cancelled() {
+            bail!("operations HTTP listener exited unexpectedly");
+        }
+        Ok(())
+    });
+    if let (Some((_bind, listener)), Some(app)) = (explorer_listener, explorer_app) {
+        let explorer_cancel = cancel.clone();
+        tasks.spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(explorer_cancel.clone().cancelled_owned())
+                .await
+                .context("SBOLExplorer listener")?;
+            if !explorer_cancel.is_cancelled() {
+                bail!("SBOLExplorer listener exited unexpectedly");
+            }
+            Ok(())
+        });
+    }
+    if let (Some(config), Some((_bind, listener))) = (tls.as_ref(), redirect_listener) {
+        let redirect_app = config.redirect_router();
+        let redirect_cancel = cancel.clone();
+        tasks.spawn(async move {
+            axum::serve(listener, redirect_app)
+                .with_graceful_shutdown(redirect_cancel.clone().cancelled_owned())
+                .await
+                .context("HTTP redirect listener")?;
+            if !redirect_cancel.is_cancelled() {
+                bail!("HTTP redirect listener exited unexpectedly");
+            }
+            Ok(())
+        });
     }
 
-    let first_exit = if let Some(explorer) = explorer_server.as_mut() {
-        tokio::select! {
-            _ = shutdown_signal() => FirstExit::Signal,
-            result = &mut main_server => FirstExit::Main(result),
-            result = &mut operations_server => FirstExit::Operations(result),
-            result = explorer => FirstExit::Explorer(result),
-        }
-    } else {
-        tokio::select! {
-            _ = shutdown_signal() => FirstExit::Signal,
-            result = &mut main_server => FirstExit::Main(result),
-            result = &mut operations_server => FirstExit::Operations(result),
-        }
+    let first_error = tokio::select! {
+        _ = shutdown_signal() => None,
+        result = tasks.join_next() => Some(match result {
+            Some(Ok(Ok(()))) => anyhow::anyhow!("server lifecycle task exited unexpectedly"),
+            Some(Ok(Err(error))) => error,
+            Some(Err(error)) => anyhow::anyhow!("server lifecycle task panicked: {error}"),
+            None => anyhow::anyhow!("server has no lifecycle tasks"),
+        }),
     };
     cancel.cancel();
 
-    let mut main_completed = false;
-    let mut operations_completed = false;
-    let mut explorer_completed = false;
-    match first_exit {
-        FirstExit::Signal => {}
-        FirstExit::Main(result) => {
-            main_completed = true;
-            result.context("main HTTP listener task")??;
-        }
-        FirstExit::Operations(result) => {
-            operations_completed = true;
-            result.context("operations HTTP listener task")??;
-        }
-        FirstExit::Explorer(result) => {
-            explorer_completed = true;
-            result.context("SBOLExplorer listener task")??;
+    let mut drain_error = None;
+    while let Some(result) = tasks.join_next().await {
+        let error = match result {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error),
+            Err(error) => Some(anyhow::anyhow!("server lifecycle task panicked: {error}")),
+        };
+        if drain_error.is_none() {
+            drain_error = error;
         }
     }
-    if !main_completed {
-        main_server.await.context("main HTTP listener task")??;
-    }
-    if !operations_completed {
-        operations_server
-            .await
-            .context("operations HTTP listener task")??;
-    }
-    if !explorer_completed {
-        if let Some(explorer) = explorer_server {
-            explorer.await.context("SBOLExplorer listener task")??;
-        }
-    }
-    tracing::info!("HTTP listeners stopped; waiting for embedded worker to drain");
+    tracing::info!("HTTP and ACME tasks stopped; waiting for embedded worker to drain");
 
     if let Some(handle) = worker_handle {
         if let Err(err) = handle.await {
             tracing::warn!(error = %err, "embedded worker task panicked");
         }
+    }
+    if let Some(error) = first_error.or(drain_error) {
+        return Err(error);
     }
     tracing::info!("sbol-db server loop exited cleanly");
     Ok(())

@@ -19,6 +19,7 @@ mod output;
 mod runtime;
 mod search_config;
 mod signal;
+mod tls;
 
 use crate::cli::{Cli, Command};
 use crate::runtime::{resolve_connection, ServerRuntime};
@@ -44,6 +45,15 @@ async fn main() -> Result<()> {
         )?),
         _ => None,
     };
+    // Validate edge/TLS policy before opening the database backend. A process
+    // with a missing hostname/contact or unsafe ACME directory fails before
+    // RocksDB itself and the rest of the application stack are initialized.
+    let mut edge_http = match (&cli.command, server_runtime.as_ref()) {
+        (Command::Server { args }, Some(runtime)) => {
+            Some(tls::EdgeHttpConfig::resolve(runtime, args)?)
+        }
+        _ => None,
+    };
     let database_url = match server_runtime.as_ref() {
         Some(runtime) => runtime.database_url().to_owned(),
         None => resolve_connection(cli.backend, cli.database_url.as_deref())?,
@@ -58,6 +68,9 @@ async fn main() -> Result<()> {
                     .take()
                     .expect("server runtime is resolved before backend open"),
                 args,
+                edge_http
+                    .take()
+                    .expect("edge HTTP config is resolved before backend open"),
             )
             .await
         }

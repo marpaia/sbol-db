@@ -44,6 +44,7 @@ use sbol_db_storage::{DbStats, LabStore, LsmStats, SqlConsole};
 use sbol_db_storage::{JobQueue, SbolStore};
 use serde_json::json;
 use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
 
 /// Deployment posture used to select fail-safe server defaults.
@@ -166,6 +167,9 @@ pub struct ServerConfig {
     pub sparql_write_enabled: bool,
     /// Cross-origin policy applied only to the public application listener.
     pub cors: CorsPolicy,
+    /// Emit HTTPS-only browser hardening headers on the public listener.
+    /// Enabled unconditionally by the production profile.
+    pub https_security_headers: bool,
     /// SHA3-256 of the one-time first-launch setup token. The plaintext token is
     /// never retained in server state or printed by debug output.
     pub setup_token_hash: Option<[u8; 32]>,
@@ -191,6 +195,7 @@ impl Default for ServerConfig {
             allow_public_signup: true,
             sparql_write_enabled: true,
             cors: CorsPolicy::Permissive,
+            https_security_headers: false,
             setup_token_hash: None,
         }
     }
@@ -251,6 +256,7 @@ impl ServerConfig {
                 .map(|v| parse_bool(&v))
                 .unwrap_or(defaults.sparql_write_enabled),
             cors: CorsPolicy::Permissive,
+            https_security_headers: defaults.https_security_headers,
             setup_token_hash: setup_token_hash_from_env(),
         };
         if let Ok(origins) = std::env::var("SBOL_DB_CORS_ALLOWED_ORIGINS") {
@@ -290,6 +296,7 @@ impl ServerConfig {
         }
         config.session_cookie_secure = true;
         config.admin_api_auth_required = true;
+        config.https_security_headers = true;
         if std::env::var_os("SBOL_DB_ALLOW_PUBLIC_SIGNUP").is_none() {
             config.allow_public_signup = false;
         }
@@ -565,7 +572,7 @@ fn application_router(state: AppState, config: ServerConfig, include_operations:
             axum::http::StatusCode::REQUEST_TIMEOUT,
             config.request_timeout,
         ));
-    apply_cors(app, &config.cors)
+    apply_security_headers(apply_cors(app, &config.cors), config.https_security_headers)
 }
 
 /// Loopback operations surface for local health agents and Prometheus scrapers.
@@ -619,6 +626,31 @@ fn apply_cors(router: Router, policy: &CorsPolicy) -> Router {
                 ]),
         ),
     }
+}
+
+fn apply_security_headers(router: Router, enabled: bool) -> Router {
+    use axum::http::{HeaderName, HeaderValue};
+
+    if !enabled {
+        return router;
+    }
+    router
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("strict-transport-security"),
+            HeaderValue::from_static("max-age=31536000"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("referrer-policy"),
+            HeaderValue::from_static("same-origin"),
+        ))
 }
 
 /// The network-internal SBOLExplorer wire-compatibility surface. It shares the

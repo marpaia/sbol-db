@@ -54,9 +54,11 @@ sqlx = { version = "0.8", default-features = false, features = [
 ] }
 
 axum = { version = "0.7", default-features = false, features = ["http1", "json", "query", "tokio", "matched-path", "multipart"] }
+axum-server = { version = "0.8", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "signal"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "timeout", "limit", "cors"] }
+tower-http = { version = "0.6", features = ["trace", "timeout", "limit", "cors", "set-header"] }
+futures = "0.3"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -98,6 +100,9 @@ qdrant-client = { version = "1.18", default-features = false, features = ["serde
 fastembed = { version = "5.17.3", default-features = false }
 fs2 = "0.4"
 roaring = "0.11"
+rustls-acme = { version = "0.15.3", default-features = false, features = ["ring", "tls12", "webpki-roots", "tokio", "axum"] }
+pem = "3"
+x509-parser = "0.16"
 
 rocksdb = { version = "0.22", default-features = false, features = ["snappy"] }
 
