@@ -10,9 +10,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
+use rocksdb::checkpoint::Checkpoint;
 use rocksdb::{
     BlockBasedOptions, BoundColumnFamily, Cache, DBCompressionType, DBWithThreadMode,
-    MultiThreaded, Options, WriteBatch,
+    MultiThreaded, Options, WriteBatch, WriteOptions,
 };
 use sbol_db_core::DomainError;
 
@@ -22,6 +23,21 @@ use crate::codec::{Term, TermId};
 /// handles as `Arc<BoundColumnFamily>`, which clone cleanly into the blocking
 /// tasks the async store spawns.
 type Inner = DBWithThreadMode<MultiThreaded>;
+
+/// Persistence guarantee used for RocksDB mutations.
+///
+/// The ordinary embedded backend retains RocksDB's buffered-write behavior for
+/// compatibility and throughput. A replicated state machine must use
+/// [`Durability::Sync`]: Raft may count a local append or state-machine apply
+/// toward a quorum only after RocksDB has flushed it to persistent storage.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Durability {
+    /// Return once RocksDB has handed the write to the operating system.
+    #[default]
+    Buffered,
+    /// Return only after RocksDB has synchronized the write to persistent storage.
+    Sync,
+}
 
 /// Every column family the store opens. Adding one here is enough for it to be
 /// created on open.
@@ -110,6 +126,7 @@ pub const SEP: u8 = 0x1F;
 pub struct Db {
     inner: Arc<Inner>,
     terms: Arc<TermDict>,
+    durability: Durability,
 }
 
 /// Shared id->term cache backing [`Db::resolve_term`]. A term id is a content
@@ -140,6 +157,15 @@ impl Db {
     /// Open (creating if absent) the database at `path` with every column
     /// family present.
     pub fn open(path: &Path) -> Result<Self, DomainError> {
+        Self::open_with_durability(path, Durability::Buffered)
+    }
+
+    /// Open a database with an explicit persistence guarantee for mutations.
+    ///
+    /// Replicated Raft logs and state machines must select
+    /// [`Durability::Sync`]. Keeping this decision on the handle prevents an
+    /// individual call site from accidentally acknowledging a buffered write.
+    pub fn open_with_durability(path: &Path, durability: Durability) -> Result<Self, DomainError> {
         let parallelism = std::thread::available_parallelism()
             .map(|n| n.get() as i32)
             .unwrap_or(4);
@@ -161,7 +187,13 @@ impl Db {
         Ok(Self {
             inner: Arc::new(inner),
             terms: Arc::new(TermDict::default()),
+            durability,
         })
+    }
+
+    /// The persistence guarantee applied to every mutation on this handle.
+    pub fn durability(&self) -> Durability {
+        self.durability
     }
 
     /// Resolve a term id to its term, caching the decode in the shared
@@ -193,11 +225,15 @@ impl Db {
     }
 
     pub fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<(), DomainError> {
-        self.inner.put_cf(&self.cf(cf), key, value).map_err(db_err)
+        self.inner
+            .put_cf_opt(&self.cf(cf), key, value, &self.write_options())
+            .map_err(db_err)
     }
 
     pub fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<(), DomainError> {
-        self.inner.delete_cf(&self.cf(cf), key).map_err(db_err)
+        self.inner
+            .delete_cf_opt(&self.cf(cf), key, &self.write_options())
+            .map_err(db_err)
     }
 
     pub fn exists_cf(&self, cf: &str, key: &[u8]) -> Result<bool, DomainError> {
@@ -211,7 +247,19 @@ impl Db {
 
     /// Atomically commit a batch of writes across column families.
     pub fn write(&self, batch: WriteBatch) -> Result<(), DomainError> {
-        self.inner.write(batch).map_err(db_err)
+        self.inner
+            .write_opt(batch, &self.write_options())
+            .map_err(db_err)
+    }
+
+    /// Create a consistent physical checkpoint of every column family.
+    ///
+    /// Raft snapshot assembly adds its replicated-log metadata and checksummed
+    /// manifest around this directory. The target must not already exist.
+    pub fn checkpoint(&self, path: &Path) -> Result<(), DomainError> {
+        Checkpoint::new(self.inner.as_ref())
+            .and_then(|checkpoint| checkpoint.create_checkpoint(path))
+            .map_err(db_err)
     }
 
     /// Iterate every (key, value) under `prefix` in one column family, in key
@@ -280,6 +328,12 @@ impl Db {
         }
         Ok(())
     }
+
+    fn write_options(&self) -> WriteOptions {
+        let mut options = WriteOptions::default();
+        options.set_sync(self.durability == Durability::Sync);
+        options
+    }
 }
 
 pub fn db_err(e: rocksdb::Error) -> DomainError {
@@ -297,4 +351,46 @@ pub fn compose(parts: &[&[u8]]) -> Vec<u8> {
         out.extend_from_slice(part);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_to_buffered_durability() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Db::open(&dir.path().join("state")).expect("open rocksdb");
+
+        assert_eq!(Durability::Buffered, db.durability());
+    }
+
+    #[test]
+    fn durable_checkpoint_round_trips_all_column_families() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = dir.path().join("state");
+        let snapshot = dir.path().join("snapshot");
+        let db = Db::open_with_durability(&state, Durability::Sync).expect("open rocksdb");
+
+        db.put_cf("meta", b"last_applied", &42_u64.to_be_bytes())
+            .expect("write applied index");
+        db.put_cf("app_config", b"theme", br#"{"dark":true}"#)
+            .expect("write application state");
+        db.checkpoint(&snapshot).expect("create checkpoint");
+        drop(db);
+
+        let restored = Db::open(&snapshot).expect("open checkpoint");
+        assert_eq!(
+            Some(42_u64.to_be_bytes().to_vec()),
+            restored
+                .get_cf("meta", b"last_applied")
+                .expect("read applied index")
+        );
+        assert_eq!(
+            Some(br#"{"dark":true}"#.to_vec()),
+            restored
+                .get_cf("app_config", b"theme")
+                .expect("read application state")
+        );
+    }
 }

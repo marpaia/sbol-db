@@ -15,6 +15,7 @@ members = [
     "crates/sbol-db-postgres",
     "crates/sbol-db-sqlite",
     "crates/sbol-db-rocksdb",
+    "crates/sbol-db-raft",
     "crates/sbol-db-backend",
     "crates/sbol-db-conformance",
     "crates/sbol-db-sparql",
@@ -79,6 +80,7 @@ sha1 = "0.10"
 argon2 = "0.5"
 hex = "0.4"
 flate2 = "1"
+tar = "0.4"
 infer = "0.16"
 base64 = "0.22"
 url = "2"
@@ -100,6 +102,7 @@ fs2 = "0.4"
 roaring = "0.11"
 
 rocksdb = { version = "0.22", default-features = false, features = ["snappy"] }
+openraft = { version = "0.9.25", features = ["serde", "storage-v2"] }
 
 tantivy = "0.22"
 
@@ -124,6 +127,7 @@ sbol-db-derive = { path = "crates/sbol-db-derive", version = "0.1.3" }
 sbol-db-postgres = { path = "crates/sbol-db-postgres", version = "0.1.3" }
 sbol-db-sqlite = { path = "crates/sbol-db-sqlite", version = "0.1.3" }
 sbol-db-rocksdb = { path = "crates/sbol-db-rocksdb", version = "0.1.3" }
+sbol-db-raft = { path = "crates/sbol-db-raft", version = "0.1.3" }
 sbol-db-backend = { path = "crates/sbol-db-backend", version = "0.1.3" }
 sbol-db-conformance = { path = "crates/sbol-db-conformance", version = "0.1.3" }
 sbol-db-sparql = { path = "crates/sbol-db-sparql", version = "0.1.3" }

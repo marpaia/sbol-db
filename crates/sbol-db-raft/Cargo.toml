@@ -1,0 +1,28 @@
+[package]
+name = "sbol-db-raft"
+version = "0.1.3"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Raft consensus and durable replication primitives for RocksDB-backed sbol-db clusters."
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+chrono.workspace = true
+openraft.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+rocksdb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sbol-db-core.workspace = true
+sbol-db-rocksdb.workspace = true
+sbol-db-storage.workspace = true
+tar.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time"] }

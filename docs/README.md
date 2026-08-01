@@ -64,6 +64,9 @@ Entry points to the project's documentation, organized by topic.
   single-file embedded SQL backend.
 - **[RocksDB layout](schema-rocksdb.md)**: column-family, term-dictionary,
   and permuted-index reference for the embedded key/value backend.
+- **[RocksDB high availability](ha-rocksdb.md)**: quorum guarantees, durable
+  Raft and state-machine boundaries, failover behavior, snapshots, and the
+  implementation sequence for two- and three-node clusters.
 
 ## Operations
 

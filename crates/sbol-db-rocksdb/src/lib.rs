@@ -21,7 +21,7 @@ use std::path::Path;
 
 use sbol_db_core::DomainError;
 
-pub use db::Db;
+pub use db::{Db, Durability};
 pub use jobs::RocksdbJobs;
 pub use migrate::RocksdbMigrator;
 pub use repo::{

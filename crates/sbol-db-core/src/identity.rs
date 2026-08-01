@@ -15,7 +15,7 @@ use crate::ids::UserId;
 /// migrated legacy `sha1(salt + sha1(password))` digest; the application layer
 /// distinguishes them. `graph_uri` is the account's owned named graph
 /// (`http://synbiohub.org/user/<username>`) that ACL-scoped reads key on.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
     pub id: UserId,
     pub username: String,
@@ -40,7 +40,7 @@ pub struct User {
 }
 
 /// The fields needed to create a [`User`]. The store assigns the [`UserId`].
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewUser {
     pub username: String,
     pub name: String,
