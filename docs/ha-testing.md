@@ -76,6 +76,49 @@ requiring the external checkout:
 cargo test -p sbol-db-ha-sim
 ```
 
+## Single-host real-process systems lab
+
+`sbol-db-ha-test` crosses the process boundary that the simulator deliberately
+does not model. It launches three standalone `sbol-db-ha-node` voters, each
+with an independent RocksDB directory and authenticated peer and test-client
+listeners. A controller-owned TCP fabric creates six directed source-to-target
+links, so a partition closes existing keep-alive connections as well as
+rejecting new traffic without changing canonical Raft membership.
+
+The synthetic gate runs on every workspace test invocation:
+
+```sh
+make ha/test-process
+```
+
+It exercises concurrent linearizable reads and writes, leader `SIGKILL`, a
+leader crash after application but before its client response, a 1-versus-2
+partition, a lagging follower, snapshot catch-up, exact idempotent retries, and
+a full three-process restart from the original RocksDB directories. After a
+final barrier, every acknowledged key is read through the elected leader and
+all nodes must produce the same canonical per-column-family state audit.
+
+The principal real-corpus gate uses the same pinned manifest and loader as the
+in-process simulator:
+
+```sh
+make ha/process-sbol-test-suite \
+  SBOL_TEST_SUITE_ROOT=/absolute/path/to/SBOLTestSuite
+```
+
+Every local run retains `manifest.json`, `history.jsonl`, `checker.json`, the
+final report, node stdout/stderr, and each RocksDB directory below a new
+`target/ha-runs/process-*` directory. A timed-out request is recorded as
+indeterminate and retried with its original `(client_id, request_id)`. CI runs
+the same workload but does not export corpus-bearing histories or data
+directories as artifacts.
+
+This process lab still shares one kernel, clock, physical disk, and power
+domain. It validates real process death and real TCP behavior, but it is not
+evidence for physical host or availability-zone independence. Its histories,
+workload protocol, state audits, and artifact schema are environment-neutral
+so a future VM driver can reuse them.
+
 ## Fault schedule and oracle
 
 One full-corpus run performs these phases while writes continue:
@@ -128,9 +171,9 @@ durability certification.
 | Synthetic in-process chaos | Every PR, fixed seed | No acknowledged loss, minority fail-closed, idempotent retry, convergence after restart | Implemented |
 | Full SBOLTestSuite in-process chaos | Nightly and before release, seed matrix | Same oracle over all 447 real importable documents and realistic payload sizes | Implemented for one replayable schedule |
 | Real HTTP three-node tests | Every PR | Peer authentication, body limits, serialization, routing, and failover | Initial fixed scenario implemented |
-| Multi-process crash harness | Nightly | `SIGKILL` at selected commit/apply/response boundaries, automatic process restart, client retry behavior | Required |
+| Multi-process crash harness | Every PR and nightly | `SIGKILL`, after-apply response loss, automatic process restart, client retry behavior | Implemented |
 | Filesystem fault harness | Nightly on Linux | `ENOSPC`, `EIO`, WAL/snapshot corruption, lost/torn writes, fsync semantics | Required |
-| External concurrent-history test | Nightly and release | Linearizable reads/writes and no lost acknowledged operations under nemesis faults | Required |
+| External concurrent-history test | Every PR, nightly, and release | Linearizable reads/writes and no lost acknowledged operations under process and partition faults | Implemented for replicated config registers |
 | Rolling-version test | Release | Protocol compatibility, snapshot compatibility, membership changes, safe downgrade refusal | Required |
 | Application semantic chaos | Release once import commands exist | Graphs, triples, objects, auth, jobs, and declared derived state match after recovery | Required |
 
@@ -178,10 +221,10 @@ property, so merely comparing final state is necessary but not sufficient.
 
 ## CI cadence and evidence
 
-- **Per PR:** storage suites, RocksDB conformance, HTTP cluster test, and one
-  fixed synthetic chaos seed.
-- **Nightly:** the full 447-document corpus over at least 32 seeds, a
-  multi-process `SIGKILL` matrix, and the concurrent-history checker.
+- **Per PR:** storage suites, RocksDB conformance, HTTP cluster test, one fixed
+  in-process seed, and the real-process 60-document systems gate.
+- **Nightly:** the full 447-document corpus through the external-process
+  controller and an expanding seed/failpoint matrix.
 - **Weekly:** longer leader churn, rolling upgrade/downgrade, disk-full and I/O
   fault jobs, snapshot corruption, and hours-long mixed read/write soak.
 - **Release:** replay every retained regression seed, run the full semantic

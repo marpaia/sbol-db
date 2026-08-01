@@ -65,6 +65,7 @@ async fn three_nodes_replicate_and_fail_over_across_http_transport() {
             storage_root: directory.path().join("node"),
             bearer_token: token.to_owned(),
             raft: config.clone(),
+            peer_routes: BTreeMap::new(),
         })
         .await
         .unwrap();

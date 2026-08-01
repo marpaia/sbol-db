@@ -15,8 +15,9 @@ IMAGE ?= $(REGISTRY):$(VERSION)
 
 HA_CHAOS_SEED ?= 0x5b01db0000000001
 HA_CHAOS_TRACE ?= target/sbol-db-ha-chaos.json
+HA_PROCESS_ARTIFACT_ROOT ?= target/ha-runs/process-$(shell date -u +%Y%m%dT%H%M%SZ)
 
-.PHONY: psql container container/test-faiss container/test-sbol-test-suite ha/chaos-sbol-test-suite model/bge-small
+.PHONY: psql container container/test-faiss container/test-sbol-test-suite ha/chaos-sbol-test-suite ha/test-process ha/process-sbol-test-suite model/bge-small
 
 psql:
 	docker compose exec -e PGPASSWORD=sbol postgres psql -U sbol -d sbol
@@ -41,6 +42,18 @@ ha/chaos-sbol-test-suite:
 		--corpus-root "$(SBOL_TEST_SUITE_ROOT)" \
 		--seed "$(HA_CHAOS_SEED)" \
 		--trace "$(HA_CHAOS_TRACE)"
+
+ha/test-process:
+	cargo test -p sbol-db-ha-test --test process_stack
+
+ha/process-sbol-test-suite:
+	@test -n "$(SBOL_TEST_SUITE_ROOT)" || (echo "set SBOL_TEST_SUITE_ROOT to a pinned SBOLTestSuite checkout" >&2; exit 2)
+	cargo build -p sbol-db-ha-test --bins
+	cargo run -p sbol-db-ha-test --bin sbol-db-ha-runner -- \
+		--node-binary target/debug/sbol-db-ha-node \
+		--corpus-root "$(SBOL_TEST_SUITE_ROOT)" \
+		--seed "$(HA_CHAOS_SEED)" \
+		--artifact-root "$(HA_PROCESS_ARTIFACT_ROOT)"
 
 model/bge-small:
 	bash docker/fetch-builtin-bge-small-model.sh $(BUILTIN_BGE_SMALL_DIR)

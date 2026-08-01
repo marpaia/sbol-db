@@ -40,6 +40,32 @@ const SNAPSHOT_FILE: &str = "current.snapshot";
 const SNAPSHOT_MANIFEST: &str = "manifest.json";
 const SNAPSHOT_STATE_DIR: &str = "state";
 const ACTIVATION_JOURNAL: &str = ".activation.json";
+const REPLICATED_COLUMN_FAMILIES: &[&str] = &[
+    META_COLUMN_FAMILY,
+    CONFIG_COLUMN_FAMILY,
+    TOKEN_COLUMN_FAMILY,
+    USERS_COLUMN_FAMILY,
+    USERS_BY_USERNAME_COLUMN_FAMILY,
+    USERS_BY_EMAIL_COLUMN_FAMILY,
+];
+
+/// Canonical inventory of one replicated RocksDB column family.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ColumnFamilyAudit {
+    pub name: String,
+    pub entry_count: usize,
+    pub sha256: [u8; 32],
+}
+
+/// Deterministic digest of every logical keyspace owned by the Raft state
+/// machine. A controller compares this only after a barrier has been applied
+/// by all nodes; node-local RocksDB files and paths are intentionally absent.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct StateAudit {
+    pub last_applied: Option<LogId<NodeId>>,
+    pub column_families: Vec<ColumnFamilyAudit>,
+    pub sha256: [u8; 32],
+}
 
 /// A persistent OpenRaft state machine backed by the existing sbol-db RocksDB
 /// layout.
@@ -226,6 +252,45 @@ impl RocksStateMachine {
             })
             .map_err(state_read)?;
             Ok(found)
+        })
+    }
+
+    pub fn audit(&self) -> StorageResult<StateAudit> {
+        self.with_db(|db| {
+            let mut combined = Sha256::new();
+            let mut column_families = Vec::with_capacity(REPLICATED_COLUMN_FAMILIES.len());
+
+            for name in REPLICATED_COLUMN_FAMILIES {
+                let mut entries = Vec::<(Vec<u8>, Vec<u8>)>::new();
+                db.for_each(name, |key, value| {
+                    entries.push((key.to_vec(), value.to_vec()));
+                    Ok(true)
+                })
+                .map_err(state_read)?;
+                entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+                let mut digest = Sha256::new();
+                hash_part(&mut digest, name.as_bytes());
+                for (key, value) in &entries {
+                    hash_part(&mut digest, key);
+                    hash_part(&mut digest, value);
+                }
+                let sha256: [u8; 32] = digest.finalize().into();
+                hash_part(&mut combined, name.as_bytes());
+                hash_part(&mut combined, &sha256);
+                column_families.push(ColumnFamilyAudit {
+                    name: (*name).to_owned(),
+                    entry_count: entries.len(),
+                    sha256,
+                });
+            }
+
+            let last_applied = read_json(db, META_COLUMN_FAMILY, LAST_APPLIED_KEY)?;
+            Ok(StateAudit {
+                last_applied,
+                column_families,
+                sha256: combined.finalize().into(),
+            })
         })
     }
 
@@ -725,6 +790,11 @@ impl RocksStateMachine {
             }
         }
     }
+}
+
+fn hash_part(digest: &mut Sha256, bytes: &[u8]) {
+    digest.update((bytes.len() as u64).to_be_bytes());
+    digest.update(bytes);
 }
 
 impl RaftSnapshotBuilder<TypeConfig> for RocksStateMachine {

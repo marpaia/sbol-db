@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::io;
 use std::sync::Arc;
@@ -38,6 +39,7 @@ const MAX_RAFT_RPC_BODY_BYTES: usize = 64 * 1024 * 1024;
 pub struct HttpNetworkFactory {
     client: reqwest::Client,
     bearer_token: Arc<str>,
+    route_overrides: Arc<BTreeMap<NodeId, String>>,
 }
 
 impl HttpNetworkFactory {
@@ -57,7 +59,20 @@ impl HttpNetworkFactory {
         Ok(Self {
             client,
             bearer_token: bearer_token.into(),
+            route_overrides: Arc::new(BTreeMap::new()),
         })
+    }
+
+    /// Override the address used to reach selected peers from this node.
+    ///
+    /// Raft membership continues to contain the peer's canonical address. The
+    /// override is a transport concern, primarily useful for routing each
+    /// directed source-to-target link through a fault-injection proxy. Because
+    /// the map belongs to one node's factory, node 1 can route node 2 through a
+    /// different proxy than node 3 uses to reach node 2.
+    pub fn with_route_overrides(mut self, routes: BTreeMap<NodeId, String>) -> Self {
+        self.route_overrides = Arc::new(routes);
+        self
     }
 }
 
@@ -65,11 +80,15 @@ impl RaftNetworkFactory<TypeConfig> for HttpNetworkFactory {
     type Network = HttpNetworkConnection;
 
     async fn new_client(&mut self, target: NodeId, node: &BasicNode) -> Self::Network {
+        let mut node = node.clone();
+        if let Some(address) = self.route_overrides.get(&target) {
+            node.addr.clone_from(address);
+        }
         HttpNetworkConnection {
             client: self.client.clone(),
             bearer_token: self.bearer_token.clone(),
             target,
-            node: node.clone(),
+            node,
         }
     }
 }

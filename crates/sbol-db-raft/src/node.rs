@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,9 @@ pub struct RocksRaftNodeConfig {
     pub storage_root: PathBuf,
     pub bearer_token: String,
     pub raft: Arc<Config>,
+    /// Optional node-local routes used instead of canonical membership
+    /// addresses for outbound peer RPCs.
+    pub peer_routes: BTreeMap<u64, String>,
 }
 
 impl fmt::Debug for RocksRaftNodeConfig {
@@ -53,6 +57,7 @@ impl fmt::Debug for RocksRaftNodeConfig {
             .field("identity", &self.identity)
             .field("storage_root", &self.storage_root)
             .field("bearer_token", &"[redacted]")
+            .field("peer_route_count", &self.peer_routes.len())
             .field("raft", &self.raft)
             .finish()
     }
@@ -82,7 +87,8 @@ impl RocksRaftNode {
         let state_machine =
             RocksStateMachine::open(&layout.state, &layout.snapshots, config.identity.cluster_id)
                 .map_err(io::Error::other)?;
-        let network = HttpNetworkFactory::new(config.bearer_token.clone())?;
+        let network = HttpNetworkFactory::new(config.bearer_token.clone())?
+            .with_route_overrides(config.peer_routes.clone());
         let raft = Raft::new(
             config.identity.node_id,
             config.raft,
@@ -195,6 +201,7 @@ mod tests {
             storage_root: directory.path().join("node"),
             bearer_token: "test-secret".to_owned(),
             raft: raft_config(),
+            peer_routes: BTreeMap::new(),
         };
 
         let node = RocksRaftNode::open(config.clone()).await.unwrap();
@@ -235,6 +242,7 @@ mod tests {
             storage_root: root.clone(),
             bearer_token: "test-secret".to_owned(),
             raft: raft_config(),
+            peer_routes: BTreeMap::new(),
         })
         .await;
         assert!(result.is_err());

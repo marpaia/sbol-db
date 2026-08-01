@@ -25,7 +25,7 @@ pub use protocol::{
 pub use replicated_config::ReplicatedConfigStore;
 pub use replicated_token::ReplicatedTokenStore;
 pub use replicated_user::ReplicatedUserStore;
-pub use state_machine::RocksStateMachine;
+pub use state_machine::{ColumnFamilyAudit, RocksStateMachine, StateAudit};
 
 pub type NodeId = u64;
 
