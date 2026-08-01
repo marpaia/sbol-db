@@ -633,6 +633,7 @@ impl CompleteBackupService {
 pub struct VerifiedBackupReport {
     pub status: &'static str,
     pub backup_id: Uuid,
+    pub restore_confirmation: String,
     pub created_at: DateTime<Utc>,
     pub application_version: String,
     pub layout_version: String,
@@ -680,6 +681,7 @@ impl VerifiedBackup {
         VerifiedBackupReport {
             status: "verified",
             backup_id: self.manifest.backup_id,
+            restore_confirmation: format!("RESTORE {}", self.manifest.backup_id),
             created_at: self.manifest.created_at,
             application_version: self.manifest.application_version.clone(),
             layout_version: self.manifest.layout_version.clone(),
@@ -984,10 +986,7 @@ pub fn verify_encrypted_backup(
         bail!("backup is missing manifest entries: {missing:?}");
     }
 
-    let db = Db::open_read_only(&payload_root.join(BackupComponent::Rocksdb.as_str()))
-        .context("open extracted RocksDB checkpoint")?;
-    let available_blobs = validate_blob_tree(&manifest, &payload_root)?;
-    let referenced_blobs = validate_referenced_blobs(&db, &available_blobs)?;
+    let referenced_blobs = verify_payload_directory(&manifest, &payload_root)?;
 
     Ok(VerifiedBackup {
         manifest,
@@ -996,6 +995,30 @@ pub fn verify_encrypted_backup(
         referenced_blobs: referenced_blobs as u64,
         extracted,
     })
+}
+
+/// Re-verify an already materialized plaintext payload against its manifest.
+/// Restore calls this before and after the same-filesystem staging rename so
+/// activation never points at a partial or modified generation.
+pub fn verify_payload_directory(manifest: &BackupManifest, payload_root: &Path) -> Result<usize> {
+    validate_manifest(manifest)?;
+    validate_source_directory(payload_root, "backup payload root")?;
+    for component in BackupComponent::ALL {
+        validate_source_directory(
+            &payload_root.join(component.as_str()),
+            &format!("{} backup component", component.as_str()),
+        )?;
+    }
+
+    let actual_files = collect_payload_files(payload_root)?;
+    if actual_files != manifest.files {
+        bail!("materialized backup payload does not match its manifest");
+    }
+
+    let db = Db::open_read_only(&payload_root.join(BackupComponent::Rocksdb.as_str()))
+        .context("open materialized RocksDB checkpoint")?;
+    let available_blobs = validate_blob_tree(manifest, payload_root)?;
+    validate_referenced_blobs(&db, &available_blobs)
 }
 
 fn write_encrypted_archive(

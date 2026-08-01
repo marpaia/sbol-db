@@ -8,6 +8,7 @@ use sbol_db_backup::{parse_x25519_identity, verify_encrypted_backup};
 
 use crate::cli::BackupAction;
 use crate::output::print_json;
+use crate::runtime::ManagedDataLayout;
 
 pub fn run(action: BackupAction) -> Result<()> {
     match action {
@@ -23,7 +24,39 @@ pub fn run(action: BackupAction) -> Result<()> {
             let verified = verify_encrypted_backup(&artifact, &identity, &staging_dir)?;
             print_json(&verified.report())
         }
+        BackupAction::Restore {
+            artifact,
+            identity_file,
+            data_dir,
+            confirmation,
+        } => {
+            require_absolute_data_dir(&data_dir)?;
+            verify_private_identity_file(&identity_file)?;
+            let identity_contents = fs::read_to_string(&identity_file)
+                .with_context(|| format!("read age identity file {}", identity_file.display()))?;
+            let identity = parse_x25519_identity(&identity_contents)?;
+            let layout = ManagedDataLayout::open(&data_dir)?;
+            let verified = verify_encrypted_backup(&artifact, &identity, layout.restore_root())?;
+            let restored = layout.restore_verified(verified, &confirmation)?;
+            print_json(&restored)
+        }
+        BackupAction::Rollback {
+            data_dir,
+            confirmation,
+        } => {
+            require_absolute_data_dir(&data_dir)?;
+            let layout = ManagedDataLayout::open(&data_dir)?;
+            let rolled_back = layout.rollback(&confirmation)?;
+            print_json(&rolled_back)
+        }
     }
+}
+
+fn require_absolute_data_dir(path: &Path) -> Result<()> {
+    if !path.is_absolute() {
+        bail!("restore --data-dir must be an absolute path");
+    }
+    Ok(())
 }
 
 fn verify_private_identity_file(path: &Path) -> Result<()> {

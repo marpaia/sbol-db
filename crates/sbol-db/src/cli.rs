@@ -337,6 +337,30 @@ pub enum BackupAction {
         #[arg(long)]
         staging_dir: PathBuf,
     },
+    /// Verify, stage, and atomically activate a complete backup offline.
+    Restore {
+        /// Encrypted `.sbolbackup.age` artifact to restore.
+        #[arg(long)]
+        artifact: PathBuf,
+        /// Private age X25519 identity file for this artifact.
+        #[arg(long, env = "SBOL_DB_BACKUP_IDENTITY_FILE")]
+        identity_file: PathBuf,
+        /// Absolute managed production data directory. The server must be stopped.
+        #[arg(long, env = "SBOL_DB_DATA_DIR")]
+        data_dir: PathBuf,
+        /// Exact destructive-operation confirmation printed by `backup verify`.
+        #[arg(long)]
+        confirmation: String,
+    },
+    /// Atomically return to the generation retained by the last restore.
+    Rollback {
+        /// Absolute managed production data directory. The server must be stopped.
+        #[arg(long, env = "SBOL_DB_DATA_DIR")]
+        data_dir: PathBuf,
+        /// Exact confirmation returned by the restore operation.
+        #[arg(long)]
+        confirmation: String,
+    },
 }
 
 // -----------------------------------------------------------------------

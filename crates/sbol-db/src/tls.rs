@@ -140,7 +140,10 @@ impl EdgeHttpConfig {
                         hostname,
                         contact,
                         directory_url,
-                        cache_root: runtime.data_root().join("acme"),
+                        cache_root: runtime
+                            .layout()
+                            .map(|layout| layout.acme_root().to_path_buf())
+                            .unwrap_or_else(|| runtime.data_root().join("acme")),
                         redirect_origin,
                     }),
                     redirect_bind,
@@ -739,7 +742,10 @@ mod tests {
         let tls = config.tls.unwrap();
         assert_eq!(tls.hostname(), "registry.example.org");
         assert_eq!(tls.directory_url(), LETS_ENCRYPT_PRODUCTION_DIRECTORY);
-        assert_eq!(tls.cache_root(), temp.path().join("acme"));
+        assert_eq!(
+            tls.cache_root(),
+            runtime.layout().expect("managed layout").acme_root()
+        );
     }
 
     #[test]
