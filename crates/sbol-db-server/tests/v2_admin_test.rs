@@ -9,8 +9,8 @@ use sbol_db_app::{AppServices, Registration};
 use sbol_db_backend::Backend;
 use sbol_db_core::User;
 use sbol_db_server::{
-    router, write_edge_settings, AppState, EdgeAdminService, EdgeRuntimeIdentity, EdgeSettings,
-    Metrics, SchemaCache, ServerConfig,
+    router, write_edge_settings, AppState, EdgeAdminService, EdgeRecoverySnapshot,
+    EdgeRuntimeIdentity, EdgeSettings, Metrics, SchemaCache, ServerConfig,
 };
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use serde_json::{json, Value};
@@ -110,6 +110,13 @@ async fn app_with_edge() -> (Router, Arc<AppServices>, TempDir) {
             data_dir: dir.path().display().to_string(),
         },
         metrics.clone(),
+        EdgeRecoverySnapshot {
+            activation_mode: "offline_cli",
+            active_generation: uuid::Uuid::new_v4(),
+            previous_generation: None,
+            last_operation: None,
+            history: Vec::new(),
+        },
     )));
     let state = AppState {
         service: backend.store.clone(),
@@ -451,6 +458,8 @@ async fn edge_settings_are_validated_persisted_and_report_restart_state() {
     assert_eq!(initial["active"]["hostname"], "registry.example.org");
     assert_eq!(initial["health"]["tls"]["required"], true);
     assert_eq!(initial["health"]["disk"]["ready"], true);
+    assert_eq!(initial["recovery"]["activation_mode"], "offline_cli");
+    assert!(initial["recovery"]["history"].as_array().unwrap().is_empty());
 
     let updated = send(
         &app,

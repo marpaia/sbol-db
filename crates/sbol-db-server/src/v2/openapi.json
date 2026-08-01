@@ -352,13 +352,14 @@
       },
       "EdgeAdminSnapshot": {
         "type": "object",
-        "required": ["active", "pending", "restart_required", "runtime", "health"],
+        "required": ["active", "pending", "restart_required", "runtime", "health", "recovery"],
         "properties": {
           "active": { "$ref": "#/components/schemas/EdgeSettings" },
           "pending": { "$ref": "#/components/schemas/EdgeSettings" },
           "restart_required": { "type": "boolean" },
           "runtime": { "type": "object", "description": "Active managed-layout identity." },
-          "health": { "type": "object", "description": "Live TLS, ACME lifecycle, and managed-disk health." }
+          "health": { "type": "object", "description": "Live TLS, ACME lifecycle, and managed-disk health." },
+          "recovery": { "type": "object", "description": "Active/previous generations, last recovery operation, and bounded offline restore history." }
         }
       },
       "Error": {

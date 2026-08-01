@@ -18,7 +18,7 @@ use sbol_db_search::VectorIndexMaintainerRegistry;
 use sbol_db_search_sdk::IndexMutationSource;
 use sbol_db_server::{
     explorer_router, operations_router, public_router, AppState, EdgeAdminService,
-    EdgeRuntimeIdentity, Metrics, ServerProfile,
+    EdgeRecoveryEvent, EdgeRecoverySnapshot, EdgeRuntimeIdentity, Metrics, ServerProfile,
 };
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{ConfigStore, JobQueue, SbolStore};
@@ -177,6 +177,15 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, mut args: ServerArgs)
         let layout = runtime
             .layout()
             .expect("production edge settings require a managed layout");
+        let recovery = layout.recovery_status()?;
+        let recovery_event = |event: crate::runtime::RecoveryEvent| EdgeRecoveryEvent {
+            status: event.status.as_str().to_owned(),
+            backup_id: event.backup_id,
+            artifact_sha256: event.artifact_sha256,
+            previous_generation: event.previous_generation,
+            target_generation: event.target_generation,
+            updated_at: event.updated_at,
+        };
         config.edge_admin = Some(Arc::new(EdgeAdminService::new(
             backend.config.clone(),
             settings,
@@ -187,6 +196,13 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, mut args: ServerArgs)
                 data_dir: layout.root().to_string_lossy().into_owned(),
             },
             metrics.clone(),
+            EdgeRecoverySnapshot {
+                activation_mode: "offline_cli",
+                active_generation: recovery.active_generation,
+                previous_generation: recovery.previous_generation,
+                last_operation: recovery.last_operation.map(&recovery_event),
+                history: recovery.history.into_iter().map(recovery_event).collect(),
+            },
         )));
     }
     let sparql_update = Arc::new(SparqlUpdateEngine::new(

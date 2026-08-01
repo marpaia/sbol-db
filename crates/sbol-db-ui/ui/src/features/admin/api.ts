@@ -178,6 +178,22 @@ export interface EdgeAdminSnapshot {
       error: string | null;
     } | null;
   };
+  recovery: {
+    activation_mode: "offline_cli";
+    active_generation: string;
+    previous_generation: string | null;
+    last_operation: EdgeRecoveryEvent | null;
+    history: EdgeRecoveryEvent[];
+  };
+}
+
+export interface EdgeRecoveryEvent {
+  status: "staged" | "activated" | "rollback_pending" | "rolled_back";
+  backup_id: string;
+  artifact_sha256: string;
+  previous_generation: string | null;
+  target_generation: string;
+  updated_at: string;
 }
 
 export function fetchAdminOverview(signal?: AbortSignal) {

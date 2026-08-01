@@ -1,5 +1,7 @@
 import {
+  Check,
   Cloud,
+  Copy,
   DatabaseBackup,
   ExternalLink,
   HardDrive,
@@ -23,6 +25,8 @@ import {
   useEdgeAdmin,
   useTriggerCompleteBackup,
 } from "@/features/admin/queries";
+import type { EdgeAdminSnapshot } from "@/features/admin/api";
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import type { RecentJob } from "@/lib/api";
 import { adminPath } from "@/lib/routes";
 import { describeError, formatBytes, formatRelative } from "@/lib/utils";
@@ -227,20 +231,153 @@ export default function AdminBackupRoute() {
         title="Recovery activation"
         description="Verification, activation, and rollback run offline so an open RocksDB process can never be replaced underneath live traffic."
       >
-        <div className="rounded-lg border border-warning/30 bg-warning/5 p-4">
-          <p className="text-sm font-medium">
-            The running admin UI cannot activate a restore.
-          </p>
-          <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
-            Stop sbol-db, retrieve the selected encrypted artifact and recovery
-            identity, then use the recovery commands on the server. Runtime
-            configuration and recovery state will be shown here as the edge
-            management phase is completed.
-          </p>
-        </div>
+        {edge.data ? (
+          <RecoveryPanel edge={edge.data} />
+        ) : (
+          <div className="rounded-lg border border-warning/30 bg-warning/5 p-4">
+            <p className="text-sm font-medium">Offline activation only</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              Edge recovery status is available only on the managed production
+              profile.
+            </p>
+          </div>
+        )}
       </AdminSection>
     </AdminPage>
   );
+}
+
+function RecoveryPanel({ edge }: { edge: EdgeAdminSnapshot }) {
+  const recovery = edge.recovery;
+  const dataDir = shellQuote(edge.runtime.data_dir);
+  const verify = `sbol-db backup verify \\
+  --artifact /srv/recovery/selected.sbolbackup.age \\
+  --identity-file /srv/recovery/recovery.agekey \\
+  --staging-dir ${shellQuote(`${edge.runtime.data_dir}/restore/verify`)}`;
+  const restore = `sbol-db backup restore \\
+  --artifact /srv/recovery/selected.sbolbackup.age \\
+  --identity-file /srv/recovery/recovery.agekey \\
+  --data-dir ${dataDir} \\
+  --confirmation 'RESTORE <backup-uuid>'`;
+  const rollback = `sbol-db backup rollback \\
+  --data-dir ${dataDir} \\
+  --confirmation 'ROLLBACK ${recovery.active_generation}'`;
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <PolicyValue
+          label="Active generation"
+          value={recovery.active_generation}
+          mono
+        />
+        <PolicyValue
+          label="Rollback generation"
+          value={recovery.previous_generation ?? "None retained"}
+          mono={Boolean(recovery.previous_generation)}
+        />
+        <PolicyValue
+          label="Last recovery operation"
+          value={
+            recovery.last_operation
+              ? `${recovery.last_operation.status.replace("_", " ")} · ${formatRelative(
+                  recovery.last_operation.updated_at
+                )}`
+              : "No restore recorded"
+          }
+        />
+      </div>
+
+      <div className="rounded-lg border border-warning/30 bg-warning/5 p-4">
+        <p className="text-sm font-medium">
+          Stop sbol-db before running these commands
+        </p>
+        <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
+          Download the selected encrypted object from S3 or GCS and place the
+          private recovery identity on the server temporarily. Verification
+          prints the exact restore confirmation. Activation stages and
+          re-verifies a complete generation before switching the durable
+          pointer.
+        </p>
+      </div>
+
+      <div className="grid gap-3">
+        <RecoveryCommand label="1. Verify the artifact" command={verify} />
+        <RecoveryCommand
+          label="2. Activate the verified generation"
+          command={restore}
+        />
+        {recovery.previous_generation && (
+          <RecoveryCommand
+            label="Rollback after an unhealthy restart"
+            command={rollback}
+          />
+        )}
+      </div>
+
+      {recovery.history.length > 0 && (
+        <div>
+          <p className="mb-2 text-xs font-medium">Recovery history</p>
+          <div className="divide-y overflow-hidden rounded-lg border">
+            {recovery.history.map((event, index) => (
+              <div
+                key={`${event.updated_at}-${event.status}-${index}`}
+                className="grid gap-1 px-4 py-3 text-xs sm:grid-cols-[140px_minmax(0,1fr)_auto] sm:items-center"
+              >
+                <span className="capitalize">
+                  {event.status.replace("_", " ")}
+                </span>
+                <span className="truncate font-mono text-[11px] text-muted-foreground">
+                  {event.backup_id}
+                </span>
+                <span className="text-muted-foreground">
+                  {formatRelative(event.updated_at)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RecoveryCommand({
+  label,
+  command,
+}: {
+  label: string;
+  command: string;
+}) {
+  const clipboard = useCopyToClipboard();
+  return (
+    <div className="overflow-hidden rounded-lg border bg-background">
+      <div className="flex items-center justify-between gap-3 border-b px-4 py-2">
+        <p className="text-xs font-medium">{label}</p>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => clipboard.copy(command)}
+          aria-label={`Copy ${label.toLowerCase()}`}
+        >
+          {clipboard.copied ? <Check /> : <Copy />}
+          {clipboard.copied
+            ? "Copied"
+            : clipboard.failed
+              ? "Copy failed"
+              : "Copy"}
+        </Button>
+      </div>
+      <pre className="overflow-x-auto p-4 text-[11px] leading-5 text-muted-foreground">
+        <code>{command}</code>
+      </pre>
+    </div>
+  );
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 function PolicyValue({

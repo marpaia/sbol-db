@@ -20,7 +20,8 @@ mod v2;
 
 pub use edge::{
     read_edge_settings, write_edge_settings, EdgeAdminError, EdgeAdminService, EdgeAdminSnapshot,
-    EdgeRuntimeIdentity, EdgeSettings, EdgeSettingsPatch, EDGE_SETTINGS_KEY,
+    EdgeRecoveryEvent, EdgeRecoverySnapshot, EdgeRuntimeIdentity, EdgeSettings, EdgeSettingsPatch,
+    EDGE_SETTINGS_KEY,
 };
 pub use error::ApiError;
 pub use export::export_subject_rdf;

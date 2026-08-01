@@ -71,6 +71,26 @@ pub struct EdgeAdminSnapshot {
     pub restart_required: bool,
     pub runtime: EdgeRuntimeIdentity,
     pub health: EdgeHealthSnapshot,
+    pub recovery: EdgeRecoverySnapshot,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct EdgeRecoverySnapshot {
+    pub activation_mode: &'static str,
+    pub active_generation: Uuid,
+    pub previous_generation: Option<Uuid>,
+    pub last_operation: Option<EdgeRecoveryEvent>,
+    pub history: Vec<EdgeRecoveryEvent>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct EdgeRecoveryEvent {
+    pub status: String,
+    pub backup_id: Uuid,
+    pub artifact_sha256: String,
+    pub previous_generation: Option<Uuid>,
+    pub target_generation: Uuid,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -87,6 +107,7 @@ pub struct EdgeAdminService {
     active: EdgeSettings,
     runtime: EdgeRuntimeIdentity,
     metrics: Arc<Metrics>,
+    recovery: EdgeRecoverySnapshot,
 }
 
 impl fmt::Debug for EdgeAdminService {
@@ -168,12 +189,14 @@ impl EdgeAdminService {
         active: EdgeSettings,
         runtime: EdgeRuntimeIdentity,
         metrics: Arc<Metrics>,
+        recovery: EdgeRecoverySnapshot,
     ) -> Self {
         Self {
             store,
             active,
             runtime,
             metrics,
+            recovery,
         }
     }
 
@@ -187,6 +210,7 @@ impl EdgeAdminService {
             pending,
             runtime: self.runtime.clone(),
             health: self.metrics.edge_health_snapshot(),
+            recovery: self.recovery.clone(),
         })
     }
 

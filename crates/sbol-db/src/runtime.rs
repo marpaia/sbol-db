@@ -26,6 +26,8 @@ const CURRENT_FILE: &str = "CURRENT";
 const PREVIOUS_FILE: &str = "PREVIOUS";
 const LOCK_FILE: &str = "LOCK";
 const RESTORE_JOURNAL_FILE: &str = "last-restore.json";
+const RESTORE_HISTORY_DIR: &str = "history";
+const MAX_RECOVERY_HISTORY: usize = 50;
 
 /// Fully resolved storage configuration held for the lifetime of the server.
 #[derive(Debug)]
@@ -188,7 +190,7 @@ pub struct RollbackOutcome {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum RestoreJournalStatus {
+pub enum RestoreJournalStatus {
     Staged,
     Activated,
     RollbackPending,
@@ -197,14 +199,35 @@ enum RestoreJournalStatus {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct RestoreJournal {
-    version: u32,
-    status: RestoreJournalStatus,
-    backup_id: Uuid,
-    artifact_sha256: String,
-    previous_generation: Option<Uuid>,
-    target_generation: Uuid,
-    updated_at: DateTime<Utc>,
+pub struct RecoveryEvent {
+    pub version: u32,
+    pub status: RestoreJournalStatus,
+    pub backup_id: Uuid,
+    pub artifact_sha256: String,
+    pub previous_generation: Option<Uuid>,
+    pub target_generation: Uuid,
+    pub updated_at: DateTime<Utc>,
+}
+
+type RestoreJournal = RecoveryEvent;
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RecoveryStatus {
+    pub active_generation: Uuid,
+    pub previous_generation: Option<Uuid>,
+    pub last_operation: Option<RecoveryEvent>,
+    pub history: Vec<RecoveryEvent>,
+}
+
+impl RestoreJournalStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Staged => "staged",
+            Self::Activated => "activated",
+            Self::RollbackPending => "rollback_pending",
+            Self::RolledBack => "rolled_back",
+        }
+    }
 }
 
 impl ManagedDataLayout {
@@ -319,6 +342,26 @@ impl ManagedDataLayout {
 
     pub fn restore_root(&self) -> &Path {
         &self.restore_root
+    }
+
+    pub fn recovery_status(&self) -> Result<RecoveryStatus> {
+        let active_generation =
+            read_generation_pointer(&self.root.join(CURRENT_FILE), "current-generation pointer")?;
+        let previous_generation = optional_generation_pointer(
+            &self.root.join(PREVIOUS_FILE),
+            "previous-generation pointer",
+        )?;
+        let last_operation = self.read_restore_journal()?;
+        let mut history = self.read_recovery_history()?;
+        if history.is_empty() {
+            history.extend(last_operation.iter().cloned());
+        }
+        Ok(RecoveryStatus {
+            active_generation,
+            previous_generation,
+            last_operation,
+            history,
+        })
     }
 
     /// Materialize a fully verified artifact as a new generation and activate
@@ -583,7 +626,8 @@ impl ManagedDataLayout {
             &self.restore_root,
             &self.restore_root.join(RESTORE_JOURNAL_FILE),
             &bytes,
-        )
+        )?;
+        self.record_recovery_event(journal)
     }
 
     fn read_restore_journal(&self) -> Result<Option<RestoreJournal>> {
@@ -598,6 +642,51 @@ impl ManagedDataLayout {
                 Err(err).with_context(|| format!("read restore journal {}", path.display()))
             }
         }
+    }
+
+    fn record_recovery_event(&self, event: &RecoveryEvent) -> Result<()> {
+        let history_root = self.restore_root.join(RESTORE_HISTORY_DIR);
+        prepare_directory(&history_root, "restore history directory")?;
+        let name = format!(
+            "{}-{}-{}.json",
+            event.updated_at.timestamp_micros(),
+            event.status.as_str(),
+            Uuid::new_v4().simple()
+        );
+        let bytes = serde_json::to_vec_pretty(event).context("encode recovery history event")?;
+        atomic_write(&history_root, &history_root.join(name), &bytes)
+    }
+
+    fn read_recovery_history(&self) -> Result<Vec<RecoveryEvent>> {
+        let history_root = self.restore_root.join(RESTORE_HISTORY_DIR);
+        reject_symlink(&history_root, "restore history directory")?;
+        let entries = match fs::read_dir(&history_root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("read restore history {}", history_root.display()));
+            }
+        };
+        let mut history = Vec::new();
+        for entry in entries {
+            let entry = entry.context("read restore history entry")?;
+            let path = entry.path();
+            reject_symlink(&path, "restore history event")?;
+            let metadata = entry.metadata().context("read restore history metadata")?;
+            if !metadata.is_file() || metadata.len() > 64 * 1024 {
+                continue;
+            }
+            let event = serde_json::from_slice::<RecoveryEvent>(
+                &fs::read(&path)
+                    .with_context(|| format!("read restore history event {}", path.display()))?,
+            )
+            .with_context(|| format!("decode restore history event {}", path.display()))?;
+            history.push(event);
+        }
+        history.sort_by_key(|event| std::cmp::Reverse(event.updated_at));
+        history.truncate(MAX_RECOVERY_HISTORY);
+        Ok(history)
     }
 }
 
@@ -648,6 +737,15 @@ fn read_generation_pointer(path: &Path, label: &str) -> Result<Uuid> {
     let raw = fs::read_to_string(path)
         .with_context(|| format!("reading {label} from {}", path.display()))?;
     parse_generation(&raw, path)
+}
+
+fn optional_generation_pointer(path: &Path, label: &str) -> Result<Option<Uuid>> {
+    reject_symlink(path, label)?;
+    match fs::read_to_string(path) {
+        Ok(raw) => parse_generation(&raw, path).map(Some),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("reading {label} {}", path.display())),
+    }
 }
 
 fn read_optional_generation_pointer(path: &Path, label: &str) -> Result<Option<Uuid>> {
@@ -959,6 +1057,20 @@ mod tests {
             fs::read(original.acme_root().join("account")).expect("read original ACME state"),
             b"original-acme"
         );
+        let recovery_status = original.recovery_status().expect("read recovery status");
+        assert_eq!(recovery_status.active_generation, original_generation);
+        assert_eq!(recovery_status.previous_generation, Some(created.backup_id));
+        assert_eq!(
+            recovery_status
+                .last_operation
+                .as_ref()
+                .map(|event| event.status),
+            Some(RestoreJournalStatus::RolledBack)
+        );
+        assert!(
+            recovery_status.history.len() >= 4,
+            "staging, activation, rollback-pending, and rollback must be retained"
+        );
         drop(original_db);
         drop(original);
 
@@ -985,6 +1097,12 @@ mod tests {
                 .expect("read fresh restored marker"),
             Some(b"restored".to_vec())
         );
+        let fresh_status = restored_fresh
+            .recovery_status()
+            .expect("read fresh recovery status");
+        assert_eq!(fresh_status.active_generation, created.backup_id);
+        assert_eq!(fresh_status.previous_generation, None);
+        assert_eq!(fresh_status.history.len(), 2);
     }
 
     #[test]
