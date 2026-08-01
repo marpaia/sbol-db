@@ -135,9 +135,10 @@ export default function AdminEdgeRoute() {
                 ? `Last event ${formatRelative(health.acme.last_success_at)}`
                 : "No lifecycle event observed yet"
           }
-          healthy={
-            !health.acme.last_failure_at || Boolean(health.acme.last_success_at)
-          }
+          healthy={lifecycleHealthy(
+            health.acme.last_success_at,
+            health.acme.last_failure_at
+          )}
         />
         <HealthCard
           icon={<HardDrive />}
@@ -417,6 +418,15 @@ export default function AdminEdgeRoute() {
       </form>
     </AdminPage>
   );
+}
+
+function lifecycleHealthy(
+  success: string | null,
+  failure: string | null
+): boolean {
+  if (!success) return false;
+  if (!failure) return true;
+  return new Date(success).getTime() >= new Date(failure).getTime();
 }
 
 function toDraft(settings: EdgeSettings): Draft {

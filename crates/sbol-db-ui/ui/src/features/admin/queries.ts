@@ -232,6 +232,7 @@ export function useCompleteBackupStatus() {
     queryKey: adminKeys.backup,
     queryFn: ({ signal }) => fetchCompleteBackupStatus(signal),
     refetchInterval: 5_000,
+    retry: false,
   });
 }
 
@@ -248,11 +249,13 @@ export function useTriggerCompleteBackup() {
   });
 }
 
-export function useEdgeAdmin() {
+export function useEdgeAdmin(enabled = true) {
   return useQuery({
     queryKey: adminKeys.edge,
     queryFn: ({ signal }) => fetchEdgeAdmin(signal),
-    refetchInterval: 10_000,
+    enabled,
+    refetchInterval: enabled ? 10_000 : false,
+    retry: false,
   });
 }
 

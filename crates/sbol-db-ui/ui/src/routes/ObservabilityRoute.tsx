@@ -8,6 +8,7 @@
  */
 
 import { useMemo } from "react";
+import { Link } from "react-router-dom";
 import {
   Activity,
   AlertTriangle,
@@ -18,11 +19,22 @@ import {
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { KpiTile } from "@/components/observability/KpiTile";
 import { Sparkline } from "@/components/observability/Sparkline";
+import type { EdgeAdminSnapshot } from "@/features/admin/api";
+import {
+  useCompleteBackupStatus,
+  useEdgeAdmin,
+} from "@/features/admin/queries";
 import { useObservabilitySummary } from "@/hooks/useObservability";
-import type { BucketSnapshot, ObservabilitySummary } from "@/lib/api";
+import type {
+  BucketSnapshot,
+  ObservabilitySummary,
+  RecentJob,
+} from "@/lib/api";
+import { adminPath } from "@/lib/routes";
 import {
   cn,
   describeError,
+  formatBytes,
   formatMs,
   formatRelative,
   formatUptime,
@@ -30,6 +42,8 @@ import {
 
 export default function ObservabilityRoute() {
   const { data: summary, isLoading, error } = useObservabilitySummary();
+  const backups = useCompleteBackupStatus();
+  const edge = useEdgeAdmin(backups.data?.enabled === true);
 
   return (
     <div className="h-full w-full overflow-y-auto">
@@ -56,6 +70,12 @@ export default function ObservabilityRoute() {
         ) : (
           <>
             <HealthStrip summary={summary} />
+            {edge.data && (
+              <EdgeRuntimeHealth
+                edge={edge.data}
+                backupJobs={backups.data?.recent ?? []}
+              />
+            )}
             <Kpis summary={summary} />
             <Charts
               buckets={summary.rolling.buckets}
@@ -67,6 +87,146 @@ export default function ObservabilityRoute() {
       </div>
     </div>
   );
+}
+
+function EdgeRuntimeHealth({
+  edge,
+  backupJobs,
+}: {
+  edge: EdgeAdminSnapshot;
+  backupJobs: RecentJob[];
+}) {
+  const now = Date.now();
+  const tlsDays =
+    edge.health.tls.certificate_expires_in_secs == null
+      ? null
+      : edge.health.tls.certificate_expires_in_secs / 86_400;
+  const successful = backupJobs.find((job) => job.status === "succeeded");
+  const completedAt = successful?.finished_at ?? successful?.created_at ?? null;
+  const backupAgeSecs = completedAt
+    ? Math.max(0, (now - new Date(completedAt).getTime()) / 1_000)
+    : null;
+  const backupStale =
+    backupAgeSecs == null ||
+    backupAgeSecs > edge.active.backup_interval_secs * 1.5;
+  const result = record(successful?.result);
+  const remote = record(result?.remote);
+  const remoteVerifiedAt =
+    typeof remote?.verified_at === "string" ? remote.verified_at : null;
+  const acmeHealthy = lifecycleHealthy(
+    edge.health.acme.last_success_at,
+    edge.health.acme.last_failure_at
+  );
+
+  return (
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-medium">Edge operations</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Live readiness signals also exported from the loopback Prometheus
+            endpoint.
+          </p>
+        </div>
+        <div className="flex gap-3 text-xs">
+          <Link
+            className="text-primary hover:underline"
+            to={adminPath("/operations/backup")}
+          >
+            Backups
+          </Link>
+          <Link
+            className="text-primary hover:underline"
+            to={adminPath("/settings/edge")}
+          >
+            Runtime settings
+          </Link>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <KpiTile
+          label="TLS certificate"
+          value={tlsDays == null ? "waiting" : Math.floor(tlsDays)}
+          unit={tlsDays == null ? undefined : "days"}
+          hint={
+            edge.health.tls.certificate_not_after
+              ? `expires ${formatRelative(edge.health.tls.certificate_not_after)}`
+              : "ACME certificate not deployed"
+          }
+          tone={
+            !edge.health.tls.ready
+              ? "error"
+              : tlsDays != null && tlsDays < 21
+                ? "warn"
+                : "ok"
+          }
+        />
+        <KpiTile
+          label="ACME lifecycle"
+          value={acmeHealthy ? "healthy" : "attention"}
+          hint={
+            edge.health.acme.last_failure_at
+              ? `last failure ${formatRelative(edge.health.acme.last_failure_at)}`
+              : edge.health.acme.last_success_at
+                ? `last event ${formatRelative(edge.health.acme.last_success_at)}`
+                : "waiting for first event"
+          }
+          tone={acmeHealthy ? "ok" : "warn"}
+        />
+        <KpiTile
+          label="Data disk"
+          value={formatBytes(edge.health.disk?.available_bytes)}
+          hint={`${formatBytes(edge.health.disk?.minimum_free_bytes)} reserve`}
+          tone={edge.health.disk?.ready ? "ok" : "error"}
+        />
+        <KpiTile
+          label="Complete backup"
+          value={completedAt ? formatRelative(completedAt) : "missing"}
+          hint={`target every ${formatInterval(edge.active.backup_interval_secs)}`}
+          tone={backupStale ? "error" : "ok"}
+        />
+        <KpiTile
+          label="Remote readback"
+          value={remoteVerifiedAt ? "verified" : "missing"}
+          hint={
+            remoteVerifiedAt
+              ? `${String(remote?.provider ?? "object store").toUpperCase()} · ${formatRelative(
+                  remoteVerifiedAt
+                )}`
+              : edge.active.backup_repository_url
+          }
+          tone={remoteVerifiedAt && !backupStale ? "ok" : "error"}
+        />
+      </div>
+      {edge.restart_required && (
+        <p className="text-xs text-warning">
+          Pending edge settings are durable but not active; restart sbol-db to
+          apply them.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function lifecycleHealthy(
+  success: string | null,
+  failure: string | null
+): boolean {
+  if (!success) return false;
+  if (!failure) return true;
+  return new Date(success).getTime() >= new Date(failure).getTime();
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function formatInterval(seconds: number): string {
+  if (seconds % 86_400 === 0) return `${seconds / 86_400}d`;
+  if (seconds % 3_600 === 0) return `${seconds / 3_600}h`;
+  return `${seconds / 60}m`;
 }
 
 function HealthStrip({ summary }: { summary: ObservabilitySummary }) {
