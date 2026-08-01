@@ -5,6 +5,7 @@
 //! infer authority from navigation visibility or duplicate policy per route.
 
 mod backup;
+mod edge;
 mod instance;
 mod integrations;
 mod operations;
@@ -59,6 +60,7 @@ pub(super) fn router() -> Router<AppState> {
         .route("/search", get(operations::search_status))
         .route("/search/rebuild", post(operations::rebuild_search))
         .route("/backup", get(backup::status).post(backup::trigger))
+        .route("/edge", get(edge::get).patch(edge::patch))
         .route("/audit", get(audit))
         .route_layer(axum::middleware::from_fn(require_admin))
 }

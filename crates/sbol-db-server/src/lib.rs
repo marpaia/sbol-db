@@ -2,6 +2,7 @@
 
 mod auth;
 mod docs;
+mod edge;
 mod error;
 mod explorer;
 mod export;
@@ -17,6 +18,10 @@ mod session;
 mod synbiohub;
 mod v2;
 
+pub use edge::{
+    read_edge_settings, write_edge_settings, EdgeAdminError, EdgeAdminService, EdgeAdminSnapshot,
+    EdgeRuntimeIdentity, EdgeSettings, EdgeSettingsPatch, EDGE_SETTINGS_KEY,
+};
 pub use error::ApiError;
 pub use export::export_subject_rdf;
 #[cfg(feature = "lab")]
@@ -176,6 +181,9 @@ pub struct ServerConfig {
     /// Whether this process has the native complete-backup executor installed.
     /// Admin routes fail closed when it is absent.
     pub complete_backups_enabled: bool,
+    /// Production-appliance configuration and health control plane. It is absent
+    /// for development and non-managed deployments.
+    pub edge_admin: Option<Arc<EdgeAdminService>>,
 }
 
 impl Default for ServerConfig {
@@ -201,6 +209,7 @@ impl Default for ServerConfig {
             https_security_headers: false,
             setup_token_hash: None,
             complete_backups_enabled: false,
+            edge_admin: None,
         }
     }
 }
@@ -263,6 +272,7 @@ impl ServerConfig {
             https_security_headers: defaults.https_security_headers,
             setup_token_hash: setup_token_hash_from_env(),
             complete_backups_enabled: false,
+            edge_admin: None,
         };
         if let Ok(origins) = std::env::var("SBOL_DB_CORS_ALLOWED_ORIGINS") {
             match parse_cors_origins(&origins) {

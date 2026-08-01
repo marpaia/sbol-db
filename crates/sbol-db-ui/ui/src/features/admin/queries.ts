@@ -12,6 +12,7 @@ import {
   fetchAdminOverview,
   fetchAdminUsers,
   fetchCompleteBackupStatus,
+  fetchEdgeAdmin,
   fetchSearchStatus,
   joinFederation,
   rebuildSearch,
@@ -20,6 +21,7 @@ import {
   saveRemote,
   syncFederation,
   triggerCompleteBackup,
+  updateEdgeAdmin,
   updateAdminInstance,
   updateAdminUser,
   type UpdateAdminUser,
@@ -32,6 +34,7 @@ export const adminKeys = {
   integrations: ["admin", "integrations"] as const,
   search: ["admin", "search"] as const,
   backup: ["admin", "backup"] as const,
+  edge: ["admin", "edge"] as const,
   audit: ["admin", "audit"] as const,
 };
 
@@ -241,6 +244,26 @@ export function useTriggerCompleteBackup() {
       client.invalidateQueries({ queryKey: adminKeys.audit });
       client.invalidateQueries({ queryKey: ["lab", "obs", "jobs", "recent"] });
       client.invalidateQueries({ queryKey: ["lab", "obs", "summary"] });
+    },
+  });
+}
+
+export function useEdgeAdmin() {
+  return useQuery({
+    queryKey: adminKeys.edge,
+    queryFn: ({ signal }) => fetchEdgeAdmin(signal),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useUpdateEdgeAdmin() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: updateEdgeAdmin,
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: adminKeys.edge });
+      client.invalidateQueries({ queryKey: adminKeys.backup });
+      client.invalidateQueries({ queryKey: adminKeys.audit });
     },
   });
 }

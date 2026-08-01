@@ -134,6 +134,52 @@ export interface CompleteBackupEnqueueResponse {
   deduplicated: boolean;
 }
 
+export interface EdgeSettings {
+  version: number;
+  hostname: string;
+  acme_contact: string;
+  acme_directory_url: string;
+  http_redirect_enabled: boolean;
+  tls_handshake_timeout_secs: number;
+  backup_recovery_recipient: string;
+  backup_repository_url: string;
+  backup_interval_secs: number;
+  backup_local_retention: number;
+  minimum_free_bytes: number;
+}
+
+export type EdgeSettingsPatch = Partial<Omit<EdgeSettings, "version">>;
+
+export interface EdgeAdminSnapshot {
+  active: EdgeSettings;
+  pending: EdgeSettings;
+  restart_required: boolean;
+  runtime: {
+    profile: "production";
+    layout_version: string;
+    generation: string;
+    data_dir: string;
+  };
+  health: {
+    tls: {
+      required: boolean;
+      ready: boolean;
+      certificate_not_after: string | null;
+      certificate_expires_in_secs: number | null;
+    };
+    acme: {
+      last_success_at: string | null;
+      last_failure_at: string | null;
+    };
+    disk: {
+      ready: boolean;
+      available_bytes: number | null;
+      minimum_free_bytes: number;
+      error: string | null;
+    } | null;
+  };
+}
+
 export function fetchAdminOverview(signal?: AbortSignal) {
   return request<AdminOverview>("", { signal });
 }
@@ -267,6 +313,14 @@ export function triggerCompleteBackup(
       ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
     })
   );
+}
+
+export function fetchEdgeAdmin(signal?: AbortSignal) {
+  return request<EdgeAdminSnapshot>("/edge", { signal });
+}
+
+export function updateEdgeAdmin(payload: EdgeSettingsPatch) {
+  return request<EdgeAdminSnapshot>("/edge", jsonRequest("PATCH", payload));
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

@@ -4,9 +4,10 @@ import {
   ExternalLink,
   HardDrive,
   History,
+  Settings,
   ShieldCheck,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import {
   AdminPage,
@@ -19,6 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   useCompleteBackupStatus,
+  useEdgeAdmin,
   useTriggerCompleteBackup,
 } from "@/features/admin/queries";
 import type { RecentJob } from "@/lib/api";
@@ -42,6 +44,7 @@ interface CompletedBackupResult {
 export default function AdminBackupRoute() {
   const navigate = useNavigate();
   const status = useCompleteBackupStatus();
+  const edge = useEdgeAdmin();
   const trigger = useTriggerCompleteBackup();
   const latestVerified = status.data?.recent.find(
     (job) => job.status === "succeeded"
@@ -129,6 +132,47 @@ export default function AdminBackupRoute() {
       />
 
       <AdminSection
+        title="Active backup policy"
+        description="These values are held consistently for the lifetime of the process. Save changes from Edge runtime settings, then restart to apply them."
+        action={
+          <Button variant="outline" size="sm" asChild>
+            <Link to={adminPath("/settings/edge")}>
+              <Settings /> Manage policy
+            </Link>
+          </Button>
+        }
+      >
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <PolicyValue
+            label="Repository"
+            value={edge.data?.active.backup_repository_url ?? "Unavailable"}
+            mono
+          />
+          <PolicyValue
+            label="Cadence"
+            value={formatInterval(edge.data?.active.backup_interval_secs)}
+          />
+          <PolicyValue
+            label="Local retention"
+            value={
+              edge.data
+                ? `${edge.data.active.backup_local_retention} verified artifacts`
+                : "Unavailable"
+            }
+          />
+          <PolicyValue
+            label="Disk reserve"
+            value={formatBytes(edge.data?.active.minimum_free_bytes)}
+          />
+        </div>
+        {edge.data?.restart_required && (
+          <p className="mt-4 text-xs text-warning">
+            Pending policy changes are saved and will apply after restart.
+          </p>
+        )}
+      </AdminSection>
+
+      <AdminSection
         title="Complete recovery contract"
         description="Every trigger produces the same artifact and passes the same local verification, remote upload, remote readback, and semantic verification gates."
       >
@@ -197,6 +241,42 @@ export default function AdminBackupRoute() {
       </AdminSection>
     </AdminPage>
   );
+}
+
+function PolicyValue({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="rounded-lg border bg-background px-4 py-3">
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <p
+        className={`mt-1 break-all text-sm ${mono ? "font-mono text-xs" : "font-medium"}`}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function formatInterval(seconds: number | undefined): string {
+  if (seconds == null) return "Unavailable";
+  if (seconds % 86_400 === 0) {
+    const days = seconds / 86_400;
+    return `${days} day${days === 1 ? "" : "s"}`;
+  }
+  if (seconds % 3_600 === 0) {
+    const hours = seconds / 3_600;
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  return `${seconds / 60} minutes`;
 }
 
 function BackupJobRow({ job, onOpen }: { job: RecentJob; onOpen: () => void }) {

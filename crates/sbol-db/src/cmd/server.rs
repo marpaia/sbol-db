@@ -17,7 +17,8 @@ use sbol_db_jobs::{default_registry, SearchIndexHandles, Worker, WorkerConfig};
 use sbol_db_search::VectorIndexMaintainerRegistry;
 use sbol_db_search_sdk::IndexMutationSource;
 use sbol_db_server::{
-    explorer_router, operations_router, public_router, AppState, Metrics, ServerProfile,
+    explorer_router, operations_router, public_router, AppState, EdgeAdminService,
+    EdgeRuntimeIdentity, Metrics, ServerProfile,
 };
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{ConfigStore, JobQueue, SbolStore};
@@ -28,12 +29,14 @@ use crate::runtime::ServerRuntime;
 use crate::signal::shutdown_signal;
 use crate::tls::{run_acme, EdgeHttpConfig};
 
-pub async fn run(
-    backend: Backend,
-    runtime: ServerRuntime,
-    args: ServerArgs,
-    edge_http: EdgeHttpConfig,
-) -> Result<()> {
+pub async fn run(backend: Backend, runtime: ServerRuntime, mut args: ServerArgs) -> Result<()> {
+    let production = runtime.profile() == crate::cli::RuntimeProfile::Production;
+    let active_edge_settings = if production {
+        Some(crate::edge_config::resolve(backend.config.as_ref(), &mut args).await?)
+    } else {
+        None
+    };
+    let edge_http = EdgeHttpConfig::resolve(&runtime, &args)?;
     let ServerArgs {
         profile: _,
         data_dir: _,
@@ -58,7 +61,6 @@ pub async fn run(
         tls,
         tls_handshake_timeout,
     } = edge_http;
-    let production = runtime.profile() == crate::cli::RuntimeProfile::Production;
     if production && no_worker {
         bail!(
             "the production profile requires the embedded worker for complete backups; \
@@ -171,6 +173,22 @@ pub async fn run(
         ServerProfile::Development
     })?;
     config.complete_backups_enabled = backup_service.is_some();
+    if let Some(settings) = active_edge_settings {
+        let layout = runtime
+            .layout()
+            .expect("production edge settings require a managed layout");
+        config.edge_admin = Some(Arc::new(EdgeAdminService::new(
+            backend.config.clone(),
+            settings,
+            EdgeRuntimeIdentity {
+                profile: "production",
+                layout_version: layout.layout_version().to_owned(),
+                generation: layout.generation(),
+                data_dir: layout.root().to_string_lossy().into_owned(),
+            },
+            metrics.clone(),
+        )));
+    }
     let sparql_update = Arc::new(SparqlUpdateEngine::new(
         backend.triple_source.clone(),
         backend.triple_writer.clone(),

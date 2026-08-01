@@ -25,6 +25,7 @@ const AdminGate = lazy(() => import("@/routes/AdminGate"));
 const DashboardRoute = lazy(() => import("@/routes/DashboardRoute"));
 const AdminAuditRoute = lazy(() => import("@/routes/AdminAuditRoute"));
 const AdminBackupRoute = lazy(() => import("@/routes/AdminBackupRoute"));
+const AdminEdgeRoute = lazy(() => import("@/routes/AdminEdgeRoute"));
 const AdminInstanceRoute = lazy(() => import("@/routes/AdminInstanceRoute"));
 const AdminIntegrationsRoute = lazy(
   () => import("@/routes/AdminIntegrationsRoute")
@@ -187,6 +188,7 @@ export default function App() {
                 element={<AdminInstanceRoute />}
               />
               <Route path="settings/users" element={<AdminUsersRoute />} />
+              <Route path="settings/edge" element={<AdminEdgeRoute />} />
               <Route
                 path="settings/integrations"
                 element={<AdminIntegrationsRoute />}

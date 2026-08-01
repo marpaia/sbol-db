@@ -315,6 +315,52 @@
           "recent": { "type": "array", "items": { "type": "object" } }
         }
       },
+      "EdgeSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "hostname", "acme_contact", "acme_directory_url", "http_redirect_enabled", "tls_handshake_timeout_secs", "backup_recovery_recipient", "backup_repository_url", "backup_interval_secs", "backup_local_retention", "minimum_free_bytes"],
+        "properties": {
+          "version": { "type": "integer", "const": 1 },
+          "hostname": { "type": "string", "description": "Canonical DNS name for native ACME TLS." },
+          "acme_contact": { "type": "string", "format": "email" },
+          "acme_directory_url": { "type": "string", "format": "uri" },
+          "http_redirect_enabled": { "type": "boolean" },
+          "tls_handshake_timeout_secs": { "type": "integer", "minimum": 1, "maximum": 60 },
+          "backup_recovery_recipient": { "type": "string", "description": "Public age X25519 recipient; the recovery identity is never stored by this API." },
+          "backup_repository_url": { "type": "string", "description": "Credential-free s3:// or gs:// bucket and instance prefix." },
+          "backup_interval_secs": { "type": "integer", "minimum": 900, "maximum": 2592000 },
+          "backup_local_retention": { "type": "integer", "minimum": 1, "maximum": 30 },
+          "minimum_free_bytes": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "EdgeSettingsPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Every property is optional; supplied values replace pending settings and apply after restart.",
+        "properties": {
+          "hostname": { "type": "string" },
+          "acme_contact": { "type": "string", "format": "email" },
+          "acme_directory_url": { "type": "string", "format": "uri" },
+          "http_redirect_enabled": { "type": "boolean" },
+          "tls_handshake_timeout_secs": { "type": "integer", "minimum": 1, "maximum": 60 },
+          "backup_recovery_recipient": { "type": "string" },
+          "backup_repository_url": { "type": "string" },
+          "backup_interval_secs": { "type": "integer", "minimum": 900, "maximum": 2592000 },
+          "backup_local_retention": { "type": "integer", "minimum": 1, "maximum": 30 },
+          "minimum_free_bytes": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "EdgeAdminSnapshot": {
+        "type": "object",
+        "required": ["active", "pending", "restart_required", "runtime", "health"],
+        "properties": {
+          "active": { "$ref": "#/components/schemas/EdgeSettings" },
+          "pending": { "$ref": "#/components/schemas/EdgeSettings" },
+          "restart_required": { "type": "boolean" },
+          "runtime": { "type": "object", "description": "Active managed-layout identity." },
+          "health": { "type": "object", "description": "Live TLS, ACME lifecycle, and managed-disk health." }
+        }
+      },
       "Error": {
         "type": "object",
         "description": "The single V2 error envelope. Every non-2xx response carries this shape.",
@@ -1680,6 +1726,17 @@
         "tags": ["Administration"], "summary": "Enqueue a complete encrypted backup", "description": "Manual UI and pre-deploy requests enqueue the same durable complete_backup job used by the scheduler. The artifact includes RocksDB, blobs, search state, and ACME state.", "operationId": "v2AdminTriggerBackup",
         "requestBody": { "required": false, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CompleteBackupTrigger" } } } },
         "responses": { "202": { "description": "Complete-backup job accepted.", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "$ref": "#/components/responses/Error" }, "501": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/admin/edge": {
+      "get": {
+        "tags": ["Administration"], "summary": "Read active and pending edge settings and live health", "operationId": "v2AdminEdgeStatus",
+        "responses": { "200": { "description": "Edge runtime configuration and health.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EdgeAdminSnapshot" } } } }, "501": { "$ref": "#/components/responses/Error" } }
+      },
+      "patch": {
+        "tags": ["Administration"], "summary": "Validate and persist pending edge settings", "description": "Settings are stored in the backend and included in complete RocksDB checkpoints. The running process remains on the active settings until restart. Credentials and recovery identities are not accepted.", "operationId": "v2AdminUpdateEdgeSettings",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EdgeSettingsPatch" } } } },
+        "responses": { "200": { "description": "Updated pending settings and restart state.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EdgeAdminSnapshot" } } } }, "400": { "$ref": "#/components/responses/Error" }, "501": { "$ref": "#/components/responses/Error" } }
       }
     },
     "/admin/audit": {

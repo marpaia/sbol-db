@@ -27,6 +27,7 @@ import {
   ScrollText,
   Search,
   SearchCheck,
+  ServerCog,
   Share2,
   Table2,
   Undo2,
@@ -159,6 +160,11 @@ function navGroups(capabilities?: Capabilities): NavGroup[] {
           to: adminPath("/settings/integrations"),
           icon: <Plug />,
           label: "Integrations",
+        },
+        {
+          to: adminPath("/settings/edge"),
+          icon: <ServerCog />,
+          label: "Edge runtime",
         },
         {
           to: adminPath("/operations/search"),

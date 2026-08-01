@@ -240,6 +240,7 @@ pub async fn run_acme(
                 match event {
                     Ok(event) => {
                         let kind = event_ok_label(&event);
+                        metrics.record_acme_event(true);
                         metrics::counter!("sbol_db_acme_events_total", "event" => kind, "result" => "success")
                             .increment(1);
                         match event {
@@ -264,6 +265,7 @@ pub async fn run_acme(
                     }
                     Err(error) => {
                         let kind = event_error_label(&error);
+                        metrics.record_acme_event(false);
                         metrics::counter!("sbol_db_acme_events_total", "event" => kind, "result" => "error")
                             .increment(1);
                         tracing::error!(event = kind, error = %error, "ACME lifecycle event failed");
