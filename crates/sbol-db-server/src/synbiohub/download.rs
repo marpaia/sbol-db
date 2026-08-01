@@ -414,7 +414,9 @@ async fn fetch_closure(
     // into a known Web of Registries instance is fetched remotely and spliced
     // in. A non-federated instance has an empty map, so this stays local.
     let resolver = std::sync::Arc::new(state.app.federation());
-    let downloader = Downloader::new(state.app.sparql.clone()).with_remote_resolver(resolver);
+    let downloader = Downloader::new(state.app.sparql.clone())
+        .with_database_prefix(state.app.database_prefix())
+        .with_remote_resolver(resolver);
     let triples = match format {
         Format::SbolNonRecursive => downloader.fetch_non_recursive(uri, scope).await?,
         _ => downloader.fetch_recursive(uri, scope).await?,

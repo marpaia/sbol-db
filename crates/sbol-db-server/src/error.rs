@@ -18,6 +18,10 @@ pub enum ApiError {
     Forbidden(String),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error("precondition required: {0}")]
+    PreconditionRequired(String),
+    #[error("precondition failed: {0}")]
+    PreconditionFailed(String),
     #[error("{0}")]
     Sparql(SparqlError),
     #[error("request timed out")]
@@ -69,6 +73,12 @@ impl ApiError {
             ApiError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "unauthorized"),
             ApiError::Forbidden(_) => (StatusCode::FORBIDDEN, "forbidden"),
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
+            ApiError::PreconditionRequired(_) => {
+                (StatusCode::PRECONDITION_REQUIRED, "precondition_required")
+            }
+            ApiError::PreconditionFailed(_) => {
+                (StatusCode::PRECONDITION_FAILED, "precondition_failed")
+            }
             ApiError::Sparql(SparqlError::Parse(_)) => {
                 (StatusCode::BAD_REQUEST, "sparql_parse_error")
             }

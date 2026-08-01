@@ -26,6 +26,9 @@ Entry points to the project's documentation, organized by topic.
   between the `sbol` CLI and SBOL DB, runtime endpoint discovery,
   collision-safe submission preview, SBOL Identity OAuth/OIDC, scoped MCP and
   API access, and the tracked-sync integrity boundary.
+- **[MCP compatibility and governance](mcp-governance.md)**: the pinned
+  protocol surface, URI and tool stability rules, prepared-change contract,
+  security invariants, and conformance gates for agent integrations.
 
 - **[Registry discovery contract](discovery-contract.md)**: normalized text
   and biological facets, exact totals, deterministic paging, public URL state,

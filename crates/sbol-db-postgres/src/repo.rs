@@ -10,6 +10,7 @@ pub mod object;
 pub mod ontology;
 pub mod pagerank;
 pub mod pg_stats;
+pub mod prepared_mutation;
 pub mod projection;
 pub mod projections;
 pub mod sequence_search;
@@ -35,6 +36,7 @@ pub use pg_stats::{
     Activity, BlockingLock, DatabaseSize, IncomingForeignKey, IndexStats, OutgoingForeignKey,
     PgStatsRepository, SlowQuery, TableColumn, TableSchema, TableStats,
 };
+pub use prepared_mutation::PgPreparedMutationStore;
 pub use projection::{ProjectionEvent, ProjectionEventRepository};
 pub use projections::{TypedProjectionCounts, TypedProjectionRepository};
 pub use sequence_search::SequenceSearchRepository;

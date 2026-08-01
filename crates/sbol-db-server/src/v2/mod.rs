@@ -63,7 +63,14 @@ pub fn router(state: AppState) -> Router<AppState> {
             post(collections::validate_collection),
         )
         .route("/collections/:iri/members", post(collections::add_member))
-        .route("/collections/:iri", delete(collections::delete_collection))
+        .route(
+            "/collections/:iri",
+            get(collections::get_collection).delete(collections::delete_collection),
+        )
+        .route(
+            "/collections/:iri/content",
+            get(collections::get_collection_content).put(collections::put_collection_content),
+        )
         .route(
             "/collections/:iri/members/:member",
             delete(collections::remove_member),

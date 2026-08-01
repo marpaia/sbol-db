@@ -26,7 +26,7 @@ pub use jobs::RocksdbJobs;
 pub use migrate::RocksdbMigrator;
 pub use repo::{
     RocksdbClusterStore, RocksdbConfigStore, RocksdbOAuthStore, RocksdbPageRankStore,
-    RocksdbSketchStore, RocksdbTokenStore, RocksdbUserStore,
+    RocksdbPreparedMutationStore, RocksdbSketchStore, RocksdbTokenStore, RocksdbUserStore,
 };
 pub use stats::RocksdbStats;
 pub use store::RocksdbStore;

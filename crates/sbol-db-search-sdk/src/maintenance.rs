@@ -22,6 +22,7 @@ use crate::{DocumentId, RegistrationError, SearchError};
 #[serde(rename_all = "snake_case")]
 pub enum IndexMutationSource {
     Submission,
+    CollectionSync,
     ObjectMutation,
     ObjectEdit,
     Attachment,

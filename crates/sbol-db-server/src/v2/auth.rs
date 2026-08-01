@@ -42,6 +42,71 @@ use crate::AppState;
 #[derive(Clone, Debug, Default)]
 pub struct Identity(pub Option<User>);
 
+/// How an HTTP or MCP request established its identity. This deliberately
+/// describes the mechanism without retaining the presented credential.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AuthenticationMethod {
+    #[default]
+    Anonymous,
+    CompatibilityBearer,
+    BrowserSession,
+    OAuth,
+}
+
+/// Complete actor context for one machine- or browser-facing request.
+///
+/// Application adapters historically passed only [`User`], which discarded
+/// the delegated OAuth client and audience before tool execution and audit.
+/// Keeping this request-scoped value alongside the compatibility [`Identity`]
+/// lets services migrate incrementally without retaining access-token secrets.
+#[derive(Clone, Debug, Default)]
+pub struct RequestPrincipal {
+    pub user: Option<User>,
+    pub oauth_client_id: Option<String>,
+    pub scopes: Vec<String>,
+    pub audience: Option<String>,
+    pub authentication_method: AuthenticationMethod,
+}
+
+impl RequestPrincipal {
+    pub(crate) fn oauth(user: User, grant: &OAuthAccessToken) -> Self {
+        let mut scopes = grant.scopes.clone();
+        scopes.sort();
+        scopes.dedup();
+        Self {
+            user: Some(user),
+            oauth_client_id: Some(grant.client_id.clone()),
+            scopes,
+            audience: Some(grant.resource.clone()),
+            authentication_method: AuthenticationMethod::OAuth,
+        }
+    }
+
+    fn first_party(user: Option<User>, source: CredentialSource) -> Self {
+        let authentication_method = match (&user, source) {
+            (None, _) => AuthenticationMethod::Anonymous,
+            (Some(_), CredentialSource::Cookie) => AuthenticationMethod::BrowserSession,
+            (Some(_), CredentialSource::Bearer) => AuthenticationMethod::CompatibilityBearer,
+            (Some(_), CredentialSource::None) => AuthenticationMethod::Anonymous,
+        };
+        Self {
+            user,
+            authentication_method,
+            ..Self::default()
+        }
+    }
+
+    pub fn has_scopes(&self, required: &[&str]) -> bool {
+        required
+            .iter()
+            .all(|required| self.scopes.iter().any(|scope| scope == required))
+    }
+
+    pub fn authenticated_user(&self) -> Option<&User> {
+        self.user.as_ref()
+    }
+}
+
 /// Where the credential attached to this request came from. The plaintext
 /// token is retained only for the request lifetime so logout can revoke it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -139,7 +204,12 @@ pub async fn attach_identity(
             Err(error) => return V2Error::from(error).into_response(),
         }
     }
+    let principal = match (&user, &oauth_grant) {
+        (Some(user), Some(grant)) => RequestPrincipal::oauth(user.clone(), grant),
+        _ => RequestPrincipal::first_party(user.clone(), credential.source),
+    };
     req.extensions_mut().insert(Identity(user));
+    req.extensions_mut().insert(principal);
     req.extensions_mut().insert(credential);
     next.run(req).await
 }
@@ -170,7 +240,11 @@ pub(crate) async fn attach_browser_identity(
         ))
         .into_response();
     }
-    req.extensions_mut().insert(Identity(user));
+    req.extensions_mut().insert(Identity(user.clone()));
+    req.extensions_mut().insert(RequestPrincipal::first_party(
+        user,
+        CredentialSource::Cookie,
+    ));
     next.run(req).await
 }
 

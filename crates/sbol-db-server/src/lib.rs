@@ -267,9 +267,19 @@ impl ServerConfig {
         let candidate = self.public_origin.as_deref().unwrap_or(fallback);
         let url = url::Url::parse(candidate)
             .map_err(|error| format!("invalid SBOL DB public origin `{candidate}`: {error}"))?;
-        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        let secure_transport = match url.scheme() {
+            "https" => url.host().is_some(),
+            "http" => match url.host() {
+                Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+                Some(url::Host::Ipv4(address)) => address.is_loopback(),
+                Some(url::Host::Ipv6(address)) => address.is_loopback(),
+                None => false,
+            },
+            _ => false,
+        };
+        if !secure_transport {
             return Err(format!(
-                "SBOL DB public origin must use http or https and include a host: `{candidate}`"
+                "SBOL DB public origin must use HTTPS, or HTTP on a loopback host: `{candidate}`"
             ));
         }
         if !url.username().is_empty()
@@ -651,5 +661,36 @@ mod config_tests {
         assert!(config
             .resolve_public_origin("http://127.0.0.1:8888")
             .is_err());
+    }
+
+    #[test]
+    fn public_origin_rejects_cleartext_non_loopback_hosts() {
+        for origin in [
+            "http://example.org",
+            "http://localhost.example.org:8888",
+            "http://192.168.1.20:8888",
+        ] {
+            let mut config = ServerConfig {
+                public_origin: Some(origin.to_owned()),
+                ..ServerConfig::default()
+            };
+            assert!(config
+                .resolve_public_origin("http://127.0.0.1:8888")
+                .is_err());
+        }
+
+        for origin in [
+            "http://localhost:8888",
+            "http://127.8.9.10:8888",
+            "http://[::1]:8888",
+        ] {
+            let mut config = ServerConfig {
+                public_origin: Some(origin.to_owned()),
+                ..ServerConfig::default()
+            };
+            config
+                .resolve_public_origin("http://127.0.0.1:8888")
+                .unwrap_or_else(|error| panic!("{origin}: {error}"));
+        }
     }
 }

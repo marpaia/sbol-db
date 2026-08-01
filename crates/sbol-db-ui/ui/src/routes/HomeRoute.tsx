@@ -12,6 +12,7 @@ import {
 import { Link, useNavigate } from "react-router-dom";
 
 import { ObjectResultCard } from "@/components/portal/ObjectResultCard";
+import { MachineAccessSection } from "@/components/portal/MachineAccessSection";
 import { SearchBox } from "@/components/portal/SearchBox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -133,6 +134,10 @@ export default function HomeRoute() {
           />
         </div>
       </section>
+
+      <MachineAccessSection
+        mcpServerAddress={instance.data?.machine_access?.mcp_url}
+      />
 
       <section className="border-y bg-muted/15">
         <div className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8">

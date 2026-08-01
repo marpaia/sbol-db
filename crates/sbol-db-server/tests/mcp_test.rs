@@ -187,6 +187,31 @@ async fn call_tool(app: &Router, token: &str, id: i32, name: &str, arguments: Va
     json_body(response).await
 }
 
+async fn prepare_and_apply(
+    app: &Router,
+    token: &str,
+    id: i32,
+    prepare_tool: &str,
+    arguments: Value,
+) -> Value {
+    let prepared = call_tool(app, token, id, prepare_tool, arguments).await;
+    assert_eq!(
+        prepared["result"]["isError"], false,
+        "prepare {prepare_tool}"
+    );
+    let plan_token = prepared["result"]["structuredContent"]["prepared_change"]["plan_token"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{prepare_tool} did not return a plan token"));
+    call_tool(
+        app,
+        token,
+        id + 1,
+        "apply_prepared_change",
+        json!({ "plan_token": plan_token }),
+    )
+    .await
+}
+
 #[tokio::test]
 async fn mcp_requires_a_live_bearer_and_rejects_cross_origin_requests() {
     let (app, services, _dir) = app().await;
@@ -298,6 +323,10 @@ async fn mcp_initializes_and_lists_the_complete_capability_set() {
         initialize["result"]["capabilities"]["tools"]["listChanged"],
         false
     );
+    assert_eq!(
+        initialize["result"]["capabilities"]["resources"]["subscribe"],
+        false
+    );
 
     let tools = json_body(
         send(
@@ -320,17 +349,20 @@ async fn mcp_initializes_and_lists_the_complete_capability_set() {
             "search_designs",
             "get_design",
             "download_design",
+            "get_collection_sync_state",
             "search_sequences",
             "find_similar_designs",
             "validate_design_upload",
             "upload_design_collection",
-            "update_design_metadata",
-            "publish_design",
+            "prepare_design_metadata_update",
+            "prepare_design_publication",
+            "prepare_collection_update",
             "list_design_collaborators",
-            "share_design",
+            "prepare_design_sharing",
             "list_reviews",
-            "start_design_review",
-            "record_review_decision",
+            "prepare_design_review",
+            "prepare_review_decision",
+            "apply_prepared_change",
             "get_design_activity",
         ]
     );
@@ -356,6 +388,182 @@ async fn mcp_initializes_and_lists_the_complete_capability_set() {
         .expect("GET response");
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(response.headers()["allow"], "POST");
+}
+
+#[tokio::test]
+async fn mcp_json_rpc_lifecycle_and_protocol_errors_are_conformant() {
+    let (app, services, _dir) = app().await;
+    let token = register(&services, "alice", &["sbol:read"]).await;
+
+    let notification = send(
+        &app,
+        Some(&token),
+        None,
+        json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+    )
+    .await;
+    assert_eq!(notification.status(), StatusCode::ACCEPTED);
+    assert!(
+        to_bytes(notification.into_body(), BODY_LIMIT)
+            .await
+            .unwrap()
+            .is_empty(),
+        "notifications have no JSON-RPC response body"
+    );
+
+    let unknown = json_body(
+        send(
+            &app,
+            Some(&token),
+            None,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "unknown/method" }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(unknown["error"]["code"], -32601);
+
+    let invalid_params = json_body(
+        send(
+            &app,
+            Some(&token),
+            None,
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": {} }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(invalid_params["error"]["code"], -32602);
+
+    let fallback = json_body(
+        send(
+            &app,
+            Some(&token),
+            None,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "initialize",
+                "params": { "protocolVersion": "2025-06-18" }
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(fallback["result"]["protocolVersion"], "2025-06-18");
+
+    let unsupported = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream")
+                .header("authorization", format!("Bearer {token}"))
+                .header("mcp-protocol-version", "2099-01-01")
+                .body(Body::from(
+                    json!({ "jsonrpc": "2.0", "id": 4, "method": "ping" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unsupported.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn mcp_resources_are_typed_and_follow_the_same_private_acl_scope() {
+    let (app, services, _dir) = app().await;
+    let alice = register_user(&services, "alice").await;
+    let alice_token = oauth_token(&services, &alice, &["sbol:read"]).await;
+    let bob_token = register(&services, "bob", &["sbol:read"]).await;
+    let created = services
+        .submission_service()
+        .submit(SubmitRequest {
+            owner: alice.username.clone(),
+            id: "resource_design".to_owned(),
+            version: "1".to_owned(),
+            name: Some("Resource design".to_owned()),
+            description: None,
+            creator_name: Some(alice.name.clone()),
+            citations: Vec::new(),
+            body: FIXTURE.to_owned(),
+            format: SerializationFormat::Turtle,
+            overwrite: ImportOverwrite::Fail,
+        })
+        .await
+        .unwrap();
+    let iri = created.members[0].as_str();
+
+    let listed = json_body(
+        send(
+            &app,
+            Some(&alice_token),
+            None,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "resources/list" }),
+        )
+        .await,
+    )
+    .await;
+    let resources = listed["result"]["resources"].as_array().unwrap();
+    assert!(resources
+        .iter()
+        .any(|resource| resource["uri"] == "sbol://registry"));
+    assert!(resources
+        .iter()
+        .any(|resource| resource["uri"] == "sbol://account"));
+    assert!(!resources
+        .iter()
+        .any(|resource| resource["uri"] == "sbol://reviews"));
+
+    let templates = json_body(
+        send(
+            &app,
+            Some(&alice_token),
+            None,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "resources/templates/list"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        templates["result"]["resourceTemplates"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("iri", iri)
+        .finish();
+    let resource_uri = format!("sbol://design?{query}");
+    let read = |id: i32| {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "resources/read",
+            "params": { "uri": resource_uri }
+        })
+    };
+    let visible = json_body(send(&app, Some(&alice_token), None, read(3)).await).await;
+    let text = visible["result"]["contents"][0]["text"].as_str().unwrap();
+    assert!(text.contains(iri));
+    assert_eq!(
+        visible["result"]["contents"][0]["mimeType"],
+        "application/json"
+    );
+
+    let hidden = json_body(send(&app, Some(&bob_token), None, read(4)).await).await;
+    assert!(hidden["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("not found or is not visible"));
 }
 
 #[tokio::test]
@@ -405,7 +613,7 @@ async fn mcp_reads_private_designs_only_for_the_authenticated_acl_scope() {
 #[tokio::test]
 async fn mcp_validation_reports_the_exact_future_identity_without_writing() {
     let (app, services, _dir) = app().await;
-    let token = register(&services, "alice", &["sbol:read"]).await;
+    let token = register(&services, "alice", &["sbol:read", "sbol:write"]).await;
     let response = send(
         &app,
         Some(&token),
@@ -431,6 +639,11 @@ async fn mcp_validation_reports_the_exact_future_identity_without_writing() {
     let body = json_body(response).await;
     assert_eq!(body["result"]["isError"], false);
     assert_eq!(body["result"]["structuredContent"]["consequence"], "create");
+    assert!(
+        body["result"]["structuredContent"]["prepared_change"]["plan_token"]
+            .as_str()
+            .is_some_and(|token| token.starts_with("sbol_plan_"))
+    );
     assert!(body["result"]["content"][0]["text"]
         .as_str()
         .unwrap()
@@ -462,7 +675,103 @@ async fn mcp_validation_reports_the_exact_future_identity_without_writing() {
 }
 
 #[tokio::test]
-async fn mcp_executes_confirmed_contribution_sharing_review_and_publication_workflows() {
+async fn prepared_changes_are_principal_bound_single_use_and_stale_safe() {
+    let (app, services, _dir) = app().await;
+    let alice = register_user(&services, "alice").await;
+    let bob = register_user(&services, "bob").await;
+    let alice_token = oauth_token(&services, &alice, &["sbol:read", "sbol:write"]).await;
+    let bob_token = oauth_token(&services, &bob, &["sbol:read", "sbol:write"]).await;
+    let created = services
+        .submission_service()
+        .submit(SubmitRequest {
+            owner: alice.username.clone(),
+            id: "prepared_guards".to_owned(),
+            version: "1".to_owned(),
+            name: Some("Before".to_owned()),
+            description: None,
+            creator_name: Some(alice.name.clone()),
+            citations: Vec::new(),
+            body: FIXTURE.to_owned(),
+            format: SerializationFormat::Turtle,
+            overwrite: ImportOverwrite::Fail,
+        })
+        .await
+        .unwrap();
+    let iri = created.members[0].as_str();
+    let prepare = |id, name: &str| {
+        call_tool(
+            &app,
+            &alice_token,
+            id,
+            "prepare_design_metadata_update",
+            json!({ "iri": iri, "name": name }),
+        )
+    };
+    let first = prepare(1, "First").await;
+    let second = prepare(2, "Second").await;
+    let first_token = first["result"]["structuredContent"]["prepared_change"]["plan_token"]
+        .as_str()
+        .unwrap();
+    let second_token = second["result"]["structuredContent"]["prepared_change"]["plan_token"]
+        .as_str()
+        .unwrap();
+
+    let wrong_principal = call_tool(
+        &app,
+        &bob_token,
+        3,
+        "apply_prepared_change",
+        json!({ "plan_token": first_token }),
+    )
+    .await;
+    assert_eq!(wrong_principal["result"]["isError"], true);
+    assert!(wrong_principal["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("different user, client, or audience"));
+
+    let applied = call_tool(
+        &app,
+        &alice_token,
+        4,
+        "apply_prepared_change",
+        json!({ "plan_token": first_token }),
+    )
+    .await;
+    assert_eq!(applied["result"]["isError"], false);
+    assert_eq!(applied["result"]["structuredContent"]["name"], "First");
+
+    let replay = call_tool(
+        &app,
+        &alice_token,
+        5,
+        "apply_prepared_change",
+        json!({ "plan_token": first_token }),
+    )
+    .await;
+    assert_eq!(replay["result"]["isError"], true);
+    assert!(replay["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("already been used"));
+
+    let stale = call_tool(
+        &app,
+        &alice_token,
+        6,
+        "apply_prepared_change",
+        json!({ "plan_token": second_token }),
+    )
+    .await;
+    assert_eq!(stale["result"]["isError"], true);
+    assert!(stale["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("changed after this operation was prepared"));
+}
+
+#[tokio::test]
+async fn mcp_executes_prepared_contribution_sharing_review_and_publication_workflows() {
     let (app, services, _dir) = app().await;
     let alice = register_user(&services, "alice").await;
     let bob = register_user(&services, "bob").await;
@@ -506,41 +815,68 @@ async fn mcp_executes_confirmed_contribution_sharing_review_and_publication_work
     )
     .await;
     assert_eq!(preview["result"]["isError"], false);
-    let confirmation = preview["result"]["structuredContent"]["confirmation"].clone();
-
-    let mut commit = upload.as_object().unwrap().clone();
-    commit.insert("confirm".to_owned(), json!(true));
-    commit.insert(
-        "expected_collection_uri".to_owned(),
-        confirmation["expected_collection_uri"].clone(),
-    );
-    commit.insert(
-        "expected_consequence".to_owned(),
-        confirmation["expected_consequence"].clone(),
-    );
+    let plan_token = preview["result"]["structuredContent"]["prepared_change"]["plan_token"]
+        .as_str()
+        .expect("prepared upload token");
     let committed = call_tool(
         &app,
         &alice_token,
         2,
-        "upload_design_collection",
-        Value::Object(commit),
+        "apply_prepared_change",
+        json!({ "plan_token": plan_token }),
     )
     .await;
     assert_eq!(committed["result"]["isError"], false);
     let member = committed["result"]["structuredContent"]["members"][0]
         .as_str()
         .unwrap();
-
-    let updated = call_tool(
+    let collection = committed["result"]["structuredContent"]["collection_uri"]
+        .as_str()
+        .unwrap();
+    let sync_state = call_tool(
         &app,
         &alice_token,
         3,
-        "update_design_metadata",
+        "get_collection_sync_state",
+        json!({ "iri": collection, "format": "turtle" }),
+    )
+    .await;
+    let etag = sync_state["result"]["structuredContent"]["content_etag"]
+        .as_str()
+        .unwrap();
+    let content = sync_state["result"]["structuredContent"]["content"]
+        .as_str()
+        .unwrap();
+    let changed_content = content.replace("Private promoter", "Synchronized private promoter");
+    assert_ne!(changed_content, content);
+    let synchronized = prepare_and_apply(
+        &app,
+        &alice_token,
+        4,
+        "prepare_collection_update",
+        json!({
+            "iri": collection,
+            "format": "turtle",
+            "expected_content_etag": etag,
+            "content": changed_content
+        }),
+    )
+    .await;
+    assert_eq!(synchronized["result"]["isError"], false);
+    assert_ne!(
+        synchronized["result"]["structuredContent"]["content_etag"],
+        etag
+    );
+
+    let updated = prepare_and_apply(
+        &app,
+        &alice_token,
+        6,
+        "prepare_design_metadata_update",
         json!({
             "iri": member,
             "name": "Reviewed private promoter",
-            "mutable_notes": "Prepared through the agent workflow",
-            "confirm": true
+            "mutable_notes": "Prepared through the agent workflow"
         }),
     )
     .await;
@@ -550,12 +886,12 @@ async fn mcp_executes_confirmed_contribution_sharing_review_and_publication_work
         "Reviewed private promoter"
     );
 
-    let shared = call_tool(
+    let shared = prepare_and_apply(
         &app,
         &alice_token,
-        4,
-        "share_design",
-        json!({ "iri": member, "user": "bob", "action": "grant", "confirm": true }),
+        5,
+        "prepare_design_sharing",
+        json!({ "iri": member, "user": "bob", "action": "grant" }),
     )
     .await;
     assert_eq!(shared["result"]["isError"], false);
@@ -576,30 +912,28 @@ async fn mcp_executes_confirmed_contribution_sharing_review_and_publication_work
         .iter()
         .any(|viewer| viewer["username"] == "bob"));
 
-    let review = call_tool(
+    let review = prepare_and_apply(
         &app,
         &alice_token,
-        7,
-        "start_design_review",
+        9,
+        "prepare_design_review",
         json!({
             "iri": member,
             "curator": "curator",
-            "note": "Please inspect the promoter metadata",
-            "confirm": true
+            "note": "Please inspect the promoter metadata"
         }),
     )
     .await;
     assert_eq!(review["result"]["isError"], false);
-    let decision = call_tool(
+    let decision = prepare_and_apply(
         &app,
         &curator_token,
-        8,
-        "record_review_decision",
+        11,
+        "prepare_review_decision",
         json!({
             "iri": member,
             "decision": "approve",
-            "note": "Identity and provenance look correct",
-            "confirm": true
+            "note": "Identity and provenance look correct"
         }),
     )
     .await;
@@ -624,17 +958,16 @@ async fn mcp_executes_confirmed_contribution_sharing_review_and_publication_work
             >= 3
     );
 
-    let published = call_tool(
+    let published = prepare_and_apply(
         &app,
         &alice_token,
-        10,
-        "publish_design",
+        15,
+        "prepare_design_publication",
         json!({
             "iri": member,
             "id": "agent_public",
             "version": "1",
-            "collision": "fail",
-            "confirm": true
+            "collision": "fail"
         }),
     )
     .await;

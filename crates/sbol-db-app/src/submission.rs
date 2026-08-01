@@ -22,7 +22,10 @@ use sbol_db_core::{DomainError, IriString, SerializationFormat, SubjectTerm};
 use sbol_db_derive::parse_import_document;
 use sbol_db_rdf::triples_to_rdf;
 use sbol_db_search_sdk::{DocumentId, IndexMaintenanceEvent, IndexMutationSource};
-use sbol_db_storage::{GraphWriteMode, ImportInput, ImportOverwrite, SbolStore};
+use sbol_db_storage::{
+    biological_content, server_managed_content, ConditionalContentWrite, GraphWriteMode,
+    ImportInput, ImportOverwrite, SbolStore,
+};
 use serde::Serialize;
 
 use crate::collection::{CollectionService, MintScope, Submission};
@@ -289,20 +292,6 @@ impl SubmissionService {
     ) -> Result<SubmitOutcome, DomainError> {
         let graph_iri = minted.collection_uri.as_str().to_owned();
 
-        let mode = match overwrite {
-            ImportOverwrite::Fail => {
-                if !self.store.graph_store_read(&graph_iri).await?.is_empty() {
-                    return Err(DomainError::InvalidInput(format!(
-                        "a submission already exists at {graph_iri}; submit with overwrite or merge"
-                    )));
-                }
-                GraphWriteMode::Merge
-            }
-            ImportOverwrite::Replace => GraphWriteMode::Replace,
-            ImportOverwrite::Merge => GraphWriteMode::Merge,
-        };
-
-        let body = triples_to_rdf(&minted.triples, SerializationFormat::NTriples)?;
         // `members` contains only top-level objects. Collect every minted IRI
         // subject instead, so the event remains complete if a current or future
         // projection includes nested SBOL subjects. Blank nodes have no stable
@@ -315,10 +304,32 @@ impl SubmissionService {
                 SubjectTerm::BlankNode(_) => None,
             })
             .collect::<BTreeSet<_>>();
-        let triple_count = self
-            .store
-            .graph_store_write(&graph_iri, &body, SerializationFormat::NTriples, mode)
-            .await?;
+        let triple_count = if overwrite == ImportOverwrite::Fail {
+            let incoming = biological_content(&minted.triples);
+            let server_managed = server_managed_content(&minted.triples);
+            match self
+                .store
+                .graph_store_write_content_if_match(&graph_iri, incoming, server_managed, None)
+                .await?
+            {
+                ConditionalContentWrite::Applied { triple_count, .. } => triple_count,
+                ConditionalContentWrite::PreconditionFailed { .. } => {
+                    return Err(DomainError::InvalidInput(format!(
+                        "a submission already exists at {graph_iri}; choose a new id or version"
+                    )))
+                }
+            }
+        } else {
+            let mode = match overwrite {
+                ImportOverwrite::Replace => GraphWriteMode::Replace,
+                ImportOverwrite::Merge => GraphWriteMode::Merge,
+                ImportOverwrite::Fail => unreachable!(),
+            };
+            let body = triples_to_rdf(&minted.triples, SerializationFormat::NTriples)?;
+            self.store
+                .graph_store_write(&graph_iri, &body, SerializationFormat::NTriples, mode)
+                .await?
+        };
 
         if let Some(maintenance) = &self.maintenance {
             maintenance

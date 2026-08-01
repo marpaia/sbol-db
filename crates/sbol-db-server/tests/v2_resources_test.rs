@@ -273,6 +273,160 @@ async fn post_collection_creates_a_readable_resource() {
 }
 
 #[tokio::test]
+async fn collection_content_sync_is_acl_scoped_and_uses_strong_content_etags() {
+    let (app, _dir) = app().await;
+    let alice = register_and_login(&app, "alice", "alice@example.org").await;
+    let bob = register_and_login(&app, "bob", "bob@example.org").await;
+    let collection = create_collection(&app, &alice, "sync").await;
+    let segment = encode_iri(&collection);
+    let content_uri = format!("/api/v2/collections/{segment}/content");
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&content_uri)
+                .header("authorization", format!("Bearer {alice}"))
+                .header("accept", "text/turtle")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("pull collection content");
+    assert_eq!(res.status(), StatusCode::OK);
+    let original_etag = res
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("content ETag")
+        .to_owned();
+    assert!(original_etag.starts_with("\"sbol-content-v1-"));
+    let original = body_string(res).await;
+    assert!(original.contains(&collection));
+    assert!(
+        !original.contains("ownedBy") && !original.contains("canView"),
+        "server-managed ACL facts are not synchronized: {original}"
+    );
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&content_uri)
+                .header("authorization", format!("Bearer {alice}"))
+                .header("content-type", "text/turtle")
+                .body(Body::from(original.clone()))
+                .unwrap(),
+        )
+        .await
+        .expect("unconditional update");
+    assert_eq!(res.status(), StatusCode::PRECONDITION_REQUIRED);
+
+    let updated = original.replace("My Component", "Updated Component");
+    assert_ne!(updated, original, "fixture carries editable metadata");
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&content_uri)
+                .header("authorization", format!("Bearer {alice}"))
+                .header("content-type", "text/turtle")
+                .header("if-match", &original_etag)
+                .body(Body::from(updated.clone()))
+                .unwrap(),
+        )
+        .await
+        .expect("conditional update");
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "update body: {}",
+        body_string(res).await
+    );
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&content_uri)
+                .header("authorization", format!("Bearer {alice}"))
+                .header("accept", "text/turtle")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("pull updated collection");
+    let updated_etag = res
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("updated content ETag")
+        .to_owned();
+    assert_ne!(updated_etag, original_etag);
+    assert!(body_string(res).await.contains("Updated Component"));
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&content_uri)
+                .header("authorization", format!("Bearer {alice}"))
+                .header("content-type", "text/turtle")
+                .header("if-match", &original_etag)
+                .body(Body::from(updated))
+                .unwrap(),
+        )
+        .await
+        .expect("stale update");
+    assert_eq!(res.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(
+        res.headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok()),
+        Some(updated_etag.as_str())
+    );
+
+    let (status, _, _) = send(&app, "GET", &content_uri, Some(&bob), None, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let share = serde_json::json!({ "user": "bob" }).to_string();
+    let (status, body, _) = send(
+        &app,
+        "POST",
+        &format!("/api/v2/objects/{segment}/shares"),
+        Some(&alice),
+        Some("application/json"),
+        Some(share),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "share body: {body}");
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&content_uri)
+                .header("authorization", format!("Bearer {bob}"))
+                .header("accept", "text/turtle")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("shared pull");
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok()),
+        Some(updated_etag.as_str()),
+        "sharing does not change the biological content ETag"
+    );
+}
+
+#[tokio::test]
 async fn validation_previews_identity_and_conflicts_without_writing() {
     let (app, _dir) = app().await;
     let token = register_and_login(&app, "alice", "alice@example.org").await;

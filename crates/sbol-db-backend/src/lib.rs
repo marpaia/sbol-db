@@ -18,23 +18,23 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use sbol_db_postgres::{
     JobRepository, PgClusterStore, PgConfigStore, PgMigrator, PgOAuthStore, PgPageRankStore,
-    PgPool, PgSketchStore, PgSqlConsole, PgStatsRepository, PgTokenStore, PgUserStore,
-    SbolObjectService,
+    PgPool, PgPreparedMutationStore, PgSketchStore, PgSqlConsole, PgStatsRepository, PgTokenStore,
+    PgUserStore, SbolObjectService,
 };
 use sbol_db_rocksdb::{
     RocksdbClusterStore, RocksdbConfigStore, RocksdbJobs, RocksdbMigrator, RocksdbOAuthStore,
-    RocksdbPageRankStore, RocksdbSketchStore, RocksdbStats, RocksdbStore, RocksdbTokenStore,
-    RocksdbUserStore,
+    RocksdbPageRankStore, RocksdbPreparedMutationStore, RocksdbSketchStore, RocksdbStats,
+    RocksdbStore, RocksdbTokenStore, RocksdbUserStore,
 };
 use sbol_db_sqlite::{
     SqliteClusterStore, SqliteConfigStore, SqliteJobRepository, SqliteMigrator, SqliteOAuthStore,
-    SqlitePageRankStore, SqlitePool, SqliteSketchStore, SqliteSqlConsole, SqliteStats, SqliteStore,
-    SqliteTokenStore, SqliteUserStore,
+    SqlitePageRankStore, SqlitePool, SqlitePreparedMutationStore, SqliteSketchStore,
+    SqliteSqlConsole, SqliteStats, SqliteStore, SqliteTokenStore, SqliteUserStore,
 };
 use sbol_db_storage::{
     AclStore, BackendKind, ClusterStore, ConfigStore, DbStats, JobQueue, LabStore, LsmStats,
-    Migrator, OAuthStore, PageRankStore, SbolStore, SketchStore, SqlConsole, TokenStore,
-    TripleSource, TripleWriter, UserStore,
+    Migrator, OAuthStore, PageRankStore, PreparedMutationStore, SbolStore, SketchStore, SqlConsole,
+    TokenStore, TripleSource, TripleWriter, UserStore,
 };
 
 /// A ready-to-use storage backend: the neutral trait objects every consumer
@@ -64,6 +64,8 @@ pub struct Backend {
     pub tokens: Arc<dyn TokenStore>,
     /// OAuth client and grant persistence for SBOL Identity.
     pub oauth: Arc<dyn OAuthStore>,
+    /// Durable one-time CLI/MCP prepared changes.
+    pub prepared_mutations: Arc<dyn PreparedMutationStore>,
     /// Synchronous triple-pattern reads for the SPARQL evaluator.
     pub triple_source: Arc<dyn TripleSource>,
     /// Transactional triple writes for SPARQL Update.
@@ -154,6 +156,8 @@ impl Backend {
         let users: Arc<dyn UserStore> = Arc::new(SqliteUserStore::new(pool.clone()));
         let tokens: Arc<dyn TokenStore> = Arc::new(SqliteTokenStore::new(pool.clone()));
         let oauth: Arc<dyn OAuthStore> = Arc::new(SqliteOAuthStore::new(pool.clone()));
+        let prepared_mutations: Arc<dyn PreparedMutationStore> =
+            Arc::new(SqlitePreparedMutationStore::new(pool.clone()));
         let migrator: Arc<dyn Migrator> = Arc::new(SqliteMigrator::new(pool.clone()));
         let db_stats: Arc<dyn DbStats> = Arc::new(SqliteStats::new(pool.clone()));
         let sql_console: Arc<dyn SqlConsole> = Arc::new(SqliteSqlConsole::new(pool));
@@ -170,6 +174,7 @@ impl Backend {
             users,
             tokens,
             oauth,
+            prepared_mutations,
             triple_source,
             triple_writer,
             lab,
@@ -194,6 +199,8 @@ impl Backend {
         let users: Arc<dyn UserStore> = Arc::new(RocksdbUserStore::new(db.clone()));
         let tokens: Arc<dyn TokenStore> = Arc::new(RocksdbTokenStore::new(db.clone()));
         let oauth: Arc<dyn OAuthStore> = Arc::new(RocksdbOAuthStore::new(db.clone()));
+        let prepared_mutations: Arc<dyn PreparedMutationStore> =
+            Arc::new(RocksdbPreparedMutationStore::new(db.clone()));
         let migrator: Arc<dyn Migrator> = Arc::new(RocksdbMigrator::new(db.clone()));
         let lsm_stats: Arc<dyn LsmStats> = Arc::new(RocksdbStats::new(db));
         let lab: Arc<dyn LabStore> = store.clone();
@@ -209,6 +216,7 @@ impl Backend {
             users,
             tokens,
             oauth,
+            prepared_mutations,
             triple_source,
             triple_writer,
             lab,
@@ -233,6 +241,8 @@ impl Backend {
         let users: Arc<dyn UserStore> = Arc::new(PgUserStore::new(pool.clone()));
         let tokens: Arc<dyn TokenStore> = Arc::new(PgTokenStore::new(pool.clone()));
         let oauth: Arc<dyn OAuthStore> = Arc::new(PgOAuthStore::new(pool.clone()));
+        let prepared_mutations: Arc<dyn PreparedMutationStore> =
+            Arc::new(PgPreparedMutationStore::new(pool.clone()));
         let migrator: Arc<dyn Migrator> = Arc::new(PgMigrator::new(pool.clone()));
         let db_stats: Arc<dyn DbStats> = Arc::new(PgStatsRepository::new(pool.clone()));
         let sql_console: Arc<dyn SqlConsole> = Arc::new(PgSqlConsole::new(pool.clone()));
@@ -251,6 +261,7 @@ impl Backend {
             users,
             tokens,
             oauth,
+            prepared_mutations,
             triple_source,
             triple_writer,
             lab,

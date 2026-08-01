@@ -50,6 +50,14 @@ fragment. Set `SBOL_DB_MCP_ENABLED=false` to leave `/mcp` unmounted and omit its
 URL from instance discovery. SBOL Identity and V2 API discovery remain
 available independently.
 
+New accounts and designs use the resolved public origin as their identity
+prefix, so an ephemeral local server mints beneath its exact
+`http://127.0.0.1:<port>/` origin and the hosted registry mints beneath
+`https://sbol.io/`. A migrated registry that must preserve an existing
+SynBioHub `databasePrefix` sets `SBOL_DB_DATABASE_PREFIX` explicitly. This
+identifier prefix is independent of the OAuth/API transport origin and does
+not change already stored graph identities.
+
 ## SBOL Identity
 
 SBOL DB acts as an OAuth authorization server and an OpenID Connect provider.
@@ -173,18 +181,23 @@ username/password exchange. `--identifier` or `--password-stdin` explicitly
 selects that compatibility path. Controlled automation can provide an already
 scoped token as `SBOL_ACCESS_TOKEN` without writing a profile.
 
-Push is collision-safe by default. The client always calls
+Initial push is collision-safe by default. The client always calls
 `POST /api/v2/collections/validate` first; the server parses and validates the
 content, computes future identities, and reports whether the operation would
-create, replace, merge, or conflict. `--preview` stops there without a write.
+create, replace, merge, or conflict. `--dry-run` stops there without a write
+(`--preview` remains a compatibility alias).
 Commit calls `POST /api/v2/collections` with the same request. The default
 collision policy is `fail`; `replace` and `merge` must be chosen explicitly.
 
-Tracked two-way synchronization is not represented by a destructive `sync`
-alias. A trustworthy sync command still needs a local tracking record, a stable
-remote revision or ETag, three-way change detection, and an `If-Match`-style
-commit guard. Pull, diff, preview, and push are the explicit workflow until
-that integrity contract is implemented.
+`sbol init` creates `sbol.toml` and `designs/`, but deliberately not
+`sbol.lock`. The first successful tracked pull or push creates the lock with a
+local file hash and the server's representation-independent biological-content
+ETag. `sbol status` and `sbol sync` then distinguish clean, local-only,
+remote-only, and simultaneous changes. Tracked updates call
+`PUT /api/v2/collections/{iri}/content` with the exact lock ETag in `If-Match`;
+the server atomically rejects a stale write. Synchronization never infers
+deletion or RDF merge. Both TOML files are credential-free and intended for
+version control.
 
 ## MCP endpoint
 
@@ -216,17 +229,20 @@ Browser-origin requests are accepted only from the configured SBOL DB origin.
 | `search_designs` | read | Search visible designs by text, type, or biological role. |
 | `get_design` | read | Open a normalized design record with biological and provenance context. |
 | `download_design` | read | Render SBOL 2/3, GenBank, FASTA, GFF3, or OMEX. |
+| `get_collection_sync_state` | read | Read complete biological collection content and its strong content ETag. |
 | `search_sequences` | read | Align a nucleotide query against visible sequences. |
 | `find_similar_designs` | read | Find visible cluster-related designs. |
-| `validate_design_upload` | read | Parse, validate, mint proposed identities, and inspect collisions without writing. |
-| `upload_design_collection` | read + write | Recheck and commit a confirmed SBOL, GenBank, or FASTA collection. |
-| `update_design_metadata` | read + write | Update owned metadata, notes, source, and citations. |
-| `publish_design` | read + write | Publish an owned design under an explicit public identity and collision policy. |
+| `validate_design_upload` | read + write | Validate create-only content and return a prepared change without writing designs. |
+| `upload_design_collection` | read + write | Compatibility commit tool for a prepared upload token. |
+| `prepare_design_metadata_update` | read + write | Prepare owned metadata, notes, source, or citation changes. |
+| `prepare_design_publication` | read + write | Prepare publication under an explicit public identity and collision policy. |
+| `prepare_collection_update` | read + write | Validate a complete collection replacement against its current ETag. |
 | `list_design_collaborators` | read + share | Inspect owners and read-only collaborators. |
-| `share_design` | read + share | Grant or revoke one account's read access without changing ownership. |
+| `prepare_design_sharing` | read + share | Resolve and prepare a grant or revocation of read access. |
 | `list_reviews` | read + review | Open the signed-in account's review queue. |
-| `start_design_review` | read + review | Assign an active curator to an owned design. |
-| `record_review_decision` | read + review | Record approval or requested changes as the assigned curator. |
+| `prepare_design_review` | read + review | Prepare assignment of an active curator to an owned design. |
+| `prepare_review_decision` | read + review | Prepare approval or requested changes as a curator. |
+| `apply_prepared_change` | scopes captured by plan | Consume and apply one reviewed, principal-bound change. |
 | `get_design_activity` | read + review | Trace ownership, sharing, edit, publication, and review activity. |
 
 Every tool calls the same application facade as the V2 and compatibility APIs.
@@ -234,12 +250,27 @@ Public, shared, and private visibility is computed from the authenticated
 account's graph scope. A private design is returned to its owner or an
 authorized collaborator and appears missing to an unrelated account.
 
-Mutating tools require `confirm: true`. Upload commit additionally recomputes
-the preview and requires the exact confirmed collection URI and collision
-consequence; metadata updates can include expected prior values to detect a
-stale edit. Collision behavior defaults to `fail`. These checks do not replace
-the agent client's responsibility to show the proposed effect to the user
-before setting confirmation.
+Agent mutations use durable prepared changes instead of a boolean confirmation
+flag. A preparation call validates and authorizes the exact payload, stores
+only the hash of an opaque one-time token, and returns the intended effect,
+input hash, expiry, and token for the agent to show to the user. The stored
+change is bound to the SBOL account, OAuth client, MCP audience, and exact
+scopes that prepared it. `apply_prepared_change` consumes that token once and
+commits only the stored payload; a caller cannot substitute different input at
+apply time.
+
+Metadata and publication preparations capture the visible design snapshot.
+Complete collection replacements capture the current biological-content ETag.
+Apply fails without changing registry data if either baseline has become stale.
+Initial creation and publication continue to default to collision policy
+`fail`. The compatibility `upload_design_collection` tool accepts the same
+durable upload token, but new clients should use the generic apply tool.
+
+The server also advertises typed `sbol://` resources for the connected
+registry, signed-in account, review queue, normalized designs, and serialized
+design content. Resource reads and tool calls use the same visibility rules:
+private designs appear missing unless the signed-in account owns them or has
+been granted access.
 
 Downloads are returned inline up to 8 MiB. Text formats use UTF-8 and OMEX uses
 base64; larger artifacts direct the caller to the authenticated REST download.

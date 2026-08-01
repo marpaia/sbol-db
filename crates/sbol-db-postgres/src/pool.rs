@@ -6,6 +6,8 @@ use sbol_db_storage::{MigrationEntry, Migrator};
 
 pub use sqlx::PgPool;
 
+// Keep the migration directory embedded in every binary so graph-kind and
+// prepared-mutation schema changes deploy atomically with their Rust callers.
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 /// The migration capability for a Postgres backend, over its connection pool.

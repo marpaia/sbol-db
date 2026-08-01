@@ -15,7 +15,8 @@ mod store;
 pub use pool::{connect, connect_and_migrate, run_migrations, SqliteMigrator, SqlitePool};
 pub use repo::{
     SqliteClusterStore, SqliteConfigStore, SqliteJobRepository, SqliteOAuthStore,
-    SqlitePageRankStore, SqliteSketchStore, SqliteTokenStore, SqliteUserStore,
+    SqlitePageRankStore, SqlitePreparedMutationStore, SqliteSketchStore, SqliteTokenStore,
+    SqliteUserStore,
 };
 pub use sql_console::SqliteSqlConsole;
 pub use stats::SqliteStats;

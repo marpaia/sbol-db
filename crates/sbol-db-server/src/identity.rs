@@ -23,7 +23,7 @@ use sbol_db_core::{DomainError, OAuthClient, User};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tower_http::cors::{Any, CorsLayer};
-use url::Url;
+use url::{Host, Url};
 
 use crate::v2::auth::Identity;
 use crate::AppState;
@@ -814,7 +814,12 @@ fn validate_redirect_uri(value: &str) -> Result<(), String> {
     if uri.scheme() == "https" {
         return Ok(());
     }
-    let loopback = matches!(uri.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+    let loopback = match uri.host() {
+        Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(Host::Ipv4(address)) => address.is_loopback(),
+        Some(Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
+    };
     if uri.scheme() == "http" && loopback {
         return Ok(());
     }
@@ -1086,8 +1091,11 @@ mod tests {
     fn redirect_uris_require_https_or_loopback() {
         assert!(validate_redirect_uri("https://agent.example/oauth/callback").is_ok());
         assert!(validate_redirect_uri("http://127.0.0.1:43123/callback").is_ok());
+        assert!(validate_redirect_uri("http://127.25.4.3:43123/callback").is_ok());
+        assert!(validate_redirect_uri("http://[::1]:43123/callback").is_ok());
         assert!(validate_redirect_uri("http://localhost:43123/callback").is_ok());
         assert!(validate_redirect_uri("http://agent.example/callback").is_err());
+        assert!(validate_redirect_uri("http://localhost.example/callback").is_err());
         assert!(validate_redirect_uri("https://user:secret@agent.example/callback").is_err());
         assert!(validate_redirect_uri("https://agent.example/callback#token").is_err());
     }

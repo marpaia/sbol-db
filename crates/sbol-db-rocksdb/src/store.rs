@@ -17,14 +17,15 @@ use sbol_db_core::{
 use sbol_db_derive::{build_import_plan, compose_merged_input, to_rdf_format};
 use sbol_db_rdf::{rdf_graph_to_triples, GRAPH_IRI_PREFIX};
 use sbol_db_storage::{
-    distinct_graph_iris, distinct_object_iris, AccelSolutions, AcceleratedQuery, AclStore,
-    BatchSequenceMatch, ClassCount, CorpusCounts, GraphFilter, GraphOverview, GraphStore,
-    GraphTriplesPage, GraphWriteMode, IdGraphFilter, IdQuad, ImportInput, ImportOverwrite,
-    LabStore, ListGraphsFilter, ListObjectsFilter, NeighborhoodStore, ObjectStore,
-    OntologyLoadReport, OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject,
-    PatternSubject, SbolStore, SequenceMatch, SequenceSearchOptions, SequenceSearchStore, TermId,
-    TermKey, TermValue, TextSearchQuery, TextSearchStore, TripleChange, TripleSource, TripleWriter,
-    UpdateOutcome, SBH_CAN_VIEW, SBH_OWNED_BY,
+    collection_content_etag, distinct_graph_iris, distinct_object_iris,
+    replacement_graph_with_management, AccelSolutions, AcceleratedQuery, AclStore,
+    BatchSequenceMatch, ClassCount, ConditionalContentWrite, CorpusCounts, GraphFilter,
+    GraphOverview, GraphStore, GraphTriplesPage, GraphWriteMode, IdGraphFilter, IdQuad,
+    ImportInput, ImportOverwrite, LabStore, ListGraphsFilter, ListObjectsFilter, NeighborhoodStore,
+    ObjectStore, OntologyLoadReport, OntologyRecord, OntologyStore, OntologyTermRecord,
+    PatternObject, PatternSubject, SbolStore, SequenceMatch, SequenceSearchOptions,
+    SequenceSearchStore, TermId, TermKey, TermValue, TextSearchQuery, TextSearchStore,
+    TripleChange, TripleSource, TripleWriter, UpdateOutcome, SBH_CAN_VIEW, SBH_OWNED_BY,
 };
 
 use crate::codec::Term;
@@ -256,6 +257,60 @@ impl RocksdbStore {
             this.accel.stage_refresh(&mut batch, &graph, &post)?;
             this.db.write(batch)?;
             Ok(inserted)
+        })
+        .await
+    }
+
+    async fn graph_store_write_content_if_match(
+        &self,
+        graph: &str,
+        incoming: Vec<Triple>,
+        server_managed: Vec<Triple>,
+        expected_content_etag: Option<&str>,
+    ) -> Result<ConditionalContentWrite, DomainError> {
+        let this = self.clone();
+        let graph = graph.to_owned();
+        let expected_content_etag = expected_content_etag.map(str::to_owned);
+        blocking(move || {
+            let content_write_lock = this.db.content_write_lock();
+            let _guard = content_write_lock.lock().map_err(|_| {
+                DomainError::Database("collection content write lock poisoned".to_owned())
+            })?;
+            let current = this.triples.scan_pattern(
+                None,
+                None,
+                None,
+                Some(&GraphFilter::Iri(graph.clone())),
+                i64::MAX,
+            )?;
+            let current_content_etag = collection_content_etag(&current);
+            let graph_exists = !current.is_empty();
+            let precondition_holds = match expected_content_etag.as_deref() {
+                None => !graph_exists,
+                Some(expected) => graph_exists && current_content_etag.as_deref() == Some(expected),
+            };
+            if !precondition_holds {
+                return Ok(ConditionalContentWrite::PreconditionFailed {
+                    current_content_etag,
+                });
+            }
+
+            let replacement =
+                replacement_graph_with_management(&current, &incoming, &server_managed, &graph);
+            let content_etag = collection_content_etag(&replacement).ok_or_else(|| {
+                DomainError::InvalidInput("collection content cannot be empty".to_owned())
+            })?;
+            let mut batch = WriteBatch::default();
+            let mut seen = HashSet::new();
+            let triple_count =
+                this.triples
+                    .stage_replace_graph(&mut batch, &mut seen, &graph, &replacement)?;
+            this.accel.stage_refresh(&mut batch, &graph, &replacement)?;
+            this.db.write(batch)?;
+            Ok(ConditionalContentWrite::Applied {
+                triple_count,
+                content_etag,
+            })
         })
         .await
     }
@@ -778,6 +833,23 @@ impl SbolStore for RocksdbStore {
 
     async fn graph_store_clear(&self, graph: &str) -> Result<usize, DomainError> {
         RocksdbStore::graph_store_clear(self, graph).await
+    }
+
+    async fn graph_store_write_content_if_match(
+        &self,
+        graph: &str,
+        incoming: Vec<Triple>,
+        server_managed: Vec<Triple>,
+        expected_content_etag: Option<&str>,
+    ) -> Result<ConditionalContentWrite, DomainError> {
+        RocksdbStore::graph_store_write_content_if_match(
+            self,
+            graph,
+            incoming,
+            server_managed,
+            expected_content_etag,
+        )
+        .await
     }
 
     async fn graph_store_read(&self, graph: &str) -> Result<Vec<Triple>, DomainError> {

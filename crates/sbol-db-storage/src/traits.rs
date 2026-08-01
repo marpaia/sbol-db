@@ -12,16 +12,16 @@ use async_trait::async_trait;
 use sbol_db_core::{
     BlobRef, ConfigEntry, DomainError, GraphId, GraphRecord, ImportReport, JobId,
     NeighborhoodQuery, NeighborhoodResult, NewUser, OAuthAccessToken, OAuthAuthorizationCode,
-    OAuthClient, OAuthRefreshToken, ObjectId, ObjectTerm, SbolObjectRecord, SerializationFormat,
-    Triple, User, UserId,
+    OAuthClient, OAuthRefreshToken, ObjectId, ObjectTerm, PreparedMutation, SbolObjectRecord,
+    SerializationFormat, Triple, User, UserId,
 };
 use sbol_db_search::{ClusterId, Signature};
 use serde_json::Value;
 
 use crate::{
-    AccelSolutions, AcceleratedQuery, BatchSequenceMatch, EnqueueOutcome, GraphFilter,
-    GraphWriteMode, IdGraphFilter, IdQuad, ImportInput, JobAttempt, JobLogRecord, JobStatus,
-    ListGraphsFilter, ListJobsFilter, ListObjectsFilter, NewJob, OldestQueuedAge,
+    AccelSolutions, AcceleratedQuery, BatchSequenceMatch, ConditionalContentWrite, EnqueueOutcome,
+    GraphFilter, GraphWriteMode, IdGraphFilter, IdQuad, ImportInput, JobAttempt, JobLogRecord,
+    JobStatus, ListGraphsFilter, ListJobsFilter, ListObjectsFilter, NewJob, OldestQueuedAge,
     OntologyLoadReport, OntologyRecord, OntologyTermRecord, PatternObject, PatternSubject,
     QueueDepthRow, RankRow, SbolJob, SequenceMatch, SequenceSearchOptions, TermId, TermKey,
     TermValue, TextSearchQuery, TripleChange, UpdateOutcome,
@@ -540,6 +540,26 @@ pub trait OAuthStore: Send + Sync {
     ) -> Result<Option<OAuthRefreshToken>, DomainError>;
 }
 
+/// Durable one-time mutation plans. Reads support principal checks before a
+/// destructive consume; the consume itself is atomic so concurrent executors
+/// cannot commit one prepared change twice.
+#[async_trait]
+pub trait PreparedMutationStore: Send + Sync {
+    async fn put_prepared_mutation(&self, plan: PreparedMutation) -> Result<(), DomainError>;
+    async fn get_prepared_mutation(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<PreparedMutation>, DomainError>;
+    async fn consume_prepared_mutation(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<PreparedMutation>, DomainError>;
+    async fn purge_expired_prepared_mutations(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<usize, DomainError>;
+}
+
 /// The full SBOL-aware store: ingest plus every derived-view read surface.
 #[async_trait]
 pub trait SbolStore:
@@ -559,6 +579,17 @@ pub trait SbolStore:
     ) -> Result<usize, DomainError>;
     async fn graph_store_clear(&self, graph: &str) -> Result<usize, DomainError>;
     async fn graph_store_read(&self, graph: &str) -> Result<Vec<Triple>, DomainError>;
+    /// Atomically create collection content when `expected_content_etag` is
+    /// `None`, or replace it only when the current content ETag exactly matches
+    /// `Some`. Implementations preserve server-managed triples and return the
+    /// new opaque content validator.
+    async fn graph_store_write_content_if_match(
+        &self,
+        graph: &str,
+        incoming: Vec<Triple>,
+        server_managed: Vec<Triple>,
+        expected_content_etag: Option<&str>,
+    ) -> Result<ConditionalContentWrite, DomainError>;
     /// Every triple with the given subject IRI, for single-object RDF export.
     async fn triples_for_subject(&self, subject_iri: &str) -> Result<Vec<Triple>, DomainError>;
     async fn ping(&self) -> Result<(), DomainError>;

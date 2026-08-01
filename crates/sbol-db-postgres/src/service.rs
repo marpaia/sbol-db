@@ -9,7 +9,10 @@ use crate::repo::{
 };
 use crate::PgPool;
 
-use sbol_db_storage::{GraphWriteMode, ImportInput, ImportOverwrite};
+use sbol_db_storage::{
+    collection_content_etag, replacement_graph_with_management, ConditionalContentWrite,
+    GraphWriteMode, ImportInput, ImportOverwrite,
+};
 
 pub struct SbolObjectService {
     pool: PgPool,
@@ -202,6 +205,72 @@ impl SbolObjectService {
         self.accel.refresh_graph(&mut tx, graph).await?;
         tx.commit().await.map_err(db_err)?;
         Ok(inserted)
+    }
+
+    /// Atomically create or compare-and-swap a collection's biological
+    /// contents. The graph registry row is the serialization point: a
+    /// conflicting insert waits for the creator, and an existing row is locked
+    /// until the content validator has been checked and the replacement has
+    /// committed.
+    pub async fn graph_store_write_content_if_match(
+        &self,
+        graph: &str,
+        incoming: Vec<Triple>,
+        server_managed: Vec<Triple>,
+        expected_content_etag: Option<&str>,
+    ) -> Result<ConditionalContentWrite, DomainError> {
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let created = sqlx::query_scalar::<_, String>(
+            "INSERT INTO sbol_graphs (iri, kind) VALUES ($1, 'collection-sync') \
+             ON CONFLICT (iri) DO NOTHING RETURNING iri::text",
+        )
+        .bind(graph)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db_err)?
+        .is_some();
+
+        // Lock even when the row came from another transaction. This makes the
+        // read/check/replace sequence one CAS operation across server workers.
+        sqlx::query("SELECT iri FROM sbol_graphs WHERE iri = $1 FOR UPDATE")
+            .bind(graph)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_err)?;
+
+        let current = self.triples.scan_graph_in_conn(&mut tx, graph).await?;
+        let current_content_etag = collection_content_etag(&current);
+        let precondition_holds = match expected_content_etag {
+            None => created,
+            Some(expected) => !created && current_content_etag.as_deref() == Some(expected),
+        };
+        if !precondition_holds {
+            return Ok(ConditionalContentWrite::PreconditionFailed {
+                current_content_etag,
+            });
+        }
+
+        let replacement =
+            replacement_graph_with_management(&current, &incoming, &server_managed, graph);
+        let content_etag = collection_content_etag(&replacement).ok_or_else(|| {
+            DomainError::InvalidInput("collection content cannot be empty".to_owned())
+        })?;
+        self.triples.clear_graph(&mut tx, Some(graph)).await?;
+        let triple_count = self
+            .triples
+            .insert_triples(&mut tx, &replacement, "collection-sync")
+            .await?;
+        self.accel.refresh_graph(&mut tx, graph).await?;
+        sqlx::query("UPDATE sbol_graphs SET updated_at = now() WHERE iri = $1")
+            .bind(graph)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(ConditionalContentWrite::Applied {
+            triple_count,
+            content_etag,
+        })
     }
 
     /// Graph Store CRUD `DELETE`: drop a named graph entirely (its triples and

@@ -16,11 +16,11 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sbol_db_core::{
     ConfigEntry, DomainError, NewUser, OAuthAccessToken, OAuthAuthorizationCode, OAuthClient,
-    OAuthRefreshToken, User, UserId,
+    OAuthRefreshToken, PreparedMutation, User, UserId,
 };
 use sbol_db_storage::{
-    ClusterId, ClusterStore, ConfigStore, OAuthStore, PageRankStore, RankRow, Signature,
-    SketchStore, TokenStore, UserStore,
+    ClusterId, ClusterStore, ConfigStore, OAuthStore, PageRankStore, PreparedMutationStore,
+    RankRow, Signature, SketchStore, TokenStore, UserStore,
 };
 use serde_json::Value;
 
@@ -275,6 +275,57 @@ impl OAuthStore for InMemoryOAuthStore {
         token_hash: &str,
     ) -> Result<Option<OAuthRefreshToken>, DomainError> {
         Ok(self.refresh_tokens.lock().unwrap().remove(token_hash))
+    }
+}
+
+/// Process-local prepared mutations for explicitly in-memory application
+/// assemblies. Backend-built services replace this with durable persistence.
+#[derive(Default)]
+pub struct InMemoryPreparedMutationStore {
+    plans: Mutex<HashMap<String, PreparedMutation>>,
+}
+
+impl InMemoryPreparedMutationStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl PreparedMutationStore for InMemoryPreparedMutationStore {
+    async fn put_prepared_mutation(&self, plan: PreparedMutation) -> Result<(), DomainError> {
+        let mut plans = self.plans.lock().unwrap();
+        if plans.contains_key(&plan.token_hash) {
+            return Err(DomainError::InvalidInput(
+                "prepared mutation token already exists".to_owned(),
+            ));
+        }
+        plans.insert(plan.token_hash.clone(), plan);
+        Ok(())
+    }
+
+    async fn get_prepared_mutation(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<PreparedMutation>, DomainError> {
+        Ok(self.plans.lock().unwrap().get(token_hash).cloned())
+    }
+
+    async fn consume_prepared_mutation(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<PreparedMutation>, DomainError> {
+        Ok(self.plans.lock().unwrap().remove(token_hash))
+    }
+
+    async fn purge_expired_prepared_mutations(
+        &self,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<usize, DomainError> {
+        let mut plans = self.plans.lock().unwrap();
+        let before = plans.len();
+        plans.retain(|_, plan| plan.expires_at > now);
+        Ok(before - plans.len())
     }
 }
 

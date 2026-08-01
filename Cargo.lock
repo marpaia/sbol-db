@@ -4035,6 +4035,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
@@ -4405,10 +4406,12 @@ version = "0.1.3"
 dependencies = [
  "async-trait",
  "chrono",
+ "hex",
  "sbol-db-core",
  "sbol-db-search",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "uuid",
 ]
 

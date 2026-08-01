@@ -39,7 +39,7 @@ const steps: CapabilityStepProps[] = [
     icon: RefreshCw,
     title: "Sync with a registry",
     description:
-      "Pull canonical designs, inspect changes, and publish through an authenticated SBOL DB profile.",
+      "Check out collections, inspect local and remote changes, and synchronize through your SBOL account.",
   },
   {
     number: "03",
@@ -88,9 +88,9 @@ const capabilityGroups: CapabilityGroupProps[] = [
           "Validate structure and identity collisions without changing the registry.",
       },
       {
-        title: "Add a collection",
+        title: "Add or synchronize a collection",
         description:
-          "Create, replace, or merge SBOL, FASTA, and GenBank designs.",
+          "Create a collection or prepare a safe update to its biological content.",
       },
       {
         title: "Improve an existing record",
@@ -269,13 +269,14 @@ function CliPreview() {
             Carry the same design into the registry
           </div>
           <Command>sbol registry login</Command>
+          <Command>sbol init</Command>
           <Command>
             {
-              "sbol registry pull https://sbol.io/public/igem/BBa_J23100/1 -o design.ttl"
+              "sbol registry pull https://sbol.io/public/igem/BBa_J23100/1"
             }
           </Command>
-          <Command>sbol registry push design.ttl --preview</Command>
-          <Command>sbol registry push design.ttl</Command>
+          <Command>sbol sync --dry-run</Command>
+          <Command>sbol sync</Command>
         </div>
       </div>
     </div>

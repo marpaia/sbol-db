@@ -4,7 +4,7 @@
 //! resource. Tool calls combine those granted scopes with the same application
 //! services and ACL model used by the V2 and compatibility APIs.
 
-use std::collections::BTreeSet;
+mod resources;
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -18,20 +18,23 @@ use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use sbol_db_app::{
-    AlignMode, AlignOptions, DiscoveryQuery, FieldValue, MakePublicRequest, ReviewDecision,
-    SubmitRequest,
+    AlignMode, AlignOptions, DiscoveryQuery, FieldValue, MakePublicRequest,
+    PreparedMutationBinding, ReviewDecision, SubmitRequest,
 };
-use sbol_db_core::{IriString, OAuthAccessToken, SerializationFormat, User};
-use sbol_db_storage::ImportOverwrite;
+use sbol_db_core::{IriString, PreparedMutation, SerializationFormat, User};
+use sbol_db_rdf::triples_to_rdf;
+use sbol_db_storage::{ConditionalContentWrite, ImportOverwrite};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::identity::{
     mcp_resource, protected_resource_metadata_url, SCOPE_READ, SCOPE_REVIEW, SCOPE_SHARE,
     SCOPE_WRITE,
 };
+use crate::v2::auth::RequestPrincipal;
 use crate::v2::download::{serialize_download, DownloadFormat};
 use crate::AppState;
 
@@ -133,6 +136,15 @@ async fn post_message(State(state): State<AppState>, headers: HeaderMap, body: B
         "initialize" => initialize(&params),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools() })),
+        "resources/list" => Ok(resources::list(&principal)),
+        "resources/templates/list" => Ok(resources::templates()),
+        "resources/read" => {
+            let required = resources::required_scopes(&params);
+            if !principal.has_scopes(required) {
+                return insufficient_scope(&state, required);
+            }
+            resources::read(&state, &principal, &params).await
+        }
         "tools/call" => {
             let Some(name) = params.get("name").and_then(Value::as_str) else {
                 return json_rpc_error(id, -32602, "tools/call requires a tool name");
@@ -141,14 +153,17 @@ async fn post_message(State(state): State<AppState>, headers: HeaderMap, body: B
             if !principal.has_scopes(required) {
                 return insufficient_scope(&state, required);
             }
-            call_tool(&state, &principal.user, params).await
+            call_tool(&state, &principal, params).await
         }
         _ => return json_rpc_error(id, -32601, "method not found"),
     };
     match result {
         Ok(result) => json_rpc_result(id, result),
         Err(DispatchError::Protocol(message)) => json_rpc_error(id, -32602, &message),
-        Err(DispatchError::Tool(message)) => json_rpc_result(id, tool_error_result(message)),
+        Err(DispatchError::Tool(message)) if method == "tools/call" => {
+            json_rpc_result(id, tool_error_result(message))
+        }
+        Err(DispatchError::Tool(message)) => json_rpc_error(id, -32002, &message),
     }
 }
 
@@ -165,7 +180,8 @@ fn initialize(params: &Value) -> Result<Value, DispatchError> {
     Ok(json!({
         "protocolVersion": protocol_version,
         "capabilities": {
-            "tools": { "listChanged": false }
+            "tools": { "listChanged": false },
+            "resources": { "subscribe": false, "listChanged": false }
         },
         "serverInfo": {
             "name": "sbol-db",
@@ -173,11 +189,15 @@ fn initialize(params: &Value) -> Result<Value, DispatchError> {
             "version": env!("CARGO_PKG_VERSION"),
             "description": "Permission-aware biological design discovery, contribution, sharing, and review"
         },
-        "instructions": "Use search_designs before get_design when you do not already know a canonical IRI. Every result and mutation is scoped to the signed-in SBOL Identity account. Preview uploads before committing them, and do not set a write tool's confirm flag until the user has reviewed its stated effect."
+        "instructions": "Use search_designs before get_design when you do not already know a canonical IRI. Every result and mutation is scoped to the signed-in SBOL Identity account. Mutation tools first prepare a short-lived change without altering registry data. Show the returned effect to the user, then call apply_prepared_change with only its one-time plan token."
     }))
 }
 
-async fn call_tool(state: &AppState, user: &User, params: Value) -> Result<Value, DispatchError> {
+async fn call_tool(
+    state: &AppState,
+    principal: &RequestPrincipal,
+    params: Value,
+) -> Result<Value, DispatchError> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
@@ -186,24 +206,52 @@ async fn call_tool(state: &AppState, user: &User, params: Value) -> Result<Value
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    match name {
+    let user = principal
+        .authenticated_user()
+        .ok_or_else(|| DispatchError::Protocol("authentication is required".to_owned()))?;
+    tracing::info!(
+        target: "sbol_db::machine_access",
+        user_id = %user.id,
+        oauth_client_id = principal.oauth_client_id.as_deref().unwrap_or(""),
+        audience = principal.audience.as_deref().unwrap_or(""),
+        authentication_method = ?principal.authentication_method,
+        tool = name,
+        "MCP tool invocation"
+    );
+    let result = match name {
         "search_designs" => search_designs(state, user, arguments).await,
         "get_design" => get_design(state, user, arguments).await,
         "download_design" => download_design(state, user, arguments).await,
+        "get_collection_sync_state" => get_collection_sync_state(state, user, arguments).await,
         "search_sequences" => search_sequences(state, user, arguments).await,
         "find_similar_designs" => find_similar_designs(state, user, arguments).await,
-        "validate_design_upload" => validate_design_upload(state, user, arguments).await,
-        "upload_design_collection" => upload_design_collection(state, user, arguments).await,
-        "update_design_metadata" => update_design_metadata(state, user, arguments).await,
-        "publish_design" => publish_design(state, user, arguments).await,
+        "validate_design_upload" => validate_design_upload(state, principal, arguments).await,
+        "upload_design_collection" => upload_design_collection(state, principal, arguments).await,
+        "prepare_design_metadata_update" => {
+            prepare_design_metadata_update(state, principal, arguments).await
+        }
+        "prepare_design_publication" => {
+            prepare_design_publication(state, principal, arguments).await
+        }
+        "prepare_collection_update" => prepare_collection_update(state, principal, arguments).await,
         "list_design_collaborators" => list_design_collaborators(state, user, arguments).await,
-        "share_design" => share_design(state, user, arguments).await,
+        "prepare_design_sharing" => prepare_design_sharing(state, principal, arguments).await,
         "list_reviews" => list_reviews(state, user, arguments).await,
-        "start_design_review" => start_design_review(state, user, arguments).await,
-        "record_review_decision" => record_review_decision(state, user, arguments).await,
+        "prepare_design_review" => prepare_design_review(state, principal, arguments).await,
+        "prepare_review_decision" => prepare_review_decision(state, principal, arguments).await,
+        "apply_prepared_change" => apply_prepared_change(state, principal, arguments).await,
         "get_design_activity" => get_design_activity(state, user, arguments).await,
         _ => Err(DispatchError::Protocol(format!("unknown tool `{name}`"))),
-    }
+    };
+    tracing::info!(
+        target: "sbol_db::machine_access",
+        user_id = %user.id,
+        oauth_client_id = principal.oauth_client_id.as_deref().unwrap_or(""),
+        tool = name,
+        outcome = if result.is_ok() { "succeeded" } else { "failed" },
+        "MCP tool outcome"
+    );
+    result
 }
 
 async fn search_designs(
@@ -346,6 +394,43 @@ async fn download_design(
     )
 }
 
+async fn get_collection_sync_state(
+    state: &AppState,
+    user: &User,
+    arguments: Value,
+) -> Result<Value, DispatchError> {
+    let arguments: CollectionSyncStateArgs = tool_arguments(arguments)?;
+    let iri = IriString::new(arguments.iri)
+        .map_err(|error| DispatchError::Tool(format!("invalid collection IRI: {error}")))?;
+    let format = parse_collection_format(&arguments.format)?;
+    let content = state
+        .app
+        .collection_sync_service()
+        .read(Some(&user.graph_uri), iri.as_str())
+        .await
+        .map_err(tool_error)?
+        .ok_or_else(|| {
+            DispatchError::Tool(
+                "collection was not found or is not visible to this account".to_owned(),
+            )
+        })?;
+    let serialized = triples_to_rdf(&content.triples, format).map_err(tool_error)?;
+    structured_tool_result(
+        format!(
+            "Read synchronized biological content for {} at content ETag {}.",
+            iri, content.content_etag
+        ),
+        Ok(json!({
+            "collection_uri": iri.as_str(),
+            "content_etag": content.content_etag,
+            "triple_count": content.triples.len(),
+            "format": collection_format_name(format),
+            "content_type": collection_media_type(format),
+            "content": serialized
+        })),
+    )
+}
+
 async fn search_sequences(
     state: &AppState,
     user: &User,
@@ -429,31 +514,63 @@ async fn find_similar_designs(
 
 async fn validate_design_upload(
     state: &AppState,
-    user: &User,
+    principal: &RequestPrincipal,
     arguments: Value,
 ) -> Result<Value, DispatchError> {
     let arguments: ValidateDesignArgs = tool_arguments(arguments)?;
+    let payload = serde_json::to_value(&arguments).map_err(tool_error)?;
+    let user = principal
+        .authenticated_user()
+        .ok_or_else(|| DispatchError::Protocol("authentication is required".to_owned()))?;
     let request = submit_request(user, arguments)?;
+    if request.overwrite != ImportOverwrite::Fail {
+        return Err(DispatchError::Tool(
+            "initial agent uploads are create-only; update an existing synchronized collection with its content ETag"
+                .to_owned(),
+        ));
+    }
     let preview = state
         .app
         .submission_service()
         .preview(&request)
         .await
         .map_err(|error| DispatchError::Tool(error.to_string()))?;
-    let consequence = consequence_label(preview.consequence);
-    let mut structured =
-        serde_json::to_value(&preview).map_err(|error| DispatchError::Tool(error.to_string()))?;
-    structured["confirmation"] = json!({
-        "expected_collection_uri": preview.collection_uri,
-        "expected_consequence": consequence
+    if preview.collision {
+        return Err(DispatchError::Tool(format!(
+            "a collection already exists at {}; choose a new id or version, or use collection synchronization with its content ETag",
+            preview.collection_uri
+        )));
+    }
+    let effect = json!({
+        "action": "create_collection",
+        "collection_uri": preview.collection_uri,
+        "members": preview.members,
+        "triple_count": preview.triple_count,
+        "collision_policy": "fail"
     });
+    let receipt = state
+        .app
+        .prepared_mutation_service()
+        .prepare(
+            &prepared_binding(principal)?,
+            "collection.upload",
+            Some(preview.collection_uri.clone()),
+            None,
+            vec![SCOPE_READ.to_owned(), SCOPE_WRITE.to_owned()],
+            effect,
+            payload,
+        )
+        .await
+        .map_err(|error| DispatchError::Tool(error.to_string()))?;
+    let mut structured = serde_json::to_value(&preview).map_err(tool_error)?;
+    structured["prepared_change"] = serde_json::to_value(&receipt).map_err(tool_error)?;
     structured_tool_result(
         format!(
-            "Upload is valid. It would {} {} with {} members and {} triples. No registry data was changed.",
-            consequence,
+            "Upload is valid. It would create {} with {} members and {} triples. No registry data was changed; the prepared change expires at {}.",
             preview.collection_uri,
             preview.members.len(),
-            preview.triple_count
+            preview.triple_count,
+            receipt.expires_at
         ),
         Ok(structured),
     )
@@ -461,34 +578,39 @@ async fn validate_design_upload(
 
 async fn upload_design_collection(
     state: &AppState,
-    user: &User,
+    principal: &RequestPrincipal,
     arguments: Value,
 ) -> Result<Value, DispatchError> {
+    let user = principal
+        .authenticated_user()
+        .ok_or_else(|| DispatchError::Protocol("authentication is required".to_owned()))?;
     require_member(user, "upload a design")?;
     let arguments: UploadDesignArgs = tool_arguments(arguments)?;
-    if !arguments.confirm {
-        return Err(DispatchError::Tool(
-            "confirm must be true after the user reviews validate_design_upload".to_owned(),
-        ));
-    }
-    let request = submit_request(user, arguments.design)?;
-    let preview = state
+    let plan = state
         .app
-        .submission_service()
-        .preview(&request)
+        .prepared_mutation_service()
+        .consume(&arguments.plan_token, &prepared_binding(principal)?)
         .await
-        .map_err(tool_error)?;
-    if preview.collection_uri != arguments.expected_collection_uri
-        || consequence_label(preview.consequence) != arguments.expected_consequence
-    {
+        .map_err(|error| DispatchError::Tool(error.to_string()))?;
+    execute_upload_plan(state, user, plan).await
+}
+
+async fn execute_upload_plan(
+    state: &AppState,
+    user: &User,
+    plan: PreparedMutation,
+) -> Result<Value, DispatchError> {
+    if plan.operation != "collection.upload" {
         return Err(DispatchError::Tool(
-            "the live upload preview no longer matches the confirmed collection URI or consequence; preview again before committing"
-                .to_owned(),
+            "the prepared change token is not an upload plan".to_owned(),
         ));
     }
-    if preview.consequence == sbol_db_app::SubmitConsequence::RejectConflict {
+    let design: ValidateDesignArgs = serde_json::from_value(plan.payload)
+        .map_err(|error| DispatchError::Tool(format!("invalid stored upload plan: {error}")))?;
+    let request = submit_request(user, design)?;
+    if request.overwrite != ImportOverwrite::Fail {
         return Err(DispatchError::Tool(
-            "the confirmed upload would be rejected by its fail-on-collision policy".to_owned(),
+            "the stored upload plan does not use fail-on-collision creation".to_owned(),
         ));
     }
     let outcome = state
@@ -503,7 +625,8 @@ async fn upload_design_collection(
         "members": outcome.members.iter().map(|iri| iri.as_str()).collect::<Vec<_>>(),
         "graph": outcome.graph_iri,
         "triple_count": outcome.triple_count,
-        "consequence": arguments.expected_consequence
+        "consequence": "create",
+        "input_hash": plan.input_hash
     });
     structured_tool_result(
         format!(
@@ -514,6 +637,486 @@ async fn upload_design_collection(
         ),
         Ok(result),
     )
+}
+
+async fn prepare_design_metadata_update(
+    state: &AppState,
+    principal: &RequestPrincipal,
+    arguments: Value,
+) -> Result<Value, DispatchError> {
+    let user = principal
+        .authenticated_user()
+        .ok_or_else(|| DispatchError::Protocol("authentication is required".to_owned()))?;
+    require_member(user, "update a design")?;
+    let arguments: UpdateDesignArgs = tool_arguments(arguments)?;
+    if arguments.name.is_none()
+        && arguments.description.is_none()
+        && arguments.mutable_description.is_none()
+        && arguments.mutable_notes.is_none()
+        && arguments.mutable_source.is_none()
+        && arguments.citations.is_none()
+    {
+        return Err(DispatchError::Tool(
+            "at least one metadata field must be supplied".to_owned(),
+        ));
+    }
+    let iri = IriString::new(arguments.iri.clone())
+        .map_err(|error| DispatchError::Tool(format!("invalid design IRI: {error}")))?;
+    authorize_design_management(state, user, iri.as_str()).await?;
+    let (before, snapshot) = design_snapshot(state, user, iri.as_str()).await?;
+    if arguments
+        .expected_name
+        .as_ref()
+        .is_some_and(|expected| before["name"].as_str() != Some(expected))
+        || arguments
+            .expected_description
+            .as_ref()
+            .is_some_and(|expected| before["description"].as_str() != Some(expected))
+    {
+        return Err(DispatchError::Tool(
+            "the design metadata changed since it was inspected; open it again before preparing the update"
+                .to_owned(),
+        ));
+    }
+    let effect = json!({
+        "action": "update_design_metadata",
+        "iri": iri.as_str(),
+        "expected_design_snapshot": snapshot,
+        "changes": metadata_changes(&arguments)
+    });
+    prepare_agent_change(
+        state,
+        principal,
+        "design.metadata.update",
+        Some(iri.as_str().to_owned()),
+        &[SCOPE_READ, SCOPE_WRITE],
+        effect,
+        serde_json::to_value(arguments).map_err(tool_error)?,
+        "Prepared a metadata update without changing the design",
+    )
+    .await
+}
+
+async fn prepare_design_publication(
+    state: &AppState,
+    principal: &RequestPrincipal,
+    arguments: Value,
+) -> Result<Value, DispatchError> {
+    let user = principal
+        .authenticated_user()
+        .ok_or_else(|| DispatchError::Protocol("authentication is required".to_owned()))?;
+    require_member(user, "publish a design")?;
+    let arguments: PublishDesignArgs = tool_arguments(arguments)?;
+    let iri = IriString::new(arguments.iri.clone())
+        .map_err(|error| DispatchError::Tool(format!("invalid design IRI: {error}")))?;
+    if arguments.id.trim().is_empty() || arguments.version.trim().is_empty() {
+        return Err(DispatchError::Tool(
+            "public id and version must not be empty".to_owned(),
+        ));
+    }
+    parse_collision_policy(arguments.collision.as_deref())?;
+    authorize_design_management(state, user, iri.as_str()).await?;
+    let (_, snapshot) = design_snapshot(state, user, iri.as_str()).await?;
+    let effect = json!({
+        "action": "publish_design",
+        "source_iri": iri.as_str(),
+        "public_id": arguments.id,
+        "version": arguments.version,
+        "collision_policy": arguments.collision.as_deref().unwrap_or("fail"),
+        "expected_design_snapshot": snapshot
+    });
+    prepare_agent_change(
+        state,
+        principal,
+        "design.publish",
+        Some(iri.as_str().to_owned()),
+        &[SCOPE_READ, SCOPE_WRITE],
+        effect,
+        serde_json::to_value(arguments).map_err(tool_error)?,
+        "Prepared publication without creating a public design",
+    )
+    .await
+}
+
+async fn prepare_collection_update(
+    state: &AppState,
+    principal: &RequestPrincipal,
+    arguments: Value,
+) -> Result<Value, DispatchError> {
+    let user = principal
+        .authenticated_user()
+        .ok_or_else(|| DispatchError::Protocol("authentication is required".to_owned()))?;
+    require_member(user, "update a synchronized collection")?;
+    let arguments: CollectionUpdateArgs = tool_arguments(arguments)?;
+    let iri = IriString::new(arguments.iri.clone())
+        .map_err(|error| DispatchError::Tool(format!("invalid collection IRI: {error}")))?;
+    if arguments.content.trim().is_empty() {
+        return Err(DispatchError::Tool(
+            "serialized collection content must not be empty".to_owned(),
+        ));
+    }
+    if arguments.expected_content_etag.trim().is_empty() {
+        return Err(DispatchError::Tool(
+            "expected_content_etag must be the exact strong ETag returned by get_collection_sync_state"
+                .to_owned(),
+        ));
+    }
+    let format = parse_collection_format(&arguments.format)?;
+    let preview = state
+        .app
+        .collection_sync_service()
+        .preview_update(
+            &user.graph_uri,
+            user.is_admin,
+            iri.as_str(),
+            &arguments.content,
+            format,
+            &arguments.expected_content_etag,
+        )
+        .await
+        .map_err(tool_error)?;
+    let effect = json!({
+        "action": "replace_collection_biological_content",
+        "collection_uri": iri.as_str(),
+        "expected_content_etag": preview.current_content_etag,
+        "proposed_content_etag": preview.proposed_content_etag,
+        "triple_count": preview.triple_count,
+        "server_managed_metadata_preserved": true
+    });
+    let receipt = state
+        .app
+        .prepared_mutation_service()
+        .prepare(
+            &prepared_binding(principal)?,
+            "collection.update",
+            Some(iri.as_str().to_owned()),
+            Some(preview.current_content_etag),
+            vec![SCOPE_READ.to_owned(), SCOPE_WRITE.to_owned()],
+            effect,
+            serde_json::to_value(arguments).map_err(tool_error)?,
+        )
+        .await
+        .map_err(tool_error)?;
+    structured_tool_result(
+        format!(
+            "Prepared a whole-collection update without changing registry data. Review the proposed biological content ETag, then apply the one-time token before {}.",
+            receipt.expires_at
+        ),
+        Ok(json!({ "prepared_change": receipt })),
+    )
+}
+
+async fn prepare_design_sharing(
+    state: &AppState,
+    principal: &RequestPrincipal,
+    arguments: Value,
+) -> Result<Value, DispatchError> {
+    let user = principal
+        .authenticated_user()
+        .ok_or_else(|| DispatchError::Protocol("authentication is required".to_owned()))?;
+    require_member(user, "manage design sharing")?;
+    let arguments: ShareDesignArgs = tool_arguments(arguments)?;
+    let iri = IriString::new(arguments.iri.clone())
+        .map_err(|error| DispatchError::Tool(format!("invalid design IRI: {error}")))?;
+    authorize_design_management(state, user, iri.as_str()).await?;
+    let target = resolve_member(state, &arguments.user).await?;
+    if target.id == user.id {
+        return Err(DispatchError::Tool(
+            "the owner cannot be added or removed as a read-only collaborator".to_owned(),
+        ));
+    }
+    if !matches!(arguments.action.as_str(), "grant" | "revoke") {
+        return Err(DispatchError::Tool(
+            "sharing action must be grant or revoke".to_owned(),
+        ));
+    }
+    let effect = json!({
+        "action": format!("{}_design_access", arguments.action),
+        "iri": iri.as_str(),
+        "collaborator": collaborator_json(&target)
+    });
+    prepare_agent_change(
+        state,
+        principal,
+        "design.share",
+        Some(iri.as_str().to_owned()),
+        &[SCOPE_READ, SCOPE_SHARE],
+        effect,
+        serde_json::to_value(arguments).map_err(tool_error)?,
+        "Prepared a sharing change without changing access",
+    )
+    .await
+}
+
+async fn prepare_design_review(
+    state: &AppState,
+    principal: &RequestPrincipal,
+    arguments: Value,
+) -> Result<Value, DispatchError> {
+    let user = principal
+        .authenticated_user()
+        .ok_or_else(|| DispatchError::Protocol("authentication is required".to_owned()))?;
+    require_member(user, "start a design review")?;
+    let arguments: StartReviewArgs = tool_arguments(arguments)?;
+    let iri = IriString::new(arguments.iri.clone())
+        .map_err(|error| DispatchError::Tool(format!("invalid design IRI: {error}")))?;
+    authorize_design_management(state, user, iri.as_str()).await?;
+    let curator = resolve_member(state, &arguments.curator).await?;
+    if !curator.is_curator && !curator.is_admin {
+        return Err(DispatchError::Tool(format!(
+            "SBOL account `{}` is not an active curator",
+            curator.username
+        )));
+    }
+    let effect = json!({
+        "action": "start_design_review",
+        "iri": iri.as_str(),
+        "curator": collaborator_json(&curator),
+        "note": arguments.note
+    });
+    prepare_agent_change(
+        state,
+        principal,
+        "design.review.start",
+        Some(iri.as_str().to_owned()),
+        &[SCOPE_READ, SCOPE_REVIEW],
+        effect,
+        serde_json::to_value(arguments).map_err(tool_error)?,
+        "Prepared a review request without opening a review",
+    )
+    .await
+}
+
+async fn prepare_review_decision(
+    state: &AppState,
+    principal: &RequestPrincipal,
+    arguments: Value,
+) -> Result<Value, DispatchError> {
+    let user = principal
+        .authenticated_user()
+        .ok_or_else(|| DispatchError::Protocol("authentication is required".to_owned()))?;
+    if !user.is_curator && !user.is_admin {
+        return Err(DispatchError::Tool(
+            "an active curator account is required to record a review decision".to_owned(),
+        ));
+    }
+    let arguments: ReviewDecisionArgs = tool_arguments(arguments)?;
+    let iri = IriString::new(arguments.iri.clone())
+        .map_err(|error| DispatchError::Tool(format!("invalid design IRI: {error}")))?;
+    if !matches!(arguments.decision.as_str(), "approve" | "request_changes") {
+        return Err(DispatchError::Tool(
+            "decision must be approve or request_changes".to_owned(),
+        ));
+    }
+    let effect = json!({
+        "action": "record_review_decision",
+        "iri": iri.as_str(),
+        "decision": arguments.decision,
+        "note": arguments.note
+    });
+    prepare_agent_change(
+        state,
+        principal,
+        "design.review.decide",
+        Some(iri.as_str().to_owned()),
+        &[SCOPE_READ, SCOPE_REVIEW],
+        effect,
+        serde_json::to_value(arguments).map_err(tool_error)?,
+        "Prepared a curator decision without changing review state",
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prepare_agent_change(
+    state: &AppState,
+    principal: &RequestPrincipal,
+    operation: &str,
+    target_iri: Option<String>,
+    required_scopes: &[&str],
+    effect: Value,
+    payload: Value,
+    summary: &str,
+) -> Result<Value, DispatchError> {
+    let receipt = state
+        .app
+        .prepared_mutation_service()
+        .prepare(
+            &prepared_binding(principal)?,
+            operation,
+            target_iri,
+            None,
+            required_scopes
+                .iter()
+                .map(|scope| (*scope).to_owned())
+                .collect(),
+            effect,
+            payload,
+        )
+        .await
+        .map_err(tool_error)?;
+    structured_tool_result(
+        format!(
+            "{summary}. Review the prepared effect, then apply its one-time token before {}.",
+            receipt.expires_at
+        ),
+        Ok(json!({ "prepared_change": receipt })),
+    )
+}
+
+async fn apply_prepared_change(
+    state: &AppState,
+    principal: &RequestPrincipal,
+    arguments: Value,
+) -> Result<Value, DispatchError> {
+    let user = principal
+        .authenticated_user()
+        .ok_or_else(|| DispatchError::Protocol("authentication is required".to_owned()))?;
+    let arguments: ApplyPreparedArgs = tool_arguments(arguments)?;
+    let plan = state
+        .app
+        .prepared_mutation_service()
+        .consume(&arguments.plan_token, &prepared_binding(principal)?)
+        .await
+        .map_err(tool_error)?;
+    match plan.operation.as_str() {
+        "collection.upload" => execute_upload_plan(state, user, plan).await,
+        "collection.update" => execute_collection_update_plan(state, user, plan).await,
+        "design.metadata.update" => {
+            verify_prepared_design_snapshot(state, user, &plan).await?;
+            update_design_metadata(state, user, confirmed_payload(plan.payload)?).await
+        }
+        "design.publish" => {
+            verify_prepared_design_snapshot(state, user, &plan).await?;
+            publish_design(state, user, confirmed_payload(plan.payload)?).await
+        }
+        "design.share" => share_design(state, user, confirmed_payload(plan.payload)?).await,
+        "design.review.start" => {
+            start_design_review(state, user, confirmed_payload(plan.payload)?).await
+        }
+        "design.review.decide" => {
+            record_review_decision(state, user, confirmed_payload(plan.payload)?).await
+        }
+        operation => Err(DispatchError::Tool(format!(
+            "unsupported prepared change operation `{operation}`"
+        ))),
+    }
+}
+
+async fn execute_collection_update_plan(
+    state: &AppState,
+    user: &User,
+    plan: PreparedMutation,
+) -> Result<Value, DispatchError> {
+    let expected = plan.expected_content_etag.clone().ok_or_else(|| {
+        DispatchError::Tool("prepared collection update has no content ETag".to_owned())
+    })?;
+    let arguments: CollectionUpdateArgs = serde_json::from_value(plan.payload)
+        .map_err(|error| DispatchError::Tool(format!("invalid stored update plan: {error}")))?;
+    let format = parse_collection_format(&arguments.format)?;
+    let outcome = state
+        .app
+        .collection_sync_service()
+        .write(
+            &user.graph_uri,
+            user.is_admin,
+            &arguments.iri,
+            &arguments.content,
+            format,
+            Some(&expected),
+        )
+        .await
+        .map_err(tool_error)?;
+    match outcome {
+        ConditionalContentWrite::Applied {
+            triple_count,
+            content_etag,
+        } => structured_tool_result(
+            format!(
+                "Updated synchronized biological content for {} at content ETag {}.",
+                arguments.iri, content_etag
+            ),
+            Ok(json!({
+                "collection_uri": arguments.iri,
+                "content_etag": content_etag,
+                "triple_count": triple_count,
+                "input_hash": plan.input_hash
+            })),
+        ),
+        ConditionalContentWrite::PreconditionFailed {
+            current_content_etag,
+        } => Err(DispatchError::Tool(format!(
+            "the collection changed after this update was prepared; no data was overwritten. Current content ETag: {current_content_etag:?}"
+        ))),
+    }
+}
+
+async fn design_snapshot(
+    state: &AppState,
+    user: &User,
+    iri: &str,
+) -> Result<(Value, String), DispatchError> {
+    let scope = state
+        .app
+        .acl_service
+        .compute_scope(Some(&user.graph_uri))
+        .await
+        .map_err(tool_error)?;
+    let details = state
+        .app
+        .object_details(iri, scope)
+        .await
+        .map_err(tool_error)?
+        .ok_or_else(|| {
+            DispatchError::Tool("design was not found or is not visible to this account".to_owned())
+        })?;
+    let value = serde_json::to_value(details).map_err(tool_error)?;
+    let bytes = serde_json::to_vec(&value).map_err(tool_error)?;
+    let snapshot = hex::encode(Sha256::digest(bytes));
+    Ok((value, snapshot))
+}
+
+async fn verify_prepared_design_snapshot(
+    state: &AppState,
+    user: &User,
+    plan: &PreparedMutation,
+) -> Result<(), DispatchError> {
+    let expected = plan
+        .effect
+        .get("expected_design_snapshot")
+        .and_then(Value::as_str)
+        .ok_or_else(|| DispatchError::Tool("prepared change has no design snapshot".to_owned()))?;
+    let iri = plan
+        .target_iri
+        .as_deref()
+        .ok_or_else(|| DispatchError::Tool("prepared change has no target design".to_owned()))?;
+    let (_, current) = design_snapshot(state, user, iri).await?;
+    if current != expected {
+        return Err(DispatchError::Tool(
+            "the design changed after this operation was prepared; no change was applied"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn confirmed_payload(mut payload: Value) -> Result<Value, DispatchError> {
+    let object = payload.as_object_mut().ok_or_else(|| {
+        DispatchError::Tool("prepared change payload is not an object".to_owned())
+    })?;
+    object.insert("confirm".to_owned(), Value::Bool(true));
+    Ok(payload)
+}
+
+fn metadata_changes(arguments: &UpdateDesignArgs) -> Value {
+    json!({
+        "name": arguments.name,
+        "description": arguments.description,
+        "mutable_description": arguments.mutable_description,
+        "mutable_notes": arguments.mutable_notes,
+        "mutable_source": arguments.mutable_source,
+        "citations": arguments.citations
+    })
 }
 
 async fn update_design_metadata(
@@ -951,6 +1554,42 @@ impl Default for DownloadDesignArgs {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct CollectionSyncStateArgs {
+    iri: String,
+    format: String,
+}
+
+impl Default for CollectionSyncStateArgs {
+    fn default() -> Self {
+        Self {
+            iri: String::new(),
+            format: "turtle".to_owned(),
+        }
+    }
+}
+
+#[derive(Clone, Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+struct CollectionUpdateArgs {
+    iri: String,
+    format: String,
+    content: String,
+    expected_content_etag: String,
+}
+
+impl Default for CollectionUpdateArgs {
+    fn default() -> Self {
+        Self {
+            iri: String::new(),
+            format: "turtle".to_owned(),
+            content: String::new(),
+            expected_content_etag: String::new(),
+        }
+    }
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct SearchSequencesArgs {
@@ -966,8 +1605,8 @@ struct SimilarDesignsArgs {
     limit: Option<usize>,
 }
 
-#[derive(Deserialize)]
-#[serde(default)]
+#[derive(Clone, Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
 struct ValidateDesignArgs {
     id: String,
     version: String,
@@ -982,14 +1621,10 @@ struct ValidateDesignArgs {
 
 #[derive(Deserialize)]
 struct UploadDesignArgs {
-    #[serde(flatten)]
-    design: ValidateDesignArgs,
-    confirm: bool,
-    expected_collection_uri: String,
-    expected_consequence: String,
+    plan_token: String,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 struct UpdateDesignArgs {
     iri: String,
@@ -1004,7 +1639,7 @@ struct UpdateDesignArgs {
     confirm: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 struct PublishDesignArgs {
     iri: String,
@@ -1038,7 +1673,7 @@ struct DesignIriArgs {
     iri: String,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 struct ShareDesignArgs {
     iri: String,
@@ -1047,7 +1682,7 @@ struct ShareDesignArgs {
     confirm: bool,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 struct StartReviewArgs {
     iri: String,
@@ -1056,13 +1691,19 @@ struct StartReviewArgs {
     confirm: bool,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 struct ReviewDecisionArgs {
     iri: String,
     decision: String,
     note: Option<String>,
     confirm: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplyPreparedArgs {
+    plan_token: String,
 }
 
 impl Default for ValidateDesignArgs {
@@ -1150,6 +1791,23 @@ fn tools() -> Vec<Value> {
             "_meta": { "io.sbol/requiredScopes": [SCOPE_READ] }
         }),
         json!({
+            "name": "get_collection_sync_state",
+            "title": "Read a synchronized collection",
+            "description": "Read one visible collection's biological SBOL content and representation-independent content ETag. Server-managed ownership, sharing, review, audit, and timestamps are excluded.",
+            "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "iri": { "type": "string", "format": "uri" },
+                    "format": { "type": "string", "enum": ["turtle", "rdfxml", "jsonld", "ntriples"], "default": "turtle" }
+                },
+                "required": ["iri"],
+                "additionalProperties": false
+            },
+            "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+            "_meta": { "io.sbol/requiredScopes": [SCOPE_READ] }
+        }),
+        json!({
             "name": "search_sequences",
             "title": "Find designs by sequence",
             "description": "Align a nucleotide sequence against visible registry sequences and return percent identity, strand, CIGAR, and score evidence.",
@@ -1186,8 +1844,8 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "validate_design_upload",
-            "title": "Check a design before upload",
-            "description": "Run SBOL parsing, validation, identity minting, and collision analysis without changing registry data.",
+            "title": "Prepare a design upload",
+            "description": "Validate and mint a create-only upload without changing registry designs, then issue a short-lived one-time prepared-change token bound to this signed-in client.",
             "inputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
@@ -1199,51 +1857,40 @@ fn tools() -> Vec<Value> {
                     "creator_name": { "type": "string" },
                     "citations": { "type": "array", "items": { "type": "string" }, "default": [] },
                     "format": { "type": "string", "enum": ["rdfxml", "turtle", "jsonld", "ntriples", "genbank", "fasta"], "default": "turtle" },
-                    "collision": { "type": "string", "enum": ["fail", "replace", "merge"], "default": "fail" },
+                    "collision": { "type": "string", "const": "fail", "default": "fail" },
                     "content": { "type": "string", "description": "Serialized design content." }
                 },
                 "required": ["id", "content"],
                 "additionalProperties": false
             },
             "annotations": {
-                "readOnlyHint": true,
+                "readOnlyHint": false,
                 "destructiveHint": false,
-                "idempotentHint": true,
+                "idempotentHint": false,
                 "openWorldHint": false
             },
-            "_meta": { "io.sbol/requiredScopes": [SCOPE_READ] }
+            "_meta": { "io.sbol/requiredScopes": [SCOPE_READ, SCOPE_WRITE] }
         }),
         json!({
             "name": "upload_design_collection",
             "title": "Upload a reviewed design collection",
-            "description": "Re-run the exact upload preview and commit only when its collection identity and collision consequence match the user's confirmed preview.",
+            "description": "Consume the exact one-time plan returned by validate_design_upload and atomically create its reviewed collection. The token is user, OAuth-client, audience, scope, payload, and expiry bound.",
             "inputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
                 "properties": {
-                    "id": { "type": "string", "minLength": 1 },
-                    "version": { "type": "string", "default": "1" },
-                    "name": { "type": "string" },
-                    "description": { "type": "string" },
-                    "creator_name": { "type": "string" },
-                    "citations": { "type": "array", "items": { "type": "string" }, "default": [] },
-                    "format": { "type": "string", "enum": ["rdfxml", "turtle", "jsonld", "ntriples", "genbank", "fasta"], "default": "turtle" },
-                    "collision": { "type": "string", "enum": ["fail", "replace", "merge"], "default": "fail" },
-                    "content": { "type": "string", "minLength": 1 },
-                    "expected_collection_uri": { "type": "string", "format": "uri", "description": "Exact collection URI returned by validate_design_upload." },
-                    "expected_consequence": { "type": "string", "enum": ["create", "reject", "replace", "merge into"], "description": "Exact consequence returned by validate_design_upload." },
-                    "confirm": { "const": true, "description": "Set only after the user reviews the matching preview." }
+                    "plan_token": { "type": "string", "pattern": "^sbol_plan_", "description": "One-time token returned in prepared_change by validate_design_upload." }
                 },
-                "required": ["id", "content", "expected_collection_uri", "expected_consequence", "confirm"],
+                "required": ["plan_token"],
                 "additionalProperties": false
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false },
             "_meta": { "io.sbol/requiredScopes": [SCOPE_READ, SCOPE_WRITE] }
         }),
         json!({
-            "name": "update_design_metadata",
-            "title": "Improve a design record",
-            "description": "Update owned design metadata, notes, provenance source, or citations. Optional expected values prevent overwriting a record changed since inspection.",
+            "name": "prepare_design_metadata_update",
+            "title": "Prepare a design metadata update",
+            "description": "Inspect and prepare an owned design metadata, notes, provenance, or citation change without applying it. Returns a short-lived one-time prepared-change token.",
             "inputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
@@ -1256,19 +1903,18 @@ fn tools() -> Vec<Value> {
                     "mutable_source": { "type": "string" },
                     "citations": { "type": "array", "items": { "type": "string" } },
                     "expected_name": { "type": "string" },
-                    "expected_description": { "type": "string" },
-                    "confirm": { "const": true }
+                    "expected_description": { "type": "string" }
                 },
-                "required": ["iri", "confirm"],
+                "required": ["iri"],
                 "additionalProperties": false
             },
-            "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
             "_meta": { "io.sbol/requiredScopes": [SCOPE_READ, SCOPE_WRITE] }
         }),
         json!({
-            "name": "publish_design",
-            "title": "Publish a stable public identity",
-            "description": "Publish an owned private design under an explicit public id, version, and fail/replace/merge collision policy.",
+            "name": "prepare_design_publication",
+            "title": "Prepare publication of a design",
+            "description": "Inspect and prepare publication of an owned private design under an explicit public id, version, and collision policy without creating public data.",
             "inputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
@@ -1279,13 +1925,31 @@ fn tools() -> Vec<Value> {
                     "name": { "type": "string" },
                     "description": { "type": "string" },
                     "citations": { "type": "array", "items": { "type": "string" }, "default": [] },
-                    "collision": { "type": "string", "enum": ["fail", "replace", "merge"], "default": "fail" },
-                    "confirm": { "const": true }
+                    "collision": { "type": "string", "enum": ["fail", "replace", "merge"], "default": "fail" }
                 },
-                "required": ["iri", "id", "confirm"],
+                "required": ["iri", "id"],
                 "additionalProperties": false
             },
-            "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
+            "_meta": { "io.sbol/requiredScopes": [SCOPE_READ, SCOPE_WRITE] }
+        }),
+        json!({
+            "name": "prepare_collection_update",
+            "title": "Prepare a synchronized collection update",
+            "description": "Validate a complete biological SBOL replacement against the exact current content ETag without changing registry data. Ownership, sharing, review, audit, and server metadata remain server-managed.",
+            "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "iri": { "type": "string", "format": "uri" },
+                    "format": { "type": "string", "enum": ["turtle", "rdfxml", "jsonld", "ntriples"], "default": "turtle" },
+                    "expected_content_etag": { "type": "string", "description": "Exact strong ETag returned by get_collection_sync_state." },
+                    "content": { "type": "string", "description": "Complete biological SBOL collection document." }
+                },
+                "required": ["iri", "expected_content_etag", "content"],
+                "additionalProperties": false
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
             "_meta": { "io.sbol/requiredScopes": [SCOPE_READ, SCOPE_WRITE] }
         }),
         json!({
@@ -1303,22 +1967,21 @@ fn tools() -> Vec<Value> {
             "_meta": { "io.sbol/requiredScopes": [SCOPE_READ, SCOPE_SHARE] }
         }),
         json!({
-            "name": "share_design",
-            "title": "Grant or revoke design access",
-            "description": "Grant or revoke one active SBOL account's read-only access without changing ownership.",
+            "name": "prepare_design_sharing",
+            "title": "Prepare a design access change",
+            "description": "Resolve the recipient and prepare a grant or revocation of read-only design access without changing permissions.",
             "inputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
                 "properties": {
                     "iri": { "type": "string", "format": "uri" },
                     "user": { "type": "string", "description": "Recipient username or email." },
-                    "action": { "type": "string", "enum": ["grant", "revoke"] },
-                    "confirm": { "const": true }
+                    "action": { "type": "string", "enum": ["grant", "revoke"] }
                 },
-                "required": ["iri", "user", "action", "confirm"],
+                "required": ["iri", "user", "action"],
                 "additionalProperties": false
             },
-            "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
             "_meta": { "io.sbol/requiredScopes": [SCOPE_READ, SCOPE_SHARE] }
         }),
         json!({
@@ -1330,42 +1993,56 @@ fn tools() -> Vec<Value> {
             "_meta": { "io.sbol/requiredScopes": [SCOPE_READ, SCOPE_REVIEW] }
         }),
         json!({
-            "name": "start_design_review",
-            "title": "Start a design review",
-            "description": "Open a review cycle for an owned design and assign an active curator.",
+            "name": "prepare_design_review",
+            "title": "Prepare a design review",
+            "description": "Resolve the curator and prepare a review request for an owned design without opening the review.",
             "inputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
                 "properties": {
                     "iri": { "type": "string", "format": "uri" },
                     "curator": { "type": "string", "description": "Curator username or email." },
-                    "note": { "type": "string" },
-                    "confirm": { "const": true }
+                    "note": { "type": "string" }
                 },
-                "required": ["iri", "curator", "confirm"],
+                "required": ["iri", "curator"],
                 "additionalProperties": false
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
             "_meta": { "io.sbol/requiredScopes": [SCOPE_READ, SCOPE_REVIEW] }
         }),
         json!({
-            "name": "record_review_decision",
-            "title": "Record a curator decision",
-            "description": "Approve a pending review or request changes, preserving the note in review history.",
+            "name": "prepare_review_decision",
+            "title": "Prepare a curator decision",
+            "description": "Prepare approval or a request for changes on a pending review without recording the decision.",
             "inputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
                 "properties": {
                     "iri": { "type": "string", "format": "uri" },
                     "decision": { "type": "string", "enum": ["approve", "request_changes"] },
-                    "note": { "type": "string" },
-                    "confirm": { "const": true }
+                    "note": { "type": "string" }
                 },
-                "required": ["iri", "decision", "confirm"],
+                "required": ["iri", "decision"],
                 "additionalProperties": false
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
             "_meta": { "io.sbol/requiredScopes": [SCOPE_READ, SCOPE_REVIEW] }
+        }),
+        json!({
+            "name": "apply_prepared_change",
+            "title": "Apply a reviewed prepared change",
+            "description": "Consume one exact one-time plan token after its effect has been shown to the user. The server rechecks user, OAuth client, audience, scopes, expiry, and any captured design state before applying it.",
+            "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "plan_token": { "type": "string", "pattern": "^sbol_plan_" }
+                },
+                "required": ["plan_token"],
+                "additionalProperties": false
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false },
+            "_meta": { "io.sbol/requiredScopes": [SCOPE_READ], "io.sbol/preparedScopesEnforced": true }
         }),
         json!({
             "name": "get_design_activity",
@@ -1391,16 +2068,33 @@ fn tool_arguments<T: DeserializeOwned>(arguments: Value) -> Result<T, DispatchEr
 
 fn required_scopes(tool: &str) -> &'static [&'static str] {
     match tool {
-        "upload_design_collection" | "update_design_metadata" | "publish_design" => {
-            &[SCOPE_READ, SCOPE_WRITE]
-        }
-        "list_design_collaborators" | "share_design" => &[SCOPE_READ, SCOPE_SHARE],
+        "validate_design_upload"
+        | "upload_design_collection"
+        | "prepare_design_metadata_update"
+        | "prepare_design_publication"
+        | "prepare_collection_update" => &[SCOPE_READ, SCOPE_WRITE],
+        "list_design_collaborators" | "prepare_design_sharing" => &[SCOPE_READ, SCOPE_SHARE],
         "list_reviews"
-        | "start_design_review"
-        | "record_review_decision"
+        | "prepare_design_review"
+        | "prepare_review_decision"
         | "get_design_activity" => &[SCOPE_READ, SCOPE_REVIEW],
+        "apply_prepared_change" => &[SCOPE_READ],
         _ => &[SCOPE_READ],
     }
+}
+
+fn prepared_binding(
+    principal: &RequestPrincipal,
+) -> Result<PreparedMutationBinding, DispatchError> {
+    let user = principal
+        .authenticated_user()
+        .ok_or_else(|| DispatchError::Protocol("authentication is required".to_owned()))?;
+    Ok(PreparedMutationBinding {
+        user_id: user.id,
+        oauth_client_id: principal.oauth_client_id.clone(),
+        audience: principal.audience.clone(),
+        scopes: principal.scopes.clone(),
+    })
 }
 
 fn submit_request(
@@ -1577,6 +2271,38 @@ fn parse_submission_format(value: &str) -> Result<SerializationFormat, DispatchE
     }
 }
 
+fn parse_collection_format(value: &str) -> Result<SerializationFormat, DispatchError> {
+    match value {
+        "turtle" => Ok(SerializationFormat::Turtle),
+        "rdfxml" => Ok(SerializationFormat::RdfXml),
+        "jsonld" => Ok(SerializationFormat::JsonLd),
+        "ntriples" => Ok(SerializationFormat::NTriples),
+        other => Err(DispatchError::Tool(format!(
+            "unsupported collection RDF format `{other}`"
+        ))),
+    }
+}
+
+fn collection_format_name(format: SerializationFormat) -> &'static str {
+    match format {
+        SerializationFormat::Turtle => "turtle",
+        SerializationFormat::RdfXml => "rdfxml",
+        SerializationFormat::JsonLd => "jsonld",
+        SerializationFormat::NTriples => "ntriples",
+        _ => unreachable!("collection formats are constrained before serialization"),
+    }
+}
+
+fn collection_media_type(format: SerializationFormat) -> &'static str {
+    match format {
+        SerializationFormat::Turtle => "text/turtle",
+        SerializationFormat::RdfXml => "application/rdf+xml",
+        SerializationFormat::JsonLd => "application/ld+json",
+        SerializationFormat::NTriples => "application/n-triples",
+        _ => unreachable!("collection formats are constrained before serialization"),
+    }
+}
+
 fn parse_collision_policy(value: Option<&str>) -> Result<ImportOverwrite, DispatchError> {
     match value.unwrap_or("fail") {
         "fail" => Ok(ImportOverwrite::Fail),
@@ -1585,15 +2311,6 @@ fn parse_collision_policy(value: Option<&str>) -> Result<ImportOverwrite, Dispat
         other => Err(DispatchError::Tool(format!(
             "unsupported collision policy `{other}`"
         ))),
-    }
-}
-
-fn consequence_label(value: sbol_db_app::SubmitConsequence) -> &'static str {
-    match value {
-        sbol_db_app::SubmitConsequence::Create => "create",
-        sbol_db_app::SubmitConsequence::RejectConflict => "reject",
-        sbol_db_app::SubmitConsequence::Replace => "replace",
-        sbol_db_app::SubmitConsequence::Merge => "merge into",
     }
 }
 
@@ -1628,27 +2345,10 @@ fn non_blank(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-struct McpPrincipal {
-    user: User,
-    grant: OAuthAccessToken,
-}
-
-impl McpPrincipal {
-    fn has_scopes(&self, required: &[&str]) -> bool {
-        let granted = self
-            .grant
-            .scopes
-            .iter()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>();
-        required.iter().all(|scope| granted.contains(scope))
-    }
-}
-
 async fn authenticated_principal(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<McpPrincipal, Response> {
+) -> Result<RequestPrincipal, Response> {
     let token = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -1684,7 +2384,7 @@ async fn authenticated_principal(
             )
         })?
         .ok_or_else(|| unauthorized(state))?;
-    Ok(McpPrincipal { user, grant })
+    Ok(RequestPrincipal::oauth(user, &grant))
 }
 
 fn bearer_token(value: &str) -> Option<&str> {
@@ -1818,6 +2518,8 @@ enum DispatchError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     #[test]
@@ -1826,14 +2528,60 @@ mod tests {
         assert_eq!(tools[0]["name"], "search_designs");
         assert_eq!(tools[1]["name"], "get_design");
         assert_eq!(tools[2]["name"], "download_design");
-        assert_eq!(tools[5]["name"], "validate_design_upload");
-        assert_eq!(tools.len(), 15);
+        assert_eq!(tools[3]["name"], "get_collection_sync_state");
+        assert_eq!(tools[6]["name"], "validate_design_upload");
+        assert_eq!(tools[16]["name"], "apply_prepared_change");
+        assert_eq!(tools.len(), 18);
         assert!(tools
             .iter()
             .all(|tool| tool["_meta"]["io.sbol/requiredScopes"].is_array()));
         assert!(tools
             .iter()
             .any(|tool| tool["annotations"]["readOnlyHint"] == false));
+
+        let mut names = HashSet::new();
+        for tool in &tools {
+            let name = tool["name"].as_str().expect("tool name");
+            assert!(names.insert(name), "duplicate MCP tool name: {name}");
+            assert!(!tool["description"].as_str().unwrap_or("").is_empty());
+            assert_eq!(tool["inputSchema"]["type"], "object", "{name}");
+            assert_eq!(
+                tool["inputSchema"]["additionalProperties"], false,
+                "{name} must reject undeclared mutation inputs"
+            );
+            let scopes = tool["_meta"]["io.sbol/requiredScopes"]
+                .as_array()
+                .expect("required scope array");
+            assert!(!scopes.is_empty(), "{name} has no required scope");
+            assert!(scopes.iter().all(|scope| scope.as_str().is_some()));
+            for annotation in [
+                "readOnlyHint",
+                "destructiveHint",
+                "idempotentHint",
+                "openWorldHint",
+            ] {
+                assert!(
+                    tool["annotations"][annotation].is_boolean(),
+                    "{name} omits {annotation}"
+                );
+            }
+            if name.starts_with("prepare_") {
+                assert_eq!(tool["annotations"]["destructiveHint"], false, "{name}");
+            }
+        }
+        assert_eq!(
+            tools[16]["annotations"]["destructiveHint"], true,
+            "applying a prepared change is the explicit commit boundary"
+        );
+        for removed_direct_mutation in [
+            "update_design_metadata",
+            "publish_design",
+            "share_design",
+            "start_design_review",
+            "record_review_decision",
+        ] {
+            assert!(!names.contains(removed_direct_mutation));
+        }
     }
 
     #[test]

@@ -78,11 +78,13 @@ pub async fn run(
     config
         .resolve_public_origin(&listener_public_origin(local_addr))
         .map_err(anyhow::Error::msg)?;
+    let database_prefix = resolved_database_prefix(&config)?;
     let sparql_update = Arc::new(SparqlUpdateEngine::new(
         backend.triple_source.clone(),
         backend.triple_writer.clone(),
     ));
-    let mut app_services = AppServices::from_backend(&backend);
+    let mut app_services =
+        AppServices::from_backend(&backend).with_database_prefix(database_prefix.clone());
 
     let built_in_search = search_config.is_none();
     if built_in_search && no_worker {
@@ -248,6 +250,35 @@ pub async fn run(
     }
     tracing::info!("sbol-db server loop exited cleanly");
     Ok(())
+}
+
+/// Resolve the identity namespace independently from the transport origin.
+/// New registries mint beneath their public origin. A migrated SynBioHub
+/// instance can retain its historical `databasePrefix` through the explicit
+/// environment override without changing OAuth or API endpoints.
+fn resolved_database_prefix(config: &sbol_db_server::ServerConfig) -> Result<String> {
+    let candidate = std::env::var("SBOL_DB_DATABASE_PREFIX")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| config.public_origin.clone())
+        .context("the server has no resolved public origin for its database prefix")?;
+    let mut url = url::Url::parse(candidate.trim())
+        .with_context(|| format!("invalid SBOL DB database prefix `{candidate}`"))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+        anyhow::bail!("SBOL DB database prefix must be an absolute HTTP(S) IRI: `{candidate}`");
+    }
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        anyhow::bail!(
+            "SBOL DB database prefix must not contain credentials, a query, or a fragment: `{candidate}`"
+        );
+    }
+    let path = format!("{}/", url.path().trim_end_matches('/'));
+    url.set_path(&path);
+    Ok(url.to_string())
 }
 
 fn listener_public_origin(address: SocketAddr) -> String {

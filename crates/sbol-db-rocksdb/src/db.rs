@@ -77,6 +77,7 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     "users_by_email",    // email -> user id
     "api_tokens",        // token hash -> user id
     "oauth",             // prefixed OAuth clients, codes, access, refresh grants
+    "prepared_mutation", // one-time CLI/MCP prepared changes
     // SynBioHub query accelerator: derived per-graph indexes (rebuilt lazily
     // when a graph is marked dirty). See `repo::accel`.
     "acc_meta",       // graph + SEP + iri -> MetaRecord JSON
@@ -112,6 +113,8 @@ pub struct Db {
     inner: Arc<Inner>,
     terms: Arc<TermDict>,
     oauth_consume_lock: Arc<Mutex<()>>,
+    content_write_lock: Arc<Mutex<()>>,
+    prepared_mutation_lock: Arc<Mutex<()>>,
 }
 
 /// Shared id->term cache backing [`Db::resolve_term`]. A term id is a content
@@ -164,6 +167,8 @@ impl Db {
             inner: Arc::new(inner),
             terms: Arc::new(TermDict::default()),
             oauth_consume_lock: Arc::new(Mutex::new(())),
+            content_write_lock: Arc::new(Mutex::new(())),
+            prepared_mutation_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -172,6 +177,17 @@ impl Db {
     /// single-use code or refresh token cannot be consumed twice concurrently.
     pub(crate) fn oauth_consume_lock(&self) -> Arc<Mutex<()>> {
         self.oauth_consume_lock.clone()
+    }
+
+    /// Process-wide serialization for collection content CAS writes. RocksDB
+    /// batches are atomic, but the validator read must remain paired with its
+    /// batch across every clone of this database handle.
+    pub(crate) fn content_write_lock(&self) -> Arc<Mutex<()>> {
+        self.content_write_lock.clone()
+    }
+
+    pub(crate) fn prepared_mutation_lock(&self) -> Arc<Mutex<()>> {
+        self.prepared_mutation_lock.clone()
     }
 
     /// Resolve a term id to its term, caching the decode in the shared

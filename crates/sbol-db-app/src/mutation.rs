@@ -125,6 +125,12 @@ impl MutationService {
         }
     }
 
+    /// Mint published identities under a deployment-specific database prefix.
+    pub fn with_database_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.collection = self.collection.with_database_prefix(prefix);
+        self
+    }
+
     /// Attach automatic search maintenance to this mutation service.
     pub fn with_maintenance(mut self, maintenance: Arc<SearchMaintenanceScheduler>) -> Self {
         self.maintenance = Some(maintenance);
