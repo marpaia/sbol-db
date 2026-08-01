@@ -33,7 +33,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{DefaultBodyLimit, Request};
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -45,6 +45,31 @@ use sbol_db_storage::{JobQueue, SbolStore};
 use serde_json::json;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
+
+/// Deployment posture used to select fail-safe server defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerProfile {
+    Development,
+    Production,
+}
+
+/// Browser cross-origin policy for the public application listener.
+#[derive(Debug, Clone)]
+pub enum CorsPolicy {
+    /// Classic SynBioHub-compatible wildcard CORS for local development.
+    Permissive,
+    /// No cross-origin response headers. Same-origin browser requests continue
+    /// to work normally.
+    SameOrigin,
+    /// Exact, normalized HTTP(S) origins allowed to call the API.
+    AllowList(Vec<HeaderValue>),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ServerConfigError {
+    #[error("{0}")]
+    Invalid(String),
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -136,6 +161,14 @@ pub struct ServerConfig {
     /// Whether `POST /register` accepts self-service account creation. When
     /// false the route returns `403`, matching classic's `allowPublicSignup`.
     pub allow_public_signup: bool,
+    /// Whether the legacy Basic-auth SPARQL write endpoints are mounted. The
+    /// public read-only `/sparql` endpoint is unaffected.
+    pub sparql_write_enabled: bool,
+    /// Cross-origin policy applied only to the public application listener.
+    pub cors: CorsPolicy,
+    /// SHA3-256 of the one-time first-launch setup token. The plaintext token is
+    /// never retained in server state or printed by debug output.
+    pub setup_token_hash: Option<[u8; 32]>,
 }
 
 impl Default for ServerConfig {
@@ -156,6 +189,9 @@ impl Default for ServerConfig {
             sparql_auth_disabled: false,
             password_salt: "synbiohub_change_me".to_owned(),
             allow_public_signup: true,
+            sparql_write_enabled: true,
+            cors: CorsPolicy::Permissive,
+            setup_token_hash: None,
         }
     }
 }
@@ -163,7 +199,7 @@ impl Default for ServerConfig {
 impl ServerConfig {
     pub fn from_env() -> Self {
         let defaults = Self::default();
-        Self {
+        let mut config = Self {
             request_timeout: std::env::var("SBOL_DB_REQUEST_TIMEOUT_SECS")
                 .ok()
                 .and_then(|s| s.parse::<u64>().ok())
@@ -210,8 +246,132 @@ impl ServerConfig {
                 .ok()
                 .map(|v| parse_bool(&v))
                 .unwrap_or(defaults.allow_public_signup),
+            sparql_write_enabled: std::env::var("SBOL_DB_SPARQL_WRITE_ENABLED")
+                .ok()
+                .map(|v| parse_bool(&v))
+                .unwrap_or(defaults.sparql_write_enabled),
+            cors: CorsPolicy::Permissive,
+            setup_token_hash: setup_token_hash_from_env(),
+        };
+        if let Ok(origins) = std::env::var("SBOL_DB_CORS_ALLOWED_ORIGINS") {
+            match parse_cors_origins(&origins) {
+                Ok(origins) => config.cors = CorsPolicy::AllowList(origins),
+                Err(error) => {
+                    tracing::error!(%error, "ignoring invalid development CORS allowlist")
+                }
+            }
         }
+        config
     }
+
+    /// Load environment configuration with production-safe defaults and reject
+    /// security downgrades instead of silently accepting them.
+    pub fn from_env_for(profile: ServerProfile) -> Result<Self, ServerConfigError> {
+        if profile == ServerProfile::Development {
+            return Ok(Self::from_env());
+        }
+
+        let mut config = Self::from_env();
+        if std::env::var("SBOL_DB_SESSION_COOKIE_SECURE")
+            .ok()
+            .is_some_and(|value| !parse_bool(&value))
+        {
+            return Err(ServerConfigError::Invalid(
+                "SBOL_DB_SESSION_COOKIE_SECURE cannot be disabled in production".to_owned(),
+            ));
+        }
+        if std::env::var("SBOL_DB_ADMIN_API_AUTH_REQUIRED")
+            .ok()
+            .is_some_and(|value| !parse_bool(&value))
+        {
+            return Err(ServerConfigError::Invalid(
+                "SBOL_DB_ADMIN_API_AUTH_REQUIRED cannot be disabled in production".to_owned(),
+            ));
+        }
+        config.session_cookie_secure = true;
+        config.admin_api_auth_required = true;
+        if std::env::var_os("SBOL_DB_ALLOW_PUBLIC_SIGNUP").is_none() {
+            config.allow_public_signup = false;
+        }
+        config.sparql_write_enabled = std::env::var("SBOL_DB_SPARQL_WRITE_ENABLED")
+            .ok()
+            .map(|value| parse_bool(&value))
+            .unwrap_or(false);
+        if config.sparql_write_enabled
+            && (config.sparql_auth_disabled
+                || config.sparql_auth_password == "dba"
+                || config.sparql_auth_password.len() < 16)
+        {
+            return Err(ServerConfigError::Invalid(
+                "production SPARQL writes require authentication and SBOL_DB_SPARQL_AUTH_PASSWORD with at least 16 characters and not the default `dba`"
+                    .to_owned(),
+            ));
+        }
+        config.cors = match std::env::var("SBOL_DB_CORS_ALLOWED_ORIGINS") {
+            Ok(origins) => CorsPolicy::AllowList(parse_cors_origins(&origins)?),
+            Err(std::env::VarError::NotPresent) => CorsPolicy::SameOrigin,
+            Err(error) => {
+                return Err(ServerConfigError::Invalid(format!(
+                    "reading SBOL_DB_CORS_ALLOWED_ORIGINS: {error}"
+                )))
+            }
+        };
+        if let Ok(token) = std::env::var("SBOL_DB_SETUP_TOKEN") {
+            if token.len() < 32 {
+                return Err(ServerConfigError::Invalid(
+                    "SBOL_DB_SETUP_TOKEN must contain at least 32 characters in production"
+                        .to_owned(),
+                ));
+            }
+        }
+        Ok(config)
+    }
+}
+
+fn setup_token_hash_from_env() -> Option<[u8; 32]> {
+    use sha3::{Digest, Sha3_256};
+
+    std::env::var("SBOL_DB_SETUP_TOKEN").ok().map(|token| {
+        let digest = Sha3_256::digest(token.as_bytes());
+        digest.into()
+    })
+}
+
+fn parse_cors_origins(value: &str) -> Result<Vec<HeaderValue>, ServerConfigError> {
+    let mut origins = Vec::new();
+    for raw in value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let url = url::Url::parse(raw).map_err(|error| {
+            ServerConfigError::Invalid(format!("invalid CORS origin `{raw}`: {error}"))
+        })?;
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(ServerConfigError::Invalid(format!(
+                "CORS allowlist entry `{raw}` must be an HTTP(S) origin without credentials, path, query, or fragment"
+            )));
+        }
+        let origin = url.origin().ascii_serialization();
+        origins.push(HeaderValue::from_str(&origin).map_err(|error| {
+            ServerConfigError::Invalid(format!("invalid CORS origin `{raw}`: {error}"))
+        })?);
+    }
+    if origins.is_empty() {
+        return Err(ServerConfigError::Invalid(
+            "SBOL_DB_CORS_ALLOWED_ORIGINS must contain at least one HTTP(S) origin".to_owned(),
+        ));
+    }
+    origins.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    origins.dedup();
+    Ok(origins)
 }
 
 fn parse_bool(s: &str) -> bool {
@@ -298,10 +458,17 @@ const SQL_UNSUPPORTED: &str =
      key-value backend";
 
 pub fn router(state: AppState, config: ServerConfig) -> Router {
-    let api = Router::new()
-        .route("/healthz", get(routes::healthz))
-        .route("/readyz", get(routes::readyz))
-        .route("/metrics", get(metrics::metrics_handler))
+    application_router(state, config, true)
+}
+
+/// Public application surface used by the production server. Operational
+/// probes and Prometheus metrics are intentionally absent.
+pub fn public_router(state: AppState, config: ServerConfig) -> Router {
+    application_router(state, config, false)
+}
+
+fn application_router(state: AppState, config: ServerConfig, include_operations: bool) -> Router {
+    let mut api = Router::new()
         .route("/docs", get(docs::docs_html))
         .route("/openapi.json", get(docs::openapi_json))
         .route("/synbiohub/openapi.json", get(docs::synbiohub_openapi_json))
@@ -340,8 +507,11 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         // The idiomatic V2 REST surface, a second presentation of the same
         // facade under a versioned prefix. It carries its own bearer-token
         // identity layer and inherits the metrics/body-limit/timeout layers.
-        .nest("/api/v2", v2::router(state.clone()))
-        .route_layer(axum::middleware::from_fn(metrics::track_metrics));
+        .nest("/api/v2", v2::router(state.clone()));
+    if include_operations {
+        api = api.merge(operations_routes());
+    }
+    api = api.route_layer(axum::middleware::from_fn(metrics::track_metrics));
 
     // SynBioHub/Virtuoso-compatible write surface, behind HTTP Basic auth.
     // Registered on both the bare and trailing-slash paths because SynBioHub
@@ -364,6 +534,12 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
         .route_layer(axum::middleware::from_fn(
             metrics::track_virtuoso_compatibility_usage,
         ));
+    let authed = if config.sparql_write_enabled {
+        authed
+    } else {
+        tracing::info!("legacy SPARQL write endpoints disabled");
+        Router::new()
+    };
 
     // The SynBioHub V1 auth surface (`/login`, `/register`, `/profile`, …),
     // behind the `X-authorization` middleware. It is independent of the
@@ -382,21 +558,67 @@ pub fn router(state: AppState, config: ServerConfig) -> Router {
     // built-in 2 MiB default; `RequestBodyLimitLayer` is the hard
     // cap that rejects oversize bodies with 413 before they're
     // streamed into memory.
-    app.layer(DefaultBodyLimit::max(config.max_body_bytes))
+    let app = app
+        .layer(DefaultBodyLimit::max(config.max_body_bytes))
         .layer(RequestBodyLimitLayer::new(config.max_body_bytes))
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,
             config.request_timeout,
+        ));
+    apply_cors(app, &config.cors)
+}
+
+/// Loopback operations surface for local health agents and Prometheus scrapers.
+pub fn operations_router(state: AppState, config: ServerConfig) -> Router {
+    operations_routes()
+        .route_layer(axum::middleware::from_fn(metrics::track_metrics))
+        .fallback(not_found_handler)
+        .with_state(state)
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            config.request_timeout,
         ))
-        // Permissive CORS so a browser SPA (e.g. the SynBioHub frontend, which
-        // calls this V1 API cross-origin) can drive the API, matching classic
-        // SynBioHub's `app.use(cors())`.
-        .layer(
-            tower_http::cors::CorsLayer::new()
-                .allow_origin(tower_http::cors::Any)
-                .allow_methods(tower_http::cors::Any)
-                .allow_headers(tower_http::cors::Any),
-        )
+}
+
+fn operations_routes() -> Router<AppState> {
+    Router::new()
+        .route("/healthz", get(routes::healthz))
+        .route("/readyz", get(routes::readyz))
+        .route("/metrics", get(metrics::metrics_handler))
+}
+
+fn apply_cors(router: Router, policy: &CorsPolicy) -> Router {
+    use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+    use axum::http::HeaderName;
+    use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+
+    match policy {
+        CorsPolicy::SameOrigin => router,
+        CorsPolicy::Permissive => router.layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        ),
+        CorsPolicy::AllowList(origins) => router.layer(
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::list(origins.iter().cloned()))
+                .allow_methods([
+                    Method::GET,
+                    Method::POST,
+                    Method::PUT,
+                    Method::PATCH,
+                    Method::DELETE,
+                    Method::OPTIONS,
+                ])
+                .allow_headers([
+                    ACCEPT,
+                    AUTHORIZATION,
+                    CONTENT_TYPE,
+                    HeaderName::from_static("x-authorization"),
+                ]),
+        ),
+    }
 }
 
 /// The network-internal SBOLExplorer wire-compatibility surface. It shares the
@@ -519,4 +741,37 @@ fn mount_portal(router: Router, config: &ServerConfig) -> Router {
 #[cfg(not(feature = "lab"))]
 fn mount_portal(router: Router, _config: &ServerConfig) -> Router {
     router
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn cors_origins_are_normalized_and_deduplicated() {
+        let origins = parse_cors_origins(
+            "https://portal.example/, http://localhost:3000, https://portal.example",
+        )
+        .expect("valid origins");
+        let values = origins
+            .iter()
+            .map(|origin| origin.to_str().expect("header value"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            vec!["http://localhost:3000", "https://portal.example"]
+        );
+    }
+
+    #[test]
+    fn cors_entries_must_be_origins_not_urls() {
+        for invalid in [
+            "https://portal.example/path",
+            "https://user@portal.example",
+            "file:///tmp/portal",
+            "",
+        ] {
+            assert!(parse_cors_origins(invalid).is_err(), "accepted {invalid}");
+        }
+    }
 }

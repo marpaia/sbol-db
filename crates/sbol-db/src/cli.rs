@@ -78,6 +78,14 @@ pub struct ServerArgs {
     #[arg(long, env = "SBOL_DB_BIND", default_value = "127.0.0.1:8888")]
     pub bind: SocketAddr,
 
+    /// Loopback listener for health, readiness, and Prometheus metrics.
+    #[arg(
+        long,
+        env = "SBOL_DB_OPERATIONS_BIND",
+        default_value = "127.0.0.1:9090"
+    )]
+    pub operations_bind: SocketAddr,
+
     /// Optional network-internal SBOLExplorer-compatible listener. The listener
     /// shares this server process's application state and search index;
     /// deployments conventionally bind it to `0.0.0.0:13162`.

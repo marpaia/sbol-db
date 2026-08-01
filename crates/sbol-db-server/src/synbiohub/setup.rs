@@ -15,10 +15,15 @@ use axum::Json;
 use sbol_db_app::Registration;
 use serde::Deserialize;
 use serde_json::json;
+use sha3::{Digest, Sha3_256};
+use tokio::sync::Mutex;
 
 use super::auth::parse_body;
 use crate::error::ApiError;
 use crate::AppState;
+
+const SETUP_TOKEN_HEADER: &str = "x-sbol-db-setup-token";
+static SETUP_LOCK: Mutex<()> = Mutex::const_new(());
 
 /// Whether the instance still needs first-launch setup: it has no administrator.
 /// Read by [`super::admin`]'s theme endpoint as `firstLaunch`. Deriving this from
@@ -48,6 +53,9 @@ struct SetupBody {
     affiliation: Option<String>,
     user_password: Option<String>,
     user_password_confirm: Option<String>,
+    /// One-time bootstrap token accepted in the body for setup UIs that cannot
+    /// set a custom header. It is never persisted.
+    setup_token: Option<String>,
 }
 
 fn plain(status: StatusCode, message: &str) -> Response {
@@ -71,10 +79,17 @@ pub async fn post_setup(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    if !is_first_launch(&state).await? {
-        return Ok(plain(StatusCode::FORBIDDEN, "SBOL DB is already set up"));
-    }
     let form: SetupBody = parse_body(&headers, &body)?;
+    let presented_token = headers
+        .get(SETUP_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .or(form.setup_token.as_deref());
+    if !valid_setup_token(state.config.setup_token_hash.as_ref(), presented_token) {
+        return Ok(plain(
+            StatusCode::UNAUTHORIZED,
+            "a valid first-launch setup token is required",
+        ));
+    }
 
     let username = form
         .user_name
@@ -98,7 +113,39 @@ pub async fn post_setup(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| username.clone());
 
-    // The first account is the administrator.
+    // The production data-directory lock guarantees one server process, and
+    // this mutex serializes concurrent requests inside it. Re-checking after the
+    // lock closes the two-request race that could otherwise create two admins.
+    let _setup_guard = SETUP_LOCK.lock().await;
+    if !is_first_launch(&state).await? {
+        return Ok(plain(StatusCode::FORBIDDEN, "SBOL DB is already set up"));
+    }
+
+    // Persist policy first. If this succeeds but account creation fails, the
+    // instance remains first-launch and a corrected request can retry. The
+    // inverse ordering could strand an administrator with missing policy.
+    let color = form
+        .color
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| crate::instance::SBOL_DB_ACCENT_COLOR.to_owned());
+    let theme = json!({
+        "instanceName": form.instance_name.filter(|s| !s.is_empty()).unwrap_or_else(|| crate::instance::DEFAULT_INSTANCE_NAME.to_owned()),
+        "instanceUrl": form.instance_url.unwrap_or_default(),
+        "uriPrefix": form.uri_prefix.filter(|s| !s.is_empty()).unwrap_or_else(|| crate::instance::DEFAULT_URI_PREFIX.to_owned()),
+        "frontPageText": form.front_page_text.unwrap_or_default(),
+        "themeParameters": [{ "name": "Base Color", "variable": "baseColor", "value": color }],
+        "altHome": form.alt_home.unwrap_or_default(),
+        "allowPublicSignup": form.allow_public_signup.unwrap_or(state.config.allow_public_signup),
+        "requireLogin": form.require_login.unwrap_or(false),
+    });
+    state
+        .app
+        .config
+        .set(crate::instance::THEME_KEY, &theme)
+        .await?;
+
+    // The first account is the administrator. Once this succeeds,
+    // `setup_required` becomes false and the setup token can no longer be used.
     state
         .app
         .auth
@@ -114,27 +161,37 @@ pub async fn post_setup(
         })
         .await?;
 
-    // Persist the branding/policy the theme endpoint serves. Creating the
-    // administrator above already flips `firstLaunch` to false.
-    let color = form
-        .color
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| crate::instance::SBOL_DB_ACCENT_COLOR.to_owned());
-    let theme = json!({
-        "instanceName": form.instance_name.filter(|s| !s.is_empty()).unwrap_or_else(|| crate::instance::DEFAULT_INSTANCE_NAME.to_owned()),
-        "instanceUrl": form.instance_url.unwrap_or_default(),
-        "uriPrefix": form.uri_prefix.filter(|s| !s.is_empty()).unwrap_or_else(|| crate::instance::DEFAULT_URI_PREFIX.to_owned()),
-        "frontPageText": form.front_page_text.unwrap_or_default(),
-        "themeParameters": [{ "name": "Base Color", "variable": "baseColor", "value": color }],
-        "altHome": form.alt_home.unwrap_or_default(),
-        "allowPublicSignup": form.allow_public_signup.unwrap_or(true),
-        "requireLogin": form.require_login.unwrap_or(false),
-    });
-    state
-        .app
-        .config
-        .set(crate::instance::THEME_KEY, &theme)
-        .await?;
-
     Ok(plain(StatusCode::OK, "SBOL DB configured"))
+}
+
+fn valid_setup_token(expected: Option<&[u8; 32]>, presented: Option<&str>) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    let Some(presented) = presented else {
+        return false;
+    };
+    let actual: [u8; 32] = Sha3_256::digest(presented.as_bytes()).into();
+    let mut difference = 0u8;
+    for (left, right) in actual.iter().zip(expected.iter()) {
+        difference |= left ^ right;
+    }
+    difference == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setup_token_hash_comparison_is_exact() {
+        let expected: [u8; 32] = Sha3_256::digest(b"correct horse battery staple token").into();
+        assert!(valid_setup_token(
+            Some(&expected),
+            Some("correct horse battery staple token")
+        ));
+        assert!(!valid_setup_token(Some(&expected), Some("wrong")));
+        assert!(!valid_setup_token(Some(&expected), None));
+        assert!(valid_setup_token(None, None));
+    }
 }

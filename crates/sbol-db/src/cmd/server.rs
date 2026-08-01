@@ -5,13 +5,15 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use sbol_db_app::{AppServices, FsBlobStore, LegacyExplorerStrategy};
 use sbol_db_backend::Backend;
 use sbol_db_jobs::{default_registry, SearchIndexHandles, Worker, WorkerConfig};
 use sbol_db_search::VectorIndexMaintainerRegistry;
 use sbol_db_search_sdk::IndexMutationSource;
-use sbol_db_server::{explorer_router, router, AppState, Metrics};
+use sbol_db_server::{
+    explorer_router, operations_router, public_router, AppState, Metrics, ServerProfile,
+};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{ConfigStore, JobQueue, SbolStore};
 use tokio_util::sync::CancellationToken;
@@ -26,6 +28,7 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> 
         data_dir: _,
         blob_root: _,
         bind,
+        operations_bind,
         explorer_bind,
         no_worker,
         worker_concurrency,
@@ -33,6 +36,13 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> 
         worker_id,
         search_config,
     } = args;
+    let production = runtime.profile() == crate::cli::RuntimeProfile::Production;
+    if production && !operations_bind.ip().is_loopback() {
+        bail!(
+            "production --operations-bind must use a loopback address; \
+             run the local telemetry collector on the same server"
+        );
+    }
     let database_url = runtime.database_url().to_owned();
     let engine = Arc::new(SparqlEngine::new(backend.triple_source.clone()));
 
@@ -66,7 +76,11 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> 
         None => metrics,
     };
 
-    let config = sbol_db_server::ServerConfig::from_env();
+    let config = sbol_db_server::ServerConfig::from_env_for(if production {
+        ServerProfile::Production
+    } else {
+        ServerProfile::Development
+    })?;
     let sparql_update = Arc::new(SparqlUpdateEngine::new(
         backend.triple_source.clone(),
         backend.triple_writer.clone(),
@@ -100,6 +114,12 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> 
             profile = ?runtime.profile(),
             blob_root = %runtime.blob_root().display(),
             "server runtime configured"
+        );
+    }
+    if production && !app_services.auth.any_admin().await? && config.setup_token_hash.is_none() {
+        bail!(
+            "a fresh production instance requires SBOL_DB_SETUP_TOKEN with at least 32 characters; \
+             provide it for first-launch setup, then remove it after creating the administrator"
         );
     }
 
@@ -178,23 +198,39 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> 
         #[cfg(feature = "lab")]
         schema_cache: Arc::new(sbol_db_server::SchemaCache::new()),
     };
-    let app = router(state.clone(), config.clone());
-    let explorer_app = explorer_bind.map(|_| explorer_router(state, config));
+    let app = public_router(state.clone(), config.clone());
+    let operations_app = operations_router(state.clone(), config.clone());
+    let explorer_app = explorer_bind.map(|_| explorer_router(state, config.clone()));
 
     let cancel = CancellationToken::new();
-    let listener = tokio::net::TcpListener::bind(bind).await?;
+    let listener = tokio::net::TcpListener::bind(bind)
+        .await
+        .with_context(|| format!("bind public listener at {bind}"))?;
+    let bind = listener
+        .local_addr()
+        .context("read public listener address")?;
+    let operations_listener = tokio::net::TcpListener::bind(operations_bind)
+        .await
+        .with_context(|| format!("bind operations listener at {operations_bind}"))?;
+    let operations_bind = operations_listener
+        .local_addr()
+        .context("read operations listener address")?;
     let explorer_listener = match explorer_bind {
-        Some(explorer_bind) => Some((
-            explorer_bind,
-            tokio::net::TcpListener::bind(explorer_bind)
+        Some(explorer_bind) => {
+            let listener = tokio::net::TcpListener::bind(explorer_bind)
                 .await
-                .with_context(|| format!("bind SBOLExplorer listener at {explorer_bind}"))?,
-        )),
+                .with_context(|| format!("bind SBOLExplorer listener at {explorer_bind}"))?;
+            let explorer_bind = listener
+                .local_addr()
+                .context("read SBOLExplorer listener address")?;
+            Some((explorer_bind, listener))
+        }
         None => None,
     };
     let worker_handle = worker_setup.map(|setup| setup.spawn(cancel.clone()));
-    tracing::info!(%bind, worker = worker_handle.is_some(), "sbol-db serving");
+    tracing::info!(%bind, %operations_bind, worker = worker_handle.is_some(), "sbol-db serving");
     println!("sbol-db listening on http://{bind}");
+    println!("sbol-db operations listening on http://{operations_bind}");
     if let Some((explorer_bind, _)) = explorer_listener.as_ref() {
         tracing::info!(%explorer_bind, "SBOLExplorer compatibility listener serving");
         println!("sbol-db Explorer compatibility listening on http://{explorer_bind}");
@@ -204,6 +240,12 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> 
     let mut main_server = tokio::spawn(async move {
         axum::serve(listener, app)
             .with_graceful_shutdown(main_cancel.cancelled_owned())
+            .await
+    });
+    let operations_cancel = cancel.clone();
+    let mut operations_server = tokio::spawn(async move {
+        axum::serve(operations_listener, operations_app)
+            .with_graceful_shutdown(operations_cancel.cancelled_owned())
             .await
     });
     let mut explorer_server = match (explorer_listener, explorer_app) {
@@ -221,6 +263,7 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> 
     enum FirstExit {
         Signal,
         Main(std::result::Result<std::io::Result<()>, tokio::task::JoinError>),
+        Operations(std::result::Result<std::io::Result<()>, tokio::task::JoinError>),
         Explorer(std::result::Result<std::io::Result<()>, tokio::task::JoinError>),
     }
 
@@ -228,23 +271,30 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> 
         tokio::select! {
             _ = shutdown_signal() => FirstExit::Signal,
             result = &mut main_server => FirstExit::Main(result),
+            result = &mut operations_server => FirstExit::Operations(result),
             result = explorer => FirstExit::Explorer(result),
         }
     } else {
         tokio::select! {
             _ = shutdown_signal() => FirstExit::Signal,
             result = &mut main_server => FirstExit::Main(result),
+            result = &mut operations_server => FirstExit::Operations(result),
         }
     };
     cancel.cancel();
 
     let mut main_completed = false;
+    let mut operations_completed = false;
     let mut explorer_completed = false;
     match first_exit {
         FirstExit::Signal => {}
         FirstExit::Main(result) => {
             main_completed = true;
             result.context("main HTTP listener task")??;
+        }
+        FirstExit::Operations(result) => {
+            operations_completed = true;
+            result.context("operations HTTP listener task")??;
         }
         FirstExit::Explorer(result) => {
             explorer_completed = true;
@@ -253,6 +303,11 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, args: ServerArgs) -> 
     }
     if !main_completed {
         main_server.await.context("main HTTP listener task")??;
+    }
+    if !operations_completed {
+        operations_server
+            .await
+            .context("operations HTTP listener task")??;
     }
     if !explorer_completed {
         if let Some(explorer) = explorer_server {
