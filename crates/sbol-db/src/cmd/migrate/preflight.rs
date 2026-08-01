@@ -417,17 +417,15 @@ pub(crate) async fn inspect(inputs: PreflightInputs) -> Result<PreflightReport> 
         _ => (None, RdfFacts::default()),
     };
 
-    let reconciliation =
-        if rdf_report.is_some() && sqlite_report.is_some() && uploads_report.is_some() {
-            Some(reconcile(
-                &account_facts,
-                &rdf_facts,
-                uploads_report.as_ref().expect("checked above"),
-                &mut issues,
-            ))
-        } else {
-            None
-        };
+    let reconciliation = match (&rdf_report, &sqlite_report, &uploads_report) {
+        (Some(_), Some(_), Some(uploads_report)) => Some(reconcile(
+            &account_facts,
+            &rdf_facts,
+            uploads_report,
+            &mut issues,
+        )),
+        _ => None,
+    };
 
     // Artifact hashes are intentionally computed after semantic inspection so
     // a concurrently changing source is likely to be noticed in the manifest.
