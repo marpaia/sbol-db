@@ -7,10 +7,13 @@
 
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ChevronDown, ChevronUp, Filter, Search } from "lucide-react";
+import { Boxes, ChevronDown, ChevronUp, Filter, Search } from "lucide-react";
 
+import { AdminPage } from "@/components/admin/AdminPage";
 import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
+import { ProductEmptyState } from "@/components/product/ProductEmptyState";
+import { Button } from "@/components/ui/button";
 import { useObjectsList } from "@/hooks/useObjects";
 import type { SbolObjectRecord } from "@/lib/api";
 import { adminPath } from "@/lib/routes";
@@ -95,95 +98,90 @@ export default function ObjectsRoute() {
   ];
 
   return (
-    <div className="h-full w-full overflow-y-auto">
-      <div className="mx-auto max-w-6xl space-y-6 px-8 py-10">
-        <header className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Objects</h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Every typed SBOL object in the database. Filter by class or role,
-              or use the bulk lookup tool to resolve many IRIs at once.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => navigate(adminPath("/objects/lookup"))}
-            className="inline-flex items-center gap-1.5 rounded-md border bg-background px-3 py-1.5 text-sm font-medium transition-colors hover:bg-accent/40"
-          >
-            <Search size={14} />
-            Bulk lookup
-          </button>
-        </header>
+    <AdminPage
+      title="Objects"
+      description="Every typed SBOL object in the data model. Filter by class, role, or named graph, or resolve many IRIs at once."
+      eyebrow="Data model"
+      action={
+        <Button
+          variant="outline"
+          size="sm"
+          type="button"
+          onClick={() => navigate(adminPath("/objects/lookup"))}
+        >
+          <Search />
+          Bulk lookup
+        </Button>
+      }
+    >
+      <Filters
+        classFilter={classFilter}
+        roleFilter={roleFilter}
+        graphFilter={graphFilter}
+        onChange={updateFilter}
+      />
 
-        <Filters
-          classFilter={classFilter}
-          roleFilter={roleFilter}
-          graphFilter={graphFilter}
-          onChange={updateFilter}
+      {error ? (
+        <ErrorBanner
+          title="Couldn't list objects"
+          body={(error as Error).message}
         />
-
-        {error ? (
-          <ErrorBanner
-            title="Couldn't list objects"
-            body={(error as Error).message}
-          />
-        ) : isLoading && !data ? (
-          <TableSkeleton />
-        ) : !data || data.objects.length === 0 ? (
-          <Empty hasFilters={!!(classFilter || roleFilter || graphFilter)} />
-        ) : (
-          <>
-            <div className="text-xs text-muted-foreground">
-              Page{" "}
-              <span className="tabular-nums text-foreground">{page + 1}</span>
-              {" · "}
-              <span className="tabular-nums text-foreground">
-                {data.objects.length.toLocaleString()}
-              </span>{" "}
-              objects
-              {!data.next_cursor && " · end of corpus"}
+      ) : isLoading && !data ? (
+        <TableSkeleton />
+      ) : !data || data.objects.length === 0 ? (
+        <Empty hasFilters={!!(classFilter || roleFilter || graphFilter)} />
+      ) : (
+        <>
+          <div className="text-xs text-muted-foreground">
+            Page{" "}
+            <span className="tabular-nums text-foreground">{page + 1}</span>
+            {" · "}
+            <span className="tabular-nums text-foreground">
+              {data.objects.length.toLocaleString()}
+            </span>{" "}
+            objects
+            {!data.next_cursor && " · end of corpus"}
+          </div>
+          <div className="overflow-hidden rounded-lg border bg-card">
+            <DataTable
+              columns={columns}
+              rows={data.objects}
+              rowKey={(o) => o.id}
+              filterable
+              onRowClick={(o) =>
+                navigate(adminPath(`/objects/${encodeURIComponent(o.iri)}`))
+              }
+            />
+          </div>
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <div className="text-muted-foreground">
+              Keyset paginated. Sort is server-side (lexicographic IRI).
             </div>
-            <div className="overflow-hidden rounded-lg border bg-card">
-              <DataTable
-                columns={columns}
-                rows={data.objects}
-                rowKey={(o) => o.id}
-                filterable
-                onRowClick={(o) =>
-                  navigate(adminPath(`/objects/${encodeURIComponent(o.iri)}`))
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCursors((prev) => prev.slice(0, -1))}
+                disabled={page === 0}
+                className="rounded-md border px-2.5 py-1 font-medium transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  data.next_cursor &&
+                  setCursors((prev) => [...prev, data.next_cursor!])
                 }
-              />
+                disabled={!data.next_cursor}
+                className="rounded-md border px-2.5 py-1 font-medium transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next
+              </button>
             </div>
-            <div className="flex items-center justify-between gap-2 text-xs">
-              <div className="text-muted-foreground">
-                Keyset paginated. Sort is server-side (lexicographic IRI).
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setCursors((prev) => prev.slice(0, -1))}
-                  disabled={page === 0}
-                  className="rounded-md border px-2.5 py-1 font-medium transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Previous
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    data.next_cursor &&
-                    setCursors((prev) => [...prev, data.next_cursor!])
-                  }
-                  disabled={!data.next_cursor}
-                  className="rounded-md border px-2.5 py-1 font-medium transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
+          </div>
+        </>
+      )}
+    </AdminPage>
   );
 }
 
@@ -277,18 +275,20 @@ function FilterField({
 
 function Empty({ hasFilters }: { hasFilters: boolean }) {
   return (
-    <div className="rounded-lg border bg-card px-6 py-10 text-center">
-      <p className="text-sm text-foreground">
-        {hasFilters
-          ? "No objects match the current filters."
-          : "No objects in the database yet."}
-      </p>
-      <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
-        {hasFilters
+    <ProductEmptyState
+      density="compact"
+      icon={Boxes}
+      title={
+        hasFilters
+          ? "No objects match the current filters"
+          : "No objects in the database yet"
+      }
+      description={
+        hasFilters
           ? "Try clearing one of the filter fields."
-          : "Import a document to populate the corpus."}
-      </p>
-    </div>
+          : "Import a document to populate the corpus."
+      }
+    />
   );
 }
 

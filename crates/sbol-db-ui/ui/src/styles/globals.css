@@ -43,6 +43,9 @@
     --ring: 178 60% 36%;
 
     --radius: 0.5rem;
+    --radius-surface: 0.75rem;
+    --radius-feature: 1rem;
+    --motion-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 
     /* SBOL Visual category hues. Bound to top-level nav groups. */
     --sbol-promoter: 28 80% 50%;

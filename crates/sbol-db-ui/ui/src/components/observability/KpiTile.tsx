@@ -4,6 +4,8 @@
  * loading state that shows an em-dash placeholder.
  */
 
+import type { LucideIcon } from "lucide-react";
+
 import { cn } from "@/lib/utils";
 
 interface KpiTileProps {
@@ -13,6 +15,8 @@ interface KpiTileProps {
   hint?: string;
   loading?: boolean;
   tone?: "default" | "warn" | "error" | "ok";
+  icon?: LucideIcon;
+  className?: string;
 }
 
 export function KpiTile({
@@ -22,6 +26,8 @@ export function KpiTile({
   hint,
   loading,
   tone = "default",
+  icon: Icon,
+  className,
 }: KpiTileProps) {
   const formatted =
     loading || value === undefined || value === null
@@ -31,9 +37,10 @@ export function KpiTile({
         : value;
 
   return (
-    <div className="rounded-lg border bg-card p-4">
-      <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-        {label}
+    <div className={cn("rounded-lg border bg-card p-4", className)}>
+      <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        {Icon && <Icon className="size-3.5 text-primary" aria-hidden="true" />}
+        <span>{label}</span>
       </div>
       <div className="mt-2 flex items-baseline gap-1.5">
         <span
