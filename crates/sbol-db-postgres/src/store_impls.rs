@@ -23,7 +23,8 @@ use sbol_db_storage::{
     NewJob, ObjectStore, OldestQueuedAge, OntologyLoadReport, OntologyRecord, OntologyStore,
     OntologyTermRecord, PatternObject, PatternSubject, QueueDepthRow, SbolJob, SbolStore,
     SequenceMatch, SequenceSearchOptions, SequenceSearchStore, TextSearchQuery, TextSearchStore,
-    TripleChange, TripleSource, TripleWriter, UpdateOutcome, SBH_CAN_VIEW, SBH_OWNED_BY,
+    TripleChange, TripleScanPage, TripleSource, TripleWriter, UpdateOutcome, SBH_CAN_VIEW,
+    SBH_OWNED_BY,
 };
 use serde_json::Value;
 use tokio::runtime::Handle;
@@ -53,6 +54,29 @@ impl PostgresTripleSource {
 }
 
 impl TripleSource for PostgresTripleSource {
+    fn scan_all_page(
+        &self,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<TripleScanPage, DomainError> {
+        let after_id = after
+            .map(str::parse::<i64>)
+            .transpose()
+            .map_err(|_| DomainError::InvalidInput("invalid Postgres triple cursor".to_owned()))?
+            .unwrap_or(0);
+        let rows = Handle::current().block_on(
+            self.triples
+                .scan_all_page(after_id, i64::try_from(limit).unwrap_or(i64::MAX)),
+        )?;
+        let next_cursor = (rows.len() == limit)
+            .then(|| rows.last().map(|(id, _)| id.to_string()))
+            .flatten();
+        Ok(TripleScanPage {
+            items: rows.into_iter().map(|(_, triple)| triple).collect(),
+            next_cursor,
+        })
+    }
+
     fn scan_pattern(
         &self,
         subject: Option<&PatternSubject>,
@@ -451,6 +475,15 @@ impl SbolStore for SbolObjectService {
 
     async fn graph_store_read(&self, graph: &str) -> Result<Vec<Triple>, DomainError> {
         self.graph_store_read(graph).await
+    }
+
+    async fn graph_store_read_page(
+        &self,
+        graph: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<TripleScanPage, DomainError> {
+        self.graph_store_read_page(graph, after, limit).await
     }
 
     async fn triples_for_subject(&self, subject_iri: &str) -> Result<Vec<Triple>, DomainError> {

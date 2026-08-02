@@ -1,36 +1,29 @@
 import { cn } from "@/lib/utils";
 
 /**
- * Square brand mark: a stylized DNA double helix on a teal backplate.
- * Mirrors the favicon so the in-app mark and the browser-tab mark
- * read as the same identity.
+ * The official SBOL Visual 3.0 promoter glyph, used as the compact product
+ * mark at sizes where a complete cassette would lose legibility.
  */
 export function BrandMark({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground",
+        "flex aspect-square size-8 items-center justify-center text-foreground",
         className
       )}
       aria-hidden="true"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 32 32"
+        viewBox="0 0 45 45"
         fill="none"
-        stroke="currentColor"
-        strokeWidth={2.2}
+        strokeWidth={3}
         strokeLinecap="round"
         strokeLinejoin="round"
-        className="size-5"
+        className="size-[78%] stroke-sbol-promoter"
       >
-        {/* Two interlocking strands running left to right */}
-        <path d="M5 9c5 0 6 14 11 14s6-14 11-14" />
-        <path d="M5 23c5 0 6-14 11-14s6 14 11 14" />
-        {/* Base-pair rungs */}
-        <path d="M8 11v10" />
-        <path d="M24 11v10" />
-        <path d="M16 13v6" />
+        <path d="m 29.000111,5.2464081 8.5,7.4999999 -8.5,7.3333" />
+        <path d="m 7.5001114,39.746408 0,-27 28.9999996,0" />
       </svg>
     </div>
   );

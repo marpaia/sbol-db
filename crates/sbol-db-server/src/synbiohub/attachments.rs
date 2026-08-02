@@ -50,7 +50,7 @@ pub async fn user_attach(
     Path(object): Path<UserObject>,
     multipart: Multipart,
 ) -> Result<Response, ApiError> {
-    attach(state, user, user_uri(&object), multipart).await
+    attach(state.clone(), user, user_uri(&state, &object), multipart).await
 }
 
 pub async fn public_attach(
@@ -59,7 +59,7 @@ pub async fn public_attach(
     Path(object): Path<PublicObject>,
     multipart: Multipart,
 ) -> Result<Response, ApiError> {
-    attach(state, user, public_uri(&object), multipart).await
+    attach(state.clone(), user, public_uri(&state, &object), multipart).await
 }
 
 /// Read the multipart file part and attach it to `target_uri`.
@@ -154,7 +154,14 @@ pub async fn user_attach_url(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    attach_url(state, user, user_uri(&object), &headers, &body).await
+    attach_url(
+        state.clone(),
+        user,
+        user_uri(&state, &object),
+        &headers,
+        &body,
+    )
+    .await
 }
 
 pub async fn public_attach_url(
@@ -164,7 +171,14 @@ pub async fn public_attach_url(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    attach_url(state, user, public_uri(&object), &headers, &body).await
+    attach_url(
+        state.clone(),
+        user,
+        public_uri(&state, &object),
+        &headers,
+        &body,
+    )
+    .await
 }
 
 /// Record an external URL as an attachment on `target_uri`.
@@ -233,7 +247,7 @@ pub async fn user_download(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(object): Path<UserObject>,
 ) -> Result<Response, ApiError> {
-    download(state, user, user_uri(&object)).await
+    download(state.clone(), user, user_uri(&state, &object)).await
 }
 
 pub async fn public_download(
@@ -241,7 +255,7 @@ pub async fn public_download(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(object): Path<PublicObject>,
 ) -> Result<Response, ApiError> {
-    download(state, user, public_uri(&object)).await
+    download(state.clone(), user, public_uri(&state, &object)).await
 }
 
 /// Resolve the attachment at `uri` under the caller's scope, read its content
@@ -249,7 +263,8 @@ pub async fn public_download(
 /// `/download`: a missing attachment or blob is a `404`.
 async fn download(state: AppState, user: Option<User>, uri: String) -> Result<Response, ApiError> {
     let scope = scope_for(&state, &user).await?;
-    let downloader = Downloader::new(state.app.sparql.clone());
+    let downloader = Downloader::new(state.app.sparql.clone())
+        .with_database_prefix(state.app.registry_namespace.database_prefix());
     let triples = downloader.fetch_recursive(&uri, scope).await?;
     let attachment =
         read_attachment(&triples, &uri).ok_or_else(|| ApiError::NotFound(uri.clone()))?;

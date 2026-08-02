@@ -8,7 +8,6 @@
 pub mod complete_backup;
 pub mod import_document;
 pub mod import_remote_document;
-pub mod import_synbiohub_collection;
 pub mod rebuild_search_index;
 pub mod rebuild_vector_index;
 pub mod update_vector_index;
@@ -19,9 +18,6 @@ pub use complete_backup::{
 };
 pub use import_document::{ImportDocumentHandler, ImportDocumentPayload};
 pub use import_remote_document::{ImportRemoteDocumentHandler, ImportRemoteDocumentPayload};
-pub use import_synbiohub_collection::{
-    ImportSynBioHubCollectionHandler, ImportSynBioHubCollectionPayload,
-};
 pub use rebuild_search_index::RebuildSearchIndexHandler;
 pub use rebuild_vector_index::RebuildVectorIndexHandler;
 pub use update_vector_index::{

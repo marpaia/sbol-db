@@ -118,6 +118,7 @@ fn is_page_path(path: &str) -> bool {
         "/sparql",
         "/change-password",
         "/connect",
+        "/about",
         "/reset-password",
     ]
     .contains(&path)
@@ -308,6 +309,7 @@ mod tests {
             "/search/objectType=ComponentDefinition",
             "/sequence-search",
             "/connect",
+            "/about",
             "/advanced-search",
             "/collections/featured",
             "/workspace/shared",

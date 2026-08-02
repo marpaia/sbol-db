@@ -12,7 +12,7 @@ use rocksdb::WriteBatch;
 use sbol_db_core::{DomainError, IriString, Triple};
 use sbol_db_storage::{
     GraphFilter, IdGraphFilter, IdQuad, PatternObject, PatternSubject, TermId as StorageTermId,
-    TermKey, TermValue,
+    TermKey, TermValue, TripleScanPage,
 };
 
 use crate::codec::{Term, TermId};
@@ -106,6 +106,40 @@ impl TripleRepository {
             let id2term = self.db.cf("id2term");
             for (id, term) in &terms[..count] {
                 batch.put_cf(&id2term, id, term.encode());
+            }
+            for index in Self::indexes_for(&quad) {
+                batch.put_cf(&self.db.cf(index.cf), quad.key(*index), []);
+            }
+            inserted += 1;
+        }
+        Ok(inserted)
+    }
+
+    /// Stage triples from a trusted, set-valued backend export without the
+    /// get-before-put membership probe used by interactive writes. Replaying a
+    /// page is safe because every dictionary/index key is content-derived and
+    /// a repeated RocksDB put replaces the identical value. This is the
+    /// bounded production-copy primitive; it avoids tens of millions of point
+    /// reads while retaining exact set semantics.
+    pub(crate) fn stage_bulk_insert(
+        &self,
+        batch: &mut WriteBatch,
+        triples: &[Triple],
+    ) -> Result<usize, DomainError> {
+        let mut seen = HashSet::with_capacity(triples.len());
+        let mut seen_terms = HashSet::with_capacity(triples.len());
+        let mut inserted = 0;
+        for triple in triples {
+            let (terms, quad, count) = Self::decompose(triple);
+            let primary_key = quad.key(Self::primary(&quad));
+            if !seen.insert(primary_key) {
+                continue;
+            }
+            let id2term = self.db.cf("id2term");
+            for (id, term) in &terms[..count] {
+                if seen_terms.insert(*id) {
+                    batch.put_cf(&id2term, id, term.encode());
+                }
             }
             for index in Self::indexes_for(&quad) {
                 batch.put_cf(&self.db.cf(index.cf), quad.key(*index), []);
@@ -252,6 +286,47 @@ impl TripleRepository {
         })
         .await
         .map_err(join_err)?
+    }
+
+    /// Stable keyset page over one named graph. The opaque cursor is the hex
+    /// encoding of the last GSPO index key returned.
+    pub fn scan_graph_page(
+        &self,
+        graph: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<TripleScanPage, DomainError> {
+        if limit == 0 {
+            return Err(DomainError::InvalidInput(
+                "graph page limit must be greater than zero".to_owned(),
+            ));
+        }
+        let gid = Term::named(graph).id();
+        let after_key = after
+            .map(hex::decode)
+            .transpose()
+            .map_err(|_| DomainError::InvalidInput("invalid RocksDB graph cursor".to_owned()))?;
+        if after_key
+            .as_ref()
+            .is_some_and(|key| key.len() != 64 || !key.starts_with(&gid))
+        {
+            return Err(DomainError::InvalidInput(
+                "RocksDB graph cursor does not belong to this graph".to_owned(),
+            ));
+        }
+        let mut items = Vec::with_capacity(limit);
+        let mut last_key = None;
+        self.db
+            .for_each_prefix_after(GSPO.cf, &gid, after_key.as_deref(), |key, _| {
+                let quad = keys::decode_key(GSPO, key);
+                items.push(self.materialize(&quad)?);
+                last_key = Some(key.to_vec());
+                Ok(items.len() < limit)
+            })?;
+        let next_cursor = (items.len() == limit)
+            .then(|| last_key.as_deref().map(hex::encode))
+            .flatten();
+        Ok(TripleScanPage { items, next_cursor })
     }
 
     pub fn distinct_named_graphs_blocking(&self) -> Result<Vec<String>, DomainError> {

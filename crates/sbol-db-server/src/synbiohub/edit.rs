@@ -19,9 +19,6 @@ use serde::Deserialize;
 use super::CurrentUser;
 use crate::{ApiError, AppState};
 
-/// The instance base IRI classic SynBioHub mints objects under.
-const BASE: &str = "http://synbiohub.org/";
-
 const DCTERMS_TITLE: &str = "http://purl.org/dc/terms/title";
 const DCTERMS_DESCRIPTION: &str = "http://purl.org/dc/terms/description";
 const SBOL2_ROLE: &str = "http://sbols.org/v2#role";
@@ -147,17 +144,24 @@ pub struct PublicFieldPath {
     pub field: String,
 }
 
-fn user_field_uri(p: &UserFieldPath) -> String {
+fn user_field_uri(state: &AppState, p: &UserFieldPath) -> String {
     format!(
-        "{BASE}user/{}/{}/{}/{}",
-        p.user_id, p.collection_id, p.display_id, p.version
+        "{}user/{}/{}/{}/{}",
+        state.app.registry_namespace.database_prefix(),
+        p.user_id,
+        p.collection_id,
+        p.display_id,
+        p.version
     )
 }
 
-fn public_field_uri(p: &PublicFieldPath) -> String {
+fn public_field_uri(state: &AppState, p: &PublicFieldPath) -> String {
     format!(
-        "{BASE}public/{}/{}/{}",
-        p.collection_id, p.display_id, p.version
+        "{}public/{}/{}/{}",
+        state.app.registry_namespace.database_prefix(),
+        p.collection_id,
+        p.display_id,
+        p.version
     )
 }
 
@@ -177,9 +181,9 @@ pub async fn user_edit_field(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     run_field(
-        state,
+        state.clone(),
         user,
-        user_field_uri(&p),
+        user_field_uri(&state, &p),
         &p.field,
         Verb::Edit,
         &headers,
@@ -196,9 +200,9 @@ pub async fn user_add_field(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     run_field(
-        state,
+        state.clone(),
         user,
-        user_field_uri(&p),
+        user_field_uri(&state, &p),
         &p.field,
         Verb::Add,
         &headers,
@@ -215,9 +219,9 @@ pub async fn user_remove_field(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     run_field(
-        state,
+        state.clone(),
         user,
-        user_field_uri(&p),
+        user_field_uri(&state, &p),
         &p.field,
         Verb::Remove,
         &headers,
@@ -234,9 +238,9 @@ pub async fn public_edit_field(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     run_field(
-        state,
+        state.clone(),
         user,
-        public_field_uri(&p),
+        public_field_uri(&state, &p),
         &p.field,
         Verb::Edit,
         &headers,
@@ -253,9 +257,9 @@ pub async fn public_add_field(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     run_field(
-        state,
+        state.clone(),
         user,
-        public_field_uri(&p),
+        public_field_uri(&state, &p),
         &p.field,
         Verb::Add,
         &headers,
@@ -272,9 +276,9 @@ pub async fn public_remove_field(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     run_field(
-        state,
+        state.clone(),
         user,
-        public_field_uri(&p),
+        public_field_uri(&state, &p),
         &p.field,
         Verb::Remove,
         &headers,
@@ -415,8 +419,12 @@ pub async fn user_add_to_collection(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     let object = format!(
-        "{BASE}user/{}/{}/{}/{}",
-        p.user_id, p.collection_id, p.display_id, p.version
+        "{}user/{}/{}/{}/{}",
+        state.app.registry_namespace.database_prefix(),
+        p.user_id,
+        p.collection_id,
+        p.display_id,
+        p.version
     );
     add_to_collections(state, user, object, &headers, &body).await
 }
@@ -429,8 +437,12 @@ pub async fn user_remove_membership(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     let collection = format!(
-        "{BASE}user/{}/{}/{}/{}",
-        p.user_id, p.collection_id, p.display_id, p.version
+        "{}user/{}/{}/{}/{}",
+        state.app.registry_namespace.database_prefix(),
+        p.user_id,
+        p.collection_id,
+        p.display_id,
+        p.version
     );
     membership(state, user, collection, false, &headers, &body).await
 }
@@ -443,8 +455,11 @@ pub async fn public_add_to_collection(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     let object = format!(
-        "{BASE}public/{}/{}/{}",
-        p.collection_id, p.display_id, p.version
+        "{}public/{}/{}/{}",
+        state.app.registry_namespace.database_prefix(),
+        p.collection_id,
+        p.display_id,
+        p.version
     );
     add_to_collections(state, user, object, &headers, &body).await
 }
@@ -457,8 +472,11 @@ pub async fn public_remove_membership(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     let collection = format!(
-        "{BASE}public/{}/{}/{}",
-        p.collection_id, p.display_id, p.version
+        "{}public/{}/{}/{}",
+        state.app.registry_namespace.database_prefix(),
+        p.collection_id,
+        p.display_id,
+        p.version
     );
     membership(state, user, collection, false, &headers, &body).await
 }
@@ -477,7 +495,7 @@ async fn membership(
     debug_assert!(!add, "addToCollection is served by add_to_collections");
     let user = require_user(user)?;
     let form = parse_body::<MemberForm>(headers, body)?;
-    let member = normalize_member(required(form.member, "member")?);
+    let member = normalize_member(&state, required(form.member, "member")?);
     service(&state)
         .remove_membership(&user.graph_uri, user.is_admin, &collection, &member)
         .await?;
@@ -504,7 +522,7 @@ async fn add_to_collections(
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            let target = normalize_member(target.to_owned());
+            let target = normalize_member(&state, target.to_owned());
             svc.add_to_collection(&user.graph_uri, user.is_admin, &target, &object)
                 .await?;
         }
@@ -514,11 +532,12 @@ async fn add_to_collections(
 
 /// Expand a member reference to an absolute URI, mirroring classic's rewrite of
 /// a leading `/public/` or `/user/` path onto the database prefix.
-fn normalize_member(member: String) -> String {
+fn normalize_member(state: &AppState, member: String) -> String {
+    let base = state.app.registry_namespace.database_prefix();
     if let Some(rest) = member.strip_prefix("/public/") {
-        format!("{BASE}public/{rest}")
+        format!("{base}public/{rest}")
     } else if let Some(rest) = member.strip_prefix("/user/") {
-        format!("{BASE}user/{rest}")
+        format!("{base}user/{rest}")
     } else {
         member
     }

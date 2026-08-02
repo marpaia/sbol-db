@@ -24,7 +24,7 @@ use tantivy::schema::{
     STORED, STRING,
 };
 use tantivy::tokenizer::{LowerCaser, RegexTokenizer, TextAnalyzer};
-use tantivy::{DocId, Index, IndexReader, ReloadPolicy, Score, SegmentReader, Term};
+use tantivy::{DocId, Index, IndexReader, Order, ReloadPolicy, Score, SegmentReader, Term};
 
 /// The rdf:type IRI whose presence divides a hit's score by 10.
 const SEQUENCE_TYPE: &str = "http://sbols.org/v2#Sequence";
@@ -47,34 +47,23 @@ const WRITER_HEAP_BYTES: usize = 50_000_000;
 /// such as `col_igem_sbol2_151015212923` into several broad OR terms.
 const SBOL_EXPLORER_TOKENIZER: &str = "sbol_explorer_standard";
 const SBOL_EXPLORER_TOKEN_PATTERN: &str = r"[\p{L}\p{N}_]+";
+const PAGERANK_FIELD: &str = "pagerank";
 
-/// A cluster map from a subject to its cluster mates (the other members of its
-/// cluster). The search combine step reads it to apply the divide-by-2
-/// duplicate penalty; [`cluster_map`] builds it from persisted assignments.
-pub type ClusterMap = HashMap<String, Vec<String>>;
+/// A cluster map from a subject to its cluster id. The search combine step
+/// remembers which ids have already appeared and applies the divide-by-2
+/// duplicate penalty to later members. Keeping the compact assignment instead
+/// of expanding every subject to all of its mates preserves the ranking while
+/// making a production-scale cold cache linear in the number of sequences.
+pub type ClusterMap = HashMap<String, crate::cluster::ClusterId>;
 
 /// Build the [`ClusterMap`] from persisted `(subject, cluster)` assignments,
-/// mapping each subject to the other members of its cluster.
-///
-/// This is SBOLExplorer's `uclust2clusters` transform: it groups assignments by
-/// cluster id, then maps every member to the set of its cluster mates (itself
-/// excluded). A singleton cluster maps its sole member to an empty list, which
-/// the penalty treats as no duplicates.
+/// mapping each subject to its cluster id. This is the compact equivalent of
+/// SBOLExplorer's `uclust2clusters` transform: the first ranked member of an id
+/// remains whole and every later member is a duplicate.
 pub fn cluster_map(
     assignments: impl IntoIterator<Item = (String, crate::cluster::ClusterId)>,
 ) -> ClusterMap {
-    let mut by_cluster: HashMap<crate::cluster::ClusterId, Vec<String>> = HashMap::new();
-    for (subject, cluster) in assignments {
-        by_cluster.entry(cluster).or_default().push(subject);
-    }
-    let mut map = ClusterMap::new();
-    for members in by_cluster.values() {
-        for member in members {
-            let mates: Vec<String> = members.iter().filter(|m| *m != member).cloned().collect();
-            map.insert(member.clone(), mates);
-        }
-    }
-    map
+    assignments.into_iter().collect()
 }
 
 /// The graphs a search is authorized to read. The facade maps its
@@ -188,7 +177,7 @@ fn build_schema() -> (Schema, Fields) {
     let version = builder.add_text_field("version", text.clone());
     let type_field = builder.add_text_field("type", text);
     let keywords = builder.add_text_field("keywords", text_unstored);
-    let pagerank = builder.add_f64_field("pagerank", FAST | STORED);
+    let pagerank = builder.add_f64_field(PAGERANK_FIELD, FAST | STORED);
     let schema = builder.build();
     let fields = Fields {
         subject,
@@ -232,6 +221,14 @@ impl RankedTextIndex {
             reader,
             fields,
         })
+    }
+
+    /// Number of committed documents currently visible to this reader.
+    ///
+    /// Servers use this at startup to distinguish an already-populated durable
+    /// index from a new/empty directory before scheduling expensive maintenance.
+    pub fn num_docs(&self) -> u64 {
+        self.reader.searcher().num_docs()
     }
 
     /// Replace every document in the index with `parts` in a single writer
@@ -282,31 +279,120 @@ impl RankedTextIndex {
         graphs: &GraphFilter,
         clusters: &ClusterMap,
     ) -> tantivy::Result<Vec<Hit>> {
-        let searcher = self.reader.searcher();
+        let empty_query = self.tokenize(query).is_empty();
         let text_query = self.text_query(query);
         let scoped_query = self.apply_graph_filter(text_query, graphs);
 
-        let fetch = (offset + limit).max(FETCH_CAP);
-        let collector =
-            TopDocs::with_limit(fetch).tweak_score(move |segment_reader: &SegmentReader| {
-                let pagerank_reader = segment_reader
-                    .fast_fields()
-                    .f64("pagerank")
-                    .expect("pagerank fast field present");
-                move |doc: DocId, original_score: Score| {
-                    let rank = pagerank_reader.first(doc).unwrap_or(1.0);
-                    f64::from(original_score) * (rank + 1.0).ln()
-                }
-            });
-        let scored: Vec<(f64, tantivy::DocAddress)> = searcher.search(&scoped_query, &collector)?;
+        let desired = offset.saturating_add(limit);
+        let fetch = desired.max(FETCH_CAP);
+        let hits =
+            self.collect_hits(scoped_query.as_ref(), empty_query, fetch, desired, clusters)?;
+        Ok(hits.into_iter().skip(offset).take(limit).collect())
+    }
+
+    /// Exact number of documents matching `query` inside `graphs`, without
+    /// loading stored documents or constructing a top-K scorer.
+    pub fn count(&self, query: &str, graphs: &GraphFilter) -> tantivy::Result<usize> {
+        let searcher = self.reader.searcher();
+        let text_query = self.text_query(query);
+        let scoped_query = self.apply_graph_filter(text_query, graphs);
+        searcher.search(scoped_query.as_ref(), &Count)
+    }
+
+    /// Rank and page one exact rdf:type without first materializing every
+    /// document in a million-object graph. The token conjunction is only a
+    /// candidate filter; stored type IRIs are checked byte-for-byte before the
+    /// exact total and page are returned.
+    pub fn search_by_type(
+        &self,
+        query: &str,
+        object_type: &str,
+        offset: usize,
+        limit: usize,
+        graphs: &GraphFilter,
+        clusters: &ClusterMap,
+    ) -> tantivy::Result<(Vec<Hit>, usize)> {
+        let empty_query = self.tokenize(query).is_empty();
+        let text_query = self.text_query(query);
+        let Some(type_query) = self.type_candidate_query(object_type) else {
+            return Ok((Vec::new(), 0));
+        };
+        let combined: Box<dyn Query> = Box::new(BooleanQuery::new(vec![
+            (Occur::Must, text_query),
+            (Occur::Must, type_query),
+        ]));
+        let scoped_query = self.apply_graph_filter(combined, graphs);
+        let searcher = self.reader.searcher();
+        let candidates = searcher.search(scoped_query.as_ref(), &Count)?;
+        if candidates == 0 {
+            return Ok((Vec::new(), 0));
+        }
+        let hits = self.collect_hits(
+            scoped_query.as_ref(),
+            empty_query,
+            candidates,
+            candidates,
+            clusters,
+        )?;
+        let filtered: Vec<Hit> = hits
+            .into_iter()
+            .filter(|hit| hit.type_iris.iter().any(|value| value == object_type))
+            .collect();
+        let total = filtered.len();
+        Ok((
+            filtered.into_iter().skip(offset).take(limit).collect(),
+            total,
+        ))
+    }
+
+    fn collect_hits(
+        &self,
+        scoped_query: &dyn Query,
+        empty_query: bool,
+        fetch: usize,
+        desired: usize,
+        clusters: &ClusterMap,
+    ) -> tantivy::Result<Vec<Hit>> {
+        if fetch == 0 || desired == 0 {
+            return Ok(Vec::new());
+        }
+        let searcher = self.reader.searcher();
+        let scored: Vec<(f64, tantivy::DocAddress)> = if empty_query {
+            // For a term-less search the BM25 score is the AllQuery constant,
+            // so `bm25 * ln(pagerank + 1)` is ordered exactly by PageRank.
+            // Let Tantivy's specialized fast-field collector keep the top-K;
+            // the generic score tweaker is dramatically slower on million-doc
+            // indexes because it constructs a scorer for every match.
+            let collector =
+                TopDocs::with_limit(fetch).order_by_fast_field::<f64>(PAGERANK_FIELD, Order::Desc);
+            searcher
+                .search(scoped_query, &collector)?
+                .into_iter()
+                .map(|(pagerank, address)| ((pagerank + 1.0).ln(), address))
+                .collect()
+        } else {
+            let collector =
+                TopDocs::with_limit(fetch).tweak_score(move |segment_reader: &SegmentReader| {
+                    let pagerank_reader = segment_reader
+                        .fast_fields()
+                        .f64(PAGERANK_FIELD)
+                        .expect("pagerank fast field present");
+                    move |doc: DocId, original_score: Score| {
+                        let rank = pagerank_reader.first(doc).unwrap_or(1.0);
+                        f64::from(original_score) * (rank + 1.0).ln()
+                    }
+                });
+            searcher.search(scoped_query, &collector)?
+        };
 
         // Penalties are applied in candidate-score order (SBOLExplorer's ES
         // order): a subject whose cluster mate already ranked ahead of it is
         // halved, so a non-centroid cluster member is demoted. An empty cluster
         // map leaves every hit whole.
-        let mut hits = Vec::with_capacity(scored.len());
-        let mut expanded: HashSet<String> = HashSet::new();
-        for (base_score, address) in scored {
+        let desired = desired.min(scored.len());
+        let mut hits = Vec::with_capacity(desired);
+        let mut seen_clusters = HashSet::new();
+        for (candidate_index, (base_score, address)) in scored.iter().copied().enumerate() {
             let doc: TantivyDocument = searcher.doc(address)?;
             let subject = self
                 .stored_string(&doc, self.fields.subject)
@@ -317,10 +403,10 @@ impl RankedTextIndex {
                 .collect();
 
             let mut score = base_score;
-            if expanded.contains(&subject) {
-                score /= 2.0;
-            } else if let Some(duplicates) = clusters.get(&subject) {
-                expanded.extend(duplicates.iter().cloned());
+            if let Some(cluster_id) = clusters.get(&subject) {
+                if !seen_clusters.insert(*cluster_id) {
+                    score /= 2.0;
+                }
             }
             if types.iter().any(|t| t == SEQUENCE_TYPE) {
                 score /= 10.0;
@@ -336,15 +422,27 @@ impl RankedTextIndex {
                 type_iris: types,
                 score,
             });
+
+            // Penalties only lower a candidate's base score. Once the current
+            // window's lowest final score is strictly above the next unseen
+            // base score, no remaining candidate can enter the requested
+            // window. This avoids decoding SBOLExplorer's entire 10k candidate
+            // pool for the common first page while preserving the exact order.
+            let check_boundary = hits.len() == desired
+                || hits.len().saturating_sub(desired) % 64 == 0
+                || candidate_index + 1 == scored.len();
+            if hits.len() >= desired && check_boundary {
+                hits.sort_by(compare_hits);
+                let next_base = scored.get(candidate_index + 1).map(|(score, _)| *score);
+                if next_base.is_none_or(|next| hits[desired - 1].score > next) {
+                    break;
+                }
+            }
         }
 
-        hits.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.subject.cmp(&b.subject))
-        });
-        Ok(hits.into_iter().skip(offset).take(limit).collect())
+        hits.sort_by(compare_hits);
+        hits.truncate(desired);
+        Ok(hits)
     }
 
     /// Return the complete ranked match set under the graph ceiling.
@@ -390,6 +488,23 @@ impl RankedTextIndex {
             }
         }
         Box::new(BooleanQuery::new(clauses))
+    }
+
+    /// Narrow a stored rdf:type IRI using every analyzer token. The caller
+    /// still checks the stored original string, so token collisions can add
+    /// work but can never add a false result.
+    fn type_candidate_query(&self, object_type: &str) -> Option<Box<dyn Query>> {
+        let clauses: Vec<(Occur, Box<dyn Query>)> = self
+            .tokenize(object_type)
+            .into_iter()
+            .map(|token| {
+                let term = Term::from_field_text(self.fields.type_field, &token);
+                let query: Box<dyn Query> =
+                    Box::new(TermQuery::new(term, IndexRecordOption::Basic));
+                (Occur::Must, query)
+            })
+            .collect();
+        (!clauses.is_empty()).then(|| Box::new(BooleanQuery::new(clauses)) as Box<dyn Query>)
     }
 
     /// Constrain a query to the authorized graphs. `Any` passes through;
@@ -446,6 +561,14 @@ fn register_tokenizer(index: &Index) -> tantivy::Result<()> {
         .tokenizers()
         .register(SBOL_EXPLORER_TOKENIZER, analyzer);
     Ok(())
+}
+
+fn compare_hits(left: &Hit, right: &Hit) -> std::cmp::Ordering {
+    right
+        .score
+        .partial_cmp(&left.score)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| left.subject.cmp(&right.subject))
 }
 
 #[cfg(test)]
@@ -567,7 +690,47 @@ mod tests {
     }
 
     #[test]
-    fn cluster_map_groups_members_into_mates() {
+    fn bounded_window_keeps_candidate_promoted_by_sequence_penalty() {
+        let mut high_sequence = part("http://example.org/seq", "part", "same", 99.0);
+        high_sequence.type_iris = vec![SEQUENCE_TYPE.to_owned()];
+        let non_sequence = part("http://example.org/component", "part", "same", 4.0);
+        let tail = part("http://example.org/tail", "part", "same", 1.0);
+        let index = index_with(vec![high_sequence, non_sequence, tail]);
+
+        let hits = index
+            .search("part", 0, 1, &GraphFilter::Any, &ClusterMap::new())
+            .expect("search");
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].subject, "http://example.org/component");
+    }
+
+    #[test]
+    fn bounded_window_keeps_candidate_promoted_by_cluster_penalty() {
+        use crate::cluster::ClusterId;
+
+        let first = part("http://example.org/first", "part", "same", 99.0);
+        let duplicate = part("http://example.org/duplicate", "part", "same", 80.0);
+        let independent = part("http://example.org/independent", "part", "same", 70.0);
+        let index = index_with(vec![first, duplicate, independent]);
+        let clusters = cluster_map(vec![
+            ("http://example.org/first".to_owned(), ClusterId(0)),
+            ("http://example.org/duplicate".to_owned(), ClusterId(0)),
+        ]);
+
+        let hits = index
+            .search("part", 0, 2, &GraphFilter::Any, &clusters)
+            .expect("search");
+        let subjects: Vec<&str> = hits.iter().map(|hit| hit.subject.as_str()).collect();
+
+        assert_eq!(
+            subjects,
+            vec!["http://example.org/first", "http://example.org/independent"]
+        );
+    }
+
+    #[test]
+    fn cluster_map_keeps_compact_assignments() {
         use crate::cluster::ClusterId;
         let map = cluster_map(vec![
             ("a".to_owned(), ClusterId(0)),
@@ -575,10 +738,10 @@ mod tests {
             ("c".to_owned(), ClusterId(0)),
             ("d".to_owned(), ClusterId(1)),
         ]);
-        let mut a_mates = map["a"].clone();
-        a_mates.sort();
-        assert_eq!(a_mates, vec!["b".to_owned(), "c".to_owned()]);
-        assert!(map["d"].is_empty(), "a singleton has no mates");
+        assert_eq!(map["a"], ClusterId(0));
+        assert_eq!(map["b"], ClusterId(0));
+        assert_eq!(map["c"], ClusterId(0));
+        assert_eq!(map["d"], ClusterId(1));
     }
 
     #[test]
@@ -619,5 +782,56 @@ mod tests {
             .expect("search");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].subject, "http://example.org/a");
+    }
+
+    #[test]
+    fn count_is_exact_and_respects_graph_scope() {
+        let mut a = part("http://example.org/a", "promoter", "text", 1.0);
+        a.graph = "http://synbiohub.org/graphA".to_owned();
+        let mut b = part("http://example.org/b", "promoter", "text", 1.0);
+        b.graph = "http://synbiohub.org/graphB".to_owned();
+        let index = index_with(vec![a, b]);
+
+        assert_eq!(index.num_docs(), 2);
+        assert_eq!(
+            index
+                .count(
+                    "promoter",
+                    &GraphFilter::Only(vec!["http://synbiohub.org/graphA".to_owned()]),
+                )
+                .expect("count"),
+            1
+        );
+        assert_eq!(
+            index.count("promoter", &GraphFilter::Any).expect("count"),
+            2
+        );
+    }
+
+    #[test]
+    fn type_search_exactly_filters_and_pages() {
+        let wanted_type = "http://sbols.org/v2#ComponentDefinition";
+        let mut first = part("http://example.org/first", "promoter", "text", 5.0);
+        let mut second = part("http://example.org/second", "promoter", "text", 3.0);
+        let mut other = part("http://example.org/other", "promoter", "text", 10.0);
+        other.type_iris = vec!["http://sbols.org/v2#Component".to_owned()];
+        first.type_iris = vec![wanted_type.to_owned()];
+        second.type_iris = vec![wanted_type.to_owned()];
+        let index = index_with(vec![first, second, other]);
+
+        let (hits, total) = index
+            .search_by_type(
+                "promoter",
+                wanted_type,
+                1,
+                1,
+                &GraphFilter::Any,
+                &ClusterMap::new(),
+            )
+            .expect("typed search");
+
+        assert_eq!(total, 2);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].subject, "http://example.org/second");
     }
 }

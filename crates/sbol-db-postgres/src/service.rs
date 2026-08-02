@@ -9,7 +9,7 @@ use crate::repo::{
 };
 use crate::PgPool;
 
-use sbol_db_storage::{GraphWriteMode, ImportInput, ImportOverwrite};
+use sbol_db_storage::{GraphWriteMode, ImportInput, ImportOverwrite, TripleScanPage};
 
 pub struct SbolObjectService {
     pool: PgPool,
@@ -220,6 +220,30 @@ impl SbolObjectService {
         self.triples
             .triples_for_graph(Some(graph), GRAPH_READ_LIMIT)
             .await
+    }
+
+    pub async fn graph_store_read_page(
+        &self,
+        graph: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<TripleScanPage, DomainError> {
+        let after_id = after
+            .map(str::parse::<i64>)
+            .transpose()
+            .map_err(|_| DomainError::InvalidInput("invalid Postgres graph cursor".to_owned()))?
+            .unwrap_or(0);
+        let rows = self
+            .triples
+            .scan_graph_page(graph, after_id, i64::try_from(limit).unwrap_or(i64::MAX))
+            .await?;
+        let next_cursor = (rows.len() == limit)
+            .then(|| rows.last().map(|(id, _)| id.to_string()))
+            .flatten();
+        Ok(TripleScanPage {
+            items: rows.into_iter().map(|(_, triple)| triple).collect(),
+            next_cursor,
+        })
     }
 
     async fn import_into_conn(

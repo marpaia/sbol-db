@@ -10,8 +10,8 @@
 //! v1-compatibility API), and `/api/v2/openapi.json` (the native V2 API). The
 //! multi-document `sources` configuration is driven through the explicit
 //! `createApiReference` call; the attribute-based auto-mount does not honor it.
-//! Both reference pages use the same small product shell and map Scalar's
-//! supported theme variables onto the SBOL DB light and dark palettes.
+//! Both reference pages use the same Design Ledger product shell and map
+//! Scalar's supported theme variables onto the SBOL DB light and dark palettes.
 
 use axum::http::header::CONTENT_TYPE;
 use axum::response::IntoResponse;
@@ -66,12 +66,9 @@ fn docs_header(subtitle: &str) -> String {
         r#"<header class="sbol-docs-header">
       <a class="sbol-docs-brand" href="/" aria-label="Back to SBOL DB">
         <span class="sbol-docs-mark" aria-hidden="true">
-          <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M5 9c5 0 6 14 11 14s6-14 11-14" />
-            <path d="M5 23c5 0 6-14 11-14s6 14 11 14" />
-            <path d="M8 11v10" />
-            <path d="M24 11v10" />
-            <path d="M16 13v6" />
+          <svg viewBox="0 0 45 45" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m 29.000111,5.2464081 8.5,7.4999999 -8.5,7.3333" />
+            <path d="m 7.5001114,39.746408 0,-27 28.9999996,0" />
           </svg>
         </span>
         <span class="sbol-docs-title-group">
@@ -103,13 +100,13 @@ pub(crate) fn render_scalar_docs_page(
     <title>{title}</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#218380" />
+    <meta name="theme-color" content="#17695e" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <style>
 {SCALAR_THEME_CSS}
     </style>
   </head>
-  <body>
+  <body data-sbol-docs-shell>
     <script>{INITIAL_THEME_SCRIPT}
     </script>
     {header}

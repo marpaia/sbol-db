@@ -70,7 +70,8 @@ pub async fn user_add_owner(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    add_owner(state, user, user_uri(&object), &headers, &body).await
+    let uri = user_uri(&state, &object);
+    add_owner(state, user, uri, &headers, &body).await
 }
 
 pub async fn public_add_owner(
@@ -80,7 +81,8 @@ pub async fn public_add_owner(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    add_owner(state, user, public_uri(&object), &headers, &body).await
+    let uri = public_uri(&state, &object);
+    add_owner(state, user, uri, &headers, &body).await
 }
 
 pub async fn user_remove_owner(
@@ -89,8 +91,12 @@ pub async fn user_remove_owner(
     Path(p): Path<UserRemoveOwnerPath>,
 ) -> Result<Response, ApiError> {
     let uri = format!(
-        "http://synbiohub.org/user/{}/{}/{}/{}",
-        p.user_id, p.collection_id, p.display_id, p.version
+        "{}user/{}/{}/{}/{}",
+        state.app.registry_namespace.database_prefix(),
+        p.user_id,
+        p.collection_id,
+        p.display_id,
+        p.version
     );
     remove_owner(state, user, uri, &p.username).await
 }
@@ -101,8 +107,11 @@ pub async fn public_remove_owner(
     Path(p): Path<PublicRemoveOwnerPath>,
 ) -> Result<Response, ApiError> {
     let uri = format!(
-        "http://synbiohub.org/public/{}/{}/{}",
-        p.collection_id, p.display_id, p.version
+        "{}public/{}/{}/{}",
+        state.app.registry_namespace.database_prefix(),
+        p.collection_id,
+        p.display_id,
+        p.version
     );
     remove_owner(state, user, uri, &p.username).await
 }

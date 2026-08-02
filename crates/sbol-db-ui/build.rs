@@ -25,6 +25,11 @@ fn main() {
     std::fs::create_dir_all(&dist_dir).expect("create OUT_DIR/ui-dist");
 
     println!("cargo:rerun-if-env-changed=SBOL_DB_SKIP_UI_BUILD");
+    // A prior build may have emitted the empty fallback because npm was not
+    // visible (for example inside cargo-chef), then be reused later in a shell
+    // where Node is installed. PATH is an input to `which npm`, so track it and
+    // rebuild the embedded assets when tool availability changes.
+    println!("cargo:rerun-if-env-changed=PATH");
     emit_rerun_directives(&ui_dir);
 
     // The ui/ source isn't always present (cargo-chef cook stubs only the
@@ -63,16 +68,31 @@ fn main() {
         );
     }
 
-    // `vite build --outDir <abs path>` writes directly into OUT_DIR so
-    // build artifacts never pollute the source tree. `--emptyOutDir`
-    // is required because the outDir is outside of the project root.
+    // Do not append Vite flags to `npm run build`: that script is a shell chain
+    // (`tsc && vite && bundle:check`), so npm appends them to the final command
+    // rather than to Vite and silently leaves OUT_DIR empty. Run each phase
+    // explicitly so the embedded bundle is always written where rust-embed
+    // reads it and never pollutes the source tree.
     run(
         Command::new(&npm)
-            .args(["run", "build", "--", "--outDir"])
+            .args(["exec", "--", "tsc", "-b"])
+            .current_dir(&ui_dir),
+        "tsc -b",
+    );
+    run(
+        Command::new(&npm)
+            .args(["exec", "--", "vite", "build", "--outDir"])
             .arg(&dist_dir)
             .arg("--emptyOutDir")
             .current_dir(&ui_dir),
         "vite build",
+    );
+    run(
+        Command::new(&npm)
+            .args(["run", "bundle:check", "--"])
+            .arg(&dist_dir)
+            .current_dir(&ui_dir),
+        "bundle check",
     );
 }
 

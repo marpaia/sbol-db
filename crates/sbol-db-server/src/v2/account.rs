@@ -5,7 +5,7 @@
 //! no password hash, reset token, API token, or administrator configuration.
 
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::header::{CACHE_CONTROL, PRAGMA};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -73,6 +73,15 @@ struct PasswordChange {
 struct SharedObjectsResponse {
     items: Vec<sbol_db_app::ObjectDetails>,
     total: usize,
+    offset: usize,
+    limit: usize,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct SharedPaging {
+    offset: Option<usize>,
+    limit: Option<usize>,
 }
 
 /// `GET /api/v2/account` — the authenticated caller's safe account profile.
@@ -135,12 +144,23 @@ pub(super) async fn change_password(
 pub(super) async fn shared(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    Query(paging): Query<SharedPaging>,
 ) -> Result<Response, V2Error> {
     let user = require_user(&identity)?;
-    let items = state.app.shared_object_details(&user.graph_uri).await?;
-    let total = items.len();
+    let offset = paging.offset.unwrap_or(0);
+    let limit = paging.limit.unwrap_or(24).clamp(1, 100);
+    let (items, total) = state
+        .app
+        .shared_object_details_page(&user.graph_uri, offset, limit)
+        .await?;
     Ok(no_store(
-        Json(SharedObjectsResponse { items, total }).into_response(),
+        Json(SharedObjectsResponse {
+            items,
+            total,
+            offset,
+            limit,
+        })
+        .into_response(),
     ))
 }
 

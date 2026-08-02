@@ -27,9 +27,9 @@ sbol-db-core.workspace = true
 sbol-db-storage.workspace = true
 sbol-db-rdf.workspace = true
 sbol-db-postgres.workspace = true
+sbol-db-rocksdb.workspace = true
 sbol-db-backend.workspace = true
 sbol-db-backup.workspace = true
-sbol-db-rocksdb.workspace = true
 sbol-db-app.workspace = true
 sbol-db-search.workspace = true
 sbol-db-search-sdk.workspace = true
@@ -47,11 +47,16 @@ sbol-rdf.workspace = true
 sqlx = { workspace = true, features = ["sqlite"] }
 oxrdf.workspace = true
 oxrdfio.workspace = true
+oxiri.workspace = true
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+hex.workspace = true
+flate2.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
@@ -60,18 +65,15 @@ axum-server.workspace = true
 async-trait.workspace = true
 fs2.workspace = true
 futures.workspace = true
-hex.workspace = true
 metrics.workspace = true
 pem.workspace = true
 rustls-acme.workspace = true
-sha2.workspace = true
 url.workspace = true
 x509-parser.workspace = true
+tempfile = "3"
 
 [dev-dependencies]
 age.workspace = true
 assert_cmd.workspace = true
 rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
 reqwest.workspace = true
-tempfile = "3"
-sha1.workspace = true

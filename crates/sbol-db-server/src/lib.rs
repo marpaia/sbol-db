@@ -35,6 +35,7 @@ pub use serialize::{
     Serialized,
 };
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -165,6 +166,10 @@ pub struct ServerConfig {
     /// routes. Defaults to classic's `synbiohub_change_me`; a migrated instance
     /// sets `SBOL_DB_PASSWORD_SALT` to its original `passwordSalt`.
     pub password_salt: String,
+    /// Salt used by classic share-link hashes. Production classic deployments
+    /// may configure this independently as `shareLinkSalt`; preserving it keeps
+    /// already-issued private-object share URLs valid after cutover.
+    pub share_link_salt: String,
     /// Whether `POST /register` accepts self-service account creation. When
     /// false the route returns `403`, matching classic's `allowPublicSignup`.
     pub allow_public_signup: bool,
@@ -185,6 +190,16 @@ pub struct ServerConfig {
     /// Production-appliance configuration and health control plane. It is absent
     /// for development and non-managed deployments.
     pub edge_admin: Option<Arc<EdgeAdminService>>,
+    /// Optional runtime overrides for the registry's persistent RDF namespace.
+    /// When absent, server startup reads the migrated `registryNamespace`
+    /// config document before falling back to the historical local default.
+    pub database_prefix: Option<String>,
+    pub public_graph: Option<String>,
+    /// Durable roots for attachment blobs and the built-in Tantivy text index.
+    /// Production deployments should set both; `None` retains ephemeral local
+    /// defaults for tests and development.
+    pub blob_root: Option<PathBuf>,
+    pub text_index_path: Option<PathBuf>,
 }
 
 impl Default for ServerConfig {
@@ -204,6 +219,7 @@ impl Default for ServerConfig {
             sparql_auth_password: "dba".to_owned(),
             sparql_auth_disabled: false,
             password_salt: "synbiohub_change_me".to_owned(),
+            share_link_salt: "synbiohub_change_me".to_owned(),
             allow_public_signup: true,
             sparql_write_enabled: true,
             cors: CorsPolicy::Permissive,
@@ -211,6 +227,10 @@ impl Default for ServerConfig {
             setup_token_hash: None,
             complete_backups_enabled: false,
             edge_admin: None,
+            database_prefix: None,
+            public_graph: None,
+            blob_root: None,
+            text_index_path: None,
         }
     }
 }
@@ -218,6 +238,10 @@ impl Default for ServerConfig {
 impl ServerConfig {
     pub fn from_env() -> Self {
         let defaults = Self::default();
+        let password_salt = std::env::var("SBOL_DB_PASSWORD_SALT")
+            .unwrap_or_else(|_| defaults.password_salt.clone());
+        let share_link_salt =
+            std::env::var("SBOL_DB_SHARE_LINK_SALT").unwrap_or_else(|_| password_salt.clone());
         let mut config = Self {
             request_timeout: std::env::var("SBOL_DB_REQUEST_TIMEOUT_SECS")
                 .ok()
@@ -260,7 +284,8 @@ impl ServerConfig {
                 .ok()
                 .map(|v| parse_bool(&v))
                 .unwrap_or(defaults.sparql_auth_disabled),
-            password_salt: std::env::var("SBOL_DB_PASSWORD_SALT").unwrap_or(defaults.password_salt),
+            password_salt,
+            share_link_salt,
             allow_public_signup: std::env::var("SBOL_DB_ALLOW_PUBLIC_SIGNUP")
                 .ok()
                 .map(|v| parse_bool(&v))
@@ -274,6 +299,10 @@ impl ServerConfig {
             setup_token_hash: setup_token_hash_from_env(),
             complete_backups_enabled: false,
             edge_admin: None,
+            database_prefix: std::env::var("SBOL_DB_DATABASE_PREFIX").ok(),
+            public_graph: std::env::var("SBOL_DB_PUBLIC_GRAPH").ok(),
+            blob_root: std::env::var_os("SBOL_DB_BLOB_ROOT").map(PathBuf::from),
+            text_index_path: std::env::var_os("SBOL_DB_TEXT_INDEX_PATH").map(PathBuf::from),
         };
         if let Ok(origins) = std::env::var("SBOL_DB_CORS_ALLOWED_ORIGINS") {
             match parse_cors_origins(&origins) {

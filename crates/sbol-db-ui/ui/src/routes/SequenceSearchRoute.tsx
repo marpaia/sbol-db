@@ -156,7 +156,7 @@ export function SequenceSearchExperience() {
                   object={hit}
                   metadata={
                     <>
-                      <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-primary">
+                      <span className="border border-primary/20 bg-primary/5 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-primary">
                         {(hit.percent_match * 100).toFixed(1)}% identity
                       </span>
                       <span className="font-mono text-[11px] text-muted-foreground">

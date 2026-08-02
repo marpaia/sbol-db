@@ -2852,7 +2852,7 @@
           },
           "kind": {
             "type": "string",
-            "description": "Handler name. Built-in handlers include `import_document`, `import_remote_document`, and `import_synbiohub_collection`."
+            "description": "Handler name. Built-in handlers include `import_document` and `import_remote_document`."
           },
           "status": {
             "$ref": "#/components/schemas/JobStatus"

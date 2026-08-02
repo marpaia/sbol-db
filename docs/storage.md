@@ -57,8 +57,10 @@ A scheme the factory does not recognize, or a string with no `://`, is a
 startup error rather than a silent fallback.
 
 The CLI and server take the connection string from `--database-url` (env
-`DATABASE_URL`), which defaults to the dev Postgres at
-`postgres://sbol:sbol@localhost:5432/sbol`. An optional `--backend` flag (env
+`DATABASE_URL`), which defaults to repo-local RocksDB at
+`rocksdb://./.sbol-db/rocksdb`. For `sbol-db server`, the same default also
+selects `.sbol-db/blobs` and `.sbol-db/text-index` unless their dedicated
+environment variables override those paths. An optional `--backend` flag (env
 `SBOL_DB_BACKEND`, one of `postgres` / `sqlite` / `rocksdb`) selects the engine
 explicitly. When `--backend` is set it must agree with the URL's scheme, or the
 URL may be a bare path that the backend completes into a scheme; a Postgres URL

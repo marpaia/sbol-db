@@ -3,9 +3,7 @@
 use async_trait::async_trait;
 use sbol_db_jobs::{
     default_registry,
-    handlers::{
-        ImportDocumentHandler, ImportRemoteDocumentHandler, ImportSynBioHubCollectionHandler,
-    },
+    handlers::{ImportDocumentHandler, ImportRemoteDocumentHandler},
     HandlerError, JobContext, JobHandler, JobOutcome, JobRegistry,
 };
 use serde::{Deserialize, Serialize};
@@ -64,10 +62,9 @@ fn every_registered_kind_self_identifies() {
         .register(AlphaHandler)
         .register(BetaHandler)
         .register(ImportDocumentHandler)
-        .register(ImportRemoteDocumentHandler)
-        .register(ImportSynBioHubCollectionHandler);
+        .register(ImportRemoteDocumentHandler);
     let kinds: Vec<_> = registry.kinds().collect();
-    assert_eq!(kinds.len(), 5);
+    assert_eq!(kinds.len(), 4);
     for kind in kinds {
         let handler = registry.lookup(kind).expect("registered kind must look up");
         assert_eq!(
@@ -104,15 +101,6 @@ fn default_registry_contains_import_remote_document() {
         .lookup("import_remote_document")
         .expect("default_registry must include import_remote_document");
     assert_eq!(handler.kind(), "import_remote_document");
-}
-
-#[test]
-fn default_registry_contains_import_synbiohub_collection() {
-    let registry = default_registry();
-    let handler = registry
-        .lookup("import_synbiohub_collection")
-        .expect("default_registry must include import_synbiohub_collection");
-    assert_eq!(handler.kind(), "import_synbiohub_collection");
 }
 
 #[test]

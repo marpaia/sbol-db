@@ -24,6 +24,20 @@ impl RocksdbConfigStore {
     pub fn new(db: Db) -> Self {
         Self { db }
     }
+
+    /// Preserve configuration values and their original update timestamps
+    /// during a backend conversion.
+    pub async fn import_exact(&self, entries: Vec<ConfigEntry>) -> Result<(), DomainError> {
+        let db = self.db.clone();
+        blocking(move || {
+            for entry in entries {
+                let bytes = serde_json::to_vec(&entry)?;
+                db.put_cf(CF_CONFIG, entry.key.as_bytes(), &bytes)?;
+            }
+            Ok(())
+        })
+        .await
+    }
 }
 
 /// Decode a stored [`ConfigEntry`] from its JSON bytes.

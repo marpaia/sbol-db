@@ -72,10 +72,17 @@ impl UserStore for InMemoryUserStore {
         identifier: &str,
     ) -> Result<Option<User>, DomainError> {
         let users = self.users.lock().unwrap();
-        Ok(users
-            .values()
-            .find(|u| u.email == identifier || u.username == identifier)
-            .cloned())
+        if let Some(user) = users.values().find(|user| user.username == identifier) {
+            return Ok(Some(user.clone()));
+        }
+        let mut matches = users.values().filter(|user| user.email == identifier);
+        let first = matches.next().cloned();
+        if first.is_some() && matches.next().is_some() {
+            return Err(DomainError::Validation(
+                "multiple accounts use this email; log in with your username".to_owned(),
+            ));
+        }
+        Ok(first)
     }
 
     async fn get_by_id(&self, id: UserId) -> Result<Option<User>, DomainError> {

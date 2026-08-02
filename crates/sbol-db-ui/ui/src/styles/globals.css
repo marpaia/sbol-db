@@ -2,35 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
-/* SBOL-native palette. The chrome reads as synthetic biology tooling:
-   primary affordances use CDS-arrow teal, and the three top-level nav
-   groups carry their corresponding SBOL Visual category hues
-   (promoter / CDS / terminator). Status colors are amplified slightly
-   so success / warning / destructive read confidently against the
-   teal chrome. */
+/* The Design Ledger palette is intentionally warmer and more material than
+   a conventional SaaS dashboard. Ink and paper carry the interface; color is
+   reserved for SBOL meaning, status, and interaction. */
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 240 10% 4%;
+    --background: 42 35% 97%;
+    --foreground: 218 36% 13%;
 
-    --card: 0 0% 100%;
-    --card-foreground: 240 10% 4%;
+    --card: 42 45% 99%;
+    --card-foreground: 218 36% 13%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 4%;
+    --popover: 42 45% 99%;
+    --popover-foreground: 218 36% 13%;
 
-    --primary: 178 60% 32%;
-    --primary-foreground: 0 0% 98%;
+    --primary: 171 66% 25%;
+    --primary-foreground: 42 40% 98%;
 
-    --secondary: 240 5% 96%;
-    --secondary-foreground: 240 6% 10%;
+    --secondary: 39 22% 92%;
+    --secondary-foreground: 218 28% 18%;
 
-    --muted: 240 5% 96%;
-    --muted-foreground: 240 4% 46%;
+    --muted: 39 22% 92%;
+    --muted-foreground: 215 12% 43%;
 
-    --accent: 178 35% 93%;
-    --accent-foreground: 178 60% 22%;
+    --accent: 169 33% 89%;
+    --accent-foreground: 171 68% 17%;
 
     --destructive: 348 65% 52%;
     --destructive-foreground: 0 0% 98%;
@@ -38,52 +35,55 @@
     --success: 152 60% 40%;
     --warning: 38 90% 50%;
 
-    --border: 240 6% 90%;
-    --input: 240 6% 90%;
-    --ring: 178 60% 36%;
+    --border: 39 15% 80%;
+    --input: 39 15% 76%;
+    --ring: 171 66% 30%;
 
-    --radius: 0.5rem;
-    --radius-surface: 0.75rem;
-    --radius-feature: 1rem;
+    --radius: 0.375rem;
+    --radius-surface: 0.375rem;
+    --radius-feature: 0.375rem;
+    --rule: 218 25% 22%;
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
     --motion-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 
-    /* SBOL Visual category hues. Bound to top-level nav groups. */
-    --sbol-promoter: 28 80% 50%;
-    --sbol-cds: 178 60% 32%;
-    --sbol-terminator: 348 65% 50%;
-    --sbol-rbs: 268 50% 55%;
+    /* SBOL DB presentation hues; SBOL Visual does not prescribe these colors. */
+    --sbol-promoter: 171 66% 31%;
+    --sbol-cds: 30 88% 48%;
+    --sbol-terminator: 353 65% 52%;
+    --sbol-rbs: 269 46% 55%;
 
-    --sidebar-background: 178 30% 97%;
-    --sidebar-foreground: 200 15% 26%;
-    --sidebar-primary: 178 60% 32%;
-    --sidebar-primary-foreground: 0 0% 98%;
-    --sidebar-accent: 178 55% 88%;
-    --sidebar-accent-foreground: 178 70% 18%;
-    --sidebar-border: 178 20% 88%;
-    --sidebar-ring: 178 60% 36%;
+    --sidebar-background: 40 26% 94%;
+    --sidebar-foreground: 218 30% 18%;
+    --sidebar-primary: 171 66% 25%;
+    --sidebar-primary-foreground: 42 40% 98%;
+    --sidebar-accent: 40 25% 89%;
+    --sidebar-accent-foreground: 218 30% 15%;
+    --sidebar-border: 39 16% 80%;
+    --sidebar-ring: 171 66% 30%;
   }
 
   .dark {
-    --background: 240 6% 7%;
-    --foreground: 0 0% 95%;
+    --background: 218 29% 8%;
+    --foreground: 40 25% 92%;
 
-    --card: 240 6% 9%;
-    --card-foreground: 0 0% 95%;
+    --card: 217 25% 11%;
+    --card-foreground: 40 25% 92%;
 
-    --popover: 240 5% 14%;
-    --popover-foreground: 0 0% 95%;
+    --popover: 217 23% 13%;
+    --popover-foreground: 40 25% 92%;
 
-    --primary: 178 55% 60%;
-    --primary-foreground: 178 50% 10%;
+    --primary: 168 57% 57%;
+    --primary-foreground: 218 35% 9%;
 
-    --secondary: 240 4% 14%;
-    --secondary-foreground: 0 0% 95%;
+    --secondary: 216 20% 17%;
+    --secondary-foreground: 40 25% 92%;
 
-    --muted: 240 4% 14%;
-    --muted-foreground: 240 5% 64%;
+    --muted: 216 20% 16%;
+    --muted-foreground: 39 10% 64%;
 
-    --accent: 178 25% 16%;
-    --accent-foreground: 178 30% 88%;
+    --accent: 169 29% 17%;
+    --accent-foreground: 165 35% 88%;
 
     --destructive: 348 60% 62%;
     --destructive-foreground: 0 0% 98%;
@@ -91,23 +91,24 @@
     --success: 152 55% 55%;
     --warning: 38 85% 60%;
 
-    --border: 240 4% 16%;
-    --input: 240 4% 16%;
-    --ring: 178 55% 60%;
+    --border: 215 18% 24%;
+    --input: 215 18% 27%;
+    --ring: 168 57% 57%;
+    --rule: 40 20% 82%;
 
-    --sbol-promoter: 28 75% 62%;
-    --sbol-cds: 178 55% 60%;
+    --sbol-promoter: 178 55% 60%;
+    --sbol-cds: 28 75% 62%;
     --sbol-terminator: 348 60% 65%;
     --sbol-rbs: 268 55% 70%;
 
-    --sidebar-background: 200 15% 6%;
-    --sidebar-foreground: 200 12% 72%;
-    --sidebar-primary: 178 55% 60%;
-    --sidebar-primary-foreground: 178 50% 10%;
-    --sidebar-accent: 178 45% 18%;
-    --sidebar-accent-foreground: 178 60% 90%;
-    --sidebar-border: 200 12% 14%;
-    --sidebar-ring: 178 55% 60%;
+    --sidebar-background: 219 34% 7%;
+    --sidebar-foreground: 40 17% 76%;
+    --sidebar-primary: 168 57% 57%;
+    --sidebar-primary-foreground: 218 35% 9%;
+    --sidebar-accent: 216 23% 14%;
+    --sidebar-accent-foreground: 40 25% 92%;
+    --sidebar-border: 215 20% 17%;
+    --sidebar-ring: 168 57% 57%;
   }
 
   html,
@@ -124,6 +125,17 @@
     -webkit-font-smoothing: antialiased;
   }
 
+  ::selection {
+    background: hsl(var(--primary) / 0.18);
+    color: hsl(var(--foreground));
+  }
+
+  a,
+  button,
+  [role="button"] {
+    -webkit-tap-highlight-color: transparent;
+  }
+
   code,
   pre,
   .font-mono {
@@ -136,6 +148,10 @@
 }
 
 @layer utilities {
+  .font-display {
+    font-family: theme("fontFamily.display");
+  }
+
   .portal-hero-grid {
     background-color: hsl(var(--background));
     background-image:
@@ -143,6 +159,176 @@
       linear-gradient(90deg, hsl(var(--border) / 0.34) 1px, transparent 1px);
     background-size: 32px 32px;
     background-position: center center;
+  }
+
+  .registry-field {
+    background-color: hsl(var(--background));
+    background-image: linear-gradient(
+      90deg,
+      hsl(var(--sbol-promoter) / 0.07),
+      transparent 24%
+    );
+  }
+
+  .ledger-rule {
+    border-color: hsl(var(--rule) / 0.28);
+  }
+
+  .ledger-label {
+    font-family: theme("fontFamily.mono");
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .public-registry h1,
+  .public-registry h2,
+  .public-registry .record-title {
+    font-family: theme("fontFamily.display");
+  }
+
+  .admin-instrument {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .terminal-entry,
+  .terminal-output,
+  .terminal-progress {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  .terminal-command-text {
+    display: inline-block;
+    overflow: hidden;
+    padding-right: 0.25ch;
+    clip-path: inset(0 100% 0 0);
+    border-right: 1px solid transparent;
+  }
+
+  .terminal-progress-fill {
+    transform: scaleX(0);
+  }
+
+  .terminal-progress-detail {
+    opacity: 0;
+  }
+
+  .terminal-session[data-running="true"] .terminal-entry {
+    animation: terminal-line-in 180ms var(--ease-out) var(--terminal-delay)
+      forwards;
+  }
+
+  .terminal-session[data-running="true"] .terminal-command-text {
+    animation:
+      terminal-type var(--terminal-duration)
+        steps(var(--terminal-characters), start)
+        calc(var(--terminal-delay) + 70ms) forwards,
+      terminal-caret var(--terminal-duration) step-end
+        calc(var(--terminal-delay) + 70ms) forwards;
+  }
+
+  .terminal-session[data-running="true"] .terminal-output {
+    animation: terminal-line-in 180ms var(--ease-out)
+      calc(var(--terminal-delay) + var(--terminal-duration) + 140ms) forwards;
+  }
+
+  .terminal-session[data-running="true"] .terminal-progress {
+    animation: terminal-line-in 180ms var(--ease-out)
+      calc(
+        var(--terminal-delay) + var(--terminal-duration) + 140ms +
+          var(--terminal-progress-offset)
+      )
+      forwards;
+  }
+
+  .terminal-session[data-running="true"] .terminal-progress-fill {
+    animation: terminal-progress-fill var(--terminal-progress-duration) linear
+      calc(
+        var(--terminal-delay) + var(--terminal-duration) + 140ms +
+          var(--terminal-progress-offset)
+      )
+      forwards;
+  }
+
+  .terminal-session[data-running="true"] .terminal-progress-detail {
+    animation: terminal-progress-detail-in 140ms var(--ease-out)
+      calc(
+        var(--terminal-delay) + var(--terminal-duration) + 140ms +
+          var(--terminal-progress-offset) + var(--terminal-progress-duration)
+      )
+      forwards;
+  }
+}
+
+@keyframes terminal-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes terminal-type {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes terminal-caret {
+  0%,
+  20%,
+  40%,
+  60%,
+  80% {
+    border-right-color: rgb(110 231 183);
+  }
+
+  10%,
+  30%,
+  50%,
+  70%,
+  90%,
+  100% {
+    border-right-color: transparent;
+  }
+}
+
+@keyframes terminal-progress-fill {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes terminal-progress-detail-in {
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 639px) {
+  .terminal-command-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    clip-path: none;
+  }
+
+  .terminal-session[data-running="true"] .terminal-command-text {
+    animation: terminal-line-in 180ms var(--ease-out)
+      calc(var(--terminal-delay) + 70ms) forwards;
   }
 }
 
@@ -154,5 +340,26 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .terminal-entry,
+  .terminal-output,
+  .terminal-progress,
+  .terminal-command-text {
+    opacity: 1 !important;
+    transform: none !important;
+    clip-path: none !important;
+    border-right-color: transparent !important;
+    animation: none !important;
+  }
+
+  .terminal-progress-fill {
+    transform: scaleX(1) !important;
+    animation: none !important;
+  }
+
+  .terminal-progress-detail {
+    opacity: 1 !important;
+    animation: none !important;
   }
 }

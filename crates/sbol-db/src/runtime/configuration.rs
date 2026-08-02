@@ -6,8 +6,8 @@ use super::filesystem::prepare_directory;
 use super::layout::ManagedDataLayout;
 use crate::cli::{BackendKind, RuntimeProfile};
 
-pub(crate) const DEFAULT_DATABASE_URL: &str = "postgres://sbol:sbol@localhost:5432/sbol";
-const DEFAULT_DEVELOPMENT_DATA_DIR: &str = "sbol-db-data";
+pub(crate) const DEFAULT_DATABASE_URL: &str = crate::cli::DEFAULT_LOCAL_DATABASE_URL;
+const DEFAULT_DEVELOPMENT_DATA_DIR: &str = ".sbol-db";
 
 /// Fully resolved storage configuration held for the lifetime of the server.
 #[derive(Debug)]

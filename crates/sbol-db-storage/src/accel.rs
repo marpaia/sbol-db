@@ -270,6 +270,25 @@ pub enum Scope {
     /// Every object with a given `rdf:type` (not restricted to top-level), e.g.
     /// `Count` over `ComponentDefinition`, or `getCollections` over `Collection`.
     ByType(String),
+    /// Every top-level object with a given `rdf:type`. SynBioHub's faceted
+    /// search template carries both the constant type criterion and the
+    /// `sbh:topLevel` self-edge, so neither the type nor top-level index alone
+    /// is sufficient.
+    TopLevelByType(String),
+    /// Every top-level object carrying one exact SBOL role IRI.
+    TopLevelByRole(String),
+    /// Every top-level object carrying both one exact rdf:type and one exact
+    /// SBOL role. Native discovery can combine its two primary biological
+    /// facets without falling back to a raw-triple join.
+    TopLevelByTypeAndRole { object_type: String, role: String },
+    /// Every object with a given `rdf:type` that is not the member of any
+    /// collection in the same graph. This is SynBioHub's root-collection
+    /// listing/count anti-join, backed by a reverse membership index on SQL
+    /// engines.
+    RootByType(String),
+    /// The intersection of [`Scope::TopLevelByType`] and
+    /// [`Scope::RootByType`], used by SynBioHub's root/manage search shape.
+    RootTopLevelByType(String),
     /// Members of a collection. With `root_only`, only members not referenced by
     /// another member (directly or via a child) — SynBioHub's "top-level members"
     /// view, whose `FILTER NOT EXISTS` anti-join is precomputed at derive time.
@@ -318,6 +337,13 @@ pub enum AcceleratedQuery {
         kind: FacetKind,
         var: String,
     },
+    /// Exact distinct-subject counts for every top-level facet value.
+    FacetCounts {
+        graph: String,
+        kind: FacetKind,
+        value_var: String,
+        count_var: String,
+    },
     /// One specific object's metadata projection (`getMetadata`): a constant
     /// `subject` with a per-field projection, answered by a primary-key lookup
     /// on the object's metadata record. `required[i]` marks a column whose
@@ -339,6 +365,7 @@ impl AcceleratedQuery {
             AcceleratedQuery::ObjectList { graph, .. }
             | AcceleratedQuery::Count { graph, .. }
             | AcceleratedQuery::Facet { graph, .. }
+            | AcceleratedQuery::FacetCounts { graph, .. }
             | AcceleratedQuery::ObjectMetadata { graph, .. } => graph,
         }
     }

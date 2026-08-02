@@ -81,7 +81,9 @@ export default function DashboardRoute() {
     <>
       <AdminPage
         title="Registry overview"
+        eyebrow="Admin control plane"
         description="Inspect the loaded corpus, check its operational shape, and move into focused data or query tools."
+        maxWidth="7xl"
       >
         <section>
           <SectionLabel>Corpus</SectionLabel>
@@ -327,9 +329,7 @@ export default function DashboardRoute() {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <h2 className="mb-3 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-      {children}
-    </h2>
+    <h2 className="ledger-label mb-3 text-muted-foreground">{children}</h2>
   );
 }
 

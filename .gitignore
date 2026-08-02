@@ -4,6 +4,9 @@
 .sqlx
 .DS_Store
 
+# Repo-local embedded development runtime (RocksDB, blobs, and search index).
+/.sbol-db/
+
 # Helm — dependency tarballs are fetched via `helm dependency build` from
 # Chart.lock; don't commit them. Chart.lock is committed.
 charts/*/charts/

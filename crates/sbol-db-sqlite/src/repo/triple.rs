@@ -85,6 +85,56 @@ impl Cols {
 }
 
 impl TripleRepository {
+    /// Stable keyset page over the complete quad table for maintenance jobs.
+    pub async fn scan_all_page(
+        &self,
+        after_id: i64,
+        limit: i64,
+    ) -> Result<Vec<(i64, Triple)>, DomainError> {
+        let rows = sqlx::query(
+            "SELECT id, graph_iri, subject_iri, subject_blank, predicate_iri, \
+             object_iri, object_blank, object_literal, datatype_iri, language \
+             FROM sbol_triples WHERE id > ? ORDER BY id LIMIT ?",
+        )
+        .bind(after_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        rows.into_iter()
+            .map(|row| {
+                let id: i64 = row.try_get("id").map_err(db_err)?;
+                Ok((id, row_to_triple(row)?))
+            })
+            .collect()
+    }
+
+    /// Stable keyset page over one named graph for bounded Graph Store reads.
+    pub async fn scan_graph_page(
+        &self,
+        graph: &str,
+        after_id: i64,
+        limit: i64,
+    ) -> Result<Vec<(i64, Triple)>, DomainError> {
+        let rows = sqlx::query(
+            "SELECT id, graph_iri, subject_iri, subject_blank, predicate_iri, \
+             object_iri, object_blank, object_literal, datatype_iri, language \
+             FROM sbol_triples WHERE graph_iri = ? AND id > ? ORDER BY id LIMIT ?",
+        )
+        .bind(graph)
+        .bind(after_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        rows.into_iter()
+            .map(|row| {
+                let id: i64 = row.try_get("id").map_err(db_err)?;
+                Ok((id, row_to_triple(row)?))
+            })
+            .collect()
+    }
+
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }

@@ -37,6 +37,111 @@ impl AccelRepository {
         Self { db }
     }
 
+    pub(crate) fn stage_import_object(
+        &self,
+        batch: &mut WriteBatch,
+        graph: &str,
+        iri: &str,
+        meta: &MetaRecord,
+    ) -> Result<(), DomainError> {
+        let sort = meta.sort_key();
+        let encoded = serde_json::to_vec(meta).map_err(ser_err)?;
+        batch.put_cf(
+            &self.db.cf("acc_meta"),
+            key(&[graph.as_bytes(), iri.as_bytes()]),
+            &encoded,
+        );
+        for ty in &meta.types {
+            batch.put_cf(
+                &self.db.cf("acc_bytype"),
+                key(&[
+                    graph.as_bytes(),
+                    ty.as_bytes(),
+                    sort.as_bytes(),
+                    iri.as_bytes(),
+                ]),
+                &encoded,
+            );
+        }
+        if meta.top_level {
+            batch.put_cf(
+                &self.db.cf("acc_toplevel"),
+                key(&[graph.as_bytes(), sort.as_bytes(), iri.as_bytes()]),
+                &encoded,
+            );
+            for role in &meta.roles {
+                batch.put_cf(
+                    &self.db.cf("acc_byrole"),
+                    key(&[
+                        graph.as_bytes(),
+                        role.as_bytes(),
+                        sort.as_bytes(),
+                        iri.as_bytes(),
+                    ]),
+                    &encoded,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn stage_import_member(
+        &self,
+        batch: &mut WriteBatch,
+        graph: &str,
+        collection: &str,
+        member: &str,
+        sort: &str,
+        is_root: bool,
+    ) {
+        batch.put_cf(
+            &self.db.cf("acc_member"),
+            key(&[
+                graph.as_bytes(),
+                collection.as_bytes(),
+                sort.as_bytes(),
+                member.as_bytes(),
+            ]),
+            [],
+        );
+        batch.put_cf(
+            &self.db.cf("acc_member_of"),
+            key(&[graph.as_bytes(), member.as_bytes()]),
+            [],
+        );
+        if is_root {
+            batch.put_cf(
+                &self.db.cf("acc_rootmember"),
+                key(&[
+                    graph.as_bytes(),
+                    collection.as_bytes(),
+                    sort.as_bytes(),
+                    member.as_bytes(),
+                ]),
+                [],
+            );
+        }
+    }
+
+    pub(crate) fn stage_import_facet(
+        &self,
+        batch: &mut WriteBatch,
+        graph: &str,
+        kind: FacetKind,
+        value: &str,
+        count: u64,
+    ) {
+        batch.put_cf(
+            &self.db.cf("acc_facet"),
+            facet_key(graph, facet_tag(kind), value),
+            count.to_le_bytes(),
+        );
+    }
+
+    pub(crate) fn stage_import_count(&self, batch: &mut WriteBatch, key: Vec<u8>, count: u64) {
+        batch.put_cf(&self.db.cf("acc_count"), key, count.to_le_bytes());
+    }
+
     /// Answer a recognized query from the graph's accelerator indexes, which the
     /// write path keeps in sync with the committed triples (see
     /// [`Self::stage_refresh`]).
@@ -64,6 +169,12 @@ impl AccelRepository {
                 subject_prefix,
             } => self.count(graph, scope, var, subject_prefix.as_deref()),
             AcceleratedQuery::Facet { graph, kind, var } => self.facet(graph, *kind, var),
+            AcceleratedQuery::FacetCounts {
+                graph,
+                kind,
+                value_var,
+                count_var,
+            } => self.facet_counts(graph, *kind, value_var, count_var),
             AcceleratedQuery::ObjectMetadata {
                 graph,
                 subject,
@@ -89,8 +200,10 @@ impl AccelRepository {
             "acc_meta",
             "acc_toplevel",
             "acc_bytype",
+            "acc_byrole",
             "acc_member",
             "acc_rootmember",
+            "acc_member_of",
             "acc_facet",
             "acc_count",
         ] {
@@ -115,23 +228,32 @@ impl AccelRepository {
         let meta_cf = self.db.cf("acc_meta");
         let tl_cf = self.db.cf("acc_toplevel");
         let bt_cf = self.db.cf("acc_bytype");
+        let br_cf = self.db.cf("acc_byrole");
         let fc_cf = self.db.cf("acc_facet");
         let count_cf = self.db.cf("acc_count");
 
         let mut toplevel_count: u64 = 0;
         let mut type_counts: HashMap<&str, u64> = HashMap::new();
+        let mut toplevel_type_counts: HashMap<&str, u64> = HashMap::new();
+        let mut role_counts: HashMap<&str, u64> = HashMap::new();
+        let mut type_role_counts: HashMap<(&str, &str), u64> = HashMap::new();
+        let mut creator_counts: HashMap<&str, u64> = HashMap::new();
+        let members: HashSet<&str> = index
+            .members
+            .iter()
+            .map(|(_, member)| member.as_str())
+            .collect();
+        let mut root_type_counts: HashMap<&str, u64> = HashMap::new();
+        let mut root_toplevel_type_counts: HashMap<&str, u64> = HashMap::new();
         // Member displayId sort keys, for ordering the membership indexes.
         let mut sort_of: HashMap<&str, &str> = HashMap::new();
         for obj in &index.objects {
             let iri = obj.iri.as_str();
             let m = &obj.meta;
             let sort = m.sort_key();
+            let encoded = serde_json::to_vec(m).map_err(ser_err)?;
             sort_of.insert(iri, sort);
-            batch.put_cf(
-                &meta_cf,
-                key(&[graph.as_bytes(), iri.as_bytes()]),
-                serde_json::to_vec(m).map_err(ser_err)?,
-            );
+            batch.put_cf(&meta_cf, key(&[graph.as_bytes(), iri.as_bytes()]), &encoded);
             for ty in &m.types {
                 batch.put_cf(
                     &bt_cf,
@@ -141,25 +263,46 @@ impl AccelRepository {
                         sort.as_bytes(),
                         iri.as_bytes(),
                     ]),
-                    [],
+                    &encoded,
                 );
                 *type_counts.entry(ty.as_str()).or_default() += 1;
+                if !members.contains(iri) {
+                    *root_type_counts.entry(ty.as_str()).or_default() += 1;
+                }
             }
             if m.top_level {
                 toplevel_count += 1;
                 batch.put_cf(
                     &tl_cf,
                     key(&[graph.as_bytes(), sort.as_bytes(), iri.as_bytes()]),
-                    [],
+                    &encoded,
                 );
                 for ty in &m.types {
-                    batch.put_cf(&fc_cf, facet_key(graph, FK_TYPES, ty), []);
+                    *toplevel_type_counts.entry(ty.as_str()).or_default() += 1;
+                    if !members.contains(iri) {
+                        *root_toplevel_type_counts.entry(ty.as_str()).or_default() += 1;
+                    }
                 }
                 for r in &m.roles {
-                    batch.put_cf(&fc_cf, facet_key(graph, FK_ROLES, r), []);
+                    batch.put_cf(
+                        &br_cf,
+                        key(&[
+                            graph.as_bytes(),
+                            r.as_bytes(),
+                            sort.as_bytes(),
+                            iri.as_bytes(),
+                        ]),
+                        &encoded,
+                    );
+                    *role_counts.entry(r.as_str()).or_default() += 1;
+                    for ty in &m.types {
+                        *type_role_counts
+                            .entry((ty.as_str(), r.as_str()))
+                            .or_default() += 1;
+                    }
                 }
                 for c in &m.creators {
-                    batch.put_cf(&fc_cf, facet_key(graph, FK_CREATORS, c), []);
+                    *creator_counts.entry(c.as_str()).or_default() += 1;
                 }
             }
         }
@@ -172,6 +315,42 @@ impl AccelRepository {
         for (ty, n) in &type_counts {
             batch.put_cf(&count_cf, count_key_type(graph, ty), n.to_le_bytes());
         }
+        for (ty, n) in &toplevel_type_counts {
+            batch.put_cf(
+                &count_cf,
+                count_key_toplevel_type(graph, ty),
+                n.to_le_bytes(),
+            );
+            batch.put_cf(&fc_cf, facet_key(graph, FK_TYPES, ty), n.to_le_bytes());
+        }
+        for (ty, n) in &root_type_counts {
+            batch.put_cf(&count_cf, count_key_root_type(graph, ty), n.to_le_bytes());
+        }
+        for (ty, n) in &root_toplevel_type_counts {
+            batch.put_cf(
+                &count_cf,
+                count_key_root_toplevel_type(graph, ty),
+                n.to_le_bytes(),
+            );
+        }
+        for (role, n) in &role_counts {
+            batch.put_cf(&count_cf, count_key_role(graph, role), n.to_le_bytes());
+            batch.put_cf(&fc_cf, facet_key(graph, FK_ROLES, role), n.to_le_bytes());
+        }
+        for ((ty, role), n) in &type_role_counts {
+            batch.put_cf(
+                &count_cf,
+                count_key_toplevel_type_role(graph, ty, role),
+                n.to_le_bytes(),
+            );
+        }
+        for (creator, n) in &creator_counts {
+            batch.put_cf(
+                &fc_cf,
+                facet_key(graph, FK_CREATORS, creator),
+                n.to_le_bytes(),
+            );
+        }
 
         // Membership indexes, including the precomputed "root member" anti-join
         // (members not referenced by another member directly or via a child),
@@ -179,6 +358,7 @@ impl AccelRepository {
         // counters (the root counter may be 0).
         let mem_cf = self.db.cf("acc_member");
         let root_cf = self.db.cf("acc_rootmember");
+        let member_of_cf = self.db.cf("acc_member_of");
         let mut member_counts: HashMap<&str, u64> = HashMap::new();
         let mut root_counts: HashMap<&str, u64> = HashMap::new();
         for (collection, member) in &index.members {
@@ -191,6 +371,11 @@ impl AccelRepository {
                     sort.as_bytes(),
                     member.as_bytes(),
                 ]),
+                [],
+            );
+            batch.put_cf(
+                &member_of_cf,
+                key(&[graph.as_bytes(), member.as_bytes()]),
                 [],
             );
             *member_counts.entry(collection.as_str()).or_default() += 1;
@@ -234,16 +419,6 @@ impl AccelRepository {
         limit: Option<usize>,
         subject_prefix: Option<&str>,
     ) -> Result<AccelSolutions, DomainError> {
-        let (cf, scan_prefix) = scope_scan(graph, scope);
-        let mut iris: Vec<String> = Vec::new();
-        self.db.for_each_prefix(cf, &scan_prefix, |key, _| {
-            let iri = String::from_utf8_lossy(last_component(key)).into_owned();
-            if subject_prefix.is_none_or(|p| iri.starts_with(p)) {
-                iris.push(iri);
-            }
-            Ok(true)
-        })?;
-
         let vars: Vec<String> = projection.iter().map(|(v, _)| v.clone()).collect();
         // Generate rows in displayId order, dedup as we go, and stop once we have
         // enough for the requested page (objects are visited in order, so a row's
@@ -252,21 +427,42 @@ impl AccelRepository {
         let mut seen = std::collections::HashSet::new();
         let mut rows: Vec<Vec<Option<TermValue>>> = Vec::new();
         let mut object_rows = Vec::new();
-        for iri in &iris {
-            // A member with no metadata (e.g. an external reference) still yields
-            // one row with the subject bound and the optional columns unbound.
-            let meta = self.load_meta(graph, iri)?.unwrap_or_default();
-            object_rows.clear();
-            generate_rows(iri, &meta, projection, &mut object_rows);
-            for row in object_rows.drain(..) {
-                if seen.insert(format!("{row:?}")) {
-                    rows.push(row);
+        let (cf, scan_prefix) = scope_scan(graph, scope);
+        self.db
+            .for_each_prefix(cf, &scan_prefix, |index_key, index_value| {
+                let iri = String::from_utf8_lossy(last_component(index_key)).into_owned();
+                if !subject_prefix.is_none_or(|prefix| iri.starts_with(prefix)) {
+                    return Ok(true);
                 }
-            }
-            if target.is_some_and(|t| rows.len() >= t) {
-                break;
-            }
-        }
+                // New secondary-index records carry primary metadata so an
+                // ordered page is a sequential read. Empty values remain
+                // compatible with databases created before that optimization.
+                let meta = if index_value.is_empty() {
+                    self.load_meta(graph, &iri)?.unwrap_or_default()
+                } else {
+                    serde_json::from_slice(index_value).map_err(ser_err)?
+                };
+                let is_member =
+                    matches!(scope, Scope::RootByType(_) | Scope::RootTopLevelByType(_))
+                        && self.db.exists_cf(
+                            "acc_member_of",
+                            &key(&[graph.as_bytes(), iri.as_bytes()]),
+                        )?;
+                if !scope_includes_loaded(scope, &meta, is_member) {
+                    return Ok(true);
+                }
+                // A member with no metadata (e.g. an external reference) still
+                // yields one row with the subject bound and optional columns
+                // unbound.
+                object_rows.clear();
+                generate_rows(&iri, &meta, projection, &mut object_rows);
+                for row in object_rows.drain(..) {
+                    if seen.insert(format!("{row:?}")) {
+                        rows.push(row);
+                    }
+                }
+                Ok(!target.is_some_and(|target| rows.len() >= target))
+            })?;
         let rows = rows
             .into_iter()
             .skip(offset)
@@ -305,7 +501,8 @@ impl AccelRepository {
             let (cf, scan_prefix) = scope_scan(graph, scope);
             let mut n: u64 = 0;
             self.db.for_each_prefix(cf, &scan_prefix, |key, _| {
-                if last_component(key).starts_with(prefix.as_bytes()) {
+                let iri = String::from_utf8_lossy(last_component(key));
+                if iri.starts_with(prefix) && self.scope_includes(graph, scope, &iri)? {
                     n += 1;
                 }
                 Ok(true)
@@ -315,6 +512,13 @@ impl AccelRepository {
             let count_key = match scope {
                 Scope::TopLevel => count_key_toplevel(graph),
                 Scope::ByType(t) => count_key_type(graph, t),
+                Scope::RootByType(t) => count_key_root_type(graph, t),
+                Scope::TopLevelByType(t) => count_key_toplevel_type(graph, t),
+                Scope::RootTopLevelByType(t) => count_key_root_toplevel_type(graph, t),
+                Scope::TopLevelByRole(role) => count_key_role(graph, role),
+                Scope::TopLevelByTypeAndRole { object_type, role } => {
+                    count_key_toplevel_type_role(graph, object_type, role)
+                }
                 Scope::Collection {
                     collection,
                     root_only,
@@ -364,6 +568,60 @@ impl AccelRepository {
         })
     }
 
+    fn facet_counts(
+        &self,
+        graph: &str,
+        kind: FacetKind,
+        value_var: &str,
+        count_var: &str,
+    ) -> Result<AccelSolutions, DomainError> {
+        let tag = facet_tag(kind);
+        let scan_prefix = compose(&[graph.as_bytes(), &[SEP], &[tag], &[SEP]]);
+        let mut rows = Vec::new();
+        self.db
+            .for_each_prefix("acc_facet", &scan_prefix, |key, value| {
+                let facet = String::from_utf8_lossy(last_component(key)).into_owned();
+                let subject_count = decode_count(value);
+                let term = match kind {
+                    FacetKind::Creators => TermValue::Literal {
+                        value: facet,
+                        datatype: XSD_STRING.to_owned(),
+                        language: None,
+                    },
+                    _ => TermValue::Iri(facet),
+                };
+                rows.push(vec![Some(term), Some(integer(subject_count))]);
+                Ok(true)
+            })?;
+        Ok(AccelSolutions {
+            vars: vec![value_var.to_owned(), count_var.to_owned()],
+            rows,
+        })
+    }
+
+    fn scope_includes(&self, graph: &str, scope: &Scope, iri: &str) -> Result<bool, DomainError> {
+        let metadata = || self.load_meta(graph, iri);
+        Ok(match scope {
+            Scope::TopLevel
+            | Scope::ByType(_)
+            | Scope::TopLevelByRole(_)
+            | Scope::Collection { .. } => true,
+            Scope::TopLevelByType(_) => metadata()?.is_some_and(|meta| meta.top_level),
+            Scope::RootByType(_) => !self
+                .db
+                .exists_cf("acc_member_of", &key(&[graph.as_bytes(), iri.as_bytes()]))?,
+            Scope::RootTopLevelByType(_) => {
+                metadata()?.is_some_and(|meta| meta.top_level)
+                    && !self
+                        .db
+                        .exists_cf("acc_member_of", &key(&[graph.as_bytes(), iri.as_bytes()]))?
+            }
+            Scope::TopLevelByTypeAndRole { object_type, .. } => metadata()?.is_some_and(|meta| {
+                meta.top_level && meta.types.iter().any(|ty| ty == object_type)
+            }),
+        })
+    }
+
     fn load_meta(&self, graph: &str, iri: &str) -> Result<Option<MetaRecord>, DomainError> {
         match self
             .db
@@ -395,12 +653,37 @@ impl AccelRepository {
     }
 }
 
-fn count_key_toplevel(graph: &str) -> Vec<u8> {
+pub(crate) fn count_key_toplevel(graph: &str) -> Vec<u8> {
     key(&[graph.as_bytes(), b"tl"])
 }
 
-fn count_key_type(graph: &str, type_iri: &str) -> Vec<u8> {
+pub(crate) fn count_key_type(graph: &str, type_iri: &str) -> Vec<u8> {
     key(&[graph.as_bytes(), b"ty", type_iri.as_bytes()])
+}
+
+pub(crate) fn count_key_role(graph: &str, role_iri: &str) -> Vec<u8> {
+    key(&[graph.as_bytes(), b"role", role_iri.as_bytes()])
+}
+
+pub(crate) fn count_key_toplevel_type(graph: &str, type_iri: &str) -> Vec<u8> {
+    key(&[graph.as_bytes(), b"tlty", type_iri.as_bytes()])
+}
+
+pub(crate) fn count_key_root_type(graph: &str, type_iri: &str) -> Vec<u8> {
+    key(&[graph.as_bytes(), b"rootty", type_iri.as_bytes()])
+}
+
+pub(crate) fn count_key_root_toplevel_type(graph: &str, type_iri: &str) -> Vec<u8> {
+    key(&[graph.as_bytes(), b"roottlty", type_iri.as_bytes()])
+}
+
+pub(crate) fn count_key_toplevel_type_role(graph: &str, type_iri: &str, role_iri: &str) -> Vec<u8> {
+    key(&[
+        graph.as_bytes(),
+        b"tltyrole",
+        type_iri.as_bytes(),
+        role_iri.as_bytes(),
+    ])
 }
 
 /// The enumeration column family and scan prefix for a scope's members, in
@@ -409,6 +692,13 @@ fn scope_scan(graph: &str, scope: &Scope) -> (&'static str, Vec<u8>) {
     match scope {
         Scope::TopLevel => ("acc_toplevel", prefix(&[graph.as_bytes()])),
         Scope::ByType(t) => ("acc_bytype", prefix(&[graph.as_bytes(), t.as_bytes()])),
+        Scope::RootByType(t) | Scope::TopLevelByType(t) | Scope::RootTopLevelByType(t) => {
+            ("acc_bytype", prefix(&[graph.as_bytes(), t.as_bytes()]))
+        }
+        Scope::TopLevelByRole(role) => ("acc_byrole", prefix(&[graph.as_bytes(), role.as_bytes()])),
+        Scope::TopLevelByTypeAndRole { role, .. } => {
+            ("acc_byrole", prefix(&[graph.as_bytes(), role.as_bytes()]))
+        }
         Scope::Collection {
             collection,
             root_only,
@@ -423,7 +713,26 @@ fn scope_scan(graph: &str, scope: &Scope) -> (&'static str, Vec<u8>) {
     }
 }
 
-fn count_key_member(graph: &str, collection: &str, root_only: bool) -> Vec<u8> {
+/// Apply the filters that are not already encoded by the selected enumeration
+/// column family. The caller supplies batched primary metadata and reverse
+/// membership results so a deep page does not issue point reads one object at
+/// a time.
+fn scope_includes_loaded(scope: &Scope, metadata: &MetaRecord, is_member: bool) -> bool {
+    match scope {
+        Scope::TopLevel
+        | Scope::ByType(_)
+        | Scope::TopLevelByRole(_)
+        | Scope::Collection { .. } => true,
+        Scope::TopLevelByType(_) => metadata.top_level,
+        Scope::RootByType(_) => !is_member,
+        Scope::RootTopLevelByType(_) => metadata.top_level && !is_member,
+        Scope::TopLevelByTypeAndRole { object_type, .. } => {
+            metadata.top_level && metadata.types.iter().any(|ty| ty == object_type)
+        }
+    }
+}
+
+pub(crate) fn count_key_member(graph: &str, collection: &str, root_only: bool) -> Vec<u8> {
     let tag: &[u8] = if root_only { b"rmem" } else { b"mem" };
     key(&[graph.as_bytes(), tag, collection.as_bytes()])
 }
@@ -451,6 +760,22 @@ fn prefix(parts: &[&[u8]]) -> Vec<u8> {
 
 fn facet_key(graph: &str, tag: u8, value: &str) -> Vec<u8> {
     compose(&[graph.as_bytes(), &[SEP], &[tag], &[SEP], value.as_bytes()])
+}
+
+fn facet_tag(kind: FacetKind) -> u8 {
+    match kind {
+        FacetKind::Types => FK_TYPES,
+        FacetKind::Roles => FK_ROLES,
+        FacetKind::Creators => FK_CREATORS,
+    }
+}
+
+fn decode_count(bytes: &[u8]) -> u64 {
+    if bytes.len() == 8 {
+        u64::from_le_bytes(bytes.try_into().expect("checked count width"))
+    } else {
+        0
+    }
 }
 
 fn last_component(key: &[u8]) -> &[u8] {

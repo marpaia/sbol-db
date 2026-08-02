@@ -35,12 +35,12 @@ export function AdminPage({
               : "max-w-6xl"
         )}
       >
-        <header className="flex flex-wrap items-start justify-between gap-4">
+        <header className="flex flex-wrap items-start justify-between gap-4 border-b border-foreground/15 pb-6">
           <div className="max-w-2xl">
-            <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-primary">
-              {eyebrow}
-            </p>
-            <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+            <p className="ledger-label mb-2 text-primary">{eyebrow}</p>
+            <h1 className="text-3xl font-semibold tracking-[-0.025em]">
+              {title}
+            </h1>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               {description}
             </p>

@@ -36,6 +36,8 @@ export const portalKeys = {
   objectDetails: (iri: string) => ["portal", "object-details", iri] as const,
   account: ["portal", "account"] as const,
   shared: ["portal", "account", "shared"] as const,
+  sharedPage: (offset: number, limit: number) =>
+    ["portal", "account", "shared", offset, limit] as const,
   collaborators: (iri: string) => ["portal", "collaborators", iri] as const,
   reviews: ["portal", "reviews"] as const,
   objectReview: (iri: string) => ["portal", "reviews", iri] as const,
@@ -69,10 +71,10 @@ export function useAccount(enabled = true) {
   });
 }
 
-export function useSharedObjects(enabled = true) {
+export function useSharedObjects(offset = 0, limit = 24, enabled = true) {
   return useQuery({
-    queryKey: portalKeys.shared,
-    queryFn: ({ signal }) => fetchSharedObjects(signal),
+    queryKey: portalKeys.sharedPage(offset, limit),
+    queryFn: ({ signal }) => fetchSharedObjects({ offset, limit }, signal),
     enabled,
     staleTime: 15_000,
     retry: false,
