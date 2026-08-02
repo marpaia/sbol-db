@@ -111,6 +111,13 @@ impl SparqlEngine {
         Self { source }
     }
 
+    /// The backend-neutral pattern reader owned by this engine. Application
+    /// projections that need a handful of exact index lookups can use it
+    /// directly instead of paying for SPARQL parse, plan, and join execution.
+    pub fn triple_source(&self) -> Arc<dyn TripleSource> {
+        self.source.clone()
+    }
+
     /// Run a SPARQL query and serialize the result.
     ///
     /// `requested_format = None` picks the form's natural default (JSON for

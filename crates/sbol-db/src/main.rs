@@ -253,12 +253,35 @@ async fn open_backend(database_url: &str, command: &Command) -> Result<Backend> 
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
+    use clap::CommandFactory;
+
     use super::*;
 
     #[test]
-    fn no_database_configuration_defaults_to_repo_local_rocksdb() {
-        let cli = Cli::try_parse_from(["sbol-db", "server"]).unwrap();
-        assert_eq!(cli.database_url, crate::cli::DEFAULT_LOCAL_DATABASE_URL);
+    fn database_argument_defaults_to_repo_local_rocksdb() {
+        // Inspect the clap schema rather than parsing the ambient process
+        // environment: CI intentionally sets DATABASE_URL for Postgres tests,
+        // and clap's env source correctly takes precedence over this default.
+        let command = Cli::command();
+        let database_url = command
+            .get_arguments()
+            .find(|argument| argument.get_id() == "database_url")
+            .expect("database_url argument");
+        assert_eq!(
+            database_url.get_default_values(),
+            [OsStr::new(crate::cli::DEFAULT_LOCAL_DATABASE_URL)]
+        );
+        assert_eq!(database_url.get_env(), Some(OsStr::new("DATABASE_URL")));
+
+        let cli = Cli::try_parse_from([
+            "sbol-db",
+            "--database-url",
+            crate::cli::DEFAULT_LOCAL_DATABASE_URL,
+            "server",
+        ])
+        .unwrap();
         assert_eq!(cli.backend, None);
         assert!(matches!(cli.command, Command::Server { .. }));
     }

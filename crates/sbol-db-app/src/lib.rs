@@ -84,7 +84,6 @@ pub use submission::{
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Instant;
 
-use futures::lock::Mutex as AsyncMutex;
 use sbol_db_backend::Backend;
 use sbol_db_core::DomainError;
 use sbol_db_search::ranked_text::{ClusterMap, RankedTextIndex};
@@ -93,22 +92,22 @@ use sbol_db_search_sdk::{IndexMaintenanceEvent, IndexMaintenanceRegistry, IndexM
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
     AclStore, BlobStore, ClusterId, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore,
-    SketchStore, TokenStore, UserStore,
+    SketchStore, TokenStore, TripleSource, UserStore,
 };
+use tokio::sync::Mutex as AsyncMutex;
+
+type SharedClusterMapCache = Arc<RwLock<Option<(Instant, Arc<ClusterMap>)>>>;
 
 /// Cache-aware view of a durable cluster store. Every mutation invalidates the
-/// expanded ranking map after the backend commit succeeds, while reads retain
+/// compact ranking map after the backend commit succeeds, while reads retain
 /// the production-scale TTL/single-flight optimization.
 struct InvalidatingClusterStore {
     inner: Arc<dyn ClusterStore>,
-    cache: Arc<RwLock<Option<(Instant, Arc<ClusterMap>)>>>,
+    cache: SharedClusterMapCache,
 }
 
 impl InvalidatingClusterStore {
-    fn new(
-        inner: Arc<dyn ClusterStore>,
-        cache: Arc<RwLock<Option<(Instant, Arc<ClusterMap>)>>>,
-    ) -> Self {
+    fn new(inner: Arc<dyn ClusterStore>, cache: SharedClusterMapCache) -> Self {
         Self { inner, cache }
     }
 
@@ -159,6 +158,10 @@ pub struct AppServices {
     pub store: Arc<dyn SbolStore>,
     /// SPARQL query evaluation over the derived triple view.
     pub sparql: Arc<SparqlEngine>,
+    /// Exact triple-pattern reads for bounded application projections. This is
+    /// the same source the SPARQL engine owns, exposed here so point-read paths
+    /// do not rebuild simple relationships through the generic query engine.
+    pub(crate) triple_source: Arc<dyn TripleSource>,
     /// SPARQL Update evaluation with transactional triple writes.
     pub sparql_update: Arc<SparqlUpdateEngine>,
     /// The async job queue.
@@ -204,10 +207,10 @@ pub struct AppServices {
     /// needs a persistent, filesystem-backed index swaps one in with
     /// [`with_text_search`](Self::with_text_search).
     pub text_search: Arc<RankedTextIndex>,
-    /// Short-lived ranking input cache. Loading and expanding the production
+    /// Short-lived ranking input cache. Loading the production
     /// cluster table on every search is much more expensive than scoring a
     /// small result page; the TTL refreshes maintenance changes promptly.
-    pub(crate) cluster_map_cache: Arc<RwLock<Option<(Instant, Arc<ClusterMap>)>>>,
+    pub(crate) cluster_map_cache: SharedClusterMapCache,
     /// Single-flight guard for an expired cluster cache. It prevents a burst of
     /// requests from all rescanning the production assignment table together.
     pub(crate) cluster_map_refresh: Arc<AsyncMutex<()>>,
@@ -541,6 +544,7 @@ impl AppServices {
         users: Arc<dyn UserStore>,
         tokens: Arc<dyn TokenStore>,
     ) -> Self {
+        let triple_source = sparql.triple_source();
         let acl_service = AclService::new(store.clone(), acl.clone());
         let auth = AuthService::new(users.clone(), tokens.clone());
         let text_search = Arc::new(
@@ -572,6 +576,7 @@ impl AppServices {
             registry_namespace: RegistryNamespace::default(),
             store,
             sparql,
+            triple_source,
             sparql_update,
             jobs,
             acl,

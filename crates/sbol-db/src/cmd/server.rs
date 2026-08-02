@@ -156,6 +156,17 @@ pub async fn run(
             "search plugin deployment configured"
         );
     }
+    if durable_text_ready {
+        let started = std::time::Instant::now();
+        app_services
+            .warm_search_cache()
+            .await
+            .context("warm ranked-search cluster cache")?;
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "ranked-search cache warmed"
+        );
+    }
     let app_services = Arc::new(app_services);
 
     // The embedded worker shares this process, so it reindexes into the very

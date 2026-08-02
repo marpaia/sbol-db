@@ -1086,7 +1086,7 @@ impl AppServices {
     /// `objectType` facet, and return the requested window plus the total
     /// number of matches. The cluster-duplicate map is built from the persisted
     /// sequence-cluster assignments, so a non-centroid cluster member takes the
-    /// index's divide-by-2 penalty. The expanded assignment map is cached for a
+    /// index's divide-by-2 penalty. The compact assignment map is cached for a
     /// short interval so a production search does not rescan 458k rows.
     pub async fn ranked_search(
         &self,
@@ -1130,8 +1130,16 @@ impl AppServices {
         Ok(self.ranked_search(query, scope).await?.1)
     }
 
+    /// Load the compact cluster-assignment cache before a ready server accepts
+    /// search traffic. This moves the only unavoidable full assignment scan to
+    /// startup; normal requests then perform bounded index work immediately.
+    pub async fn warm_search_cache(&self) -> Result<(), DomainError> {
+        self.cached_cluster_map().await?;
+        Ok(())
+    }
+
     async fn cached_cluster_map(&self) -> Result<Arc<ClusterMap>, DomainError> {
-        {
+        let stale = {
             let cached = self
                 .cluster_map_cache
                 .read()
@@ -1141,6 +1149,35 @@ impl AppServices {
                     return Ok(map.clone());
                 }
             }
+            cached.as_ref().map(|(_, map)| map.clone())
+        };
+
+        // Expiration protects servers paired with an external worker, whose
+        // writes cannot invalidate this process-local cache. Keep serving the
+        // last complete snapshot while one background task refreshes it; a
+        // routine search must never inherit the full-table scan latency.
+        if let Some(stale) = stale {
+            if let (Ok(refresh), Ok(runtime)) = (
+                self.cluster_map_refresh.clone().try_lock_owned(),
+                tokio::runtime::Handle::try_current(),
+            ) {
+                let cluster = self.cluster.clone();
+                let cache = self.cluster_map_cache.clone();
+                runtime.spawn(async move {
+                    let _refresh = refresh;
+                    match cluster.all_assignments().await {
+                        Ok(assignments) => {
+                            let refreshed = Arc::new(cluster_map(assignments));
+                            *cache.write().expect("cluster map cache lock poisoned") =
+                                Some((std::time::Instant::now(), refreshed));
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "background cluster-map refresh failed");
+                        }
+                    }
+                });
+            }
+            return Ok(stale);
         }
 
         let _refresh = self.cluster_map_refresh.lock().await;

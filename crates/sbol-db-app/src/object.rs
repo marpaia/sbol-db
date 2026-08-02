@@ -7,11 +7,14 @@
 //! once in the application layer so V2, compatibility adapters, and future
 //! clients can share the same biological and authorization semantics.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use sbol_db_core::{DomainError, IriString, ObjectTerm, SbolObjectRecord, Triple};
+use sbol_db_core::{DomainError, IriString, ObjectTerm, SbolObjectRecord, SubjectTerm, Triple};
 use sbol_db_rdf::GRAPH_IRI_PREFIX;
 use sbol_db_sparql::{GraphScope, ResultFormat, SparqlOptions};
+use sbol_db_storage::{
+    GraphFilter as StorageGraphFilter, PatternObject, PatternSubject, TripleSource,
+};
 use serde::Serialize;
 
 use crate::AppServices;
@@ -79,6 +82,8 @@ const SBOL2_SIZE: &str = "http://sbols.org/v2#size";
 const SBOL3_SIZE: &str = "http://sbols.org/v3#size";
 const SBOL2_FORMAT: &str = "http://sbols.org/v2#format";
 const SBOL3_FORMAT: &str = "http://sbols.org/v3#format";
+
+const OBJECT_RELATION_ROW_LIMIT: usize = 10_000;
 
 /// Whether an object-page section has complete content to show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -263,6 +268,13 @@ struct ScopedSubject {
     record: Option<SbolObjectRecord>,
 }
 
+#[derive(Default)]
+struct ObjectRelations {
+    collections: Vec<String>,
+    uses: Vec<String>,
+    twins: Vec<String>,
+}
+
 impl AppServices {
     /// Resolve the effective graph scope for reading `iri`, or `None` when the
     /// object is absent or outside the caller's authorization ceiling.
@@ -327,42 +339,12 @@ impl AppServices {
             referenced_iris(triples, &[SBOL2_INTERACTION, SBOL3_INTERACTION]);
         let (member_iris, member_partial) = referenced_iris(triples, &[SBOL2_MEMBER, SBOL3_MEMBER]);
 
-        let target = sparql_iri(iri)?;
-        let collection_query = format!(
-            "SELECT DISTINCT ?subject WHERE {{ \
-             {{ ?subject <{SBOL2_MEMBER}> {target} . }} UNION \
-             {{ ?subject <{SBOL3_MEMBER}> {target} . }} }} ORDER BY ?subject"
-        );
-        let uses_query = format!(
-            "SELECT DISTINCT ?subject WHERE {{ \
-             ?subject a ?type . \
-             {{ ?subject ?predicate {target} . }} UNION \
-             {{ ?subject ?predicate ?middle . ?middle ?middlePredicate {target} . \
-                FILTER(?middlePredicate != <{SBH_TOP_LEVEL}>) }} \
-             FILTER(?subject != {target}) }} ORDER BY ?subject"
-        );
-        let twins_query = format!(
-            "SELECT DISTINCT ?subject WHERE {{ \
-             VALUES ?targetSequencePredicate {{ <{SBOL2_SEQUENCE}> <{SBOL3_SEQUENCE}> }} \
-             VALUES ?sequencePredicate {{ <{SBOL2_SEQUENCE}> <{SBOL3_SEQUENCE}> }} \
-             VALUES ?targetElementsPredicate {{ <{SBOL2_ELEMENTS}> <{SBOL3_ELEMENTS}> }} \
-             VALUES ?elementsPredicate {{ <{SBOL2_ELEMENTS}> <{SBOL3_ELEMENTS}> }} \
-             {target} ?targetSequencePredicate ?targetSequence . \
-             ?targetSequence ?targetElementsPredicate ?elements . \
-             ?subject ?sequencePredicate ?sequence . \
-             ?sequence ?elementsPredicate ?elements . \
-             ?subject a ?type . FILTER(?subject != {target}) \
-             }} ORDER BY ?subject"
-        );
-
-        let collection_iris = self
-            .object_relation_iris(&collection_query, scoped.query_scope.clone())
-            .await?;
-        let use_iris = self
-            .object_relation_iris(&uses_query, scoped.query_scope.clone())
-            .await?;
-        let twin_iris = self
-            .object_relation_iris(&twins_query, scoped.query_scope.clone())
+        // Object pages need exact incoming and two-hop relationships, but not a
+        // general query planner. Resolve them through the backend's SPO/POS
+        // indexes in one blocking task. On RocksDB these are bounded prefix
+        // seeks around the selected IRI instead of multi-second SPARQL joins.
+        let relations = self
+            .indexed_object_relations(iri, &sequence_iris, scoped.query_scope.clone())
             .await?;
 
         let component_like = is_component_like(&object_type);
@@ -456,7 +438,7 @@ impl AppServices {
                 interaction_partial,
                 "Interaction structure applies to Component designs.",
             ),
-            collections: reference_section(collection_iris, true, false, ""),
+            collections: reference_section(relations.collections, true, false, ""),
             members: reference_section(
                 member_iris,
                 collection_like,
@@ -476,9 +458,9 @@ impl AppServices {
                 }),
                 items: attachments,
             },
-            uses: reference_section(use_iris, true, false, ""),
+            uses: reference_section(relations.uses, true, false, ""),
             twins: reference_section(
-                twin_iris,
+                relations.twins,
                 component_like && has_asserted_sequence(triples),
                 false,
                 "Exact-sequence twins require a Component with an asserted sequence.",
@@ -631,7 +613,7 @@ impl AppServices {
     ) -> Result<Vec<String>, DomainError> {
         let options = SparqlOptions {
             authorized_graphs: scope,
-            max_rows: 10_000,
+            max_rows: OBJECT_RELATION_ROW_LIMIT,
             ..SparqlOptions::default()
         };
         let outcome = self
@@ -641,7 +623,9 @@ impl AppServices {
             .map_err(DomainError::from)?;
         if outcome.payload.truncated {
             return Err(DomainError::Unavailable(
-                "object relationship result exceeded its 10000-row safety bound".to_owned(),
+                format!(
+                    "object relationship result exceeded its {OBJECT_RELATION_ROW_LIMIT}-row safety bound"
+                ),
             ));
         }
         let value: serde_json::Value = serde_json::from_slice(&outcome.payload.body)?;
@@ -662,6 +646,24 @@ impl AppServices {
         iris.sort();
         iris.dedup();
         Ok(iris)
+    }
+
+    async fn indexed_object_relations(
+        &self,
+        iri: &str,
+        sequence_iris: &[String],
+        scope: GraphScope,
+    ) -> Result<ObjectRelations, DomainError> {
+        let source = self.triple_source.clone();
+        let iri = iri.to_owned();
+        let sequence_iris = sequence_iris.to_vec();
+        tokio::task::spawn_blocking(move || {
+            collect_object_relations(source.as_ref(), &iri, &sequence_iris, &scope)
+        })
+        .await
+        .map_err(|error| {
+            DomainError::Database(format!("object relationship lookup panicked: {error}"))
+        })?
     }
 
     async fn object_visualization(
@@ -841,6 +843,181 @@ impl AppServices {
             });
         }
         Ok(items)
+    }
+}
+
+fn collect_object_relations(
+    source: &dyn TripleSource,
+    target: &str,
+    target_sequences: &[String],
+    scope: &GraphScope,
+) -> Result<ObjectRelations, DomainError> {
+    let target_object = PatternObject::Iri(target.to_owned());
+    let incoming = scan_scoped(source, None, None, Some(&target_object), scope)?;
+    let mut collections = BTreeSet::new();
+    let mut direct_uses = HashSet::new();
+    let mut middles = HashSet::new();
+    for triple in incoming {
+        if let SubjectTerm::Iri(subject) = &triple.subject {
+            if matches!(triple.predicate.as_str(), SBOL2_MEMBER | SBOL3_MEMBER) {
+                collections.insert(subject.as_str().to_owned());
+            }
+            if subject.as_str() != target {
+                direct_uses.insert(subject.as_str().to_owned());
+            }
+        }
+        if triple.predicate.as_str() != SBH_TOP_LEVEL {
+            middles.insert(triple.subject);
+        }
+    }
+
+    let mut indirect_uses = HashSet::new();
+    for middle in middles {
+        let middle_object = pattern_object_for_subject(&middle);
+        for triple in scan_scoped(source, None, None, Some(&middle_object), scope)? {
+            if let SubjectTerm::Iri(subject) = triple.subject {
+                if subject.as_str() != target {
+                    indirect_uses.insert(subject.into_inner());
+                }
+            }
+        }
+        enforce_relation_bound(indirect_uses.len())?;
+    }
+
+    direct_uses.extend(indirect_uses);
+    let mut uses = retain_typed_iris(source, direct_uses, scope)?;
+    uses.sort();
+    enforce_relation_bound(uses.len())?;
+
+    let mut twin_candidates = HashSet::new();
+    if !target_sequences.is_empty() {
+        let mut elements = HashSet::new();
+        for sequence in target_sequences {
+            let subject = PatternSubject::Iri(sequence.clone());
+            for triple in scan_scoped(source, Some(&subject), None, None, scope)? {
+                if matches!(triple.predicate.as_str(), SBOL2_ELEMENTS | SBOL3_ELEMENTS) {
+                    elements.insert(triple.object);
+                }
+            }
+        }
+
+        let mut matching_sequences = HashSet::new();
+        for element in elements {
+            let element = pattern_object_for_term(&element);
+            for predicate in [SBOL2_ELEMENTS, SBOL3_ELEMENTS] {
+                for triple in scan_scoped(source, None, Some(predicate), Some(&element), scope)? {
+                    matching_sequences.insert(triple.subject);
+                }
+            }
+        }
+
+        for sequence in matching_sequences {
+            let sequence = pattern_object_for_subject(&sequence);
+            for predicate in [SBOL2_SEQUENCE, SBOL3_SEQUENCE] {
+                for triple in scan_scoped(source, None, Some(predicate), Some(&sequence), scope)? {
+                    if let SubjectTerm::Iri(subject) = triple.subject {
+                        if subject.as_str() != target {
+                            twin_candidates.insert(subject.into_inner());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut twins = retain_typed_iris(source, twin_candidates, scope)?;
+    twins.sort();
+    enforce_relation_bound(twins.len())?;
+
+    Ok(ObjectRelations {
+        collections: collections.into_iter().collect(),
+        uses,
+        twins,
+    })
+}
+
+fn retain_typed_iris(
+    source: &dyn TripleSource,
+    candidates: HashSet<String>,
+    scope: &GraphScope,
+) -> Result<Vec<String>, DomainError> {
+    let mut typed = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let subject = PatternSubject::Iri(candidate.clone());
+        if !scan_scoped(source, Some(&subject), Some(RDF_TYPE), None, scope)?.is_empty() {
+            typed.push(candidate);
+        }
+    }
+    Ok(typed)
+}
+
+fn scan_scoped(
+    source: &dyn TripleSource,
+    subject: Option<&PatternSubject>,
+    predicate: Option<&str>,
+    object: Option<&PatternObject>,
+    scope: &GraphScope,
+) -> Result<Vec<Triple>, DomainError> {
+    let mut triples = Vec::new();
+    match scope {
+        GraphScope::Union => {
+            triples = source.scan_pattern(
+                subject,
+                predicate,
+                object,
+                None,
+                (OBJECT_RELATION_ROW_LIMIT + 1) as i64,
+            )?;
+        }
+        GraphScope::Only(graphs) => {
+            for graph in graphs {
+                let graph = StorageGraphFilter::Iri(graph.clone());
+                let remaining = OBJECT_RELATION_ROW_LIMIT
+                    .saturating_sub(triples.len())
+                    .saturating_add(1);
+                triples.extend(source.scan_pattern(
+                    subject,
+                    predicate,
+                    object,
+                    Some(&graph),
+                    remaining as i64,
+                )?);
+                enforce_relation_bound(triples.len())?;
+            }
+        }
+    }
+    enforce_relation_bound(triples.len())?;
+    Ok(triples)
+}
+
+fn enforce_relation_bound(len: usize) -> Result<(), DomainError> {
+    if len > OBJECT_RELATION_ROW_LIMIT {
+        return Err(DomainError::Unavailable(format!(
+            "object relationship result exceeded its {OBJECT_RELATION_ROW_LIMIT}-row safety bound"
+        )));
+    }
+    Ok(())
+}
+
+fn pattern_object_for_subject(subject: &SubjectTerm) -> PatternObject {
+    match subject {
+        SubjectTerm::Iri(value) => PatternObject::Iri(value.as_str().to_owned()),
+        SubjectTerm::BlankNode(value) => PatternObject::Blank(value.clone()),
+    }
+}
+
+fn pattern_object_for_term(term: &ObjectTerm) -> PatternObject {
+    match term {
+        ObjectTerm::Iri(value) => PatternObject::Iri(value.as_str().to_owned()),
+        ObjectTerm::BlankNode(value) => PatternObject::Blank(value.clone()),
+        ObjectTerm::Literal {
+            value,
+            datatype,
+            language,
+        } => PatternObject::Literal {
+            value: value.clone(),
+            datatype: datatype.as_str().to_owned(),
+            language: language.clone(),
+        },
     }
 }
 
