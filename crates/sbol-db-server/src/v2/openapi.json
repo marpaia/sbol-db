@@ -297,41 +297,22 @@
           "confirmation": { "type": "string", "description": "The exact target-specific phrase documented by the operation." }
         }
       },
-      "BackupDocument": {
+      "CompleteBackupTrigger": {
         "type": "object",
-        "required": ["document_iri", "name", "description", "source_uri", "ntriples"],
+        "additionalProperties": false,
         "properties": {
-          "document_iri": { "type": ["string", "null"] },
-          "name": { "type": ["string", "null"] },
-          "description": { "type": ["string", "null"] },
-          "source_uri": { "type": ["string", "null"] },
-          "ntriples": { "type": "string" }
+          "trigger": { "type": "string", "enum": ["manual", "pre_deploy"], "default": "manual" },
+          "idempotency_key": { "type": "string", "maxLength": 200, "description": "Required for pre_deploy; use a release or commit identifier." }
         }
       },
-      "BackupArchive": {
+      "CompleteBackupStatus": {
         "type": "object",
-        "required": ["format", "version", "created_at", "scope", "documents", "checksum"],
+        "required": ["enabled", "strategy", "components", "recent"],
         "properties": {
-          "format": { "type": "string", "const": "sbol-db-registry-backup" },
-          "version": { "type": "integer", "const": 1 },
-          "created_at": { "type": "string", "format": "date-time" },
-          "scope": { "type": "string", "const": "registry_graphs_only" },
-          "documents": { "type": "array", "items": { "$ref": "#/components/schemas/BackupDocument" } },
-          "checksum": { "type": "string", "description": "SHA3-256 over the canonical archive payload." }
-        }
-      },
-      "BackupValidation": {
-        "type": "object",
-        "required": ["valid", "format", "version", "checksum", "documents", "confirmation", "scope", "excludes"],
-        "properties": {
-          "valid": { "type": "boolean", "const": true },
-          "format": { "type": "string" },
-          "version": { "type": "integer" },
-          "checksum": { "type": "string" },
-          "documents": { "type": "integer" },
-          "confirmation": { "type": "string" },
-          "scope": { "type": "string" },
-          "excludes": { "type": "array", "items": { "type": "string" } }
+          "enabled": { "type": "boolean" },
+          "strategy": { "type": "string", "const": "complete_encrypted_checkpoint" },
+          "components": { "type": "array", "items": { "type": "string", "enum": ["rocksdb", "blobs", "search", "acme"] } },
+          "recent": { "type": "array", "items": { "type": "object" } }
         }
       },
       "Error": {
@@ -1692,22 +1673,13 @@
     },
     "/admin/backup": {
       "get": {
-        "tags": ["Administration"], "summary": "Export a portable registry archive", "description": "Exports SBOL document graphs only; excludes accounts, tokens, passwords, configuration, secrets, blobs, and operational state.", "operationId": "v2AdminBackup",
-        "responses": { "200": { "description": "Integrity-checked registry archive.", "headers": { "Content-Disposition": { "schema": { "type": "string" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BackupArchive" } } } } }
-      }
-    },
-    "/admin/backup/validate": {
+        "tags": ["Administration"], "summary": "Read complete-backup capability and recent jobs", "operationId": "v2AdminBackupStatus",
+        "responses": { "200": { "description": "Complete-backup status.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CompleteBackupStatus" } } } } }
+      },
       "post": {
-        "tags": ["Administration"], "summary": "Validate a registry archive without mutation", "operationId": "v2AdminValidateBackup",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BackupArchive" } } } },
-        "responses": { "200": { "description": "Validation result and exact restore confirmation phrase.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BackupValidation" } } } }, "400": { "$ref": "#/components/responses/Error" } }
-      }
-    },
-    "/admin/backup/restore": {
-      "post": {
-        "tags": ["Administration"], "summary": "Atomically restore a verified registry archive", "description": "Requires the checksum-derived confirmation returned by validation. A full search rebuild is queued after commit.", "operationId": "v2AdminRestoreBackup",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["archive", "confirmation"], "properties": { "archive": { "$ref": "#/components/schemas/BackupArchive" }, "confirmation": { "type": "string" } } } } } },
-        "responses": { "200": { "description": "Restore and rebuild result.", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "$ref": "#/components/responses/Error" } }
+        "tags": ["Administration"], "summary": "Enqueue a complete encrypted backup", "description": "Manual UI and pre-deploy requests enqueue the same durable complete_backup job used by the scheduler. The artifact includes RocksDB, blobs, search state, and ACME state.", "operationId": "v2AdminTriggerBackup",
+        "requestBody": { "required": false, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CompleteBackupTrigger" } } } },
+        "responses": { "202": { "description": "Complete-backup job accepted.", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "$ref": "#/components/responses/Error" }, "501": { "$ref": "#/components/responses/Error" } }
       }
     },
     "/admin/audit": {

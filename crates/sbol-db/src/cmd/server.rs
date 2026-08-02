@@ -13,6 +13,7 @@ use sbol_db_app::{
     DEFAULT_REGISTRY_DATABASE_PREFIX,
 };
 use sbol_db_backend::Backend;
+use sbol_db_backup::{load_or_create_encryption, CompleteBackupConfig, CompleteBackupService};
 use sbol_db_jobs::{default_registry, SearchIndexHandles, Worker, WorkerConfig};
 use sbol_db_search::ranked_text::RankedTextIndex;
 use sbol_db_search::VectorIndexMaintainerRegistry;
@@ -48,6 +49,7 @@ pub async fn run(
         worker_queues,
         worker_id,
         search_config,
+        backup_recovery_recipient,
         ..
     } = args;
     let EdgeHttpConfig {
@@ -57,6 +59,12 @@ pub async fn run(
         tls_handshake_timeout,
     } = edge_http;
     let production = runtime.profile() == crate::cli::RuntimeProfile::Production;
+    if production && no_worker {
+        bail!(
+            "the production profile requires the embedded worker for complete backups; \
+             remove --no-worker"
+        );
+    }
     if production && !operations_bind.ip().is_loopback() {
         bail!(
             "production --operations-bind must use a loopback address; \
@@ -83,6 +91,43 @@ pub async fn run(
         )
     } else {
         tracing::info!("embedded worker disabled (--no-worker); HTTP-only node");
+        None
+    };
+
+    let backup_service = if production {
+        let layout = runtime
+            .layout()
+            .context("production runtime is missing its managed data layout")?;
+        let rocksdb = backend
+            .rocksdb
+            .as_ref()
+            .context("production complete backups require the RocksDB backend")?;
+        let recovery_recipient = backup_recovery_recipient
+            .as_deref()
+            .context("production requires SBOL_DB_BACKUP_RECOVERY_RECIPIENT")?;
+        let verification_identity_path =
+            layout.backups_root().join(".verification-identity.agekey");
+        let encryption =
+            load_or_create_encryption(recovery_recipient, &verification_identity_path)?;
+        let service = Arc::new(CompleteBackupService::new(
+            CompleteBackupConfig {
+                db: rocksdb.db.clone(),
+                blobs_root: layout.blob_root().to_path_buf(),
+                search_root: layout.search_root().to_path_buf(),
+                acme_root: layout.acme_root().to_path_buf(),
+                backups_root: layout.backups_root().to_path_buf(),
+                generation: layout.generation(),
+                layout_version: layout.layout_version().to_owned(),
+                application_version: env!("CARGO_PKG_VERSION").to_owned(),
+            },
+            encryption,
+        ));
+        worker_setup
+            .as_mut()
+            .expect("production requires the embedded worker")
+            .backups = Some(service.clone());
+        Some(service)
+    } else {
         None
     };
 
@@ -115,6 +160,7 @@ pub async fn run(
     if let Some(layout) = runtime.layout() {
         config.text_index_path = Some(layout.search_root().to_path_buf());
     }
+    config.complete_backups_enabled = backup_service.is_some();
     let sparql_update = Arc::new(SparqlUpdateEngine::new(
         backend.triple_source.clone(),
         backend.triple_writer.clone(),
@@ -558,6 +604,9 @@ pub(crate) struct WorkerSetup {
     /// that assembles search plugins installs the same validated registry used
     /// by its query router.
     pub vector_indexes: Option<Arc<VectorIndexMaintainerRegistry>>,
+    /// Complete-backup executor installed only by the embedded production
+    /// appliance worker.
+    pub backups: Option<Arc<CompleteBackupService>>,
 }
 
 impl WorkerSetup {
@@ -580,6 +629,9 @@ impl WorkerSetup {
         }
         if let Some(vector_indexes) = self.vector_indexes {
             worker = worker.with_vector_indexes(vector_indexes);
+        }
+        if let Some(backups) = self.backups {
+            worker = worker.with_backups(backups);
         }
         tokio::spawn(async move {
             if let Err(err) = worker.run(cancel).await {
@@ -666,6 +718,7 @@ pub(crate) async fn build_worker_setup(
         search: None,
         // Installed by a configured search deployment.
         vector_indexes: None,
+        backups: None,
     })
 }
 

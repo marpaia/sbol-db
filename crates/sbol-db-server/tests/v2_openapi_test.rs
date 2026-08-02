@@ -362,8 +362,6 @@ async fn openapi_json_is_served_and_wellformed() {
         "/admin/search",
         "/admin/search/rebuild",
         "/admin/backup",
-        "/admin/backup/validate",
-        "/admin/backup/restore",
         "/admin/audit",
         "/search",
         "/search/facets",

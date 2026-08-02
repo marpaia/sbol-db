@@ -35,6 +35,7 @@ fn args() -> ServerArgs {
         worker_queues: None,
         worker_id: None,
         search_config: None,
+        backup_recovery_recipient: None,
     }
 }
 
@@ -61,7 +62,10 @@ fn production_defaults_to_https_and_redirect() {
     let tls = config.tls.unwrap();
     assert_eq!(tls.hostname(), "registry.example.org");
     assert_eq!(tls.directory_url(), LETS_ENCRYPT_PRODUCTION_DIRECTORY);
-    assert_eq!(tls.cache_root(), temp.path().join("acme"));
+    assert_eq!(
+        tls.cache_root(),
+        runtime.layout().expect("managed layout").acme_root()
+    );
 }
 
 #[test]

@@ -122,7 +122,10 @@ impl EdgeHttpConfig {
                         hostname,
                         contact,
                         directory_url,
-                        cache_root: runtime.data_root().join("acme"),
+                        cache_root: runtime
+                            .layout()
+                            .map(|layout| layout.acme_root().to_path_buf())
+                            .unwrap_or_else(|| runtime.data_root().join("acme")),
                         redirect_origin,
                     }),
                     redirect_bind,

@@ -34,6 +34,9 @@ async fn main() -> Result<()> {
     if let Command::Util { action } = cli.command {
         return cmd::util::run(action).await;
     }
+    if let Command::Backup { action } = cli.command {
+        return cmd::backup::run(action);
+    }
 
     // RDF acquisition and normalization are target-free and preserve the raw
     // export, so they must not open or mutate a destination database.
@@ -130,7 +133,7 @@ async fn main() -> Result<()> {
                 server_runtime
                     .take()
                     .expect("server runtime is resolved before backend open"),
-                args,
+                *args,
                 edge_http
                     .take()
                     .expect("edge HTTP config is resolved before backend open"),
@@ -196,6 +199,7 @@ async fn main() -> Result<()> {
         Command::NormalizeSynbiohubRdf { .. } => unreachable!("handled before backend open"),
         Command::CopyPostgresToRocksdb { .. } => unreachable!("handled before backend open"),
         Command::Util { .. } => unreachable!("handled before backend open"),
+        Command::Backup { .. } => unreachable!("handled before backend open"),
     }
 }
 

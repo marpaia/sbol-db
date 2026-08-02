@@ -175,6 +175,7 @@ async fn rebuild_populates_ranks_and_index() {
         }),
         vector_indexes: None,
         config: None,
+        backups: None,
     };
 
     RebuildSearchIndexHandler
@@ -313,6 +314,7 @@ async fn rebuild_indexes_and_clusters_native_imports_without_compatibility_marke
         }),
         vector_indexes: None,
         config: None,
+        backups: None,
     };
 
     let outcome = RebuildSearchIndexHandler
@@ -383,6 +385,7 @@ async fn rebuild_without_search_handle_fails_clearly() {
         search: None,
         vector_indexes: None,
         config: None,
+        backups: None,
     };
 
     let err = RebuildSearchIndexHandler
@@ -423,6 +426,7 @@ async fn older_rebuild_signal_coalesces_into_the_newest_pending_job() {
         search: None,
         vector_indexes: None,
         config: None,
+        backups: None,
     };
     let outcome = RebuildSearchIndexHandler
         .run(ctx, serde_json::json!({}))

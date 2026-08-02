@@ -6,13 +6,13 @@
 //! All families share tuned options (Snappy compression and a bloom filter for
 //! fast point lookups, which the get-before-put insert path leans on).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use rocksdb::{
-    BlockBasedOptions, BoundColumnFamily, Cache, DBCompressionType, DBWithThreadMode,
-    MultiThreaded, Options, WriteBatch,
+    checkpoint::Checkpoint, BlockBasedOptions, BoundColumnFamily, Cache, DBCompressionType,
+    DBWithThreadMode, MultiThreaded, Options, WriteBatch, DEFAULT_COLUMN_FAMILY_NAME,
 };
 use sbol_db_core::DomainError;
 
@@ -112,6 +112,7 @@ pub const SEP: u8 = 0x1F;
 pub struct Db {
     inner: Arc<Inner>,
     terms: Arc<TermDict>,
+    read_only: bool,
 }
 
 /// Shared id->term cache backing [`Db::resolve_term`]. A term id is a content
@@ -163,7 +164,65 @@ impl Db {
         Ok(Self {
             inner: Arc::new(inner),
             terms: Arc::new(TermDict::default()),
+            read_only: false,
         })
+    }
+
+    /// Open an existing database without permitting any mutations. Backup
+    /// verification uses this to prove a decrypted checkpoint is structurally
+    /// complete without modifying the candidate restore generation.
+    pub fn open_read_only(path: &Path) -> Result<Self, DomainError> {
+        let actual = Inner::list_cf(&Options::default(), path).map_err(db_err)?;
+        let actual: BTreeSet<_> = actual.into_iter().collect();
+        let expected: BTreeSet<_> = std::iter::once(DEFAULT_COLUMN_FAMILY_NAME.to_owned())
+            .chain(COLUMN_FAMILIES.iter().map(|name| (*name).to_owned()))
+            .collect();
+        if actual != expected {
+            let missing: Vec<_> = expected.difference(&actual).cloned().collect();
+            let unexpected: Vec<_> = actual.difference(&expected).cloned().collect();
+            return Err(DomainError::Database(format!(
+                "RocksDB checkpoint column-family mismatch; missing={missing:?}, unexpected={unexpected:?}"
+            )));
+        }
+        let inner = Inner::open_cf_for_read_only(
+            &Options::default(),
+            path,
+            COLUMN_FAMILIES.iter().copied(),
+            false,
+        )
+        .map_err(db_err)?;
+        Ok(Self {
+            inner: Arc::new(inner),
+            terms: Arc::new(TermDict::default()),
+            read_only: true,
+        })
+    }
+
+    /// Create a native RocksDB checkpoint containing every column family. The
+    /// checkpoint API takes a consistent engine snapshot and hard-links
+    /// immutable SST files when the destination shares a filesystem.
+    pub fn create_checkpoint(&self, destination: &Path) -> Result<(), DomainError> {
+        self.ensure_writable()?;
+        if destination.exists() {
+            return Err(DomainError::Io(format!(
+                "checkpoint destination already exists: {}",
+                destination.display()
+            )));
+        }
+        self.inner.flush_wal(true).map_err(db_err)?;
+        Checkpoint::new(self.inner.as_ref())
+            .and_then(|checkpoint| checkpoint.create_checkpoint(destination))
+            .map_err(db_err)
+    }
+
+    fn ensure_writable(&self) -> Result<(), DomainError> {
+        if self.read_only {
+            Err(DomainError::Database(
+                "attempted to mutate a read-only RocksDB checkpoint".to_owned(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     /// Resolve a term id to its term, caching the decode in the shared
@@ -195,10 +254,12 @@ impl Db {
     }
 
     pub fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<(), DomainError> {
+        self.ensure_writable()?;
         self.inner.put_cf(&self.cf(cf), key, value).map_err(db_err)
     }
 
     pub fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<(), DomainError> {
+        self.ensure_writable()?;
         self.inner.delete_cf(&self.cf(cf), key).map_err(db_err)
     }
 
@@ -213,6 +274,7 @@ impl Db {
 
     /// Atomically commit a batch of writes across column families.
     pub fn write(&self, batch: WriteBatch) -> Result<(), DomainError> {
+        self.ensure_writable()?;
         self.inner.write(batch).map_err(db_err)
     }
 
@@ -286,6 +348,9 @@ impl Db {
     /// Trigger a full manual compaction of every column family. Synchronous and
     /// potentially slow; callers run it on a blocking thread.
     pub fn compact_all(&self) {
+        if self.read_only {
+            return;
+        }
         for cf in COLUMN_FAMILIES {
             self.inner
                 .compact_range_cf(&self.cf(cf), None::<&[u8]>, None::<&[u8]>);
@@ -327,4 +392,30 @@ pub fn compose(parts: &[&[u8]]) -> Vec<u8> {
         out.extend_from_slice(part);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checkpoint_reopens_read_only_with_all_state() {
+        let source = tempfile::tempdir().unwrap();
+        let checkpoint_parent = tempfile::tempdir().unwrap();
+        let checkpoint_path = checkpoint_parent.path().join("checkpoint");
+        let db = Db::open(source.path()).unwrap();
+        db.put_cf("app_config", b"instance", b"complete-state")
+            .unwrap();
+
+        db.create_checkpoint(&checkpoint_path).unwrap();
+        let checkpoint = Db::open_read_only(&checkpoint_path).unwrap();
+
+        assert_eq!(
+            checkpoint.get_cf("app_config", b"instance").unwrap(),
+            Some(b"complete-state".to_vec())
+        );
+        assert!(checkpoint
+            .put_cf("app_config", b"instance", b"mutated")
+            .is_err());
+    }
 }
