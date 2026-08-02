@@ -16,6 +16,14 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 async fn routers(config: ServerConfig) -> (Router, Router, TempDir) {
+    let (public, operations, directory, _) = routers_with_tls(config, false).await;
+    (public, operations, directory)
+}
+
+async fn routers_with_tls(
+    config: ServerConfig,
+    tls_required: bool,
+) -> (Router, Router, TempDir, Arc<Metrics>) {
     let directory = tempfile::tempdir().expect("tempdir");
     let url = format!("sqlite://{}", directory.path().join("surface.db").display());
     let backend = Backend::open(&url).await.expect("open sqlite backend");
@@ -27,6 +35,10 @@ async fn routers(config: ServerConfig) -> (Router, Router, TempDir) {
         .await
         .expect("migrate");
     let services = Arc::new(AppServices::from_backend(&backend));
+    let metrics = Metrics::install(None, env!("CARGO_PKG_VERSION"));
+    if tls_required {
+        metrics.require_tls();
+    }
     let state = AppState {
         service: backend.store.clone(),
         sparql: Arc::new(SparqlEngine::new(backend.triple_source.clone())),
@@ -35,7 +47,7 @@ async fn routers(config: ServerConfig) -> (Router, Router, TempDir) {
             backend.triple_writer.clone(),
         )),
         app: services,
-        metrics: Metrics::install(None, env!("CARGO_PKG_VERSION")),
+        metrics: metrics.clone(),
         jobs: backend.jobs.clone(),
         lab: backend.lab.clone(),
         config: config.clone(),
@@ -49,6 +61,7 @@ async fn routers(config: ServerConfig) -> (Router, Router, TempDir) {
         public_router(state.clone(), config.clone()),
         operations_router(state, config),
         directory,
+        metrics,
     )
 }
 
@@ -87,6 +100,24 @@ async fn public_and_operations_routes_are_disjoint() {
 }
 
 #[tokio::test]
+async fn readiness_waits_for_required_tls_certificate() {
+    let (_public, operations, _directory, metrics) =
+        routers_with_tls(ServerConfig::default(), true).await;
+
+    assert_eq!(
+        get(&operations, "/readyz").await.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    metrics.mark_tls_ready(chrono::Utc::now().timestamp() + 60);
+    assert_eq!(get(&operations, "/readyz").await.status(), StatusCode::OK);
+    metrics.mark_tls_ready(chrono::Utc::now().timestamp() - 1);
+    assert_eq!(
+        get(&operations, "/readyz").await.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+}
+
+#[tokio::test]
 async fn same_origin_policy_emits_no_cross_origin_permission() {
     let config = ServerConfig {
         cors: CorsPolicy::SameOrigin,
@@ -105,6 +136,37 @@ async fn same_origin_policy_emits_no_cross_origin_permission() {
     assert!(response
         .headers()
         .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+        .is_none());
+}
+
+#[tokio::test]
+async fn production_security_headers_apply_only_to_public_responses() {
+    let config = ServerConfig {
+        https_security_headers: true,
+        ..ServerConfig::default()
+    };
+    let (public, operations, _directory) = routers(config).await;
+
+    let public_response = get(&public, "/api/v2").await;
+    for (name, expected) in [
+        ("strict-transport-security", "max-age=31536000"),
+        ("x-content-type-options", "nosniff"),
+        ("x-frame-options", "DENY"),
+        ("referrer-policy", "same-origin"),
+    ] {
+        assert_eq!(
+            public_response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok()),
+            Some(expected),
+            "missing or incorrect {name}"
+        );
+    }
+    assert!(get(&operations, "/healthz")
+        .await
+        .headers()
+        .get("strict-transport-security")
         .is_none());
 }
 
