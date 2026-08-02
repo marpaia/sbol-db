@@ -26,6 +26,7 @@ body {
 }
 
 .light-mode {
+  --sbol-brand-promoter: hsl(171 66% 31%);
   --scalar-color-1: hsl(218 36% 13%);
   --scalar-color-2: hsl(215 12% 43%);
   --scalar-color-3: hsl(215 10% 55%);
@@ -53,6 +54,7 @@ body {
 }
 
 .dark-mode {
+  --sbol-brand-promoter: hsl(178 55% 60%);
   --scalar-color-1: hsl(40 25% 92%);
   --scalar-color-2: hsl(39 10% 64%);
   --scalar-color-3: hsl(39 8% 49%);
@@ -163,21 +165,13 @@ body {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
-  border: 1px solid var(--scalar-border-color);
-  border-radius: 4px;
-  background: var(--scalar-background-card);
 }
 
 .sbol-docs-mark svg {
-  width: 1.4rem;
-  height: 1.4rem;
+  width: 78%;
+  height: 78%;
+  stroke: var(--sbol-brand-promoter);
 }
-
-.sbol-mark-rail { stroke: var(--scalar-color-3); }
-.sbol-mark-promoter { stroke: var(--sbol-promoter); }
-.sbol-mark-cds { fill: color-mix(in srgb, var(--sbol-cds) 15%, transparent); stroke: var(--sbol-cds); }
-.sbol-mark-terminator { stroke: var(--sbol-terminator); }
 
 .sbol-docs-title-group {
   display: grid;

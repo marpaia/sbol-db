@@ -66,11 +66,9 @@ fn docs_header(subtitle: &str) -> String {
         r#"<header class="sbol-docs-header">
       <a class="sbol-docs-brand" href="/" aria-label="Back to SBOL DB">
         <span class="sbol-docs-mark" aria-hidden="true">
-          <svg viewBox="0 0 32 32" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 23H29" class="sbol-mark-rail" />
-            <path d="M5 22V10h6m0 0-3-3m3 3-3 3" class="sbol-mark-promoter" />
-            <path d="M13 16h7l4 4-4 4h-7z" class="sbol-mark-cds" />
-            <path d="M27 12v11m-4-11h8" class="sbol-mark-terminator" />
+          <svg viewBox="0 0 45 45" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m 29.000111,5.2464081 8.5,7.4999999 -8.5,7.3333" />
+            <path d="m 7.5001114,39.746408 0,-27 28.9999996,0" />
           </svg>
         </span>
         <span class="sbol-docs-title-group">

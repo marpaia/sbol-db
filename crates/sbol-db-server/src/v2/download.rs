@@ -110,7 +110,9 @@ async fn fetch_closure(
     scope: GraphScope,
 ) -> Result<Vec<Triple>, V2Error> {
     let resolver = Arc::new(state.app.federation());
-    let downloader = Downloader::new(state.app.sparql.clone()).with_remote_resolver(resolver);
+    let downloader = Downloader::new(state.app.sparql.clone())
+        .with_database_prefix(state.app.registry_namespace.database_prefix())
+        .with_remote_resolver(resolver);
     let triples = match format {
         DownloadFormat::SbolNonRecursive => downloader.fetch_non_recursive(uri, scope).await?,
         _ => downloader.fetch_recursive(uri, scope).await?,

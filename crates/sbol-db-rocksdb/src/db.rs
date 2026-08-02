@@ -81,8 +81,10 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     "acc_meta",       // graph + SEP + iri -> MetaRecord JSON
     "acc_toplevel",   // graph + SEP + displayId + SEP + iri -> () (top-levels in sort order)
     "acc_bytype",     // graph + SEP + type + SEP + displayId + SEP + iri -> ()
+    "acc_byrole",     // graph + SEP + role + SEP + displayId + SEP + iri -> ()
     "acc_member",     // graph + SEP + collection + SEP + displayId + SEP + iri -> ()
     "acc_rootmember", // graph + SEP + collection + SEP + displayId + SEP + iri -> () (anti-join)
+    "acc_member_of",  // graph + SEP + member iri -> () (reverse-membership existence)
     "acc_facet",      // graph + SEP + kind + SEP + value -> ()
     "acc_count",      // graph + SEP + scope -> u64 LE (precomputed counts)
     "acc_dirty",      // graph -> () (presence = indexes stale, rebuild on next read)
@@ -228,6 +230,34 @@ impl Db {
             let (key, value) = item.map_err(db_err)?;
             if !key.starts_with(prefix) {
                 break;
+            }
+            if !f(&key, &value)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Iterate a prefix range strictly after an opaque prior key. The cursor
+    /// is the exact last key returned by a previous page, so this remains
+    /// stable without OFFSET even while the database contains many graphs.
+    pub fn for_each_prefix_after(
+        &self,
+        cf: &str,
+        prefix: &[u8],
+        after: Option<&[u8]>,
+        mut f: impl FnMut(&[u8], &[u8]) -> Result<bool, DomainError>,
+    ) -> Result<(), DomainError> {
+        let handle = self.cf(cf);
+        let start = after.unwrap_or(prefix);
+        let mode = rocksdb::IteratorMode::From(start, rocksdb::Direction::Forward);
+        for item in self.inner.iterator_cf(&handle, mode) {
+            let (key, value) = item.map_err(db_err)?;
+            if !key.starts_with(prefix) {
+                break;
+            }
+            if after.is_some_and(|cursor| key.as_ref() == cursor) {
+                continue;
             }
             if !f(&key, &value)? {
                 break;

@@ -191,6 +191,145 @@
   .admin-instrument {
     font-variant-numeric: tabular-nums;
   }
+
+  .terminal-entry,
+  .terminal-output,
+  .terminal-progress {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  .terminal-command-text {
+    display: inline-block;
+    overflow: hidden;
+    padding-right: 0.25ch;
+    clip-path: inset(0 100% 0 0);
+    border-right: 1px solid transparent;
+  }
+
+  .terminal-progress-fill {
+    transform: scaleX(0);
+  }
+
+  .terminal-progress-detail {
+    opacity: 0;
+  }
+
+  .terminal-session[data-running="true"] .terminal-entry {
+    animation: terminal-line-in 180ms var(--ease-out) var(--terminal-delay)
+      forwards;
+  }
+
+  .terminal-session[data-running="true"] .terminal-command-text {
+    animation:
+      terminal-type var(--terminal-duration)
+        steps(var(--terminal-characters), start)
+        calc(var(--terminal-delay) + 70ms) forwards,
+      terminal-caret var(--terminal-duration) step-end
+        calc(var(--terminal-delay) + 70ms) forwards;
+  }
+
+  .terminal-session[data-running="true"] .terminal-output {
+    animation: terminal-line-in 180ms var(--ease-out)
+      calc(var(--terminal-delay) + var(--terminal-duration) + 140ms) forwards;
+  }
+
+  .terminal-session[data-running="true"] .terminal-progress {
+    animation: terminal-line-in 180ms var(--ease-out)
+      calc(
+        var(--terminal-delay) + var(--terminal-duration) + 140ms +
+          var(--terminal-progress-offset)
+      )
+      forwards;
+  }
+
+  .terminal-session[data-running="true"] .terminal-progress-fill {
+    animation: terminal-progress-fill var(--terminal-progress-duration) linear
+      calc(
+        var(--terminal-delay) + var(--terminal-duration) + 140ms +
+          var(--terminal-progress-offset)
+      )
+      forwards;
+  }
+
+  .terminal-session[data-running="true"] .terminal-progress-detail {
+    animation: terminal-progress-detail-in 140ms var(--ease-out)
+      calc(
+        var(--terminal-delay) + var(--terminal-duration) + 140ms +
+          var(--terminal-progress-offset) + var(--terminal-progress-duration)
+      )
+      forwards;
+  }
+}
+
+@keyframes terminal-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes terminal-type {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes terminal-caret {
+  0%,
+  20%,
+  40%,
+  60%,
+  80% {
+    border-right-color: rgb(110 231 183);
+  }
+
+  10%,
+  30%,
+  50%,
+  70%,
+  90%,
+  100% {
+    border-right-color: transparent;
+  }
+}
+
+@keyframes terminal-progress-fill {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes terminal-progress-detail-in {
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 639px) {
+  .terminal-command-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    clip-path: none;
+  }
+
+  .terminal-session[data-running="true"] .terminal-command-text {
+    animation: terminal-line-in 180ms var(--ease-out)
+      calc(var(--terminal-delay) + 70ms) forwards;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -201,5 +340,26 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .terminal-entry,
+  .terminal-output,
+  .terminal-progress,
+  .terminal-command-text {
+    opacity: 1 !important;
+    transform: none !important;
+    clip-path: none !important;
+    border-right-color: transparent !important;
+    animation: none !important;
+  }
+
+  .terminal-progress-fill {
+    transform: scaleX(1) !important;
+    animation: none !important;
+  }
+
+  .terminal-progress-detail {
+    opacity: 1 !important;
+    animation: none !important;
   }
 }

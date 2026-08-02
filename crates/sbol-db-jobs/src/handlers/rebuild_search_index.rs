@@ -27,12 +27,14 @@ use std::sync::OnceLock;
 use async_trait::async_trait;
 use sbol_db_core::{GraphId, ObjectTerm, SubjectTerm, Triple};
 use sbol_db_search::keywords::{build_keywords, SoTerm};
-use sbol_db_search::pagerank::{link_graph_for_top_levels, pagerank, top_level_iris};
+use sbol_db_search::pagerank::pagerank;
 use sbol_db_search::ranked_text::IndexedPart;
 use sbol_db_search::{
     band_hashes, cluster_sequences, sketch, AlignOptions, Signature, SketchParams,
 };
-use sbol_db_storage::{JobStatus, ListJobsFilter, ListObjectsFilter, RankRow, SbolJob};
+use sbol_db_storage::{
+    JobStatus, ListJobsFilter, ListObjectsFilter, RankRow, SbolJob, TripleSource,
+};
 use serde_json::Value;
 
 use crate::context::JobContext;
@@ -121,19 +123,16 @@ impl JobHandler for RebuildSearchIndexHandler {
         })?;
 
         // Clusters -> PageRank -> tantivy, SBOLExplorer's `update_index` order.
-        //
-        // The triple source drives its async backend to completion synchronously,
-        // so the full-store scan runs on a blocking thread rather than a runtime
-        // worker.
+        // The production corpus is scanned in stable keyset pages. The first
+        // pass retains only the compact structures later stages actually need
+        // (top levels, resource adjacency, sequences, and part->sequence links)
+        // instead of materializing every RDF literal and relation at once.
         let triples = search.triples.clone();
-        let all_triples = tokio::task::spawn_blocking(move || {
-            triples.scan_pattern(None, None, None, None, i64::MAX)
-        })
-        .await
-        .map_err(|e| HandlerError::Other(format!("triple scan task join: {e}")))??;
-
+        let projection = tokio::task::spawn_blocking(move || scan_corpus(&triples))
+            .await
+            .map_err(|e| HandlerError::Other(format!("triple scan task join: {e}")))??;
         let native = native_objects(&ctx).await?;
-        let mut uris_set = top_level_iris(&all_triples);
+        let mut uris_set = projection.top_levels;
         uris_set.extend(native.iris.iter().cloned());
         let uris: Vec<String> = uris_set.iter().cloned().collect();
 
@@ -145,7 +144,12 @@ impl JobHandler for RebuildSearchIndexHandler {
         // keys match the align path's candidate lookups. A non-nucleotide sequence
         // yields no canonical k-mer and is left unsketched. Sketching is
         // CPU-bound, so it runs on a blocking thread.
-        let sequence_elements = collect_all_sequences(&all_triples);
+        let mut sequence_elements = projection
+            .sequences
+            .iter()
+            .map(|(iri, value)| (iri.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        sequence_elements.sort_by(|left, right| left.0.cmp(&right.0));
         let sketched_input = sequence_elements.len();
         let sketch_entries = tokio::task::spawn_blocking(move || build_sketches(sequence_elements))
             .await
@@ -157,7 +161,22 @@ impl JobHandler for RebuildSearchIndexHandler {
         // and persist the assignments. Alignment is CPU-bound, so it runs on a
         // blocking thread; the persisted assignments then drive the search-time
         // divide-by-2 duplicate penalty and answer `/similar`.
-        let part_sequences = collect_part_sequences(&all_triples, &uris_set);
+        let mut part_sequences = projection
+            .part_to_sequence
+            .iter()
+            .filter_map(|(part, sequence)| {
+                uris_set
+                    .contains(part)
+                    .then(|| {
+                        projection
+                            .sequences
+                            .get(sequence)
+                            .map(|value| (part.clone(), value.clone()))
+                    })
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        part_sequences.sort_by(|left, right| left.0.cmp(&right.0));
         let clustered_parts = part_sequences.len();
         let assignments = tokio::task::spawn_blocking(move || {
             cluster_sequences(part_sequences, &AlignOptions::default())
@@ -167,7 +186,7 @@ impl JobHandler for RebuildSearchIndexHandler {
         let clusters = distinct_cluster_count(&assignments);
         search.cluster.replace_clusters(assignments).await?;
 
-        let edges = link_graph_for_top_levels(&all_triples, &uris_set);
+        let edges = link_graph_from_adjacency(&projection.adjacency, &uris_set);
         let ranks = pagerank(&edges, &uris);
 
         let rank_rows: Vec<RankRow> = ranks
@@ -181,7 +200,13 @@ impl JobHandler for RebuildSearchIndexHandler {
         search.pagerank.replace_all_ranks(rank_rows).await?;
 
         let so_terms = load_so_terms(&ctx).await?;
-        let mut metas = collect_object_metadata(&all_triples, &uris_set);
+        let triples = search.triples.clone();
+        let metadata_top_levels = uris_set.clone();
+        let mut metas = tokio::task::spawn_blocking(move || {
+            scan_object_metadata(&triples, &metadata_top_levels)
+        })
+        .await
+        .map_err(|e| HandlerError::Other(format!("metadata scan task join: {e}")))??;
         // The physical graph of a native import is `graph:document:<uuid>`,
         // but callers are authorized against its public document IRI. Store
         // that public identity in the text index so ACL graph filters agree
@@ -289,133 +314,207 @@ struct ObjectMeta {
     sbol_type: Option<String>,
 }
 
+#[derive(Default)]
+struct CorpusProjection {
+    top_levels: HashSet<String>,
+    adjacency: HashMap<String, Vec<String>>,
+    sequences: HashMap<String, String>,
+    part_to_sequence: HashMap<String, String>,
+}
+
+const MAINTENANCE_PAGE_SIZE: usize = 50_000;
+
+fn scan_corpus(
+    source: &std::sync::Arc<dyn TripleSource>,
+) -> Result<CorpusProjection, sbol_db_core::DomainError> {
+    let mut projection = CorpusProjection::default();
+    scan_pages(source, |triples| {
+        for triple in triples {
+            if triple.predicate.as_str() == SBH_TOP_LEVEL {
+                if let (SubjectTerm::Iri(subject), ObjectTerm::Iri(object)) =
+                    (&triple.subject, &triple.object)
+                {
+                    if subject == object {
+                        projection.top_levels.insert(subject.as_str().to_owned());
+                    }
+                }
+            }
+            if let Some(object) = reference_object(&triple.object) {
+                projection
+                    .adjacency
+                    .entry(reference_subject(&triple.subject))
+                    .or_default()
+                    .push(object);
+            }
+            match triple.predicate.as_str() {
+                ELEMENTS | ELEMENTS_V3 => {
+                    if let (SubjectTerm::Iri(sequence), ObjectTerm::Literal { value, .. }) =
+                        (&triple.subject, &triple.object)
+                    {
+                        projection
+                            .sequences
+                            .entry(sequence.as_str().to_owned())
+                            .or_insert_with(|| value.clone());
+                    }
+                }
+                SEQUENCE | SEQUENCE_V3 => {
+                    if let (SubjectTerm::Iri(part), ObjectTerm::Iri(sequence)) =
+                        (&triple.subject, &triple.object)
+                    {
+                        projection
+                            .part_to_sequence
+                            .entry(part.as_str().to_owned())
+                            .or_insert_with(|| sequence.as_str().to_owned());
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    })?;
+    Ok(projection)
+}
+
+fn scan_object_metadata(
+    source: &std::sync::Arc<dyn TripleSource>,
+    top_levels: &HashSet<String>,
+) -> Result<HashMap<String, ObjectMeta>, sbol_db_core::DomainError> {
+    let mut metas = HashMap::new();
+    scan_pages(source, |triples| {
+        for triple in triples {
+            accumulate_object_metadata(&mut metas, triple, top_levels);
+        }
+        Ok(())
+    })?;
+    Ok(metas)
+}
+
+fn scan_pages(
+    source: &std::sync::Arc<dyn TripleSource>,
+    mut consume: impl FnMut(&[Triple]) -> Result<(), sbol_db_core::DomainError>,
+) -> Result<(), sbol_db_core::DomainError> {
+    let mut cursor: Option<String> = None;
+    loop {
+        let page = source.scan_all_page(cursor.as_deref(), MAINTENANCE_PAGE_SIZE)?;
+        consume(&page.items)?;
+        match page.next_cursor {
+            Some(next) if cursor.as_deref() != Some(next.as_str()) => cursor = Some(next),
+            Some(_) => {
+                return Err(sbol_db_core::DomainError::Database(
+                    "triple scan returned a non-advancing cursor".to_owned(),
+                ))
+            }
+            None => break,
+        }
+    }
+    Ok(())
+}
+
+fn reference_subject(subject: &SubjectTerm) -> String {
+    match subject {
+        SubjectTerm::Iri(iri) => iri.as_str().to_owned(),
+        SubjectTerm::BlankNode(node) => format!("_:{node}"),
+    }
+}
+
+fn reference_object(object: &ObjectTerm) -> Option<String> {
+    match object {
+        ObjectTerm::Iri(iri) => Some(iri.as_str().to_owned()),
+        ObjectTerm::BlankNode(node) => Some(format!("_:{node}")),
+        ObjectTerm::Literal { .. } => None,
+    }
+}
+
+fn link_graph_from_adjacency(
+    adjacency: &HashMap<String, Vec<String>>,
+    top_levels: &HashSet<String>,
+) -> Vec<(String, String)> {
+    let mut edges = HashSet::new();
+    for parent in top_levels {
+        let Some(direct) = adjacency.get(parent) else {
+            continue;
+        };
+        for middle in direct {
+            if top_levels.contains(middle) {
+                edges.insert((parent.clone(), middle.clone()));
+            }
+            if let Some(children) = adjacency.get(middle) {
+                for child in children {
+                    if top_levels.contains(child) {
+                        edges.insert((parent.clone(), child.clone()));
+                    }
+                }
+            }
+        }
+    }
+    edges.into_iter().collect()
+}
+
 /// Project each top-level object's searchable metadata out of the triple set,
 /// mirroring SBOLExplorer's index projection (displayId, title, description,
 /// version, rdf:type, SO role, biopax type).
+#[cfg(test)]
 fn collect_object_metadata(
     triples: &[Triple],
     top_levels: &std::collections::HashSet<String>,
 ) -> HashMap<String, ObjectMeta> {
     let mut metas: HashMap<String, ObjectMeta> = HashMap::new();
     for t in triples {
-        let SubjectTerm::Iri(subject) = &t.subject else {
-            continue;
-        };
-        let subject = subject.as_str();
-        if !top_levels.contains(subject) {
-            continue;
-        }
-        let meta = metas.entry(subject.to_owned()).or_default();
-        if meta.graph.is_none() {
-            if let Some(g) = &t.graph_iri {
-                meta.graph = Some(g.as_str().to_owned());
-            }
-        }
-        match t.predicate.as_str() {
-            // A compatibility top-level marker identifies the externally
-            // addressable graph that search ACLs use. The same subject may
-            // also occur in a native physical `graph:document:*` graph; prefer
-            // the explicit external marker regardless of scan order.
-            SBH_TOP_LEVEL if matches!(&t.object, ObjectTerm::Iri(object) if object.as_str() == subject) => {
-                if let Some(candidate) = t.graph_iri.as_ref().map(|graph| graph.as_str()) {
-                    let should_replace = match meta.graph.as_deref() {
-                        None => true,
-                        Some(current) => {
-                            current.starts_with(INTERNAL_DOCUMENT_GRAPH_PREFIX)
-                                && !candidate.starts_with(INTERNAL_DOCUMENT_GRAPH_PREFIX)
-                        }
-                    };
-                    if should_replace {
-                        meta.graph = Some(candidate.to_owned());
-                    }
-                }
-            }
-            RDF_TYPE => {
-                if let Some(v) = object_iri(&t.object) {
-                    meta.types.push(v);
-                }
-            }
-            DISPLAY_ID | DISPLAY_ID_V3 => {
-                set_first(&mut meta.display_id, object_literal(&t.object))
-            }
-            TITLE | NAME_V3 => set_first(&mut meta.name, object_literal(&t.object)),
-            DESCRIPTION | DESCRIPTION_V3 => {
-                set_first(&mut meta.description, object_literal(&t.object))
-            }
-            VERSION => set_first(&mut meta.version, object_literal(&t.object)),
-            ROLE | ROLE_V3 => set_first(&mut meta.role, object_iri(&t.object)),
-            SBOL_TYPE | SBOL_TYPE_V3 => set_first(&mut meta.sbol_type, object_iri(&t.object)),
-            _ => {}
-        }
+        accumulate_object_metadata(&mut metas, t, top_levels);
     }
     metas
 }
 
-/// Every `(sequence_iri, elements)` pair in the triple set: any subject carrying
-/// an `elements` literal under the SBOL 2 or SBOL 3 vocabulary. This is the
-/// version-agnostic source for the persisted sketch index, so a verbatim SBOL 2
-/// graph (whose derived typed view is empty) is sketched identically to an
-/// upgraded SBOL 3 import, and the keys are the Sequence IRIs the align path
-/// looks up. A subject with more than one elements value keeps the first seen.
-fn collect_all_sequences(triples: &[Triple]) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = Vec::new();
-    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for t in triples {
-        let pred = t.predicate.as_str();
-        if pred != ELEMENTS && pred != ELEMENTS_V3 {
-            continue;
+fn accumulate_object_metadata(
+    metas: &mut HashMap<String, ObjectMeta>,
+    t: &Triple,
+    top_levels: &HashSet<String>,
+) {
+    let SubjectTerm::Iri(subject) = &t.subject else {
+        return;
+    };
+    let subject = subject.as_str();
+    if !top_levels.contains(subject) {
+        return;
+    }
+    let meta = metas.entry(subject.to_owned()).or_default();
+    if meta.graph.is_none() {
+        if let Some(g) = &t.graph_iri {
+            meta.graph = Some(g.as_str().to_owned());
         }
-        if let (SubjectTerm::Iri(seq), ObjectTerm::Literal { value, .. }) = (&t.subject, &t.object)
-        {
-            if seen.insert(seq.as_str()) {
-                out.push((seq.as_str().to_owned(), value.as_str().to_owned()));
+    }
+    match t.predicate.as_str() {
+        // A compatibility top-level marker identifies the externally
+        // addressable graph that search ACLs use. The same subject may
+        // also occur in a native physical `graph:document:*` graph; prefer
+        // the explicit external marker regardless of scan order.
+        SBH_TOP_LEVEL if matches!(&t.object, ObjectTerm::Iri(object) if object.as_str() == subject) => {
+            if let Some(candidate) = t.graph_iri.as_ref().map(|graph| graph.as_str()) {
+                let should_replace = match meta.graph.as_deref() {
+                    None => true,
+                    Some(current) => {
+                        current.starts_with(INTERNAL_DOCUMENT_GRAPH_PREFIX)
+                            && !candidate.starts_with(INTERNAL_DOCUMENT_GRAPH_PREFIX)
+                    }
+                };
+                if should_replace {
+                    meta.graph = Some(candidate.to_owned());
+                }
             }
         }
+        RDF_TYPE => {
+            if let Some(v) = object_iri(&t.object) {
+                meta.types.push(v);
+            }
+        }
+        DISPLAY_ID | DISPLAY_ID_V3 => set_first(&mut meta.display_id, object_literal(&t.object)),
+        TITLE | NAME_V3 => set_first(&mut meta.name, object_literal(&t.object)),
+        DESCRIPTION | DESCRIPTION_V3 => set_first(&mut meta.description, object_literal(&t.object)),
+        VERSION => set_first(&mut meta.version, object_literal(&t.object)),
+        ROLE | ROLE_V3 => set_first(&mut meta.role, object_iri(&t.object)),
+        SBOL_TYPE | SBOL_TYPE_V3 => set_first(&mut meta.sbol_type, object_iri(&t.object)),
+        _ => {}
     }
-    out
-}
-
-/// Gather the `(part_iri, elements)` pairs to cluster, mirroring SBOLExplorer's
-/// clustering query: a top-level part linked to a Sequence whose `elements`
-/// literal supplies the nucleotide string. The cluster is keyed by the part
-/// IRI, so `/similar` on a part resolves its mates directly. A part with more
-/// than one sequence keeps the first seen, and a part is included only when it
-/// is top-level (the indexed subject the duplicate penalty ranks).
-fn collect_part_sequences(
-    triples: &[Triple],
-    top_levels: &std::collections::HashSet<String>,
-) -> Vec<(String, String)> {
-    let mut elements: HashMap<&str, &str> = HashMap::new();
-    for t in triples {
-        let pred = t.predicate.as_str();
-        if pred != ELEMENTS && pred != ELEMENTS_V3 {
-            continue;
-        }
-        if let (SubjectTerm::Iri(seq), ObjectTerm::Literal { value, .. }) = (&t.subject, &t.object)
-        {
-            elements.entry(seq.as_str()).or_insert(value.as_str());
-        }
-    }
-
-    let mut parts: Vec<(String, String)> = Vec::new();
-    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for t in triples {
-        if !matches!(t.predicate.as_str(), SEQUENCE | SEQUENCE_V3) {
-            continue;
-        }
-        let (SubjectTerm::Iri(part), ObjectTerm::Iri(seq)) = (&t.subject, &t.object) else {
-            continue;
-        };
-        let part = part.as_str();
-        if !top_levels.contains(part) || seen.contains(part) {
-            continue;
-        }
-        if let Some(seq_elements) = elements.get(seq.as_str()) {
-            seen.insert(part);
-            parts.push((part.to_owned(), (*seq_elements).to_owned()));
-        }
-    }
-    parts
 }
 
 /// Native imports persist their authoritative top-level projection in the

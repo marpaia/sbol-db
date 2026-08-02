@@ -15,7 +15,10 @@ import RegisterRoute from "@/routes/RegisterRoute";
 import SetupRoute from "@/routes/SetupRoute";
 
 const PublicObjectRoute = lazy(() => import("@/routes/PublicObjectRoute"));
+const AboutRoute = lazy(() => import("@/routes/AboutRoute"));
 const ConnectRoute = lazy(() => import("@/routes/ConnectRoute"));
+const PrivacyRoute = lazy(() => import("@/routes/PrivacyRoute"));
+const TermsRoute = lazy(() => import("@/routes/TermsRoute"));
 const ContributionRoute = lazy(() => import("@/routes/ContributionRoute"));
 const SearchRoute = lazy(() => import("@/routes/SearchRoute"));
 const SequenceSearchRoute = lazy(() => import("@/routes/SequenceSearchRoute"));
@@ -62,6 +65,9 @@ export default function App() {
             <Route path="register" element={<RegisterRoute />} />
             <Route path="setup" element={<SetupRoute />} />
             <Route path="connect" element={<ConnectRoute />} />
+            <Route path="about" element={<AboutRoute />} />
+            <Route path="privacy" element={<PrivacyRoute />} />
+            <Route path="terms" element={<TermsRoute />} />
             <Route element={<PublicAccessGate />}>
               <Route index element={<HomeRoute />} />
               <Route

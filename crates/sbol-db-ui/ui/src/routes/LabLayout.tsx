@@ -11,18 +11,27 @@
  * wrap themselves in `WorkbenchShell` for the three-column experience.
  */
 
-import { Fragment, useCallback, useEffect, useState } from "react";
-import { Command as CommandIcon } from "lucide-react";
+import { Fragment, useCallback } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { AppSidebar } from "@/components/lab/AppSidebar";
 import { CommandPalette } from "@/components/lab/CommandPalette";
+import { ProductThemeMenu } from "@/components/product/ProductThemeMenu";
+import {
+  ProductAccountControl,
+  ProductCommandTrigger,
+  ProductSignatureRail,
+  ProductTopBar,
+  ProductTopBarActions,
+} from "@/components/product/ProductTopBar";
 import { Separator } from "@/components/ui/separator";
 import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
+import { useSession } from "@/features/portal/queries";
+import { useCommandPaletteShortcut } from "@/hooks/useCommandPaletteShortcut";
 import { type Dialect, useLabStore } from "@/lib/store";
 import { PRODUCT_NAME } from "@/lib/product";
 import { adminPath } from "@/lib/routes";
@@ -30,6 +39,7 @@ import { adminPath } from "@/lib/routes";
 export default function LabLayout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const session = useSession();
   const setBuffer = useLabStore((s) => s.setBuffer);
 
   // The command palette acts on whichever dialect the user is in. On
@@ -49,45 +59,34 @@ export default function LabLayout() {
     [navigate, setBuffer]
   );
 
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setPaletteOpen((v) => !v);
-      } else if (e.key === "Escape" && paletteOpen) {
-        setPaletteOpen(false);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [paletteOpen]);
+  const [paletteOpen, setPaletteOpen] = useCommandPaletteShortcut();
 
   return (
     <SidebarProvider className="admin-instrument h-svh">
+      <ProductSignatureRail className="fixed inset-x-0 top-0 z-50" />
       <AppSidebar onOpenPalette={() => setPaletteOpen(true)} />
       <SidebarInset className="h-svh overflow-hidden">
-        <header className="flex h-[3.25rem] shrink-0 items-center gap-2 border-b border-foreground/15 bg-card/75 px-3 backdrop-blur">
-          <SidebarTrigger className="-ml-1" />
+        <ProductTopBar
+          signatureRail={false}
+          className="bg-card/75 pt-1 supports-[backdrop-filter]:bg-card/70"
+          contentClassName="gap-2 px-3 sm:px-4 lg:px-5"
+        >
+          <SidebarTrigger className="-ml-1 h-9 w-9" />
           <Separator orientation="vertical" className="mx-1 h-4" />
-          <Breadcrumb
-            pathname={pathname}
-            rootLabel={`${PRODUCT_NAME} / ADMIN`}
-          />
-          <button
-            type="button"
-            onClick={() => setPaletteOpen(true)}
-            className="ml-auto inline-flex items-center gap-2 rounded-[3px] border bg-background px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-          >
-            <CommandIcon size={12} />
-            <span>Search…</span>
-            <kbd className="text-[10px] text-muted-foreground/70">⌘K</kbd>
-          </button>
-        </header>
+          <Breadcrumb pathname={pathname} rootLabel={PRODUCT_NAME} />
+          <ProductTopBarActions>
+            <ProductCommandTrigger
+              layout="admin"
+              onOpen={() => setPaletteOpen(true)}
+            />
+            <ProductAccountControl user={session.data?.user} surface="admin" />
+          </ProductTopBarActions>
+        </ProductTopBar>
         <main className="flex-1 min-h-0 overflow-hidden">
           <Outlet />
         </main>
       </SidebarInset>
+      <ProductThemeMenu floating />
       <CommandPalette
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
@@ -266,7 +265,10 @@ function Breadcrumb({
 }) {
   const trail = buildTrail(pathname);
   return (
-    <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-sm">
+    <nav
+      aria-label="Breadcrumb"
+      className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-sm"
+    >
       <span className="text-muted-foreground">{rootLabel}</span>
       {trail.map((crumb, i) => {
         const isLast = i === trail.length - 1;

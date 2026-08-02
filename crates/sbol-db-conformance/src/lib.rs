@@ -967,6 +967,24 @@ pub async fn graph_set_semantics(store: &dyn SbolStore) {
         2,
         "the graph holds exactly the two distinct triples"
     );
+    let mut cursor = None;
+    let mut paged = Vec::new();
+    loop {
+        let page = store
+            .graph_store_read_page(GRAPH, cursor.as_deref(), 1)
+            .await
+            .expect("graph_store_read_page");
+        assert!(page.items.len() <= 1, "page limit is respected");
+        if page.items.is_empty() {
+            break;
+        }
+        paged.extend(page.items);
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(paged.len(), 2, "keyset pages cover the complete graph once");
 
     let cleared = store
         .graph_store_clear(GRAPH)

@@ -94,7 +94,7 @@ pub async fn public_similar(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(object): Path<PublicObject>,
 ) -> Result<Response, ApiError> {
-    similar_impl(state, user, public_uri(&object)).await
+    similar_impl(state.clone(), user, public_uri(&state, &object)).await
 }
 
 /// `GET /public/:collectionId/:displayId/:version/similarCount`.
@@ -103,7 +103,7 @@ pub async fn public_similar_count(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(object): Path<PublicObject>,
 ) -> Result<Response, ApiError> {
-    similar_count_impl(state, user, public_uri(&object)).await
+    similar_count_impl(state.clone(), user, public_uri(&state, &object)).await
 }
 
 /// `GET /user/:userId/:collectionId/:displayId/:version/similar`.
@@ -112,7 +112,7 @@ pub async fn user_similar(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(object): Path<UserObject>,
 ) -> Result<Response, ApiError> {
-    similar_impl(state, user, user_uri(&object)).await
+    similar_impl(state.clone(), user, user_uri(&state, &object)).await
 }
 
 /// `GET /user/:userId/:collectionId/:displayId/:version/similarCount`.
@@ -121,7 +121,7 @@ pub async fn user_similar_count(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(object): Path<UserObject>,
 ) -> Result<Response, ApiError> {
-    similar_count_impl(state, user, user_uri(&object)).await
+    similar_count_impl(state.clone(), user, user_uri(&state, &object)).await
 }
 
 /// `GET /public/:collectionId/:displayId/similar` (version-less): resolve the
@@ -131,7 +131,7 @@ pub async fn public_similar_pi(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(object): Path<PublicObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state, &user, public_pi_uri(&object)).await?;
+    let uri = resolve_pi(&state, &user, public_pi_uri(&state, &object)).await?;
     similar_impl(state, user, uri).await
 }
 
@@ -140,7 +140,7 @@ pub async fn public_similar_count_pi(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(object): Path<PublicObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state, &user, public_pi_uri(&object)).await?;
+    let uri = resolve_pi(&state, &user, public_pi_uri(&state, &object)).await?;
     similar_count_impl(state, user, uri).await
 }
 
@@ -149,7 +149,7 @@ pub async fn user_similar_pi(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(object): Path<UserObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state, &user, user_pi_uri(&object)).await?;
+    let uri = resolve_pi(&state, &user, user_pi_uri(&state, &object)).await?;
     similar_impl(state, user, uri).await
 }
 
@@ -158,7 +158,7 @@ pub async fn user_similar_count_pi(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(object): Path<UserObjectPi>,
 ) -> Result<Response, ApiError> {
-    let uri = resolve_pi(&state, &user, user_pi_uri(&object)).await?;
+    let uri = resolve_pi(&state, &user, user_pi_uri(&state, &object)).await?;
     similar_count_impl(state, user, uri).await
 }
 

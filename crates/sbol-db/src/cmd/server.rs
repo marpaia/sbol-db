@@ -8,9 +8,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use sbol_db_app::{AppServices, LegacyExplorerStrategy};
+use sbol_db_app::{
+    AppServices, FsBlobStore, LegacyExplorerStrategy, RegistryNamespace,
+    DEFAULT_REGISTRY_DATABASE_PREFIX,
+};
 use sbol_db_backend::Backend;
 use sbol_db_jobs::{default_registry, SearchIndexHandles, Worker, WorkerConfig};
+use sbol_db_search::ranked_text::RankedTextIndex;
 use sbol_db_search::VectorIndexMaintainerRegistry;
 use sbol_db_search_sdk::IndexMutationSource;
 use sbol_db_server::{explorer_router, router, AppState, Metrics};
@@ -18,6 +22,9 @@ use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{ConfigStore, JobQueue, SbolStore};
 use tokio_util::sync::CancellationToken;
 
+use crate::cli::{
+    DEFAULT_LOCAL_BLOB_ROOT, DEFAULT_LOCAL_DATABASE_URL, DEFAULT_LOCAL_TEXT_INDEX_PATH,
+};
 use crate::signal::shutdown_signal;
 
 #[allow(clippy::too_many_arguments)]
@@ -64,18 +71,55 @@ pub async fn run(
         None => metrics,
     };
 
-    let config = sbol_db_server::ServerConfig::from_env();
+    let mut config = sbol_db_server::ServerConfig::from_env();
+    apply_local_runtime_defaults(database_url, &mut config);
     let sparql_update = Arc::new(SparqlUpdateEngine::new(
         backend.triple_source.clone(),
         backend.triple_writer.clone(),
     ));
-    let mut app_services = AppServices::from_backend(&backend);
+    let namespace = resolve_registry_namespace(backend.config.clone(), &config).await?;
+    tracing::info!(
+        database_prefix = namespace.database_prefix(),
+        public_graph = namespace.public_graph(),
+        "registry namespace configured"
+    );
+    let mut app_services = AppServices::from_backend(&backend).with_registry_namespace(namespace);
+    if let Some(root) = &config.blob_root {
+        std::fs::create_dir_all(root)
+            .with_context(|| format!("create durable blob root {}", root.display()))?;
+        app_services = app_services.with_blobs(Arc::new(FsBlobStore::new(root)));
+        tracing::info!(path = %root.display(), "durable blob store configured");
+    } else {
+        tracing::warn!(
+            "SBOL_DB_BLOB_ROOT is unset; attachment blobs use the ephemeral development path"
+        );
+    }
+    let mut durable_text_ready = false;
+    if let Some(path) = &config.text_index_path {
+        std::fs::create_dir_all(path)
+            .with_context(|| format!("create text-index directory {}", path.display()))?;
+        let text_index = RankedTextIndex::open_or_create(path)
+            .with_context(|| format!("open text index {}", path.display()))?;
+        durable_text_ready = text_index.num_docs() > 0;
+        let document_count = text_index.num_docs();
+        app_services = app_services.with_text_search(Arc::new(text_index));
+        tracing::info!(
+            path = %path.display(),
+            document_count,
+            "durable text index configured"
+        );
+    } else {
+        tracing::warn!(
+            "SBOL_DB_TEXT_INDEX_PATH is unset; ranked text search uses an in-memory index"
+        );
+    }
 
     let built_in_search = search_config.is_none();
+    let local_rocksdb_search = built_in_search && database_url == DEFAULT_LOCAL_DATABASE_URL;
     if built_in_search && no_worker {
         tracing::warn!(
-            "the built-in in-process vector index is disabled with --no-worker; \
-             configure a shared vector backend with --search-config for an external worker"
+            "the built-in search runtime is disabled with --no-worker; configure a shared \
+             search backend with --search-config for an external worker"
         );
     } else {
         let deployment = match search_config {
@@ -86,7 +130,14 @@ pub async fn run(
                     app_services.cluster.clone(),
                 )))?
                 .build()?,
-            None => crate::search_config::built_in_text_deployment().await?,
+            None if local_rocksdb_search => crate::search_config::built_in_legacy_deployment(
+                Arc::new(LegacyExplorerStrategy::new(
+                    app_services.text_search.clone(),
+                    app_services.cluster.clone(),
+                )),
+                durable_text_ready,
+            )?,
+            None => crate::search_config::built_in_text_deployment(durable_text_ready).await?,
         };
         if let Some(setup) = worker_setup.as_mut() {
             setup.vector_indexes = Some(deployment.maintainers());
@@ -101,7 +152,19 @@ pub async fn run(
             strategies = app_services.search_runtime().descriptors().len(),
             vector_indexes = deployment.maintainers().len(),
             built_in = built_in_search,
+            local_rocksdb = local_rocksdb_search,
             "search plugin deployment configured"
+        );
+    }
+    if durable_text_ready {
+        let started = std::time::Instant::now();
+        app_services
+            .warm_search_cache()
+            .await
+            .context("warm ranked-search cluster cache")?;
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "ranked-search cache warmed"
         );
     }
     let app_services = Arc::new(app_services);
@@ -113,7 +176,10 @@ pub async fn run(
     // `/similar` and the ranked search.
     if let Some(setup) = worker_setup.as_mut() {
         setup.search = Some(SearchIndexHandles {
-            cluster: backend.cluster.clone(),
+            // Use the facade's invalidating wrapper so a completed rebuild is
+            // visible to the next ranked request immediately instead of after
+            // the production cluster-map cache TTL.
+            cluster: app_services.cluster.clone(),
             pagerank: backend.pagerank.clone(),
             sketch: backend.sketch.clone(),
             text_index: app_services.text_search.clone(),
@@ -236,6 +302,55 @@ pub async fn run(
     }
     tracing::info!("sbol-db server loop exited cleanly");
     Ok(())
+}
+
+fn apply_local_runtime_defaults(database_url: &str, config: &mut sbol_db_server::ServerConfig) {
+    if database_url != DEFAULT_LOCAL_DATABASE_URL {
+        return;
+    }
+    config
+        .blob_root
+        .get_or_insert_with(|| PathBuf::from(DEFAULT_LOCAL_BLOB_ROOT));
+    config
+        .text_index_path
+        .get_or_insert_with(|| PathBuf::from(DEFAULT_LOCAL_TEXT_INDEX_PATH));
+}
+
+async fn resolve_registry_namespace(
+    store: Arc<dyn ConfigStore>,
+    runtime: &sbol_db_server::ServerConfig,
+) -> Result<RegistryNamespace> {
+    let persisted = store.get("registryNamespace").await?;
+    let theme = store.get("theme").await?;
+    let persisted_prefix = persisted
+        .as_ref()
+        .and_then(|value| value.get("databasePrefix"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            theme
+                .as_ref()
+                .and_then(|value| value.get("uriPrefix"))
+                .and_then(serde_json::Value::as_str)
+        });
+    let database_prefix = runtime
+        .database_prefix
+        .as_deref()
+        .or(persisted_prefix)
+        .unwrap_or(DEFAULT_REGISTRY_DATABASE_PREFIX);
+    let mut normalized_prefix = database_prefix.to_owned();
+    if !normalized_prefix.ends_with('/') {
+        normalized_prefix.push('/');
+    }
+    let persisted_public = persisted
+        .as_ref()
+        .and_then(|value| value.get("publicGraph"))
+        .and_then(serde_json::Value::as_str);
+    let public_graph = runtime
+        .public_graph
+        .clone()
+        .or_else(|| persisted_public.map(ToOwned::to_owned))
+        .unwrap_or_else(|| format!("{normalized_prefix}public"));
+    Ok(RegistryNamespace::new(normalized_prefix, public_graph)?)
 }
 
 /// Constructed setup for an embedded / standalone worker: the backend-neutral
@@ -372,4 +487,43 @@ pub(crate) async fn build_worker_setup(
 
 fn is_postgres(url: &str) -> bool {
     url.starts_with("postgres://") || url.starts_with("postgresql://")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repo_local_database_selects_durable_runtime_paths() {
+        let mut config = sbol_db_server::ServerConfig::default();
+        apply_local_runtime_defaults(DEFAULT_LOCAL_DATABASE_URL, &mut config);
+
+        assert_eq!(
+            config.blob_root.as_deref(),
+            Some(std::path::Path::new(DEFAULT_LOCAL_BLOB_ROOT))
+        );
+        assert_eq!(
+            config.text_index_path.as_deref(),
+            Some(std::path::Path::new(DEFAULT_LOCAL_TEXT_INDEX_PATH))
+        );
+    }
+
+    #[test]
+    fn explicit_runtime_paths_are_not_overwritten() {
+        let mut config = sbol_db_server::ServerConfig {
+            blob_root: Some(PathBuf::from("/tmp/explicit-blobs")),
+            text_index_path: Some(PathBuf::from("/tmp/explicit-text")),
+            ..sbol_db_server::ServerConfig::default()
+        };
+        apply_local_runtime_defaults(DEFAULT_LOCAL_DATABASE_URL, &mut config);
+
+        assert_eq!(
+            config.blob_root.as_deref(),
+            Some(std::path::Path::new("/tmp/explicit-blobs"))
+        );
+        assert_eq!(
+            config.text_index_path.as_deref(),
+            Some(std::path::Path::new("/tmp/explicit-text"))
+        );
+    }
 }

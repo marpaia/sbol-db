@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 
-const dist = resolve("dist");
+const dist = resolve(process.argv[2] ?? "dist");
 const html = readFileSync(resolve(dist, "index.html"), "utf8");
 
 const entryMatch = html.match(

@@ -194,6 +194,7 @@ fn corpus() -> String {
 <{BETA}> <http://wiki.synbiohub.org/wiki/Terms/synbiohub#mutableProvenance> "Built in the Boulder teaching lab" .
 <{BETA}> <http://purl.org/dc/terms/created> "2026-03-03T10:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
 <{BETA}> <http://purl.org/dc/terms/modified> "2026-04-04T10:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<{BETA}> <http://www.w3.org/ns/prov#wasDerivedFrom> <{ALPHA}> .
 
 <http://example.org/public/beta/feature> <http://sbols.org/v2#displayId> "unplaced-feature" .
 
@@ -202,6 +203,8 @@ fn corpus() -> String {
 <{GAMMA}> <http://sbols.org/v2#displayId> "gamma" .
 <{GAMMA}> <http://purl.org/dc/terms/title> "Gamma coding sequence" .
 <{GAMMA}> <http://sbols.org/v2#role> <{CDS}> .
+<{GAMMA}> <http://www.w3.org/ns/prov#qualifiedUsage> _:alphaUsage .
+_:alphaUsage <http://www.w3.org/ns/prov#entity> <{ALPHA}> .
 "#
     )
 }
@@ -427,6 +430,13 @@ async fn details_normalize_identity_provenance_and_inverse_collections() {
     );
     assert_eq!(details["collections"]["state"], "available");
     assert_eq!(details["collections"]["items"][0]["uri"], COLLECTION);
+    let uses = details["uses"]["items"]
+        .as_array()
+        .expect("uses relationship items")
+        .iter()
+        .map(|item| item["uri"].as_str().expect("uses relationship IRI"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(uses, BTreeSet::from([BETA, COLLECTION, GAMMA]));
     assert_eq!(details["sequences"]["state"], "empty");
     assert_eq!(details["visualization"]["state"], "empty");
     assert_eq!(details["members"]["state"], "unsupported");

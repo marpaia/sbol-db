@@ -165,6 +165,7 @@ async fn html_navigation_intercepts_new_and_colliding_page_routes() {
         "/search",
         "/search/objectType=ComponentDefinition",
         "/sequence-search?q=GAATTC&mode=exact",
+        "/about",
         "/advanced-search",
         "/contribute",
         "/account",

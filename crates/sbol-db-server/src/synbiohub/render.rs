@@ -275,7 +275,12 @@ fn manage_row(row: &Map<String, Value>) -> Value {
         .unwrap_or("")
         .to_owned();
     let url = uri_str
-        .strip_prefix("http://synbiohub.org")
+        .split_once("://")
+        .and_then(|(_, authority_and_path)| {
+            authority_and_path
+                .find('/')
+                .map(|at| &authority_and_path[at..])
+        })
         .unwrap_or(uri_str)
         .to_owned();
     let triplestore = if uri_str.contains("/public/") {

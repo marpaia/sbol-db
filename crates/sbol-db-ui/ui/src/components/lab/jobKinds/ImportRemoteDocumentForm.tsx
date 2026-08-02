@@ -28,7 +28,7 @@ export function ImportRemoteDocumentForm({
           value={value.url}
           onChange={(s) => patch({ url: s })}
           disabled={disabled}
-          placeholder="https://synbiohub.org/public/igem/BBa_B0034/1/sbol"
+          placeholder="https://example.org/designs/example.xml"
           required
         />
         <FormatSelect

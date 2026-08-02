@@ -15,6 +15,11 @@ export interface InstanceInfo {
   uri_prefix: string;
   front_page_text: string;
   setup_required: boolean;
+  machine_access?: {
+    api_url: string;
+    mcp_url?: string;
+    authorization_issuer?: string;
+  };
   policies: {
     allow_public_signup: boolean;
     require_login: boolean;
@@ -429,6 +434,8 @@ export type AccountProfile = SessionUser;
 export interface SharedObjectsResponse {
   items: PortalObjectDetails[];
   total: number;
+  offset: number;
+  limit: number;
 }
 
 export interface Collaborator {
@@ -716,9 +723,14 @@ export async function changeAccountPassword(request: {
 }
 
 export async function fetchSharedObjects(
+  paging: { offset?: number; limit?: number } = {},
   signal?: AbortSignal
 ): Promise<SharedObjectsResponse> {
-  return requestJson<SharedObjectsResponse>("/api/v2/account/shared", {
+  const params = new URLSearchParams();
+  if (paging.offset !== undefined) params.set("offset", String(paging.offset));
+  if (paging.limit !== undefined) params.set("limit", String(paging.limit));
+  const query = params.size ? `?${params}` : "";
+  return requestJson<SharedObjectsResponse>(`/api/v2/account/shared${query}`, {
     signal,
   });
 }

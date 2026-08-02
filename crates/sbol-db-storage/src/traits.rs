@@ -23,11 +23,38 @@ use crate::{
     ListGraphsFilter, ListJobsFilter, ListObjectsFilter, NewJob, OldestQueuedAge,
     OntologyLoadReport, OntologyRecord, OntologyTermRecord, PatternObject, PatternSubject,
     QueueDepthRow, RankRow, SbolJob, SequenceMatch, SequenceSearchOptions, TermId, TermKey,
-    TermValue, TextSearchQuery, TripleChange, UpdateOutcome,
+    TermValue, TextSearchQuery, TripleChange, TripleScanPage, UpdateOutcome,
 };
 
 /// Synchronous triple-pattern reads, as required by the SPARQL evaluator.
 pub trait TripleSource: Send + Sync {
+    /// Stable, resumable keyset page over the complete quad store. Large
+    /// maintenance jobs use this instead of requesting `i64::MAX` rows. The
+    /// default supports small/test stores in one bounded page and fails closed
+    /// if another page would be required.
+    fn scan_all_page(
+        &self,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<TripleScanPage, DomainError> {
+        if after.is_some() {
+            return Err(DomainError::Database(
+                "this triple source does not implement paginated full scans".to_owned(),
+            ));
+        }
+        let requested = i64::try_from(limit.saturating_add(1)).unwrap_or(i64::MAX);
+        let mut items = self.scan_pattern(None, None, None, None, requested)?;
+        if items.len() > limit {
+            return Err(DomainError::Database(
+                "this triple source requires a paginated full-scan implementation".to_owned(),
+            ));
+        }
+        Ok(TripleScanPage {
+            items: std::mem::take(&mut items),
+            next_cursor: None,
+        })
+    }
+
     /// Scan triples matching a pattern. Any position may be bound or wildcarded
     /// (`None`); `limit` caps the rows returned per call.
     fn scan_pattern(
@@ -509,6 +536,15 @@ pub trait SbolStore:
     ) -> Result<usize, DomainError>;
     async fn graph_store_clear(&self, graph: &str) -> Result<usize, DomainError>;
     async fn graph_store_read(&self, graph: &str) -> Result<Vec<Triple>, DomainError>;
+    /// One stable keyset page from a named graph. The opaque cursor belongs to
+    /// the backend and allows HTTP exports and migration verification to avoid
+    /// both OFFSET scans and whole-graph memory limits.
+    async fn graph_store_read_page(
+        &self,
+        graph: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<TripleScanPage, DomainError>;
     /// Every triple with the given subject IRI, for single-object RDF export.
     async fn triples_for_subject(&self, subject_iri: &str) -> Result<Vec<Triple>, DomainError>;
     async fn ping(&self) -> Result<(), DomainError>;

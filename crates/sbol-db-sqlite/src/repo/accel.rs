@@ -81,6 +81,12 @@ impl AccelRepository {
                     .await
             }
             AcceleratedQuery::Facet { graph, kind, var } => self.facet(graph, *kind, var).await,
+            AcceleratedQuery::FacetCounts {
+                graph,
+                kind,
+                value_var,
+                count_var,
+            } => self.facet_counts(graph, *kind, value_var, count_var).await,
             AcceleratedQuery::ObjectMetadata {
                 graph,
                 subject,
@@ -122,9 +128,9 @@ impl AccelRepository {
         let mut objects: Vec<(String, String, bool, String)> = Vec::new();
         // (type_iri, iri, sort)
         let mut types: Vec<(String, String, String)> = Vec::new();
-        // (kind, value)
-        let mut facets: Vec<(i64, String)> = Vec::new();
-        let mut facet_seen: HashSet<(i64, &str)> = HashSet::new();
+        // (role_iri, iri, sort)
+        let mut roles: Vec<(String, String, String)> = Vec::new();
+        let mut facet_counts: HashMap<(i64, String), i64> = HashMap::new();
         for obj in &index.objects {
             let iri = obj.iri.as_str();
             let m = &obj.meta;
@@ -138,24 +144,31 @@ impl AccelRepository {
             for t in &m.types {
                 types.push((t.clone(), iri.to_owned(), sort.to_owned()));
             }
+            for role in &m.roles {
+                roles.push((role.clone(), iri.to_owned(), sort.to_owned()));
+            }
             if m.top_level {
+                let mut object_facets: HashSet<(i64, &str)> = HashSet::new();
                 for t in &m.types {
-                    if facet_seen.insert((FK_TYPES, t.as_str())) {
-                        facets.push((FK_TYPES, t.clone()));
-                    }
+                    object_facets.insert((FK_TYPES, t.as_str()));
                 }
                 for r in &m.roles {
-                    if facet_seen.insert((FK_ROLES, r.as_str())) {
-                        facets.push((FK_ROLES, r.clone()));
-                    }
+                    object_facets.insert((FK_ROLES, r.as_str()));
                 }
                 for c in &m.creators {
-                    if facet_seen.insert((FK_CREATORS, c.as_str())) {
-                        facets.push((FK_CREATORS, c.clone()));
-                    }
+                    object_facets.insert((FK_CREATORS, c.as_str()));
+                }
+                for (kind, value) in object_facets {
+                    *facet_counts.entry((kind, value.to_owned())).or_default() += 1;
                 }
             }
         }
+        // (kind, value, exact distinct-subject count)
+        let mut facets: Vec<(i64, String, i64)> = facet_counts
+            .into_iter()
+            .map(|((kind, value), count)| (kind, value, count))
+            .collect();
+        facets.sort();
 
         // (collection, member, sort, is_root)
         let mut members: Vec<(String, String, String, bool)> = Vec::new();
@@ -169,7 +182,13 @@ impl AccelRepository {
             ));
         }
 
-        for table in ["accel_object", "accel_type", "accel_member", "accel_facet"] {
+        for table in [
+            "accel_object",
+            "accel_type",
+            "accel_role",
+            "accel_member",
+            "accel_facet",
+        ] {
             sqlx::query(&format!("DELETE FROM {table} WHERE graph_iri = ?"))
                 .bind(graph)
                 .execute(&mut *conn)
@@ -201,6 +220,18 @@ impl AccelRepository {
             });
             qb.build().execute(&mut *conn).await.map_err(db_err)?;
         }
+        for chunk in roles.chunks(INSERT_CHUNK) {
+            let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
+                "INSERT OR IGNORE INTO accel_role (graph_iri, role_iri, iri, sort_key) ",
+            );
+            qb.push_values(chunk, |mut b, (role_iri, iri, sort)| {
+                b.push_bind(graph)
+                    .push_bind(role_iri)
+                    .push_bind(iri)
+                    .push_bind(sort);
+            });
+            qb.build().execute(&mut *conn).await.map_err(db_err)?;
+        }
         for chunk in members.chunks(INSERT_CHUNK) {
             let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
                 "INSERT OR IGNORE INTO accel_member \
@@ -216,10 +247,15 @@ impl AccelRepository {
             qb.build().execute(&mut *conn).await.map_err(db_err)?;
         }
         for chunk in facets.chunks(INSERT_CHUNK) {
-            let mut qb: QueryBuilder<Sqlite> =
-                QueryBuilder::new("INSERT OR IGNORE INTO accel_facet (graph_iri, kind, value) ");
-            qb.push_values(chunk, |mut b, (kind, value)| {
-                b.push_bind(graph).push_bind(*kind).push_bind(value);
+            let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
+                "INSERT OR IGNORE INTO accel_facet \
+                 (graph_iri, kind, value, subject_count) ",
+            );
+            qb.push_values(chunk, |mut b, (kind, value, count)| {
+                b.push_bind(graph)
+                    .push_bind(*kind)
+                    .push_bind(value)
+                    .push_bind(*count);
             });
             qb.build().execute(&mut *conn).await.map_err(db_err)?;
         }
@@ -298,6 +334,82 @@ impl AccelRepository {
                 );
                 qb.push_bind(graph);
                 qb.push(" AND ty.type_iri = ").push_bind(t.clone());
+                push_prefix_filter(&mut qb, "ty.iri", subject_prefix);
+                qb.push(" ORDER BY ty.sort_key, ty.iri");
+            }
+            Scope::TopLevelByType(t) => {
+                qb.push(
+                    "SELECT ty.iri AS iri, o.meta AS meta FROM accel_type ty \
+                     JOIN accel_object o \
+                       ON o.graph_iri = ty.graph_iri AND o.iri = ty.iri \
+                     WHERE ty.graph_iri = ",
+                );
+                qb.push_bind(graph);
+                qb.push(" AND ty.type_iri = ").push_bind(t.clone());
+                qb.push(" AND o.top_level");
+                push_prefix_filter(&mut qb, "ty.iri", subject_prefix);
+                qb.push(" ORDER BY ty.sort_key, ty.iri");
+            }
+            Scope::TopLevelByRole(role) => {
+                qb.push(
+                    "SELECT r.iri AS iri, o.meta AS meta FROM accel_role r \
+                     JOIN accel_object o \
+                       ON o.graph_iri = r.graph_iri AND o.iri = r.iri \
+                     WHERE r.graph_iri = ",
+                );
+                qb.push_bind(graph);
+                qb.push(" AND r.role_iri = ").push_bind(role.clone());
+                qb.push(" AND o.top_level");
+                push_prefix_filter(&mut qb, "r.iri", subject_prefix);
+                qb.push(" ORDER BY r.sort_key, r.iri");
+            }
+            Scope::TopLevelByTypeAndRole { object_type, role } => {
+                qb.push(
+                    "SELECT r.iri AS iri, o.meta AS meta FROM accel_role r \
+                     JOIN accel_type ty \
+                       ON ty.graph_iri = r.graph_iri AND ty.iri = r.iri \
+                     JOIN accel_object o \
+                       ON o.graph_iri = r.graph_iri AND o.iri = r.iri \
+                     WHERE r.graph_iri = ",
+                );
+                qb.push_bind(graph);
+                qb.push(" AND r.role_iri = ").push_bind(role.clone());
+                qb.push(" AND ty.type_iri = ")
+                    .push_bind(object_type.clone());
+                qb.push(" AND o.top_level");
+                push_prefix_filter(&mut qb, "r.iri", subject_prefix);
+                qb.push(" ORDER BY r.sort_key, r.iri");
+            }
+            Scope::RootByType(t) => {
+                qb.push(
+                    "SELECT ty.iri AS iri, o.meta AS meta FROM accel_type ty \
+                     LEFT JOIN accel_object o \
+                       ON o.graph_iri = ty.graph_iri AND o.iri = ty.iri \
+                     WHERE ty.graph_iri = ",
+                );
+                qb.push_bind(graph);
+                qb.push(" AND ty.type_iri = ").push_bind(t.clone());
+                qb.push(
+                    " AND NOT EXISTS (SELECT 1 FROM accel_member m \
+                       WHERE m.graph_iri = ty.graph_iri AND m.member_iri = ty.iri)",
+                );
+                push_prefix_filter(&mut qb, "ty.iri", subject_prefix);
+                qb.push(" ORDER BY ty.sort_key, ty.iri");
+            }
+            Scope::RootTopLevelByType(t) => {
+                qb.push(
+                    "SELECT ty.iri AS iri, o.meta AS meta FROM accel_type ty \
+                     JOIN accel_object o \
+                       ON o.graph_iri = ty.graph_iri AND o.iri = ty.iri \
+                     WHERE ty.graph_iri = ",
+                );
+                qb.push_bind(graph);
+                qb.push(" AND ty.type_iri = ").push_bind(t.clone());
+                qb.push(" AND o.top_level");
+                qb.push(
+                    " AND NOT EXISTS (SELECT 1 FROM accel_member m \
+                       WHERE m.graph_iri = ty.graph_iri AND m.member_iri = ty.iri)",
+                );
                 push_prefix_filter(&mut qb, "ty.iri", subject_prefix);
                 qb.push(" ORDER BY ty.sort_key, ty.iri");
             }
@@ -385,6 +497,72 @@ impl AccelRepository {
                 qb.push(" AND type_iri = ").push_bind(t.clone());
                 push_prefix_filter(&mut qb, "iri", subject_prefix);
             }
+            Scope::TopLevelByType(t) => {
+                qb.push(
+                    "SELECT COUNT(*) FROM accel_type ty \
+                     JOIN accel_object o \
+                       ON o.graph_iri = ty.graph_iri AND o.iri = ty.iri \
+                     WHERE ty.graph_iri = ",
+                );
+                qb.push_bind(graph);
+                qb.push(" AND ty.type_iri = ").push_bind(t.clone());
+                qb.push(" AND o.top_level");
+                push_prefix_filter(&mut qb, "ty.iri", subject_prefix);
+            }
+            Scope::TopLevelByRole(role) => {
+                qb.push(
+                    "SELECT COUNT(*) FROM accel_role r \
+                     JOIN accel_object o \
+                       ON o.graph_iri = r.graph_iri AND o.iri = r.iri \
+                     WHERE r.graph_iri = ",
+                );
+                qb.push_bind(graph);
+                qb.push(" AND r.role_iri = ").push_bind(role.clone());
+                qb.push(" AND o.top_level");
+                push_prefix_filter(&mut qb, "r.iri", subject_prefix);
+            }
+            Scope::TopLevelByTypeAndRole { object_type, role } => {
+                qb.push(
+                    "SELECT COUNT(*) FROM accel_role r \
+                     JOIN accel_type ty \
+                       ON ty.graph_iri = r.graph_iri AND ty.iri = r.iri \
+                     JOIN accel_object o \
+                       ON o.graph_iri = r.graph_iri AND o.iri = r.iri \
+                     WHERE r.graph_iri = ",
+                );
+                qb.push_bind(graph);
+                qb.push(" AND r.role_iri = ").push_bind(role.clone());
+                qb.push(" AND ty.type_iri = ")
+                    .push_bind(object_type.clone());
+                qb.push(" AND o.top_level");
+                push_prefix_filter(&mut qb, "r.iri", subject_prefix);
+            }
+            Scope::RootByType(t) => {
+                qb.push("SELECT COUNT(*) FROM accel_type ty WHERE ty.graph_iri = ");
+                qb.push_bind(graph);
+                qb.push(" AND ty.type_iri = ").push_bind(t.clone());
+                qb.push(
+                    " AND NOT EXISTS (SELECT 1 FROM accel_member m \
+                       WHERE m.graph_iri = ty.graph_iri AND m.member_iri = ty.iri)",
+                );
+                push_prefix_filter(&mut qb, "ty.iri", subject_prefix);
+            }
+            Scope::RootTopLevelByType(t) => {
+                qb.push(
+                    "SELECT COUNT(*) FROM accel_type ty \
+                     JOIN accel_object o \
+                       ON o.graph_iri = ty.graph_iri AND o.iri = ty.iri \
+                     WHERE ty.graph_iri = ",
+                );
+                qb.push_bind(graph);
+                qb.push(" AND ty.type_iri = ").push_bind(t.clone());
+                qb.push(" AND o.top_level");
+                qb.push(
+                    " AND NOT EXISTS (SELECT 1 FROM accel_member m \
+                       WHERE m.graph_iri = ty.graph_iri AND m.member_iri = ty.iri)",
+                );
+                push_prefix_filter(&mut qb, "ty.iri", subject_prefix);
+            }
             Scope::Collection {
                 collection,
                 root_only,
@@ -445,6 +623,50 @@ impl AccelRepository {
             .collect();
         Ok(AccelSolutions {
             vars: vec![var.to_owned()],
+            rows,
+        })
+    }
+
+    async fn facet_counts(
+        &self,
+        graph: &str,
+        kind: FacetKind,
+        value_var: &str,
+        count_var: &str,
+    ) -> Result<AccelSolutions, DomainError> {
+        let (tag, iri_value) = match kind {
+            FacetKind::Types => (FK_TYPES, true),
+            FacetKind::Roles => (FK_ROLES, true),
+            FacetKind::Creators => (FK_CREATORS, false),
+        };
+        let rows = sqlx::query(
+            "SELECT value, subject_count FROM accel_facet \
+             WHERE graph_iri = ? AND kind = ? ORDER BY value",
+        )
+        .bind(graph)
+        .bind(tag)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        let rows = rows
+            .into_iter()
+            .map(|row| {
+                let value: String = row.try_get("value").map_err(db_err)?;
+                let count: i64 = row.try_get("subject_count").map_err(db_err)?;
+                let value = if iri_value {
+                    TermValue::Iri(value)
+                } else {
+                    TermValue::Literal {
+                        value,
+                        datatype: XSD_STRING.to_owned(),
+                        language: None,
+                    }
+                };
+                Ok(vec![Some(value), Some(integer(count as u64))])
+            })
+            .collect::<Result<Vec<_>, DomainError>>()?;
+        Ok(AccelSolutions {
+            vars: vec![value_var.to_owned(), count_var.to_owned()],
             rows,
         })
     }

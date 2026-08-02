@@ -73,6 +73,7 @@ handler. `/assets/*` is exact-match only, so a missing JavaScript file returns
 | --- | --- | --- | --- |
 | `/`, `/search/*`, `/sequence-search` | React portal | existing handler when HTML is not preferred | Search accepts canonical query-string state; classic path grammar is translated visibly and sequence grammar moves to its dedicated workflow. |
 | `/connect` | React portal | none | Public guide for connecting the `sbol` CLI, V2 REST clients, and MCP-capable agents; registry permissions still govern every request. |
+| `/about` | React portal | none | Public product documentation for the registry, account workflows, machine interfaces, administrator workspace, and scope. |
 | `/login`, `/register`, `/setup` | React portal | V1 handler for mutations and non-HTML requests | V2 session is preferred by the new UI; V1 remains compatible. |
 | `/account`, `/workspace/*`, `/contribute` | React portal | none | Native account, collaboration, review, and validate-first contribution workflows. |
 | `/objects/view/:iri` | React portal | none | URI is encoded as one route parameter. |

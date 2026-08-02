@@ -874,16 +874,6 @@ export interface ImportRemoteDocumentPayload {
   created_by?: string;
 }
 
-export interface ImportSynBioHubCollectionPayload {
-  collection_uri: string;
-  base_url?: string;
-  format?: ImportDocumentFormat;
-  namespace?: string;
-  page_size?: number;
-  max_records?: number;
-  created_by?: string;
-}
-
 export interface EnqueueRemoteImportOptions {
   queue?: string;
   priority?: number;
@@ -900,25 +890,6 @@ export async function enqueueRemoteImport(
   return enqueueJob(
     {
       kind: "import_remote_document",
-      payload,
-      queue: options.queue,
-      priority: options.priority,
-      max_attempts: options.max_attempts,
-      idempotency_key: options.idempotency_key,
-      correlation_id: options.correlation_id,
-    },
-    signal
-  );
-}
-
-export async function enqueueSynBioHubCollection(
-  payload: ImportSynBioHubCollectionPayload,
-  options: EnqueueRemoteImportOptions = {},
-  signal?: AbortSignal
-): Promise<EnqueueJobResult> {
-  return enqueueJob(
-    {
-      kind: "import_synbiohub_collection",
       payload,
       queue: options.queue,
       priority: options.priority,

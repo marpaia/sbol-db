@@ -1,8 +1,8 @@
 //! The account store over Postgres.
 //!
-//! Rows map to [`User`]; the unique `username` and `email` constraints are
-//! enforced by the schema. Password hashing lives in the application layer, so
-//! these methods store and read an already-computed `password_hash`.
+//! Rows map to [`User`]. Usernames are unique. Production migration permits
+//! duplicate classic emails; lookup therefore prefers an exact username and
+//! rejects an ambiguous email instead of selecting an arbitrary account.
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -62,14 +62,30 @@ impl UserStore for PgUserStore {
         &self,
         identifier: &str,
     ) -> Result<Option<User>, DomainError> {
-        let row = sqlx::query(&format!(
-            "SELECT {USER_COLS} FROM sbh_user WHERE email = $1 OR username = $1 LIMIT 1"
+        let username = sqlx::query(&format!(
+            "SELECT {USER_COLS} FROM sbh_user WHERE username = $1"
         ))
         .bind(identifier)
         .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?;
-        row.map(row_to_user).transpose()
+        if let Some(row) = username {
+            return row_to_user(row).map(Some);
+        }
+        let rows = sqlx::query(&format!(
+            "SELECT {USER_COLS} FROM sbh_user WHERE email = $1 ORDER BY username LIMIT 2"
+        ))
+        .bind(identifier)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        match rows.len() {
+            0 => Ok(None),
+            1 => row_to_user(rows.into_iter().next().expect("one row")).map(Some),
+            _ => Err(DomainError::Validation(
+                "multiple accounts use this email; log in with your username".to_owned(),
+            )),
+        }
     }
 
     async fn get_by_id(&self, id: UserId) -> Result<Option<User>, DomainError> {

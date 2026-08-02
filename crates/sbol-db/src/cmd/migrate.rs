@@ -19,38 +19,61 @@
 //!
 //! [`FsBlobStore`]: sbol_db_app::FsBlobStore
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
+use oxrdfio::RdfFormat;
+
+#[cfg(test)]
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+
+#[cfg(test)]
+use anyhow::Context;
+#[cfg(test)]
 use oxrdf::{GraphName, Triple};
-use oxrdfio::{RdfFormat, RdfParser, RdfSerializer};
+#[cfg(test)]
+use oxrdfio::{RdfParser, RdfSerializer};
+#[cfg(test)]
 use sbol_db_app::AuthService;
+#[cfg(test)]
 use sbol_db_core::{NewUser, SerializationFormat};
+#[cfg(test)]
 use sbol_db_storage::{
     ConfigStore, GraphWriteMode, JobQueue, Migrator, NewJob, SbolStore, UserStore,
 };
+#[cfg(test)]
 use serde::Serialize;
+#[cfg(test)]
 use serde_json::Value;
+#[cfg(test)]
 use sqlx::sqlite::{SqliteConnectOptions, SqliteRow};
+#[cfg(test)]
 use sqlx::{Row, SqlitePool};
 
-use crate::output::print_json;
+pub mod normalize;
+pub mod preflight;
+pub mod production;
+pub mod rocksdb;
 
 /// The default filenames a migration looks for under `--source` when a part is
 /// not given its own explicit path.
+#[cfg(test)]
 const DEFAULT_RDF_DUMP: &str = "dump.nq";
+#[cfg(test)]
 const DEFAULT_SQLITE: &str = "synbiohub.sqlite";
+#[cfg(test)]
 const DEFAULT_UPLOADS: &str = "uploads";
+#[cfg(test)]
 const DEFAULT_CONFIG: &str = "config.local.json";
 
 /// The job kind the search-index rebuild handler is registered under.
+#[cfg(test)]
 const REINDEX_KIND: &str = "rebuild_search_index";
 
 /// The paths and toggles that drive a migration run. Each part is optional: an
 /// explicit path overrides the one derived from `source`, and a part with no
 /// resolvable path (neither explicit nor under `source`) is skipped.
+#[cfg(test)]
 pub struct MigrateInputs {
     /// Root of an unpacked classic instance; supplies defaults for any part
     /// left unset.
@@ -77,6 +100,7 @@ pub struct MigrateInputs {
 }
 
 /// One migrated named graph and the triple count written into it.
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 pub struct GraphReport {
     pub graph: String,
@@ -84,6 +108,7 @@ pub struct GraphReport {
 }
 
 /// A structured summary of what a migration run loaded.
+#[cfg(test)]
 #[derive(Debug, Default, Serialize)]
 pub struct MigrateReport {
     pub graphs: Vec<GraphReport>,
@@ -95,22 +120,9 @@ pub struct MigrateReport {
     pub reindex_job: Option<String>,
 }
 
-/// CLI entry point: run the migration and print the report as JSON.
-#[allow(clippy::too_many_arguments)]
-pub async fn run(
-    store: Arc<dyn SbolStore>,
-    users: Arc<dyn UserStore>,
-    config: Arc<dyn ConfigStore>,
-    jobs: Arc<dyn JobQueue>,
-    migrator: Option<Arc<dyn Migrator>>,
-    inputs: MigrateInputs,
-) -> Result<()> {
-    let report = migrate(store, users, config, jobs, migrator, inputs).await?;
-    print_json(&report)
-}
-
-/// Run the migration and return the report. Split from [`run`] so tests can
-/// assert against the loaded state directly.
+/// Legacy cross-backend fixture loader retained only as a compact compatibility
+/// rehearsal; the CLI uses [`production`] and cannot enter this fail-open path.
+#[cfg(test)]
 pub(crate) async fn migrate(
     store: Arc<dyn SbolStore>,
     users: Arc<dyn UserStore>,
@@ -164,6 +176,7 @@ pub(crate) async fn migrate(
 /// joined with `default_name`. Returns `None` (with a warning) when the
 /// resolved path does not exist, so a partial instance still migrates the parts
 /// it has. Errors only when neither an override nor a source is given.
+#[cfg(test)]
 fn resolve(
     source: &Option<PathBuf>,
     explicit: &Option<PathBuf>,
@@ -191,6 +204,7 @@ fn resolve(
 /// a quad stream, its triples are grouped by graph name, and each group is
 /// written to its own named graph with the graph-store write path so per-graph
 /// boundaries are preserved exactly.
+#[cfg(test)]
 async fn load_graphs(
     store: &Arc<dyn SbolStore>,
     path: &Path,
@@ -249,6 +263,7 @@ async fn load_graphs(
 
 /// Serialize a set of triples to N-Triples, the graph-store write path's
 /// canonical single-graph input.
+#[cfg(test)]
 fn serialize_ntriples(triples: &[Triple]) -> Result<String> {
     let mut buf = Vec::new();
     let mut serializer = RdfSerializer::from_format(RdfFormat::NTriples).for_writer(&mut buf);
@@ -288,6 +303,7 @@ fn rdf_format_for(path: &Path) -> Result<RdfFormat> {
 /// Import every `users` row from a classic `synbiohub.sqlite`, preserving each
 /// account's legacy password hash and owned graph URI. The database is opened
 /// read-only so the source instance is never mutated.
+#[cfg(test)]
 async fn load_users(
     users: &Arc<dyn UserStore>,
     path: &Path,
@@ -306,6 +322,7 @@ async fn load_users(
     result
 }
 
+#[cfg(test)]
 async fn read_and_insert_users(
     users: &Arc<dyn UserStore>,
     pool: &SqlitePool,
@@ -357,6 +374,7 @@ async fn read_and_insert_users(
 
 /// Read a SQLite boolean column, which classic SynBioHub stores as an integer
 /// `0`/`1` (a NULL reads as `false`).
+#[cfg(test)]
 fn get_bool(row: &SqliteRow, column: &str) -> Result<bool> {
     let value: Option<i64> = row.try_get(column)?;
     Ok(value.unwrap_or(0) != 0)
@@ -366,6 +384,7 @@ fn get_bool(row: &SqliteRow, column: &str) -> Result<bool> {
 /// `<sha1[0:2]>/<sha1[2:]>.gz` shard layout so every blob stays retrievable by
 /// its content hash. Copies are byte-for-byte; the tree is already gzip-encoded
 /// and content-addressed.
+#[cfg(test)]
 fn copy_uploads(src_uploads: &Path, blob_root: &Path, report: &mut MigrateReport) -> Result<()> {
     let dest_uploads = blob_root.join("uploads");
     let mut stack = vec![src_uploads.to_path_buf()];
@@ -400,6 +419,7 @@ fn copy_uploads(src_uploads: &Path, blob_root: &Path, report: &mut MigrateReport
 }
 
 /// Write each top-level `config.local.json` key into the durable config store.
+#[cfg(test)]
 async fn load_config(
     config: &Arc<dyn ConfigStore>,
     path: &Path,

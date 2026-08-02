@@ -58,7 +58,7 @@ export function SbolVisualCassette() {
   const maskPrefix = `cassette-glyph-${useId().replaceAll(":", "")}`;
 
   return (
-    <div className="border-b border-foreground/15 bg-background/70">
+    <div className="border-b border-foreground/15">
       <div className="flex items-center justify-between border-b border-foreground/10 px-4 py-2.5 sm:px-5">
         <span className="ledger-label text-muted-foreground">
           Expression cassette

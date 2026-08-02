@@ -63,5 +63,6 @@ pub use traits::{
 pub use sbol_db_search::{ClusterId, Signature};
 pub use triple::{
     GraphFilter, IdGraphFilter, IdQuad, PatternObject, PatternSubject, TermId, TermKey, TermValue,
+    TripleScanPage,
 };
 pub use update::{TripleChange, UpdateOutcome};

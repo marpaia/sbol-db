@@ -32,6 +32,69 @@ async fn main() -> Result<()> {
         return cmd::util::run(action).await;
     }
 
+    // RDF acquisition and normalization are target-free and preserve the raw
+    // export, so they must not open or mutate a destination database.
+    if let Command::NormalizeSynbiohubRdf {
+        input,
+        output,
+        policy,
+        report,
+    } = cli.command
+    {
+        return cmd::migrate::normalize::run(cmd::migrate::normalize::NormalizeInputs {
+            input,
+            output,
+            policy,
+            report,
+        });
+    }
+
+    // Source preflight is intentionally target-free: it must work before a
+    // destination database exists and must never mutate one accidentally.
+    if let Command::PreflightSynbiohub {
+        source,
+        virtuoso_db,
+        rdf,
+        rdf_normalization_report,
+        sqlite,
+        uploads,
+        config,
+        config_defaults,
+        report,
+        allow_blockers,
+    } = cli.command
+    {
+        return cmd::migrate::preflight::run(cmd::migrate::preflight::PreflightInputs {
+            source,
+            virtuoso_db,
+            rdf,
+            rdf_normalization_report,
+            sqlite,
+            uploads,
+            config,
+            config_defaults,
+            report,
+            allow_blockers,
+        })
+        .await;
+    }
+
+    if let Command::CopyPostgresToRocksdb {
+        destination,
+        chunk_size,
+        omit_completed_job_history,
+    } = cli.command
+    {
+        let source_url = resolve_connection(cli.backend, &cli.database_url)?;
+        return cmd::migrate::rocksdb::run(cmd::migrate::rocksdb::CopyInputs {
+            source_url,
+            destination,
+            chunk_size,
+            omit_completed_job_history,
+        })
+        .await;
+    }
+
     let database_url = resolve_connection(cli.backend, &cli.database_url)?;
     let backend = open_backend(&database_url, &cli.command).await?;
 
@@ -92,36 +155,30 @@ async fn main() -> Result<()> {
             cmd::inspect::run(stats, action).await
         }
         Command::MigrateSynbiohub {
-            source,
-            rdf,
-            sqlite,
-            uploads,
-            config,
+            manifest,
+            policy,
             blob_store,
-            default_graph,
-            skip_migrations,
+            chunk_size,
             no_reindex,
         } => {
-            cmd::migrate::run(
-                backend.store.clone(),
-                backend.users.clone(),
+            let pool = backend.require_postgres()?.pool.clone();
+            cmd::migrate::production::run(
+                pool,
                 backend.config.clone(),
                 backend.jobs.clone(),
-                backend.migrator.clone(),
-                cmd::migrate::MigrateInputs {
-                    source,
-                    rdf,
-                    sqlite,
-                    uploads,
-                    config,
+                cmd::migrate::production::ProductionInputs {
+                    manifest,
+                    policy,
                     blob_store,
-                    default_graph,
-                    skip_migrations,
+                    chunk_size,
                     no_reindex,
                 },
             )
             .await
         }
+        Command::PreflightSynbiohub { .. } => unreachable!("handled before backend open"),
+        Command::NormalizeSynbiohubRdf { .. } => unreachable!("handled before backend open"),
+        Command::CopyPostgresToRocksdb { .. } => unreachable!("handled before backend open"),
         Command::Util { .. } => unreachable!("handled before backend open"),
     }
 }
@@ -196,7 +253,38 @@ async fn open_backend(database_url: &str, command: &Command) -> Result<Backend> 
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
+    use clap::CommandFactory;
+
     use super::*;
+
+    #[test]
+    fn database_argument_defaults_to_repo_local_rocksdb() {
+        // Inspect the clap schema rather than parsing the ambient process
+        // environment: CI intentionally sets DATABASE_URL for Postgres tests,
+        // and clap's env source correctly takes precedence over this default.
+        let command = Cli::command();
+        let database_url = command
+            .get_arguments()
+            .find(|argument| argument.get_id() == "database_url")
+            .expect("database_url argument");
+        assert_eq!(
+            database_url.get_default_values(),
+            [OsStr::new(crate::cli::DEFAULT_LOCAL_DATABASE_URL)]
+        );
+        assert_eq!(database_url.get_env(), Some(OsStr::new("DATABASE_URL")));
+
+        let cli = Cli::try_parse_from([
+            "sbol-db",
+            "--database-url",
+            crate::cli::DEFAULT_LOCAL_DATABASE_URL,
+            "server",
+        ])
+        .unwrap();
+        assert_eq!(cli.backend, None);
+        assert!(matches!(cli.command, Command::Server { .. }));
+    }
 
     #[test]
     fn no_selector_passes_url_through() {

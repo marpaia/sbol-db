@@ -1,5 +1,15 @@
 //! Triple-pattern scan inputs shared by the storage contract.
 
+use sbol_db_core::Triple;
+
+/// One stable keyset page from a full-store scan. The cursor is opaque to
+/// callers and may encode a relational row id or an engine-native key.
+#[derive(Clone, Debug)]
+pub struct TripleScanPage {
+    pub items: Vec<Triple>,
+    pub next_cursor: Option<String>,
+}
+
 /// Filter on the named-graph position for a pattern scan.
 ///
 /// Mirrors SPARQL `graph_name` semantics: `None` (no filter at the call site)

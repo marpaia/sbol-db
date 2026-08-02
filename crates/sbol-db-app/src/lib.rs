@@ -25,6 +25,7 @@ mod federation;
 mod maintenance;
 pub mod memory;
 mod mutation;
+mod namespace;
 mod object;
 mod permission;
 mod plugin;
@@ -51,6 +52,10 @@ pub use federation::{
 };
 pub use maintenance::{MaintenanceScheduleReceipt, SearchMaintenanceScheduler};
 pub use mutation::{MakePublicOutcome, MakePublicRequest, MutationError, MutationService};
+pub use namespace::{
+    RegistryNamespace, DEFAULT_DATABASE_PREFIX as DEFAULT_REGISTRY_DATABASE_PREFIX,
+    DEFAULT_PUBLIC_GRAPH,
+};
 pub use object::{
     ObjectAttachment, ObjectAttachmentSection, ObjectContentState, ObjectDetails, ObjectProperty,
     ObjectPropertyValue, ObjectProvenance, ObjectReference, ObjectReferenceSection,
@@ -76,26 +81,87 @@ pub use submission::{
     SubmitPreview, SubmitRequest,
 };
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
+use std::time::Instant;
 
 use sbol_db_backend::Backend;
-use sbol_db_search::ranked_text::RankedTextIndex;
+use sbol_db_core::DomainError;
+use sbol_db_search::ranked_text::{ClusterMap, RankedTextIndex};
 use sbol_db_search::{SearchDeployment, SearchRuntime, VectorRouter};
 use sbol_db_search_sdk::{IndexMaintenanceEvent, IndexMaintenanceRegistry, IndexMutationSource};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
-    AclStore, BlobStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore,
-    SketchStore, TokenStore, UserStore,
+    AclStore, BlobStore, ClusterId, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore,
+    SketchStore, TokenStore, TripleSource, UserStore,
 };
+use tokio::sync::Mutex as AsyncMutex;
+
+type SharedClusterMapCache = Arc<RwLock<Option<(Instant, Arc<ClusterMap>)>>>;
+
+/// Cache-aware view of a durable cluster store. Every mutation invalidates the
+/// compact ranking map after the backend commit succeeds, while reads retain
+/// the production-scale TTL/single-flight optimization.
+struct InvalidatingClusterStore {
+    inner: Arc<dyn ClusterStore>,
+    cache: SharedClusterMapCache,
+}
+
+impl InvalidatingClusterStore {
+    fn new(inner: Arc<dyn ClusterStore>, cache: SharedClusterMapCache) -> Self {
+        Self { inner, cache }
+    }
+
+    fn invalidate(&self) {
+        *self.cache.write().expect("cluster map cache lock poisoned") = None;
+    }
+}
+
+#[async_trait::async_trait]
+impl ClusterStore for InvalidatingClusterStore {
+    async fn cluster_id_of(&self, iri: &str) -> Result<Option<ClusterId>, DomainError> {
+        self.inner.cluster_id_of(iri).await
+    }
+
+    async fn cluster_mates(&self, iri: &str) -> Result<Vec<String>, DomainError> {
+        self.inner.cluster_mates(iri).await
+    }
+
+    async fn replace_clusters(&self, pairs: Vec<(String, ClusterId)>) -> Result<(), DomainError> {
+        self.inner.replace_clusters(pairs).await?;
+        self.invalidate();
+        Ok(())
+    }
+
+    async fn all_assignments(&self) -> Result<Vec<(String, ClusterId)>, DomainError> {
+        self.inner.all_assignments().await
+    }
+
+    async fn assign_cluster(&self, iri: &str, cluster: ClusterId) -> Result<(), DomainError> {
+        self.inner.assign_cluster(iri, cluster).await?;
+        self.invalidate();
+        Ok(())
+    }
+
+    async fn max_cluster_id(&self) -> Result<Option<ClusterId>, DomainError> {
+        self.inner.max_cluster_id().await
+    }
+}
 
 /// The application facade: the neutral trait objects plus the identity-aware
 /// subsystems every HTTP adapter shares.
 #[derive(Clone)]
 pub struct AppServices {
+    /// Immutable graph/object namespace for this registry. Production migration
+    /// installs the source registry's HTTPS values before serving requests.
+    pub registry_namespace: RegistryNamespace,
     /// The SBOL-aware store: ingest plus every derived-view read surface.
     pub store: Arc<dyn SbolStore>,
     /// SPARQL query evaluation over the derived triple view.
     pub sparql: Arc<SparqlEngine>,
+    /// Exact triple-pattern reads for bounded application projections. This is
+    /// the same source the SPARQL engine owns, exposed here so point-read paths
+    /// do not rebuild simple relationships through the generic query engine.
+    pub(crate) triple_source: Arc<dyn TripleSource>,
     /// SPARQL Update evaluation with transactional triple writes.
     pub sparql_update: Arc<SparqlUpdateEngine>,
     /// The async job queue.
@@ -141,6 +207,13 @@ pub struct AppServices {
     /// needs a persistent, filesystem-backed index swaps one in with
     /// [`with_text_search`](Self::with_text_search).
     pub text_search: Arc<RankedTextIndex>,
+    /// Short-lived ranking input cache. Loading the production
+    /// cluster table on every search is much more expensive than scoring a
+    /// small result page; the TTL refreshes maintenance changes promptly.
+    pub(crate) cluster_map_cache: SharedClusterMapCache,
+    /// Single-flight guard for an expired cluster cache. It prevents a burst of
+    /// requests from all rescanning the production assignment table together.
+    pub(crate) cluster_map_refresh: Arc<AsyncMutex<()>>,
     /// Lazily assembled structured-search runtime. The built-in runtime wraps
     /// the current text index and cluster store; an embedding/vector deployment
     /// can replace it with [`with_search_runtime`](Self::with_search_runtime).
@@ -229,9 +302,15 @@ impl AppServices {
         cluster: Arc<dyn ClusterStore>,
         sketch: Arc<dyn SketchStore>,
     ) -> Self {
+        let cluster_map_cache = Arc::new(RwLock::new(None));
         self.pagerank = pagerank;
-        self.cluster = cluster;
+        self.cluster = Arc::new(InvalidatingClusterStore::new(
+            cluster,
+            cluster_map_cache.clone(),
+        ));
         self.sketch = sketch;
+        self.cluster_map_cache = cluster_map_cache;
+        self.cluster_map_refresh = Arc::new(AsyncMutex::new(()));
         // The built-in legacy strategy captures the cluster store. Reset the
         // lazy runtime so it observes the newly installed durable handle.
         self.search_runtime = Arc::new(OnceLock::new());
@@ -296,9 +375,21 @@ impl AppServices {
     /// the neutral handles directly yet must exercise the real per-backend
     /// identity persistence.
     pub fn with_identity(mut self, users: Arc<dyn UserStore>, tokens: Arc<dyn TokenStore>) -> Self {
-        self.auth = AuthService::new(users.clone(), tokens.clone());
+        self.auth = AuthService::new(users.clone(), tokens.clone())
+            .with_database_prefix(self.registry_namespace.database_prefix());
         self.users = users;
         self.tokens = tokens;
+        self
+    }
+
+    /// Install the registry's persistent namespace across identity, ACL, URI
+    /// minting, mutation, visibility, and download consumers.
+    pub fn with_registry_namespace(mut self, namespace: RegistryNamespace) -> Self {
+        self.acl_service = AclService::new(self.store.clone(), self.acl.clone())
+            .with_public_graph(namespace.public_graph());
+        self.auth = AuthService::new(self.users.clone(), self.tokens.clone())
+            .with_database_prefix(namespace.database_prefix());
+        self.registry_namespace = namespace;
         self
     }
 
@@ -373,7 +464,8 @@ impl AppServices {
     pub fn submission_service(&self) -> SubmissionService {
         SubmissionService::with_maintenance(
             self.store.clone(),
-            CollectionService::new(),
+            CollectionService::new()
+                .with_database_prefix(self.registry_namespace.database_prefix()),
             self.search_maintenance.clone(),
         )
     }
@@ -385,6 +477,7 @@ impl AppServices {
             self.sparql_update.clone(),
             self.acl_service.clone(),
         )
+        .with_database_prefix(self.registry_namespace.database_prefix())
         .with_maintenance(self.search_maintenance.clone())
     }
 
@@ -451,6 +544,7 @@ impl AppServices {
         users: Arc<dyn UserStore>,
         tokens: Arc<dyn TokenStore>,
     ) -> Self {
+        let triple_source = sparql.triple_source();
         let acl_service = AclService::new(store.clone(), acl.clone());
         let auth = AuthService::new(users.clone(), tokens.clone());
         let text_search = Arc::new(
@@ -460,7 +554,11 @@ impl AppServices {
             std::env::temp_dir().join("sbol-db-blobs"),
         ));
         let pagerank: Arc<dyn PageRankStore> = Arc::new(memory::InMemoryPageRankStore::new());
-        let cluster: Arc<dyn ClusterStore> = Arc::new(memory::InMemoryClusterStore::new());
+        let cluster_map_cache = Arc::new(RwLock::new(None));
+        let cluster: Arc<dyn ClusterStore> = Arc::new(InvalidatingClusterStore::new(
+            Arc::new(memory::InMemoryClusterStore::new()),
+            cluster_map_cache.clone(),
+        ));
         let sketch: Arc<dyn SketchStore> = Arc::new(memory::InMemorySketchStore::new());
         let config: Arc<dyn ConfigStore> = Arc::new(memory::InMemoryConfigStore::new());
         let federation_client: Arc<dyn WebOfRegistriesClient> =
@@ -469,13 +567,16 @@ impl AppServices {
         let expose = Arc::new(plugin::ExposeRegistry::new());
         let stream = Arc::new(plugin::StreamRegistry::new());
         let search_runtime = Arc::new(OnceLock::new());
+        let cluster_map_refresh = Arc::new(AsyncMutex::new(()));
         let search_maintenance = Arc::new(SearchMaintenanceScheduler::new(
             jobs.clone(),
             Arc::new(IndexMaintenanceRegistry::default()),
         ));
         Self {
+            registry_namespace: RegistryNamespace::default(),
             store,
             sparql,
+            triple_source,
             sparql_update,
             jobs,
             acl,
@@ -489,6 +590,8 @@ impl AppServices {
             tokens,
             auth,
             text_search,
+            cluster_map_cache,
+            cluster_map_refresh,
             search_runtime,
             search_vectors: None,
             search_maintenance,

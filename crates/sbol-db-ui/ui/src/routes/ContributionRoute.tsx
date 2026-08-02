@@ -6,10 +6,10 @@ import {
   CircleAlert,
   FileCheck2,
   FileUp,
+  FolderKanban,
   Loader2,
   LockKeyhole,
   RotateCcw,
-  Sparkles,
   TriangleAlert,
 } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
@@ -227,7 +227,8 @@ function ContributionWorkspace() {
     <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
       <header className="max-w-3xl">
         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-primary">
-          <Sparkles className="size-3.5" /> Account workspace
+          <FolderKanban className="size-3.5" aria-hidden="true" /> Account
+          workspace
         </div>
         <h1 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">
           Contribute a design collection

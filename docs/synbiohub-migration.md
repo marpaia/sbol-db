@@ -1,210 +1,360 @@
-# Migrating a classic SynBioHub instance
+# Classic SynBioHub production migration
 
-`sbol-db migrate-synbiohub` loads a classic (Node/Express) SynBioHub
-instance into an sbol-db database in one pass. It reconstructs the
-equivalent state without going through the classic app: the RDF is loaded
-verbatim, accounts keep their existing password hashes, uploaded files keep
-their content addresses, and the mutable config file becomes durable config.
+This migration preserves the classic registry's durable user-visible state:
+named RDF graphs, account identities and legacy password hashes, roles, graph
+ownership, sharing triples, content-addressed uploads, and instance
+configuration. It is Postgres-only, manifest-gated, resumable, and fail-closed.
 
-This document covers what the command reads, how to run it against a real
-instance, and how to verify the result. For the running-triplestore
-compatibility surface (SynBioHub talking to sbol-db in place of Virtuoso at
-runtime) see [Running SynBioHub on sbol-db](synbiohub.md).
+The old fixture loader still exists behind tests as a compatibility rehearsal,
+but it is not reachable from the CLI. It was not safe for production because
+it loaded an RDF file into memory, silently skipped missing inputs, copied
+blobs directly into their live directory, assumed unique email addresses, had
+no resume ledger, and never reconciled target content against the source.
 
-## What a classic instance looks like
+## Production snapshot already observed
 
-A deployed classic SynBioHub keeps its state in four places:
+The copied production layout under `synbiohub-data` contains:
 
-| Part | Classic location | What it holds |
-| --- | --- | --- |
-| RDF | Virtuoso triplestore | The SBOL2 corpus: a public graph plus one graph per user |
-| Accounts | `synbiohub.sqlite` (`users` table) | Names, emails, affiliations, password hashes, owned graph URIs, roles |
-| Uploads | `uploads/` tree | Attachment blobs, gzip-compressed and content-addressed by SHA-1 |
-| Config | `config.local.json` | Instance name and URL, feature toggles, and other mutable settings |
+- a 4,041,211,904-byte Virtuoso database;
+- a logically healthy 2,505,863,168-byte SQLite account database;
+- 3,095 accounts: 16 administrators, 21 curators, and 34 members;
+- 9,970 gzip upload blobs, all of which passed decompression, content SHA-1,
+  path-address, and compressed SHA-256 checks;
+- 94 active reset links, which the importer invalidates;
+- 10,362,699 classic sessions, which are intentionally not imported;
+- zero classic jobs, tasks, and external-profile rows;
+- three exact duplicate-email groups and ten case-folded identity collision
+  groups; and
+- an HTTPS production database prefix and public graph, with login required.
 
-The migration takes those same four parts. Only the RDF needs preparing: it
-lives inside Virtuoso, so you dump it to a file first. The other three are
-copied straight from the instance's filesystem.
+The same directory also contains a misspelled 278,528-byte
+`synibohub.sqlite` last modified in 2020. It has 241 accounts: 239 usernames
+also occur in the selected live database and two do not. Preflight therefore
+hashes it as an additional source artifact and raises
+`additional_sqlite_snapshot_requires_disposition`; the cutover policy must
+record why this historical snapshot is not canonical. Rotated logs and the
+truncated 20-byte `backup.gz` are retained with the frozen source for audit and
+recovery analysis, but are not application state imported into SBOL DB.
 
-## Prerequisites
+The target preserves exact usernames and case. Login first tries exact
+username, then accepts an email only when it identifies one account. Users in
+a duplicate-email group must log in with their username. No account is merged
+or discarded.
 
-- The `sbol-db` binary on the machine running the migration.
-- A destination database, chosen with `--database-url` (or `DATABASE_URL`).
-  The scheme selects the backend: `postgres://`, `sqlite://`, or
-  `rocksdb://`. The migration applies any pending schema migrations before
-  loading unless `--skip-migrations` is given.
-- Read access to the classic instance's `synbiohub.sqlite`, `uploads/` tree,
-  and `config.local.json`.
-- A Virtuoso RDF dump exported as N-Quads (`.nq`) or TriG (`.trig`). Both
-  carry graph names, which the migration needs to keep the public graph and
-  each per-user graph separate. Triple-only formats (`.nt`, `.ttl`,
-  `.rdf`) are accepted but land in the default graph, so they are only
-  useful for a single-graph load.
+Sessions, reset links, queued classic jobs, and transient tasks are operational
+state rather than durable registry data. They are intentionally invalidated;
+users sign in again after cutover, and incomplete work must be replayed from
+the frozen source or an operator record. This is the only deliberate departure
+from a literal byte-for-byte state copy.
 
-### Exporting the RDF dump from Virtuoso
+## Architecture
 
-Virtuoso serializes its full quad store to N-Quads with `dump_nquads`. From
-`isql`:
-
-```sql
-dump_nquads('dumps', 1, 1000000000, 1);
+```mermaid
+flowchart LR
+  A["Frozen classic snapshot"] --> B["Pinned Virtuoso private-copy export"]
+  A --> C["Read-only SQLite private copy"]
+  A --> D["Upload and config inventory"]
+  B --> Q["Digest-addressed IRI normalization"]
+  Q --> E["Content-addressed preflight manifest"]
+  C --> E
+  D --> E
+  E --> F["Explicit blocker and graph policy"]
+  F --> G["Postgres migration run ledger"]
+  G --> H["Users and roles"]
+  G --> I["Bounded RDF batches"]
+  G --> J["Checksum-verified blob staging"]
+  H --> K["Counts and identity reconciliation"]
+  I --> L["Per-graph count and fingerprint reconciliation"]
+  J --> M["Atomic upload-tree promotion"]
+  K --> N["Canonical state ready"]
+  L --> N
+  M --> N
+  N --> O["Paged derived-index rebuild"]
+  O --> P["Cutover evidence and traffic switch"]
 ```
 
-That writes numbered `.nq` files under Virtuoso's configured `DirsAllowed`
-dump directory. Concatenate them into one file (for example `dump.nq`) and
-place it wherever the migration can read it.
+There are two kinds of data:
 
-## Running the migration
+- Canonical state: accounts, configuration, RDF triples, and blobs. The loader
+  will not mark this state ready until it exactly reconciles.
+- Derived state: text search, PageRank, sequence sketches, and clusters. These
+  are rebuilt only from reconciled canonical state and can be discarded and
+  regenerated.
 
-The simplest form points `--source` at an unpacked instance directory and
-`--blob-store` at the destination blob-store root:
+Every run is identified by the source bundle SHA-256 plus importer version.
+Rerunning the same command resumes the same ledger. A different bundle cannot
+enter a non-empty target. A Postgres advisory lock prevents two loaders from
+running concurrently.
+
+## 1. Freeze and export Virtuoso
+
+Stop writes before taking the cutover snapshot. Keep an independently
+restorable copy of every source artifact.
+
+The exporter copies `virtuoso.db` into a temporary directory and starts the
+exact inspected Virtuoso image against that private copy. Virtuoso is allowed
+to checkpoint and create logs only inside the temporary directory. The source
+database is mounted nowhere and cannot be mutated.
 
 ```sh
-sbol-db migrate-synbiohub \
-  --database-url postgres://sbol:sbol@localhost:5432/sbol \
-  --source /path/to/classic-instance \
-  --blob-store /var/lib/sbol-db/blobs
+SYNBIOHUB_CONFIG=/snapshot/config.local.json \
+  ./scripts/export-synbiohub-virtuoso.sh \
+  /snapshot/virtuoso.db \
+  /snapshot/export/production.nq \
+  /path/to/large-temporary-volume
 ```
 
-With `--source` set, each part defaults to a conventional path beneath it:
+If the SQL DBA credential was rotated independently of SynBioHub's HTTP graph
+store credential, set `VIRTUOSO_DBA_PASSWORD` from the deployment secret
+manager as well. That value takes precedence over the config file and is never
+printed.
 
-| Part | Default path under `--source` | Override flag |
-| --- | --- | --- |
-| RDF dump | `dump.nq` | `--rdf` |
-| Accounts | `synbiohub.sqlite` | `--sqlite` |
-| Uploads | `uploads` | `--uploads` |
-| Config | `config.local.json` | `--config` |
+The script pins
+`tenforce/virtuoso@sha256:de97286328aa0babb9e06e9626321d91363ba3f260529b9083d1fa02f36ad664`,
+reads the DBA password internally from the environment or classic config
+without printing it,
+uses `dump_nquads`, concatenates fragments in name order, atomically publishes
+the output, and prints the final size and SHA-256. It refuses to overwrite an
+existing export.
 
-Any part can be given its own explicit path, which overrides the
-`--source`-derived default. A part whose resolved path does not exist is
-skipped with a warning, so a partial instance still migrates the parts it
-has. When the classic pieces are scattered, drop `--source` and pass each
-flag directly:
+## 2. Normalize invalid legacy IRIs
+
+Keep the Virtuoso export immutable. If strict N-Quads parsing identifies
+legacy IRIs that are not valid absolute IRIs, review the complete inventory
+and record every accepted rewrite in an exact-count, digest-addressed policy.
+Then produce a new artifact and provenance report:
 
 ```sh
-sbol-db migrate-synbiohub \
-  --database-url postgres://sbol:sbol@localhost:5432/sbol \
-  --rdf /dumps/public.nq \
-  --sqlite /backup/synbiohub.sqlite \
-  --uploads /backup/uploads \
-  --config /etc/synbiohub/config.local.json \
-  --blob-store /var/lib/sbol-db/blobs
+cargo run -p sbol-db -- normalize-synbiohub-rdf \
+  --input /snapshot/export/production.nq \
+  --output /snapshot/export/production.normalized.nq \
+  --policy /evidence/iri-normalization-policy.json \
+  --report /evidence/rdf-normalization.json
 ```
 
-`--blob-store` must match the blob-store root the running sbol-db server is
-configured to serve from: the uploads tree is copied to `<root>/uploads`,
-which is where the server looks up a blob by its SHA-1.
+The normalizer scans only N-Quads IRI tokens, never literal contents. It
+decodes N-Quads Unicode escapes before validation, validates every resulting
+IRI as absolute, rejects unapproved invalid IRIs and target collisions, and
+checks the policy's exact occurrence, replacement, IRI-role, and graph counts.
+`percent_encode_spaces` preserves a malformed absolute IRI by encoding its
+spaces. `map_relative_iri_to_urn` preserves an otherwise base-less relative
+reference injectively under `urn:synbiohub:legacy-relative-iri:` rather than
+inventing an ontology namespace. The output is strictly reparsed and must have
+the same quad count as the input. Existing output and report files are never
+overwritten.
 
-Useful flags:
+## 3. Produce the preflight manifest
 
-- `--default-graph <iri>` loads any default-graph (unnamed) triples into the
-  named graph you specify. Without it such triples are counted and skipped,
-  since a well-formed SynBioHub dump keeps everything in named graphs.
-- `--skip-migrations` assumes the destination schema is already current and
-  does not apply pending migrations first.
-- `--no-reindex` skips enqueuing the search-index rebuild (see below).
+Preflight does not open a target database. SQLite is inspected from a private
+copy including its WAL/SHM sidecars. The RDF parser and blob verifier stream
+their inputs with bounded buffers.
 
-## What each part becomes
+```sh
+cargo run -p sbol-db -- preflight-synbiohub \
+  --source /snapshot \
+  --rdf /snapshot/export/production.normalized.nq \
+  --rdf-normalization-report /evidence/rdf-normalization.json \
+  --config-defaults /path/to/classic-synbiohub/config.json \
+  --report /evidence/synbiohub-preflight.json
+```
 
-- **RDF** is parsed as a quad stream, grouped by graph name, and each named
-  graph is written verbatim through the graph-store write path in `Replace`
-  mode. The public graph and every per-user graph land byte-for-byte where
-  they were, so SBOL2 round-trips unchanged and graph IRIs stay opaque.
-- **Accounts** are read from the `users` table with the database opened
-  read-only, so the source is never mutated. Each row becomes an account
-  that keeps its legacy `sha1(salt + sha1(password))` hash and owned graph
-  URI. The hash is not rehashed during migration; the first successful login
-  transparently upgrades it to argon2. Admin, curator, and member roles and
-  any password-reset link are carried over.
-- **Uploads** are copied into `<blob-store>/uploads`, preserving the
-  `<sha1[0:2]>/<sha1[2:]>.gz` shard layout byte-for-byte. The tree is already
-  gzip-encoded and content-addressed, so every attachment stays retrievable
-  by its content hash.
-- **Config** keys are each written into the durable config store, the
-  replacement for the mutable `config.local.json`.
-- After loading, a `rebuild_search_index` job is enqueued so the native
-  ranked text index, PageRank scores, and sequence clusters are rebuilt from
-  the loaded corpus. A worker (the embedded one in `sbol-db server`, or a
-  standalone `sbol-db worker`) must be running to process it.
+The manifest commits to:
 
-The command prints a JSON report of what it loaded: the named graphs and
-their triple counts, total triples, default-graph triples skipped, users
-imported, blobs copied, config keys set, and the reindex job id.
+- byte size and SHA-256 for the raw database, raw and normalized RDF exports,
+  normalization policy/report, SQLite main/WAL/SHM, and configuration files;
+- a logical SHA-256 over all classic account fields in source-id order;
+- every upload's expected SHA-1, content SHA-1, compressed SHA-256, compressed
+  and uncompressed size, and gzip validity;
+- every named graph's class, quad count, and duplicate-aware,
+  order-independent fingerprint;
+- account/graph, owner/account, viewer/account, and RDF/blob reconciliation;
+  and
+- namespace, public graph, policy flags, roles, collision summaries, and
+  timestamp ranges.
 
-## Rehearsal, cutover, and rollback
+The report is safe to archive: email collision values are hashed, password
+hashes never appear, and nested API keys, salts, passwords, credentials,
+private keys, and tokens are recursively redacted. Secret values still
+contribute to the source bundle digest. At import time configuration is read
+again from the hash-verified source files, not from the redacted preview.
 
-Treat the first run as a rehearsal against a disposable, empty destination.
-The source files are opened read-only, but the destination is populated in
-stages (graphs, accounts, blobs, configuration, then the rebuild job), so a
-failed whole-instance migration is not a transaction spanning the database and
-filesystem. Discard the rehearsal destination and rerun after correcting the
-cause; do not treat a partial report as a cutover candidate.
+Do not use `--allow-blockers` for a cutover manifest. That flag exists only so
+an operator can save an incomplete inventory while fixing its source.
 
-The maintained synthetic rehearsal runs the same source fixture on SQLite,
-RocksDB, and a configured isolated Postgres database. On every backend it
-asserts:
+## 4. Resolve policy explicitly
 
-- exact named-graph separation and triple counts;
-- migrated administrator/member roles and graph ownership;
-- successful login with the original password followed by Argon2 rehash;
-- byte-equal blob retrieval by the classic content hash;
-- durable instance configuration; and
-- enqueueing of the search rebuild.
+No blocker can be ignored at the command line. If an exceptional source issue
+is accepted, record its code and a non-empty reason in a policy file. Every
+graph outside the configured public graph and user-graph namespace also needs
+an explicit import disposition. A wildcard is allowed when the reviewed policy
+is to preserve every such graph.
 
-For a production cutover:
+```json
+{
+  "waivers": {
+    "reviewed_blocker_code": "Approved by migration owner in change record CHG-1234"
+  },
+  "other_graphs": {
+    "*": "import"
+  }
+}
+```
 
-1. rehearse from a recent snapshot and record the migration report plus every
-   verification result below;
-2. announce and begin a classic write freeze;
-3. take fresh, independently restorable RDF, account SQLite, upload, and config
-   snapshots;
-4. migrate into a new empty SBOL DB destination and run the same checks;
-5. keep the classic deployment and snapshots intact while routing a controlled
-   validation cohort, then switch normal traffic; and
-6. retain the frozen source for the agreed rollback window.
+The production importer does not support an `exclude` disposition: a run that
+drops a source graph cannot claim to be a 1:1 migration.
 
-Rollback before accepting new SBOL DB writes is a traffic switch back to the
-frozen classic instance. After new writes are accepted, rollback is not a
-simple route change: reconcile or export those writes first. This command does
-not reverse-migrate SBOL DB state into classic storage, and no cutover should
-claim otherwise.
+## 5. Rehearse on a disposable Postgres target
 
-The original `passwordSalt` must be supplied as `SBOL_DB_PASSWORD_SALT` to the
-running server until every migrated credential has either logged in and
-upgraded or been reset. Losing that value does not expose passwords, but it
-prevents verification of credentials that still use the legacy digest.
+Use a fresh database and a blob root whose `uploads/` path is absent or empty.
 
-## Post-migration verification
+```sh
+cargo run -p sbol-db -- \
+  --database-url postgres://sbol:REDACTED@127.0.0.1:5432/sbol_rehearsal \
+  migrate-synbiohub \
+  --manifest /evidence/synbiohub-preflight.json \
+  --policy /evidence/synbiohub-policy.json \
+  --blob-store /var/lib/sbol-db/blobs \
+  --chunk-size 25000
+```
 
-Point the report's numbers and a few spot checks at the loaded database. The
-examples below use a server started against the migrated database.
+The command:
 
-1. **Graphs are verbatim.** Compare triple counts per graph against the
-   report, and confirm the public graph reads back through SPARQL:
+1. validates manifest schema and policy;
+2. rehashes every file before applying target migrations;
+3. creates or resumes `sbh_migration_run` and its artifact, identity, graph,
+   blob, and issue ledgers;
+4. imports users from a private SQLite copy with deterministic target UUIDs,
+   exact source timestamps, graph URIs, roles, and password hashes;
+5. invalidates reset links and does not import sessions or API tokens;
+6. writes RDF with set semantics in bounded batches and preserves every named
+   graph IRI exactly;
+7. checksums each copied upload into a run-specific staging tree;
+8. streams every target graph in keyset pages and compares its count and
+   fingerprint to the manifest;
+9. reconciles identity and blob ledgers, loads transformed configuration, and
+   atomically promotes the staged uploads tree; and
+10. enqueues the rebuild of text, PageRank, cluster, and sequence-sketch
+    indexes.
 
-   ```sh
-   curl -s -X POST http://localhost:8888/sparql \
-     -H 'Accept: application/sparql-results+json' \
-     --data-urlencode 'query=SELECT (COUNT(*) AS ?c) FROM <https://synbiohub.org/public> WHERE { ?s ?p ?o }'
-   ```
+The target Graph Store no longer has the former 5,000,000-triple silent read
+cap. Turtle and N-Triples responses are streamed in stable backend-keyset pages;
+RDF/XML and JSON-LD remain buffered for ordinary graphs and fail explicitly
+above 100,000 triples with instructions to request a streaming format.
 
-2. **Accounts migrated and upgrade on login.** A migrated user logs in with
-   their original password; the first login rehashes the stored credential to
-   argon2 while the account's roles and owned graph URI are unchanged.
+An interrupted command is rerun unchanged. Inserts are idempotent, source user
+IDs map deterministically, staged files are checksum-verified before reuse, and
+the run cannot become `ready` while any canonical reconciliation fails. Running
+the command again after `ready` re-verifies source files, target graph
+fingerprints, identities, and the promoted upload tree.
 
-3. **Blobs are retrievable by hash.** An attachment's blob is present under
-   `<blob-store>/uploads/<sha1[0:2]>/<sha1[2:]>.gz` and downloads through the
-   server's attachment endpoint by its SHA-1.
+`--no-reindex` is useful only for loader development. A cutover is not ready
+until the derived-index job succeeds.
 
-4. **Config is set.** Read a known key (for example the instance name) back
-   from the config store and confirm it matches the classic
-   `config.local.json`.
+## 6. Convert a reconciled Postgres rehearsal to RocksDB
 
-5. **Search index rebuilt.** Once the reindex job completes, ranked text
-   search, `/similar`, and sequence clustering return results over the
-   migrated corpus. Check job status with `sbol-db jobs` and confirm the
-   `rebuild_search_index` job reached a terminal success state.
+RocksDB is an embedded, single-host deployment target. Convert only from a
+Postgres import whose production migration run is already `ready`, while every
+API server and worker that can write to that Postgres database is stopped:
 
-The `migrate-synbiohub` integration test drives exactly these checks against
-a synthetic mini-dump fixture, asserting verbatim graph counts, legacy-login
-rehash, blob-by-hash retrieval, a config key, and the enqueued reindex job.
+```sh
+sbol-db \
+  --database-url postgres://sbol:REDACTED@127.0.0.1:5432/sbol_rehearsal \
+  copy-postgres-to-rocksdb \
+  --destination /var/lib/sbol-db/production.rocksdb \
+  --chunk-size 25000 \
+  --omit-completed-job-history
+```
+
+The command refuses an active job, an unverified graph or accelerator ledger,
+a dirty accelerator graph, a source without exactly one ready production run,
+or a non-empty RocksDB destination belonging to another source. It also refuses
+typed SBOL documents, objects, sequences, or ontologies because this conversion
+path currently targets the verbatim classic SynBioHub corpus; accepting those
+rows would silently omit native SBOL DB state.
+
+Users, duplicate-email identity semantics, timestamps, password hashes, roles,
+API-token hashes, configuration, verbatim graph IRIs and triples, query
+accelerators, PageRank, sequence clusters, sketches, and LSH bands are copied
+exactly. Completed job history is operational history rather than registry
+state, so omitting it requires the explicit flag shown above. Blobs and the
+ranked text index remain in their durable filesystem paths and are reused at
+runtime.
+
+Every page commits its source keyset checkpoint in the same RocksDB batch as
+its data. Rerun the identical command after an interruption; it resumes safely.
+The target is marked `ready` only after the source is re-counted to prove that
+it stayed quiescent and every destination column-family cardinality matches.
+
+Start the first validation server without a worker so no startup reconciliation
+job mutates derived state while API and restore checks run:
+
+```sh
+sbol-db \
+  --database-url rocksdb:///var/lib/sbol-db/production.rocksdb \
+  server --bind 127.0.0.1:8888 --no-worker
+```
+
+RocksDB admits one local process opening the database and is not a shared
+multi-node backend. After validation, enable a worker only on that same host
+when the deployment is ready to process new writes and maintenance jobs.
+
+## 7. Runtime configuration
+
+Run the server with durable paths and the original classic salts supplied from
+the deployment's secret manager:
+
+```sh
+export SBOL_DB_BLOB_ROOT=/var/lib/sbol-db/blobs
+export SBOL_DB_TEXT_INDEX_PATH=/var/lib/sbol-db/search/text
+export SBOL_DB_PASSWORD_SALT='read from classic passwordSalt'
+export SBOL_DB_SHARE_LINK_SALT='read from classic shareLinkSalt'
+export SBOL_DB_SESSION_COOKIE_SECURE=true
+```
+
+`registryNamespace` is persisted during migration, so the server uses the
+production HTTPS database prefix and public graph for ACLs, reads, downloads,
+new user graphs, submissions, mutation targets, share URLs, and compatibility
+routes. `SBOL_DB_DATABASE_PREFIX` and `SBOL_DB_PUBLIC_GRAPH` remain explicit
+runtime overrides.
+
+The original password salt is required until every legacy SHA-1 credential has
+successfully logged in and transparently upgraded to Argon2 or has been reset.
+The share-link salt preserves already-issued private-object share URLs.
+
+## 8. Cutover gates
+
+Record all evidence against the exact manifest/run pair. Do not switch traffic
+until all gates pass:
+
+- classic writes remained frozen from snapshot through decision;
+- raw source and Postgres/blob backups restore independently;
+- the migration run is `ready`, with all artifacts, identities, graphs, and
+  blobs verified and no unwaived blocker;
+- source and target totals match by graph class and for every individual graph;
+- all public referenced blobs are present and retrievable;
+- sampled administrators, curators, members, duplicate-email users, and
+  ordinary users log in with existing usernames/passwords and keep their roles;
+- sampled users see all owned collections across multiple workspace pages and
+  see explicitly shared private objects;
+- public anonymous search, object details, download formats, attachments, and
+  collection membership work under the production HTTPS identities;
+- a complete streamed N-Triples export of the target public graph matches the
+  manifest fingerprint and count (no response-size truncation);
+- the derived-index job succeeded and search, similar-object, and sequence
+  results cover both public and private authorized scopes; and
+- logs and archived evidence contain no source secrets.
+
+Start with an operator/admin validation session, then a controlled user cohort,
+then normal traffic. Keep the frozen classic service available but read-only
+during the rollback window.
+
+## Rollback
+
+Before accepting SBOL DB writes, rollback is a traffic switch to the frozen
+classic deployment. The failed/rehearsal Postgres database and blob root are
+disposable; do not mutate the source snapshot to clean up a target.
+
+After accepting SBOL DB writes, rollback is no longer a simple traffic switch.
+Freeze SBOL DB, export and reconcile post-cutover writes, and make an explicit
+data-loss decision before returning to classic. This tooling does not claim to
+reverse-migrate SBOL DB state into classic SynBioHub.

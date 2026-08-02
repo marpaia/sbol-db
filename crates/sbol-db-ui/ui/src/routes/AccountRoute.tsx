@@ -64,7 +64,7 @@ function AccountSettings() {
   const instance = useInstance();
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-10 sm:px-6 lg:px-8">
+    <div className="mx-auto w-full max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
       <header className="border-b pb-8">
         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-primary">
           <UserRound className="size-3.5" aria-hidden="true" /> Account
@@ -410,7 +410,7 @@ function AccountSkeleton({ compact = false }: { compact?: boolean }) {
       className={
         compact
           ? "mt-8 grid gap-6 lg:grid-cols-3"
-          : "mx-auto max-w-5xl space-y-6 px-4 py-10 sm:px-6"
+          : "mx-auto max-w-7xl space-y-6 px-4 py-10 sm:px-6"
       }
       aria-label="Loading account settings"
     >

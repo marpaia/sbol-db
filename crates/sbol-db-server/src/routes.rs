@@ -1,10 +1,13 @@
+use std::io;
 use std::time::Duration;
 
+use axum::body::{Body, Bytes};
 use axum::extract::{Path, Query, State};
 use axum::http::header::{ACCEPT, CONTENT_TYPE};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
+use futures::stream;
 use sbol_db_core::{
     Direction, GraphId, GraphRecord, ImportReport, IriString, JobId, NeighborhoodQuery,
     NeighborhoodResult, ObjectId, SbolObjectRecord, SerializationFormat,
@@ -27,6 +30,8 @@ use crate::export;
 use crate::AppState;
 
 const READYZ_TIMEOUT: Duration = Duration::from_secs(1);
+const GRAPH_STREAM_PAGE: usize = 25_000;
+const BUFFERED_GRAPH_LIMIT: usize = 100_000;
 
 pub async fn healthz() -> &'static str {
     "ok"
@@ -1354,13 +1359,73 @@ pub async fn graph_store_get(
     State(state): State<AppState>,
     Query(params): Query<GraphCrudParams>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, ApiError> {
+) -> Result<Response, ApiError> {
     let graph = graph_crud_target(&params)?;
     let format = resolve_format(None, &headers).unwrap_or(SerializationFormat::Turtle);
-    let triples = state.service.graph_store_read(&graph).await?;
-    let body = triples_to_rdf(&triples, format)?;
     let content_type = rdf_content_type(format);
-    Ok(([(CONTENT_TYPE, content_type)], body))
+    if matches!(
+        format,
+        SerializationFormat::Turtle | SerializationFormat::NTriples
+    ) {
+        // N-Triples is a valid Turtle subset. Serializing each bounded page as
+        // N-Triples therefore gives both formats one syntactically valid,
+        // incremental response without retaining the production public graph.
+        let service = state.service.clone();
+        let stream = stream::try_unfold(
+            (service, graph, None::<String>, false),
+            |(service, graph, cursor, done)| async move {
+                if done {
+                    return Ok(None);
+                }
+                let page = service
+                    .graph_store_read_page(&graph, cursor.as_deref(), GRAPH_STREAM_PAGE)
+                    .await
+                    .map_err(|error| io::Error::other(error.to_string()))?;
+                if page.items.is_empty() {
+                    return Ok(None);
+                }
+                let body = triples_to_rdf(&page.items, SerializationFormat::NTriples)
+                    .map_err(|error| io::Error::other(error.to_string()))?;
+                let done = page.next_cursor.is_none();
+                Ok::<_, io::Error>(Some((
+                    Bytes::from(body),
+                    (service, graph, page.next_cursor, done),
+                )))
+            },
+        );
+        let mut response = Response::new(Body::from_stream(stream));
+        response.headers_mut().insert(
+            CONTENT_TYPE,
+            content_type.parse().expect("static RDF content type"),
+        );
+        return Ok(response);
+    }
+
+    // RDF/XML and JSON-LD serializers need a whole document. Keep that path
+    // complete for ordinary graphs, but fail explicitly rather than silently
+    // truncating a production-scale graph. Turtle/N-Triples is the unbounded
+    // export surface.
+    let mut triples = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = state
+            .service
+            .graph_store_read_page(&graph, cursor.as_deref(), GRAPH_STREAM_PAGE)
+            .await?;
+        if triples.len().saturating_add(page.items.len()) > BUFFERED_GRAPH_LIMIT {
+            return Err(ApiError::BadRequest(
+                "this graph is too large for a buffered RDF/XML or JSON-LD response; request Turtle or N-Triples for a complete streaming export"
+                    .to_owned(),
+            ));
+        }
+        triples.extend(page.items);
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    let body = triples_to_rdf(&triples, format)?;
+    Ok(([(CONTENT_TYPE, content_type)], body).into_response())
 }
 
 fn rdf_content_type(format: SerializationFormat) -> &'static str {

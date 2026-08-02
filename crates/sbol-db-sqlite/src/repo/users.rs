@@ -1,7 +1,9 @@
 //! The account store over SQLite.
 //!
-//! Mirrors the Postgres semantics: rows map to [`User`], `username` and `email`
-//! are unique, and the store persists an already-computed `password_hash`.
+//! Mirrors the Postgres lookup semantics: an exact username wins over email and
+//! an ambiguous email is rejected rather than choosing an arbitrary account.
+//! The development SQLite schema still keeps emails unique; production classic
+//! migration targets Postgres.
 //! UUIDs are TEXT and booleans are INTEGER (0/1).
 
 use async_trait::async_trait;
@@ -61,15 +63,30 @@ impl UserStore for SqliteUserStore {
         &self,
         identifier: &str,
     ) -> Result<Option<User>, DomainError> {
-        let row = sqlx::query(&format!(
-            "SELECT {USER_COLS} FROM sbh_user WHERE email = ? OR username = ? LIMIT 1"
+        let username = sqlx::query(&format!(
+            "SELECT {USER_COLS} FROM sbh_user WHERE username = ?"
         ))
-        .bind(identifier)
         .bind(identifier)
         .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?;
-        row.map(row_to_user).transpose()
+        if let Some(row) = username {
+            return row_to_user(row).map(Some);
+        }
+        let rows = sqlx::query(&format!(
+            "SELECT {USER_COLS} FROM sbh_user WHERE email = ? ORDER BY username LIMIT 2"
+        ))
+        .bind(identifier)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        match rows.len() {
+            0 => Ok(None),
+            1 => row_to_user(rows.into_iter().next().expect("one row")).map(Some),
+            _ => Err(DomainError::Validation(
+                "multiple accounts use this email; log in with your username".to_owned(),
+            )),
+        }
     }
 
     async fn get_by_id(&self, id: UserId) -> Result<Option<User>, DomainError> {
