@@ -149,7 +149,7 @@ function TableCard({
           </span>
           <ChevronRight
             size={12}
-            className="ml-auto shrink-0 text-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-foreground"
+            className="ml-auto shrink-0 text-muted-foreground/40 transition-[color,transform] duration-150 [transition-timing-function:cubic-bezier(0.23,1,0.32,1)] group-hover:translate-x-0.5 group-hover:text-foreground"
             aria-hidden
           />
         </Link>

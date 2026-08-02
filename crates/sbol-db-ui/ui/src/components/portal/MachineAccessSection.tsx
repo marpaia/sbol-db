@@ -137,9 +137,9 @@ export function MachineAccessSection() {
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-primary">
               Machine access
             </p>
-            <h2 className="mt-3 max-w-3xl text-balance text-3xl font-semibold tracking-[-0.025em] sm:text-4xl">
+            <h1 className="mt-3 max-w-3xl text-balance text-3xl font-semibold tracking-[-0.025em] sm:text-4xl">
               One design language for people, pipelines, and agents.
-            </h2>
+            </h1>
           </div>
           <div>
             <p className="max-w-2xl text-pretty text-sm leading-7 text-muted-foreground sm:text-base">
@@ -230,7 +230,7 @@ function CapabilityStep({
           {number}
         </span>
       </div>
-      <h3 className="mt-4 font-semibold tracking-tight">{title}</h3>
+      <h2 className="mt-4 font-semibold tracking-tight">{title}</h2>
       <p className="mt-2 text-xs leading-5 text-muted-foreground sm:text-sm sm:leading-6">
         {description}
       </p>
@@ -299,9 +299,9 @@ function RegistryPromise() {
       <p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">
         SBOL DB CLI
       </p>
-      <h3 className="mt-2 text-xl font-semibold tracking-tight">
+      <h2 className="mt-2 text-xl font-semibold tracking-tight">
         Keep the biological and social context together.
-      </h3>
+      </h2>
       <div className="mt-5 space-y-4">
         {promises.map(({ icon: Icon, title, description }) => (
           <div key={title} className="flex gap-3">
@@ -357,9 +357,9 @@ function McpDocumentation() {
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">
                 SBOL DB MCP
               </p>
-              <h3 className="mt-1.5 text-balance text-2xl font-semibold tracking-[-0.025em]">
+              <h2 className="mt-1.5 text-balance text-2xl font-semibold tracking-[-0.025em]">
                 Let your agent work safely with biological designs.
-              </h3>
+              </h2>
               <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
                 Find designs, prepare changes, and move reviews forward—without
                 stepping outside your SBOL DB permissions.
@@ -380,9 +380,9 @@ function McpDocumentation() {
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
                 Connect your agent
               </p>
-              <h4 className="mt-2 text-lg font-semibold tracking-[-0.015em]">
+              <h3 className="mt-2 text-lg font-semibold tracking-[-0.015em]">
                 Add SBOL DB in a few clicks.
-              </h4>
+              </h3>
             </div>
           </div>
 
@@ -494,9 +494,9 @@ function CapabilityGroup({
       <span className="flex size-8 items-center justify-center rounded-lg border border-primary/10 bg-primary/10 text-primary">
         <Icon className="size-[15px]" />
       </span>
-      <h4 className="mt-3 text-sm font-semibold tracking-[-0.015em]">
+      <h3 className="mt-3 text-sm font-semibold tracking-[-0.015em]">
         {label}
-      </h4>
+      </h3>
       <p className="mt-1.5 text-xs leading-[1.55] text-muted-foreground">
         {description}
       </p>
@@ -504,9 +504,9 @@ function CapabilityGroup({
       <ul className="mt-4 divide-y" role="list">
         {capabilities.map((capability) => (
           <li key={capability.title} className="py-2.5 first:pt-0 last:pb-0">
-            <h5 className="text-xs font-semibold text-foreground">
+            <h4 className="text-xs font-semibold text-foreground">
               {capability.title}
-            </h5>
+            </h4>
             <p className="mt-1 text-xs leading-[1.45] text-muted-foreground">
               {capability.description}
             </p>
