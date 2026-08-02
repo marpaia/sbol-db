@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use sbol_db_backend::Backend;
 
+mod backup_scheduler;
 mod cli;
 mod cmd;
 mod format;

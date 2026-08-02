@@ -8,6 +8,7 @@
 //! requests that didn't match a route are bucketed as `unmatched`.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -41,9 +42,16 @@ pub struct Metrics {
     api_pool: Option<PgPool>,
     worker_pool: std::sync::Mutex<Option<PgPool>>,
     jobs: std::sync::Mutex<Option<Arc<dyn JobQueue>>>,
+    data_disk: std::sync::Mutex<Option<DataDiskProbe>>,
     tls_required: AtomicBool,
     tls_ready: AtomicBool,
     tls_not_after_unix: AtomicI64,
+}
+
+#[derive(Clone, Debug)]
+struct DataDiskProbe {
+    path: PathBuf,
+    minimum_free_bytes: u64,
 }
 
 static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
@@ -90,11 +98,22 @@ impl Metrics {
             })
             .clone();
         metrics::gauge!("sbol_db_build_info", "version" => version).set(1.0);
+        for gauge in [
+            "sbol_db_backup_last_success_timestamp_seconds",
+            "sbol_db_backup_last_failure_timestamp_seconds",
+            "sbol_db_backup_last_remote_verification_timestamp_seconds",
+            "sbol_db_backup_scheduler_last_enqueue_timestamp_seconds",
+            "sbol_db_backup_scheduler_next_timestamp_seconds",
+            "sbol_db_backup_local_artifacts",
+        ] {
+            metrics::gauge!(gauge).set(0.0);
+        }
         Arc::new(Self {
             handle,
             api_pool: pool,
             worker_pool: std::sync::Mutex::new(None),
             jobs: std::sync::Mutex::new(None),
+            data_disk: std::sync::Mutex::new(None),
             tls_required: AtomicBool::new(false),
             tls_ready: AtomicBool::new(false),
             tls_not_after_unix: AtomicI64::new(0),
@@ -154,6 +173,70 @@ impl Metrics {
     pub fn with_jobs_repo(self: &Arc<Self>, jobs: Arc<dyn JobQueue>) -> Arc<Self> {
         *self.jobs.lock().expect("jobs repo poisoned") = Some(jobs);
         self.clone()
+    }
+
+    /// Attach the managed production filesystem to readiness and Prometheus
+    /// snapshots. A scrape never mutates the filesystem.
+    pub fn with_data_disk(self: &Arc<Self>, path: PathBuf, minimum_free_bytes: u64) -> Arc<Self> {
+        *self.data_disk.lock().expect("data_disk poisoned") = Some(DataDiskProbe {
+            path,
+            minimum_free_bytes,
+        });
+        self.clone()
+    }
+
+    pub fn data_disk_ready_for_traffic(&self) -> Result<(), String> {
+        let probe = self
+            .data_disk
+            .lock()
+            .map_err(|_| "data disk probe lock is poisoned".to_owned())?
+            .clone();
+        let Some(probe) = probe else {
+            return Ok(());
+        };
+        let available = fs2::available_space(&probe.path).map_err(|error| {
+            format!(
+                "cannot read available space for {}: {error}",
+                probe.path.display()
+            )
+        })?;
+        if available < probe.minimum_free_bytes {
+            return Err(format!(
+                "managed data filesystem is below its free-space reserve: available={available}, required={}",
+                probe.minimum_free_bytes
+            ));
+        }
+        Ok(())
+    }
+
+    fn snapshot_data_disk(&self) {
+        let probe = self.data_disk.lock().expect("data_disk poisoned").clone();
+        let Some(probe) = probe else {
+            return;
+        };
+        metrics::gauge!("sbol_db_data_disk_minimum_free_bytes")
+            .set(probe.minimum_free_bytes as f64);
+        match fs2::available_space(&probe.path) {
+            Ok(available) => {
+                metrics::gauge!("sbol_db_data_disk_available_bytes").set(available as f64);
+                metrics::gauge!("sbol_db_data_disk_ready").set(
+                    if available >= probe.minimum_free_bytes {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    path = %probe.path.display(),
+                    %error,
+                    "data disk free-space snapshot failed"
+                );
+                metrics::gauge!("sbol_db_data_disk_ready").set(0.0);
+                metrics::counter!("sbol_db_data_disk_probe_errors_total").increment(1);
+            }
+        }
     }
 
     fn snapshot_pool(label: &'static str, pool: &PgPool) {
@@ -254,6 +337,7 @@ impl Metrics {
 
     async fn render(&self) -> String {
         self.snapshot_tls();
+        self.snapshot_data_disk();
         if let Some(pool) = self.api_pool.as_ref() {
             Self::snapshot_pool("sbol_db", pool);
         }
@@ -731,4 +815,20 @@ impl RollingSnapshot {
 /// summary handler.
 pub fn rolling_snapshot() -> RollingSnapshot {
     rolling().snapshot()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_disk_reserve_participates_in_readiness() {
+        let temp = tempfile::tempdir().unwrap();
+        let metrics =
+            Metrics::install(None, "disk-test").with_data_disk(temp.path().to_path_buf(), u64::MAX);
+        assert!(metrics.data_disk_ready_for_traffic().is_err());
+
+        let metrics = metrics.with_data_disk(temp.path().to_path_buf(), 0);
+        assert!(metrics.data_disk_ready_for_traffic().is_ok());
+    }
 }

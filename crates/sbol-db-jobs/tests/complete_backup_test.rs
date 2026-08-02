@@ -28,6 +28,7 @@ async fn handler_publishes_one_verified_artifact_and_reuses_it_on_retry() {
     let backups = Arc::new(CompleteBackupService::new(
         CompleteBackupConfig {
             db: rocksdb,
+            database_root: root.path().join("rocksdb"),
             blobs_root: root.path().join("blobs"),
             search_root: root.path().join("search"),
             acme_root: root.path().join("acme"),
@@ -35,6 +36,8 @@ async fn handler_publishes_one_verified_artifact_and_reuses_it_on_retry() {
             generation: Uuid::new_v4(),
             layout_version: "1".to_owned(),
             application_version: "test".to_owned(),
+            minimum_free_bytes: 0,
+            local_retention: 2,
         },
         BackupEncryption::new(recovery.to_public(), verification),
     ));
