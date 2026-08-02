@@ -99,6 +99,18 @@ pub fn recognize(query: &Query, default_graph: Option<&str>) -> Option<Accelerat
         return None;
     }
 
+    if is_aggregate && projection.len() == 2 {
+        let value_var = projection[0].as_str().to_owned();
+        if let Some(kind) = facet_kind(&patterns, &value_var) {
+            return Some(AcceleratedQuery::FacetCounts {
+                graph,
+                kind,
+                value_var,
+                count_var: projection[1].as_str().to_owned(),
+            });
+        }
+    }
+
     if is_aggregate {
         let var = projection.first()?.as_str().to_owned();
         let (scope, subject_var) = detect_scope(&patterns, root_only)?;
@@ -229,31 +241,49 @@ fn detect_scope(patterns: &[&TriplePattern], root_only: bool) -> Option<(Scope, 
     for t in patterns {
         if is_toplevel(t) {
             if let TermPattern::Variable(s) = &t.subject {
-                // The top-level index is type-agnostic and carries no member
-                // anti-join. A query that also pins the subject to a constant
-                // rdf:type, or that adds `FILTER NOT EXISTS { ?o sbol2:member ?s }`
-                // (root_only), asks for a narrower set than the index holds
-                // (SynBioHub's "manage"/root-collections query does both). Neither
-                // is filterable here, so decline and let the engine evaluate it.
-                if has_const_type(patterns, s.as_str()) || root_only {
-                    return None;
-                }
-                return Some((Scope::TopLevel, s.as_str().to_owned()));
+                let object_type = const_object(patterns, s.as_str(), RDF_TYPE);
+                let role = const_object(patterns, s.as_str(), ROLE);
+                let scope = match (root_only, object_type, role) {
+                    (false, None, None) => Scope::TopLevel,
+                    (false, Some(object_type), None) => Scope::TopLevelByType(object_type),
+                    (false, None, Some(role)) => Scope::TopLevelByRole(role),
+                    (false, Some(object_type), Some(role)) => {
+                        Scope::TopLevelByTypeAndRole { object_type, role }
+                    }
+                    // Root membership intersections with roles do not yet have
+                    // a purpose-built index. Decline instead of ignoring one
+                    // of the constraints.
+                    (true, _, Some(_)) | (true, None, None) => return None,
+                    (true, Some(object_type), None) => Scope::RootTopLevelByType(object_type),
+                };
+                return Some((scope, s.as_str().to_owned()));
             }
         }
     }
     for t in patterns {
         if pred(t) == Some(RDF_TYPE) {
             if let (TermPattern::Variable(s), TermPattern::NamedNode(n)) = (&t.subject, &t.object) {
-                // The by-type index enumerates every object of a type; the member
-                // anti-join (`FILTER NOT EXISTS { ?o sbol2:member ?s }`, root_only)
-                // that SynBioHub's public "browse root collections" query adds is
-                // not precomputed for it. Decline so those root-only listings are
-                // evaluated generically rather than including nested members.
-                if root_only {
+                // A constant role without a top-level self-edge is a distinct
+                // intersection for which no scope exists. Never silently serve
+                // it as type-only.
+                if const_object(patterns, s.as_str(), ROLE).is_some() {
                     return None;
                 }
-                return Some((Scope::ByType(n.as_str().to_owned()), s.as_str().to_owned()));
+                let top_level = patterns.iter().any(|candidate| {
+                    is_toplevel(candidate)
+                        && matches!(
+                            &candidate.subject,
+                            TermPattern::Variable(subject) if subject.as_str() == s.as_str()
+                        )
+                });
+                let type_iri = n.as_str().to_owned();
+                let scope = match (root_only, top_level) {
+                    (false, false) => Scope::ByType(type_iri),
+                    (false, true) => Scope::TopLevelByType(type_iri),
+                    (true, false) => Scope::RootByType(type_iri),
+                    (true, true) => Scope::RootTopLevelByType(type_iri),
+                };
+                return Some((scope, s.as_str().to_owned()));
             }
         }
     }
@@ -264,10 +294,20 @@ fn detect_scope(patterns: &[&TriplePattern], root_only: bool) -> Option<(Scope, 
 /// (`?subject a <NamedNode>`), as opposed to the type-projection pattern
 /// `?subject a ?type`.
 fn has_const_type(patterns: &[&TriplePattern], subject: &str) -> bool {
-    patterns.iter().any(|t| {
-        pred(t) == Some(RDF_TYPE)
-            && matches!(&t.subject, TermPattern::Variable(s) if s.as_str() == subject)
-            && matches!(&t.object, TermPattern::NamedNode(_))
+    const_object(patterns, subject, RDF_TYPE).is_some()
+}
+
+fn const_object(patterns: &[&TriplePattern], subject: &str, predicate: &str) -> Option<String> {
+    patterns.iter().find_map(|t| {
+        if pred(t) != Some(predicate)
+            || !matches!(&t.subject, TermPattern::Variable(s) if s.as_str() == subject)
+        {
+            return None;
+        }
+        match &t.object {
+            TermPattern::NamedNode(value) => Some(value.as_str().to_owned()),
+            _ => None,
+        }
     })
 }
 
@@ -741,6 +781,35 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn recognizes_facet_counts() {
+        let types = format!(
+            "SELECT ?value (COUNT(DISTINCT ?subject) AS ?count) FROM <{G}> WHERE {{ \
+             ?subject a ?value . ?subject sbh:topLevel ?subject }} GROUP BY ?value"
+        );
+        assert!(matches!(
+            rec(&types),
+            Some(AcceleratedQuery::FacetCounts {
+                kind: FacetKind::Types,
+                ref value_var,
+                ref count_var,
+                ..
+            }) if value_var == "value" && count_var == "count"
+        ));
+
+        let roles = format!(
+            "SELECT ?value (COUNT(DISTINCT ?subject) AS ?count) FROM <{G}> WHERE {{ \
+             ?subject sbol2:role ?value . ?subject sbh:topLevel ?subject }} GROUP BY ?value"
+        );
+        assert!(matches!(
+            rec(&roles),
+            Some(AcceleratedQuery::FacetCounts {
+                kind: FacetKind::Roles,
+                ..
+            })
+        ));
+    }
+
     const COLL: &str = "http://localhost:7777/user/testuser/Tester_1/Tester_1_collection/1";
 
     #[test]
@@ -862,13 +931,11 @@ mod tests {
         assert!(rec("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1").is_none());
     }
 
-    // SynBioHub's "manage" / root-collections query pins the subject to a constant
-    // type *and* requires it to be top-level. The top-level index is type-agnostic,
-    // so serving it as `Scope::TopLevel` would return every top-level object
-    // (component definitions, sequences, ...) regardless of type. The recognizer
-    // must decline these so the engine evaluates them generically.
+    // SynBioHub's "manage" / root-collections search shape pins the subject to a
+    // constant type, requires it to be top-level, and applies the member
+    // anti-join. It must retain all three constraints in the accelerator scope.
     #[test]
-    fn declines_toplevel_with_constant_type() {
+    fn recognizes_root_toplevel_with_constant_type() {
         let q = format!(
             "SELECT DISTINCT ?subject ?displayId ?version ?name ?description ?type ?sbolType ?role \
              FROM <{G}> WHERE {{ ?subject a sbol2:Collection . \
@@ -881,10 +948,73 @@ mod tests {
              OPTIONAL{{?subject sbol2:type ?sbolType}} \
              OPTIONAL{{?subject sbol2:role ?role}} }}"
         );
-        assert!(
-            rec(&q).is_none(),
-            "manage/root-collections query must decline"
+        assert!(matches!(
+            rec(&q),
+            Some(AcceleratedQuery::ObjectList {
+                scope: Scope::RootTopLevelByType(ref ty),
+                ..
+            }) if ty == "http://sbols.org/v2#Collection"
+        ));
+    }
+
+    #[test]
+    fn recognizes_faceted_toplevel_type_search() {
+        let q = format!(
+            "SELECT DISTINCT ?subject ?displayId ?version ?name ?description ?type ?sbolType ?role \
+             FROM <{G}> WHERE {{ ?subject a sbol2:ComponentDefinition . \
+             ?subject a ?type . ?subject sbh:topLevel ?subject . \
+             OPTIONAL{{?subject sbol2:displayId ?displayId}} \
+             OPTIONAL{{?subject sbol2:version ?version}} \
+             OPTIONAL{{?subject dcterms:title ?name}} \
+             OPTIONAL{{?subject dcterms:description ?description}} \
+             OPTIONAL{{?subject sbol2:type ?sbolType}} \
+             OPTIONAL{{?subject sbol2:role ?role}} }} LIMIT 10"
         );
+        assert!(matches!(
+            rec(&q),
+            Some(AcceleratedQuery::ObjectList {
+                scope: Scope::TopLevelByType(ref ty),
+                ..
+            }) if ty == "http://sbols.org/v2#ComponentDefinition"
+        ));
+    }
+
+    #[test]
+    fn recognizes_faceted_toplevel_role_search() {
+        let q = format!(
+            "SELECT DISTINCT ?subject ?role FROM <{G}> WHERE {{ \
+             ?subject sbol2:role <http://identifiers.org/so/SO:0000167> . \
+             ?subject sbh:topLevel ?subject . \
+             OPTIONAL{{?subject sbol2:role ?role}} }}"
+        );
+        assert!(matches!(
+            rec(&q),
+            Some(AcceleratedQuery::ObjectList {
+                scope: Scope::TopLevelByRole(ref role),
+                ..
+            }) if role == "http://identifiers.org/so/SO:0000167"
+        ));
+    }
+
+    #[test]
+    fn recognizes_faceted_toplevel_type_and_role_search() {
+        let q = format!(
+            "SELECT DISTINCT ?subject FROM <{G}> WHERE {{ \
+             ?subject a sbol2:ComponentDefinition . \
+             ?subject sbol2:role <http://identifiers.org/so/SO:0000167> . \
+             ?subject sbh:topLevel ?subject }}"
+        );
+        assert!(matches!(
+            rec(&q),
+            Some(AcceleratedQuery::ObjectList {
+                scope: Scope::TopLevelByTypeAndRole {
+                    ref object_type,
+                    ref role,
+                },
+                ..
+            }) if object_type == "http://sbols.org/v2#ComponentDefinition"
+                && role == "http://identifiers.org/so/SO:0000167"
+        ));
     }
 
     // SynBioHub's "sub-collections" query restricts a collection's members to a
@@ -893,8 +1023,8 @@ mod tests {
     // decline rather than return every member.
     // SynBioHub's public "browse" lists root collections: a by-type listing with
     // a member anti-join (`?s a sbol2:Collection . FILTER NOT EXISTS { ?o member
-    // ?s }`). The by-type index has no root anti-join, so the recognizer must
-    // decline rather than include nested (member) collections.
+    // ?s }`). SQL accelerators answer it through a reverse membership index;
+    // backends that do not support the scope fall through to generic evaluation.
     // SynBioHub's download path probes "is <X> a Collection?" with
     // `?c a sbol2:Collection . FILTER(?c = <X>)`. The by-type index can't apply
     // the subject-equality filter, so the recognizer must decline — otherwise it
@@ -945,16 +1075,19 @@ mod tests {
     }
 
     #[test]
-    fn declines_bytype_root_only() {
+    fn recognizes_bytype_root_only() {
         let q = format!(
             "SELECT ?object ?name FROM <{G}> WHERE {{ ?object a sbol2:Collection . \
              FILTER NOT EXISTS {{ ?otherCollection sbol2:member ?object }} \
              OPTIONAL{{?object dcterms:title ?name}} }}"
         );
-        assert!(
-            rec(&q).is_none(),
-            "browse root-collections query must decline"
-        );
+        assert!(matches!(
+            rec(&q),
+            Some(AcceleratedQuery::ObjectList {
+                scope: Scope::RootByType(ref ty),
+                ..
+            }) if ty == "http://sbols.org/v2#Collection"
+        ));
     }
 
     #[test]
@@ -971,7 +1104,7 @@ mod tests {
     }
 
     #[test]
-    fn declines_toplevel_with_constant_type_count() {
+    fn recognizes_root_toplevel_with_constant_type_count() {
         let q = format!(
             "SELECT (sum(?tc) AS ?count) FROM <{G}> WHERE {{ \
              {{ SELECT (count(distinct ?subject) AS ?tc) WHERE {{ \
@@ -979,9 +1112,12 @@ mod tests {
              FILTER NOT EXISTS {{ ?otherCollection sbol2:member ?subject }} \
              ?subject a ?type . ?subject sbh:topLevel ?subject }} }} }}"
         );
-        assert!(
-            rec(&q).is_none(),
-            "manage/root-collections count query must decline"
-        );
+        assert!(matches!(
+            rec(&q),
+            Some(AcceleratedQuery::Count {
+                scope: Scope::RootTopLevelByType(ref ty),
+                ..
+            }) if ty == "http://sbols.org/v2#Collection"
+        ));
     }
 }

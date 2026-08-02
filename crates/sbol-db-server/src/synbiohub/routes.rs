@@ -658,6 +658,17 @@ pub(super) async fn run_scoped_value(
     query: &str,
     scope: GraphScope,
 ) -> Result<Value, ApiError> {
+    // An anonymous caller is authorized for exactly the public graph. Supplying
+    // that graph as the protocol default is semantically identical to the
+    // single-graph union, and lets the SPARQL engine select its per-graph
+    // accelerator instead of evaluating fixed SynBioHub templates against the
+    // full 26M-row dataset. Multi-graph authenticated scopes keep union-default
+    // semantics and therefore remain on the generic path unless the query names
+    // a graph explicitly.
+    let default_graph = match &scope {
+        GraphScope::Only(graphs) if graphs.len() == 1 => Some(graphs[0].clone()),
+        _ => None,
+    };
     let options = SparqlOptions {
         authorized_graphs: scope,
         ..SparqlOptions::default()
@@ -665,7 +676,12 @@ pub(super) async fn run_scoped_value(
     let outcome = state
         .app
         .sparql
-        .execute(query, Some(ResultFormat::Json), None, &options)
+        .execute(
+            query,
+            Some(ResultFormat::Json),
+            default_graph.as_deref(),
+            &options,
+        )
         .await?;
     serde_json::from_slice(&outcome.payload.body)
         .map_err(|e| ApiError::Domain(DomainError::Serialization(e.to_string())))

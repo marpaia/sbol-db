@@ -16,7 +16,7 @@ use sbol_db_search::{
 use sbol_db_search_faiss::{FaissBackendConfig, FaissVectorBackend};
 use sbol_db_search_sdk::{
     DistanceMetric, EmbeddingProvider, IndexMaintenanceDescriptor, IndexMaintenanceEvent,
-    IndexMaintenancePlugin, IndexMaintenanceTask, SearchError,
+    IndexMaintenancePlugin, IndexMaintenanceTask, IndexMutationSource, SearchError,
 };
 use sbol_db_vector_flat::ExactFlatVectorBackend;
 use sbol_db_vector_qdrant::{QdrantRemoteBackend, QdrantRemoteConfig};
@@ -79,16 +79,18 @@ const LEGACY_EXPLORER_REBUILD_KIND: &str = "rebuild_search_index";
 
 struct LegacyExplorerMaintenance {
     descriptor: IndexMaintenanceDescriptor,
+    skip_startup: bool,
 }
 
 impl LegacyExplorerMaintenance {
-    fn new() -> Self {
+    fn new(skip_startup: bool) -> Self {
         Self {
             descriptor: IndexMaintenanceDescriptor {
                 id: LEGACY_EXPLORER_MAINTENANCE_ID.to_owned(),
                 display_name: "SBOLExplorer compatibility index maintenance".to_owned(),
                 description: "Coalesced rebuilds of the shared ranked text, sequence sketch, cluster, and PageRank indexes".to_owned(),
             },
+            skip_startup,
         }
     }
 }
@@ -101,8 +103,11 @@ impl IndexMaintenancePlugin for LegacyExplorerMaintenance {
 
     async fn plan(
         &self,
-        _event: &IndexMaintenanceEvent,
+        event: &IndexMaintenanceEvent,
     ) -> Result<Vec<IndexMaintenanceTask>, SearchError> {
+        if self.skip_startup && event.source == IndexMutationSource::Startup {
+            return Ok(Vec::new());
+        }
         Ok(vec![IndexMaintenanceTask::new(
             LEGACY_EXPLORER_REBUILD_KIND,
             serde_json::json!({}),
@@ -110,8 +115,8 @@ impl IndexMaintenancePlugin for LegacyExplorerMaintenance {
     }
 }
 
-fn legacy_explorer_maintenance() -> Arc<dyn IndexMaintenancePlugin> {
-    Arc::new(LegacyExplorerMaintenance::new())
+fn legacy_explorer_maintenance(skip_startup: bool) -> Arc<dyn IndexMaintenancePlugin> {
+    Arc::new(LegacyExplorerMaintenance::new(skip_startup))
 }
 
 /// The no-configuration search deployment shipped by the server binary.
@@ -128,7 +133,7 @@ fn legacy_explorer_maintenance() -> Arc<dyn IndexMaintenancePlugin> {
 /// worker shares the backend state. Production topologies that separate API
 /// and worker processes select a persistent shared backend through
 /// [`load_builder`].
-pub async fn built_in_text_deployment() -> Result<SearchDeployment> {
+pub async fn built_in_text_deployment(skip_legacy_startup: bool) -> Result<SearchDeployment> {
     let profile = builtin_bge_small_profile();
     let model_directory = builtin_bge_small_model_dir();
     let bundle = builtin_bge_small_bundle(model_directory.clone());
@@ -144,7 +149,7 @@ pub async fn built_in_text_deployment() -> Result<SearchDeployment> {
                     model_directory.display()
                 )
             })?;
-    build_builtin_text_deployment(Arc::new(provider))
+    build_builtin_text_deployment(Arc::new(provider), skip_legacy_startup)
 }
 
 fn builtin_bge_small_profile() -> FastEmbedProviderConfig {
@@ -207,6 +212,7 @@ fn resolve_builtin_bge_small_model_dir(
 
 fn build_builtin_text_deployment(
     embedding: Arc<dyn EmbeddingProvider>,
+    skip_legacy_startup: bool,
 ) -> Result<SearchDeployment> {
     let embedding_profile = embedding.descriptor().id.clone();
 
@@ -243,7 +249,7 @@ fn build_builtin_text_deployment(
         .register_vector_backend(Arc::new(ExactFlatVectorBackend::new(
             "builtin.exact-flat.v1",
         )))?
-        .register_maintenance_plugin(legacy_explorer_maintenance())?
+        .register_maintenance_plugin(legacy_explorer_maintenance(skip_legacy_startup))?
         .build()
         .map_err(Into::into)
 }
@@ -302,7 +308,7 @@ pub async fn load_builder(path: &Path) -> Result<SearchDeploymentBuilder> {
     }
 
     builder
-        .register_maintenance_plugin(legacy_explorer_maintenance())
+        .register_maintenance_plugin(legacy_explorer_maintenance(false))
         .map_err(Into::into)
 }
 
@@ -325,7 +331,7 @@ mod tests {
     use super::*;
 
     fn fixture_builtin_text_deployment() -> SearchDeployment {
-        build_builtin_text_deployment(Arc::new(HashingTextEmbeddingProvider::new())).unwrap()
+        build_builtin_text_deployment(Arc::new(HashingTextEmbeddingProvider::new()), false).unwrap()
     }
 
     #[test]
@@ -445,6 +451,43 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(explorer_jobs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn populated_durable_text_index_skips_only_legacy_startup_rebuild() {
+        let deployment =
+            build_builtin_text_deployment(Arc::new(HashingTextEmbeddingProvider::new()), true)
+                .unwrap();
+        let startup = IndexMaintenanceEvent::corpus(IndexMutationSource::Startup);
+        let mutation = IndexMaintenanceEvent::corpus(IndexMutationSource::GraphStore);
+
+        let mut startup_kinds = Vec::new();
+        let mut mutation_kinds = Vec::new();
+        for plugin in deployment.maintenance().plugins() {
+            startup_kinds.extend(
+                plugin
+                    .plan(&startup)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|task| task.kind),
+            );
+            mutation_kinds.extend(
+                plugin
+                    .plan(&mutation)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|task| task.kind),
+            );
+        }
+        startup_kinds.sort();
+        mutation_kinds.sort();
+        assert_eq!(startup_kinds, vec!["rebuild_vector_index"]);
+        assert_eq!(
+            mutation_kinds,
+            vec!["rebuild_search_index", "rebuild_vector_index"]
+        );
     }
 
     #[tokio::test]

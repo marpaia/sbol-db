@@ -81,6 +81,7 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     "acc_meta",       // graph + SEP + iri -> MetaRecord JSON
     "acc_toplevel",   // graph + SEP + displayId + SEP + iri -> () (top-levels in sort order)
     "acc_bytype",     // graph + SEP + type + SEP + displayId + SEP + iri -> ()
+    "acc_byrole",     // graph + SEP + role + SEP + displayId + SEP + iri -> ()
     "acc_member",     // graph + SEP + collection + SEP + displayId + SEP + iri -> ()
     "acc_rootmember", // graph + SEP + collection + SEP + displayId + SEP + iri -> () (anti-join)
     "acc_facet",      // graph + SEP + kind + SEP + value -> ()

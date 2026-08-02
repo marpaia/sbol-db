@@ -90,13 +90,20 @@ pub async fn run(
             "SBOL_DB_BLOB_ROOT is unset; attachment blobs use the ephemeral development path"
         );
     }
+    let mut durable_text_ready = false;
     if let Some(path) = &config.text_index_path {
         std::fs::create_dir_all(path)
             .with_context(|| format!("create text-index directory {}", path.display()))?;
         let text_index = RankedTextIndex::open_or_create(path)
             .with_context(|| format!("open text index {}", path.display()))?;
+        durable_text_ready = text_index.num_docs() > 0;
+        let document_count = text_index.num_docs();
         app_services = app_services.with_text_search(Arc::new(text_index));
-        tracing::info!(path = %path.display(), "durable text index configured");
+        tracing::info!(
+            path = %path.display(),
+            document_count,
+            "durable text index configured"
+        );
     } else {
         tracing::warn!(
             "SBOL_DB_TEXT_INDEX_PATH is unset; ranked text search uses an in-memory index"
@@ -118,7 +125,7 @@ pub async fn run(
                     app_services.cluster.clone(),
                 )))?
                 .build()?,
-            None => crate::search_config::built_in_text_deployment().await?,
+            None => crate::search_config::built_in_text_deployment(durable_text_ready).await?,
         };
         if let Some(setup) = worker_setup.as_mut() {
             setup.vector_indexes = Some(deployment.maintainers());

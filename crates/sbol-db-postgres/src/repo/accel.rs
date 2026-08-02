@@ -28,6 +28,10 @@ const FK_ROLES: i16 = 2;
 const FK_CREATORS: i16 = 3;
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+/// Bound the Postgres bind message while rebuilding production-scale graphs.
+/// A graph can derive millions of type/member rows; sending every array in one
+/// `UNNEST` risks PostgreSQL's one-gigabyte protocol/message ceiling.
+const INSERT_CHUNK: usize = 5_000;
 
 /// Derives, maintains, and queries the accelerator indexes for the Postgres
 /// backend.
@@ -75,6 +79,12 @@ impl AccelRepository {
                     .await
             }
             AcceleratedQuery::Facet { graph, kind, var } => self.facet(graph, *kind, var).await,
+            AcceleratedQuery::FacetCounts {
+                graph,
+                kind,
+                value_var,
+                count_var,
+            } => self.facet_counts(graph, *kind, value_var, count_var).await,
             AcceleratedQuery::ObjectMetadata {
                 graph,
                 subject,
@@ -119,9 +129,10 @@ impl AccelRepository {
         let mut ty_type: Vec<String> = Vec::new();
         let mut ty_iri: Vec<String> = Vec::new();
         let mut ty_sort: Vec<String> = Vec::new();
-        let mut facet_kind: Vec<i16> = Vec::new();
-        let mut facet_value: Vec<String> = Vec::new();
-        let mut facet_seen: HashSet<(i16, &str)> = HashSet::new();
+        let mut role_role: Vec<String> = Vec::new();
+        let mut role_iri: Vec<String> = Vec::new();
+        let mut role_sort: Vec<String> = Vec::new();
+        let mut facet_counts: HashMap<(i16, String), i64> = HashMap::new();
         for obj in &index.objects {
             let iri = obj.iri.as_str();
             let m = &obj.meta;
@@ -135,27 +146,35 @@ impl AccelRepository {
                 ty_iri.push(iri.to_owned());
                 ty_sort.push(sort.to_owned());
             }
+            for role in &m.roles {
+                role_role.push(role.clone());
+                role_iri.push(iri.to_owned());
+                role_sort.push(sort.to_owned());
+            }
             if m.top_level {
+                let mut object_facets: HashSet<(i16, &str)> = HashSet::new();
                 for t in &m.types {
-                    if facet_seen.insert((FK_TYPES, t.as_str())) {
-                        facet_kind.push(FK_TYPES);
-                        facet_value.push(t.clone());
-                    }
+                    object_facets.insert((FK_TYPES, t.as_str()));
                 }
                 for r in &m.roles {
-                    if facet_seen.insert((FK_ROLES, r.as_str())) {
-                        facet_kind.push(FK_ROLES);
-                        facet_value.push(r.clone());
-                    }
+                    object_facets.insert((FK_ROLES, r.as_str()));
                 }
                 for c in &m.creators {
-                    if facet_seen.insert((FK_CREATORS, c.as_str())) {
-                        facet_kind.push(FK_CREATORS);
-                        facet_value.push(c.clone());
-                    }
+                    object_facets.insert((FK_CREATORS, c.as_str()));
+                }
+                for (kind, value) in object_facets {
+                    *facet_counts.entry((kind, value.to_owned())).or_default() += 1;
                 }
             }
         }
+        let mut facets: Vec<(i16, String, i64)> = facet_counts
+            .into_iter()
+            .map(|((kind, value), count)| (kind, value, count))
+            .collect();
+        facets.sort();
+        let facet_kind: Vec<i16> = facets.iter().map(|(kind, _, _)| *kind).collect();
+        let facet_value: Vec<String> = facets.iter().map(|(_, value, _)| value.clone()).collect();
+        let facet_count: Vec<i64> = facets.iter().map(|(_, _, count)| *count).collect();
 
         let mut mem_coll: Vec<String> = Vec::new();
         let mut mem_iri: Vec<String> = Vec::new();
@@ -174,14 +193,21 @@ impl AccelRepository {
             mem_root.push(root_set.contains(&(collection.as_str(), member.as_str())));
         }
 
-        for table in ["accel_object", "accel_type", "accel_member", "accel_facet"] {
+        for table in [
+            "accel_object",
+            "accel_type",
+            "accel_role",
+            "accel_member",
+            "accel_facet",
+        ] {
             sqlx::query(&format!("DELETE FROM {table} WHERE graph_iri = $1"))
                 .bind(graph)
                 .execute(&mut *conn)
                 .await
                 .map_err(db_err)?;
         }
-        if !obj_iri.is_empty() {
+        for start in (0..obj_iri.len()).step_by(INSERT_CHUNK) {
+            let end = (start + INSERT_CHUNK).min(obj_iri.len());
             sqlx::query(
                 "INSERT INTO accel_object (graph_iri, iri, sort_key, top_level, meta)
                  SELECT $1, iri, sort_key, top_level, meta
@@ -189,15 +215,16 @@ impl AccelRepository {
                     AS u(iri, sort_key, top_level, meta)",
             )
             .bind(graph)
-            .bind(&obj_iri)
-            .bind(&obj_sort)
-            .bind(&obj_top)
-            .bind(&obj_meta)
+            .bind(&obj_iri[start..end])
+            .bind(&obj_sort[start..end])
+            .bind(&obj_top[start..end])
+            .bind(&obj_meta[start..end])
             .execute(&mut *conn)
             .await
             .map_err(db_err)?;
         }
-        if !ty_iri.is_empty() {
+        for start in (0..ty_iri.len()).step_by(INSERT_CHUNK) {
+            let end = (start + INSERT_CHUNK).min(ty_iri.len());
             sqlx::query(
                 "INSERT INTO accel_type (graph_iri, type_iri, iri, sort_key)
                  SELECT $1, type_iri, iri, sort_key
@@ -206,14 +233,32 @@ impl AccelRepository {
                  ON CONFLICT DO NOTHING",
             )
             .bind(graph)
-            .bind(&ty_type)
-            .bind(&ty_iri)
-            .bind(&ty_sort)
+            .bind(&ty_type[start..end])
+            .bind(&ty_iri[start..end])
+            .bind(&ty_sort[start..end])
             .execute(&mut *conn)
             .await
             .map_err(db_err)?;
         }
-        if !mem_iri.is_empty() {
+        for start in (0..role_iri.len()).step_by(INSERT_CHUNK) {
+            let end = (start + INSERT_CHUNK).min(role_iri.len());
+            sqlx::query(
+                "INSERT INTO accel_role (graph_iri, role_iri, iri, sort_key)
+                 SELECT $1, role_iri, iri, sort_key
+                 FROM UNNEST($2::text[], $3::text[], $4::text[])
+                    AS u(role_iri, iri, sort_key)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(graph)
+            .bind(&role_role[start..end])
+            .bind(&role_iri[start..end])
+            .bind(&role_sort[start..end])
+            .execute(&mut *conn)
+            .await
+            .map_err(db_err)?;
+        }
+        for start in (0..mem_iri.len()).step_by(INSERT_CHUNK) {
+            let end = (start + INSERT_CHUNK).min(mem_iri.len());
             sqlx::query(
                 "INSERT INTO accel_member (graph_iri, collection_iri, member_iri, sort_key, is_root)
                  SELECT $1, collection_iri, member_iri, sort_key, is_root
@@ -222,24 +267,27 @@ impl AccelRepository {
                  ON CONFLICT DO NOTHING",
             )
             .bind(graph)
-            .bind(&mem_coll)
-            .bind(&mem_iri)
-            .bind(&mem_sort)
-            .bind(&mem_root)
+            .bind(&mem_coll[start..end])
+            .bind(&mem_iri[start..end])
+            .bind(&mem_sort[start..end])
+            .bind(&mem_root[start..end])
             .execute(&mut *conn)
             .await
             .map_err(db_err)?;
         }
-        if !facet_value.is_empty() {
+        for start in (0..facet_value.len()).step_by(INSERT_CHUNK) {
+            let end = (start + INSERT_CHUNK).min(facet_value.len());
             sqlx::query(
-                "INSERT INTO accel_facet (graph_iri, kind, value)
-                 SELECT $1, kind, value
-                 FROM UNNEST($2::smallint[], $3::text[]) AS u(kind, value)
+                "INSERT INTO accel_facet (graph_iri, kind, value, subject_count)
+                 SELECT $1, kind, value, subject_count
+                 FROM UNNEST($2::smallint[], $3::text[], $4::bigint[])
+                    AS u(kind, value, subject_count)
                  ON CONFLICT DO NOTHING",
             )
             .bind(graph)
-            .bind(&facet_kind)
-            .bind(&facet_value)
+            .bind(&facet_kind[start..end])
+            .bind(&facet_value[start..end])
+            .bind(&facet_count[start..end])
             .execute(&mut *conn)
             .await
             .map_err(db_err)?;
@@ -310,7 +358,10 @@ impl AccelRepository {
                 if let Some(p) = subject_prefix {
                     qb.push(" AND iri LIKE ").push_bind(like_prefix(p));
                 }
-                qb.push(" ORDER BY sort_key COLLATE \"C\", iri COLLATE \"C\"");
+                qb.push(
+                    " ORDER BY left(sort_key, 128) COLLATE \"C\", sort_key COLLATE \"C\", \
+                              left(iri, 128) COLLATE \"C\", iri COLLATE \"C\"",
+                );
             }
             Scope::ByType(t) => {
                 qb.push(
@@ -324,7 +375,111 @@ impl AccelRepository {
                 if let Some(p) = subject_prefix {
                     qb.push(" AND ty.iri LIKE ").push_bind(like_prefix(p));
                 }
-                qb.push(" ORDER BY ty.sort_key COLLATE \"C\", ty.iri COLLATE \"C\"");
+                qb.push(
+                    " ORDER BY left(ty.sort_key, 128) COLLATE \"C\", ty.sort_key COLLATE \"C\", \
+                              left(ty.iri, 128) COLLATE \"C\", ty.iri COLLATE \"C\"",
+                );
+            }
+            Scope::TopLevelByType(t) => {
+                qb.push(
+                    "SELECT ty.iri AS iri, o.meta AS meta FROM accel_type ty \
+                     JOIN accel_object o \
+                       ON o.graph_iri = ty.graph_iri AND o.iri = ty.iri \
+                     WHERE ty.graph_iri = ",
+                );
+                qb.push_bind(graph.to_owned());
+                qb.push(" AND ty.type_iri = ").push_bind(t.clone());
+                qb.push(" AND o.top_level");
+                if let Some(p) = subject_prefix {
+                    qb.push(" AND ty.iri LIKE ").push_bind(like_prefix(p));
+                }
+                qb.push(
+                    " ORDER BY left(ty.sort_key, 128) COLLATE \"C\", ty.sort_key COLLATE \"C\", \
+                              left(ty.iri, 128) COLLATE \"C\", ty.iri COLLATE \"C\"",
+                );
+            }
+            Scope::TopLevelByRole(role) => {
+                qb.push(
+                    "SELECT r.iri AS iri, o.meta AS meta FROM accel_role r \
+                     JOIN accel_object o \
+                       ON o.graph_iri = r.graph_iri AND o.iri = r.iri \
+                     WHERE r.graph_iri = ",
+                );
+                qb.push_bind(graph.to_owned());
+                qb.push(" AND r.role_iri = ").push_bind(role.clone());
+                qb.push(" AND o.top_level");
+                if let Some(p) = subject_prefix {
+                    qb.push(" AND r.iri LIKE ").push_bind(like_prefix(p));
+                }
+                qb.push(
+                    " ORDER BY left(r.sort_key, 128) COLLATE \"C\", r.sort_key COLLATE \"C\", \
+                              left(r.iri, 128) COLLATE \"C\", r.iri COLLATE \"C\"",
+                );
+            }
+            Scope::TopLevelByTypeAndRole { object_type, role } => {
+                qb.push(
+                    "SELECT r.iri AS iri, o.meta AS meta FROM accel_role r \
+                     JOIN accel_type ty \
+                       ON ty.graph_iri = r.graph_iri AND ty.iri = r.iri \
+                     JOIN accel_object o \
+                       ON o.graph_iri = r.graph_iri AND o.iri = r.iri \
+                     WHERE r.graph_iri = ",
+                );
+                qb.push_bind(graph.to_owned());
+                qb.push(" AND r.role_iri = ").push_bind(role.clone());
+                qb.push(" AND ty.type_iri = ")
+                    .push_bind(object_type.clone());
+                qb.push(" AND o.top_level");
+                if let Some(p) = subject_prefix {
+                    qb.push(" AND r.iri LIKE ").push_bind(like_prefix(p));
+                }
+                qb.push(
+                    " ORDER BY left(r.sort_key, 128) COLLATE \"C\", r.sort_key COLLATE \"C\", \
+                              left(r.iri, 128) COLLATE \"C\", r.iri COLLATE \"C\"",
+                );
+            }
+            Scope::RootByType(t) => {
+                qb.push(
+                    "SELECT ty.iri AS iri, o.meta AS meta FROM accel_type ty \
+                     LEFT JOIN accel_object o \
+                       ON o.graph_iri = ty.graph_iri AND o.iri = ty.iri \
+                     WHERE ty.graph_iri = ",
+                );
+                qb.push_bind(graph.to_owned());
+                qb.push(" AND ty.type_iri = ").push_bind(t.clone());
+                qb.push(
+                    " AND NOT EXISTS (SELECT 1 FROM accel_member m \
+                       WHERE m.graph_iri = ty.graph_iri AND m.member_iri = ty.iri)",
+                );
+                if let Some(p) = subject_prefix {
+                    qb.push(" AND ty.iri LIKE ").push_bind(like_prefix(p));
+                }
+                qb.push(
+                    " ORDER BY left(ty.sort_key, 128) COLLATE \"C\", ty.sort_key COLLATE \"C\", \
+                              left(ty.iri, 128) COLLATE \"C\", ty.iri COLLATE \"C\"",
+                );
+            }
+            Scope::RootTopLevelByType(t) => {
+                qb.push(
+                    "SELECT ty.iri AS iri, o.meta AS meta FROM accel_type ty \
+                     JOIN accel_object o \
+                       ON o.graph_iri = ty.graph_iri AND o.iri = ty.iri \
+                     WHERE ty.graph_iri = ",
+                );
+                qb.push_bind(graph.to_owned());
+                qb.push(" AND ty.type_iri = ").push_bind(t.clone());
+                qb.push(" AND o.top_level");
+                qb.push(
+                    " AND NOT EXISTS (SELECT 1 FROM accel_member m \
+                       WHERE m.graph_iri = ty.graph_iri AND m.member_iri = ty.iri)",
+                );
+                if let Some(p) = subject_prefix {
+                    qb.push(" AND ty.iri LIKE ").push_bind(like_prefix(p));
+                }
+                qb.push(
+                    " ORDER BY left(ty.sort_key, 128) COLLATE \"C\", ty.sort_key COLLATE \"C\", \
+                              left(ty.iri, 128) COLLATE \"C\", ty.iri COLLATE \"C\"",
+                );
             }
             Scope::Collection {
                 collection,
@@ -345,7 +500,10 @@ impl AccelRepository {
                 if let Some(p) = subject_prefix {
                     qb.push(" AND m.member_iri LIKE ").push_bind(like_prefix(p));
                 }
-                qb.push(" ORDER BY m.sort_key COLLATE \"C\", m.member_iri COLLATE \"C\"");
+                qb.push(
+                    " ORDER BY left(m.sort_key, 128) COLLATE \"C\", m.sort_key COLLATE \"C\", \
+                              left(m.member_iri, 128) COLLATE \"C\", m.member_iri COLLATE \"C\"",
+                );
             }
         }
         if let Some(l) = limit {
@@ -416,6 +574,82 @@ impl AccelRepository {
                     qb.push(" AND iri LIKE ").push_bind(like_prefix(p));
                 }
             }
+            Scope::TopLevelByType(t) => {
+                qb.push(
+                    "SELECT COUNT(*) FROM accel_type ty \
+                     JOIN accel_object o \
+                       ON o.graph_iri = ty.graph_iri AND o.iri = ty.iri \
+                     WHERE ty.graph_iri = ",
+                );
+                qb.push_bind(graph.to_owned());
+                qb.push(" AND ty.type_iri = ").push_bind(t.clone());
+                qb.push(" AND o.top_level");
+                if let Some(p) = subject_prefix {
+                    qb.push(" AND ty.iri LIKE ").push_bind(like_prefix(p));
+                }
+            }
+            Scope::TopLevelByRole(role) => {
+                qb.push(
+                    "SELECT COUNT(*) FROM accel_role r \
+                     JOIN accel_object o \
+                       ON o.graph_iri = r.graph_iri AND o.iri = r.iri \
+                     WHERE r.graph_iri = ",
+                );
+                qb.push_bind(graph.to_owned());
+                qb.push(" AND r.role_iri = ").push_bind(role.clone());
+                qb.push(" AND o.top_level");
+                if let Some(p) = subject_prefix {
+                    qb.push(" AND r.iri LIKE ").push_bind(like_prefix(p));
+                }
+            }
+            Scope::TopLevelByTypeAndRole { object_type, role } => {
+                qb.push(
+                    "SELECT COUNT(*) FROM accel_role r \
+                     JOIN accel_type ty \
+                       ON ty.graph_iri = r.graph_iri AND ty.iri = r.iri \
+                     JOIN accel_object o \
+                       ON o.graph_iri = r.graph_iri AND o.iri = r.iri \
+                     WHERE r.graph_iri = ",
+                );
+                qb.push_bind(graph.to_owned());
+                qb.push(" AND r.role_iri = ").push_bind(role.clone());
+                qb.push(" AND ty.type_iri = ")
+                    .push_bind(object_type.clone());
+                qb.push(" AND o.top_level");
+                if let Some(p) = subject_prefix {
+                    qb.push(" AND r.iri LIKE ").push_bind(like_prefix(p));
+                }
+            }
+            Scope::RootByType(t) => {
+                qb.push("SELECT COUNT(*) FROM accel_type ty WHERE ty.graph_iri = ");
+                qb.push_bind(graph.to_owned());
+                qb.push(" AND ty.type_iri = ").push_bind(t.clone());
+                qb.push(
+                    " AND NOT EXISTS (SELECT 1 FROM accel_member m \
+                       WHERE m.graph_iri = ty.graph_iri AND m.member_iri = ty.iri)",
+                );
+                if let Some(p) = subject_prefix {
+                    qb.push(" AND ty.iri LIKE ").push_bind(like_prefix(p));
+                }
+            }
+            Scope::RootTopLevelByType(t) => {
+                qb.push(
+                    "SELECT COUNT(*) FROM accel_type ty \
+                     JOIN accel_object o \
+                       ON o.graph_iri = ty.graph_iri AND o.iri = ty.iri \
+                     WHERE ty.graph_iri = ",
+                );
+                qb.push_bind(graph.to_owned());
+                qb.push(" AND ty.type_iri = ").push_bind(t.clone());
+                qb.push(" AND o.top_level");
+                qb.push(
+                    " AND NOT EXISTS (SELECT 1 FROM accel_member m \
+                       WHERE m.graph_iri = ty.graph_iri AND m.member_iri = ty.iri)",
+                );
+                if let Some(p) = subject_prefix {
+                    qb.push(" AND ty.iri LIKE ").push_bind(like_prefix(p));
+                }
+            }
             Scope::Collection {
                 collection,
                 root_only,
@@ -479,6 +713,50 @@ impl AccelRepository {
             .collect();
         Ok(AccelSolutions {
             vars: vec![var.to_owned()],
+            rows,
+        })
+    }
+
+    async fn facet_counts(
+        &self,
+        graph: &str,
+        kind: FacetKind,
+        value_var: &str,
+        count_var: &str,
+    ) -> Result<AccelSolutions, DomainError> {
+        let (tag, iri_value) = match kind {
+            FacetKind::Types => (FK_TYPES, true),
+            FacetKind::Roles => (FK_ROLES, true),
+            FacetKind::Creators => (FK_CREATORS, false),
+        };
+        let rows = sqlx::query(
+            "SELECT value, subject_count FROM accel_facet \
+             WHERE graph_iri = $1 AND kind = $2 ORDER BY value COLLATE \"C\"",
+        )
+        .bind(graph)
+        .bind(tag)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        let rows = rows
+            .into_iter()
+            .map(|row| {
+                let value: String = row.try_get("value").map_err(db_err)?;
+                let count: i64 = row.try_get("subject_count").map_err(db_err)?;
+                let value = if iri_value {
+                    TermValue::Iri(value)
+                } else {
+                    TermValue::Literal {
+                        value,
+                        datatype: XSD_STRING.to_owned(),
+                        language: None,
+                    }
+                };
+                Ok(vec![Some(value), Some(integer(count as u64))])
+            })
+            .collect::<Result<Vec<_>, DomainError>>()?;
+        Ok(AccelSolutions {
+            vars: vec![value_var.to_owned(), count_var.to_owned()],
             rows,
         })
     }

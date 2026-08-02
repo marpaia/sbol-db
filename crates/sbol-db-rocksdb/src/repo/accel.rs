@@ -41,6 +41,24 @@ impl AccelRepository {
     /// write path keeps in sync with the committed triples (see
     /// [`Self::stage_refresh`]).
     pub fn run(&self, query: &AcceleratedQuery) -> Result<AccelSolutions, DomainError> {
+        let unsupported_intersection = match query {
+            AcceleratedQuery::ObjectList { scope, .. } | AcceleratedQuery::Count { scope, .. } => {
+                matches!(
+                    scope,
+                    Scope::RootByType(_)
+                        | Scope::TopLevelByType(_)
+                        | Scope::TopLevelByTypeAndRole { .. }
+                        | Scope::RootTopLevelByType(_)
+                )
+            }
+            AcceleratedQuery::FacetCounts { .. } => true,
+            _ => false,
+        };
+        if unsupported_intersection {
+            return Err(DomainError::Database(
+                "the requested accelerator intersection is not supported by RocksDB".to_owned(),
+            ));
+        }
         match query {
             AcceleratedQuery::ObjectList {
                 graph,
@@ -64,6 +82,7 @@ impl AccelRepository {
                 subject_prefix,
             } => self.count(graph, scope, var, subject_prefix.as_deref()),
             AcceleratedQuery::Facet { graph, kind, var } => self.facet(graph, *kind, var),
+            AcceleratedQuery::FacetCounts { .. } => unreachable!("rejected above"),
             AcceleratedQuery::ObjectMetadata {
                 graph,
                 subject,
@@ -89,6 +108,7 @@ impl AccelRepository {
             "acc_meta",
             "acc_toplevel",
             "acc_bytype",
+            "acc_byrole",
             "acc_member",
             "acc_rootmember",
             "acc_facet",
@@ -115,11 +135,13 @@ impl AccelRepository {
         let meta_cf = self.db.cf("acc_meta");
         let tl_cf = self.db.cf("acc_toplevel");
         let bt_cf = self.db.cf("acc_bytype");
+        let br_cf = self.db.cf("acc_byrole");
         let fc_cf = self.db.cf("acc_facet");
         let count_cf = self.db.cf("acc_count");
 
         let mut toplevel_count: u64 = 0;
         let mut type_counts: HashMap<&str, u64> = HashMap::new();
+        let mut role_counts: HashMap<&str, u64> = HashMap::new();
         // Member displayId sort keys, for ordering the membership indexes.
         let mut sort_of: HashMap<&str, &str> = HashMap::new();
         for obj in &index.objects {
@@ -157,6 +179,17 @@ impl AccelRepository {
                 }
                 for r in &m.roles {
                     batch.put_cf(&fc_cf, facet_key(graph, FK_ROLES, r), []);
+                    batch.put_cf(
+                        &br_cf,
+                        key(&[
+                            graph.as_bytes(),
+                            r.as_bytes(),
+                            sort.as_bytes(),
+                            iri.as_bytes(),
+                        ]),
+                        [],
+                    );
+                    *role_counts.entry(r.as_str()).or_default() += 1;
                 }
                 for c in &m.creators {
                     batch.put_cf(&fc_cf, facet_key(graph, FK_CREATORS, c), []);
@@ -171,6 +204,9 @@ impl AccelRepository {
         );
         for (ty, n) in &type_counts {
             batch.put_cf(&count_cf, count_key_type(graph, ty), n.to_le_bytes());
+        }
+        for (role, n) in &role_counts {
+            batch.put_cf(&count_cf, count_key_role(graph, role), n.to_le_bytes());
         }
 
         // Membership indexes, including the precomputed "root member" anti-join
@@ -315,6 +351,15 @@ impl AccelRepository {
             let count_key = match scope {
                 Scope::TopLevel => count_key_toplevel(graph),
                 Scope::ByType(t) => count_key_type(graph, t),
+                // Rejected by `run` above; retained here to keep the internal
+                // scope helpers exhaustive.
+                Scope::RootByType(t) | Scope::TopLevelByType(t) | Scope::RootTopLevelByType(t) => {
+                    count_key_type(graph, t)
+                }
+                Scope::TopLevelByRole(role) => count_key_role(graph, role),
+                Scope::TopLevelByTypeAndRole { .. } => {
+                    unreachable!("type and role intersection is rejected before count")
+                }
                 Scope::Collection {
                     collection,
                     root_only,
@@ -403,12 +448,25 @@ fn count_key_type(graph: &str, type_iri: &str) -> Vec<u8> {
     key(&[graph.as_bytes(), b"ty", type_iri.as_bytes()])
 }
 
+fn count_key_role(graph: &str, role_iri: &str) -> Vec<u8> {
+    key(&[graph.as_bytes(), b"role", role_iri.as_bytes()])
+}
+
 /// The enumeration column family and scan prefix for a scope's members, in
 /// displayId order.
 fn scope_scan(graph: &str, scope: &Scope) -> (&'static str, Vec<u8>) {
     match scope {
         Scope::TopLevel => ("acc_toplevel", prefix(&[graph.as_bytes()])),
         Scope::ByType(t) => ("acc_bytype", prefix(&[graph.as_bytes(), t.as_bytes()])),
+        // Rejected by `run` above; RocksDB currently has no intersection scan
+        // for type+top-level or the reverse-membership anti-join.
+        Scope::RootByType(t) | Scope::TopLevelByType(t) | Scope::RootTopLevelByType(t) => {
+            ("acc_bytype", prefix(&[graph.as_bytes(), t.as_bytes()]))
+        }
+        Scope::TopLevelByRole(role) => ("acc_byrole", prefix(&[graph.as_bytes(), role.as_bytes()])),
+        Scope::TopLevelByTypeAndRole { .. } => {
+            unreachable!("type and role intersection is rejected before scans")
+        }
         Scope::Collection {
             collection,
             root_only,

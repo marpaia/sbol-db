@@ -169,6 +169,13 @@ fn templates() -> Vec<(&'static str, String)> {
          ?subject a ?type . ?subject sbh:topLevel ?subject . \
          OPTIONAL{{?subject dcterms:title ?n}} }} }} }}"
     );
+    let search_by_role = format!(
+        "{prefixes}\
+         SELECT DISTINCT ?subject ?role WHERE {{ \
+         ?subject sbol2:role <http://identifiers.org/so/SO:0000167> . \
+         ?subject sbh:topLevel ?subject . \
+         OPTIONAL{{?subject sbol2:role ?role}} }}"
+    );
     let get_collections = format!(
         "{prefixes}\
          SELECT DISTINCT ?subject ?displayId ?name WHERE {{ ?subject a sbol2:Collection . \
@@ -231,6 +238,7 @@ fn templates() -> Vec<(&'static str, String)> {
     vec![
         ("search", search),
         ("search_count", search_count),
+        ("search_by_role", search_by_role),
         ("get_collections", get_collections),
         ("count_by_type", count_by_type),
         ("facet_types", facet_types),

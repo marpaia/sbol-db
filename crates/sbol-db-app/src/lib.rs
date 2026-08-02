@@ -81,10 +81,12 @@ pub use submission::{
     SubmitPreview, SubmitRequest,
 };
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
+use std::time::Instant;
 
+use futures::lock::Mutex as AsyncMutex;
 use sbol_db_backend::Backend;
-use sbol_db_search::ranked_text::RankedTextIndex;
+use sbol_db_search::ranked_text::{ClusterMap, RankedTextIndex};
 use sbol_db_search::{SearchDeployment, SearchRuntime, VectorRouter};
 use sbol_db_search_sdk::{IndexMaintenanceEvent, IndexMaintenanceRegistry, IndexMutationSource};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
@@ -149,6 +151,13 @@ pub struct AppServices {
     /// needs a persistent, filesystem-backed index swaps one in with
     /// [`with_text_search`](Self::with_text_search).
     pub text_search: Arc<RankedTextIndex>,
+    /// Short-lived ranking input cache. Loading and expanding the production
+    /// cluster table on every search is much more expensive than scoring a
+    /// small result page; the TTL refreshes maintenance changes promptly.
+    pub(crate) cluster_map_cache: Arc<RwLock<Option<(Instant, Arc<ClusterMap>)>>>,
+    /// Single-flight guard for an expired cluster cache. It prevents a burst of
+    /// requests from all rescanning the production assignment table together.
+    pub(crate) cluster_map_refresh: Arc<AsyncMutex<()>>,
     /// Lazily assembled structured-search runtime. The built-in runtime wraps
     /// the current text index and cluster store; an embedding/vector deployment
     /// can replace it with [`with_search_runtime`](Self::with_search_runtime).
@@ -240,6 +249,8 @@ impl AppServices {
         self.pagerank = pagerank;
         self.cluster = cluster;
         self.sketch = sketch;
+        self.cluster_map_cache = Arc::new(RwLock::new(None));
+        self.cluster_map_refresh = Arc::new(AsyncMutex::new(()));
         // The built-in legacy strategy captures the cluster store. Reset the
         // lazy runtime so it observes the newly installed durable handle.
         self.search_runtime = Arc::new(OnceLock::new());
@@ -491,6 +502,8 @@ impl AppServices {
         let expose = Arc::new(plugin::ExposeRegistry::new());
         let stream = Arc::new(plugin::StreamRegistry::new());
         let search_runtime = Arc::new(OnceLock::new());
+        let cluster_map_cache = Arc::new(RwLock::new(None));
+        let cluster_map_refresh = Arc::new(AsyncMutex::new(()));
         let search_maintenance = Arc::new(SearchMaintenanceScheduler::new(
             jobs.clone(),
             Arc::new(IndexMaintenanceRegistry::default()),
@@ -512,6 +525,8 @@ impl AppServices {
             tokens,
             auth,
             text_search,
+            cluster_map_cache,
+            cluster_map_refresh,
             search_runtime,
             search_vectors: None,
             search_maintenance,

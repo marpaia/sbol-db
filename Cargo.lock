@@ -4050,6 +4050,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "flate2",
+ "futures",
  "hex",
  "infer",
  "reqwest",

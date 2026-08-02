@@ -16,7 +16,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use oxrdf::{BlankNode, GraphName, Literal, NamedNode, NamedOrBlankNode, Term};
 use oxrdfio::RdfParser;
 use sbol_db_core::{IriString, ObjectTerm, SubjectTerm, Triple};
-use sbol_db_postgres::{PgPool, TripleRepository};
+use sbol_db_postgres::{AccelRepository, PgPool, TripleRepository};
 use sbol_db_storage::{ConfigStore, JobQueue, NewJob};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -73,6 +73,7 @@ pub struct ProductionReport {
     pub reset_links_invalidated: u64,
     pub graphs_verified: u64,
     pub triples_verified: u64,
+    pub accelerators_verified: u64,
     pub blobs_verified: u64,
     pub config_keys: Vec<String>,
     pub reindex_job: Option<String>,
@@ -159,6 +160,7 @@ async fn run_locked(
         )?;
         reconcile_users(pool, run_id, manifest).await?;
         reconcile_graphs(pool, run_id, manifest, policy, inputs.chunk_size).await?;
+        rebuild_accelerators(pool, run_id).await?;
         return summarize_ready_run(pool, run_id, manifest, artifacts_verified).await;
     }
 
@@ -181,6 +183,7 @@ async fn run_locked(
             reconcile_graphs(pool, run_id, manifest, policy, inputs.chunk_size).await?;
         reconcile_users(pool, run_id, manifest).await?;
         reconcile_blobs(pool, run_id, manifest, blobs_verified).await?;
+        let accelerators_verified = rebuild_accelerators(pool, run_id).await?;
 
         let config_keys = load_config(config.as_ref(), manifest).await?;
         promote_uploads(&staging_uploads, &inputs.blob_store)?;
@@ -217,6 +220,7 @@ async fn run_locked(
             reset_links_invalidated,
             graphs_verified,
             triples_verified,
+            accelerators_verified,
             blobs_verified,
             config_keys,
             reindex_job,
@@ -1183,6 +1187,118 @@ fn reindex_idempotency_key(run_id: Uuid) -> String {
     format!("synbiohub-migration:{run_id}:reindex")
 }
 
+/// Rebuild the fixed-query accelerator for every verified imported graph.
+///
+/// Each graph commits independently and has a durable ledger row. A failure
+/// therefore leaves already-verified graphs intact and a rerun resumes at the
+/// first incomplete graph instead of repeating the whole production corpus.
+async fn rebuild_accelerators(pool: &PgPool, run_id: Uuid) -> Result<u64> {
+    sqlx::query(
+        "INSERT INTO sbh_migration_accelerator (run_id, graph_iri, status) \
+         SELECT run_id, graph_iri, 'pending' \
+         FROM sbh_migration_graph \
+         WHERE run_id = $1 AND status = 'verified' \
+         ON CONFLICT (run_id, graph_iri) DO NOTHING",
+    )
+    .bind(run_id)
+    .execute(pool)
+    .await
+    .context("initializing query-accelerator ledger")?;
+
+    let graphs = sqlx::query_scalar::<_, String>(
+        "SELECT accelerator.graph_iri \
+         FROM sbh_migration_accelerator accelerator \
+         JOIN sbh_migration_graph graph \
+           ON graph.run_id = accelerator.run_id \
+          AND graph.graph_iri = accelerator.graph_iri \
+         WHERE accelerator.run_id = $1 AND accelerator.status <> 'verified' \
+         ORDER BY CASE WHEN graph.graph_class = 'public' THEN 0 ELSE 1 END, \
+                  accelerator.graph_iri COLLATE \"C\"",
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await
+    .context("listing incomplete query accelerators")?;
+    let accelerator = AccelRepository::new(pool.clone(), TripleRepository::new(pool.clone()));
+
+    for graph in graphs {
+        sqlx::query(
+            "UPDATE sbh_migration_accelerator \
+             SET status = 'building', error = NULL, updated_at = now() \
+             WHERE run_id = $1 AND graph_iri = $2",
+        )
+        .bind(run_id)
+        .bind(&graph)
+        .execute(pool)
+        .await
+        .with_context(|| format!("marking query accelerator building for {graph}"))?;
+
+        let mut tx = pool
+            .begin()
+            .await
+            .with_context(|| format!("starting query accelerator transaction for {graph}"))?;
+        let refresh = accelerator.refresh_graph(&mut tx, &graph).await;
+        if let Err(error) = refresh {
+            let _ = tx.rollback().await;
+            let message = format!("{error:#}");
+            let _ = sqlx::query(
+                "UPDATE sbh_migration_accelerator \
+                 SET status = 'failed', error = $3, updated_at = now() \
+                 WHERE run_id = $1 AND graph_iri = $2",
+            )
+            .bind(run_id)
+            .bind(&graph)
+            .bind(&message)
+            .execute(pool)
+            .await;
+            return Err(anyhow::anyhow!(error))
+                .with_context(|| format!("rebuilding query accelerator for {graph}"));
+        }
+        sqlx::query(
+            "UPDATE sbh_migration_accelerator \
+             SET status = 'verified', error = NULL, updated_at = now() \
+             WHERE run_id = $1 AND graph_iri = $2",
+        )
+        .bind(run_id)
+        .bind(&graph)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("verifying query accelerator ledger for {graph}"))?;
+        tx.commit()
+            .await
+            .with_context(|| format!("committing query accelerator for {graph}"))?;
+    }
+
+    let expected: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sbh_migration_graph \
+         WHERE run_id = $1 AND status = 'verified'",
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await?;
+    let verified: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sbh_migration_accelerator \
+         WHERE run_id = $1 AND status = 'verified'",
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await?;
+    if verified != expected {
+        bail!(
+            "query accelerator reconciliation mismatch: expected {expected} verified graphs, found {verified}"
+        );
+    }
+    sqlx::query(
+        "UPDATE sbh_migration_run \
+         SET accelerators_completed_at = now(), updated_at = now() WHERE id = $1",
+    )
+    .bind(run_id)
+    .execute(pool)
+    .await
+    .context("marking query accelerators complete")?;
+    u64::try_from(verified).context("query accelerator count is negative")
+}
+
 async fn summarize_ready_run(
     pool: &PgPool,
     run_id: Uuid,
@@ -1203,6 +1319,13 @@ async fn summarize_ready_run(
     .await?;
     let triples_verified: i64 = sqlx::query_scalar(
         "SELECT coalesce(sum(loaded_quads),0)::bigint FROM sbh_migration_graph \
+         WHERE run_id=$1 AND status='verified'",
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await?;
+    let accelerators_verified: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sbh_migration_accelerator \
          WHERE run_id=$1 AND status='verified'",
     )
     .bind(run_id)
@@ -1236,6 +1359,7 @@ async fn summarize_ready_run(
             .unwrap_or_default(),
         graphs_verified: u64::try_from(graphs_verified)?,
         triples_verified: u64::try_from(triples_verified)?,
+        accelerators_verified: u64::try_from(accelerators_verified)?,
         blobs_verified: u64::try_from(blobs_verified)?,
         config_keys: manifest.config.target_config_keys.clone(),
         reindex_job,
@@ -1416,6 +1540,24 @@ mod tests {
             .await
             .expect("run status");
         assert_eq!(status, "ready");
+        let accelerators: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sbh_migration_accelerator WHERE status = 'verified'",
+        )
+        .fetch_one(&backend.require_postgres().expect("Postgres").pool)
+        .await
+        .expect("verified accelerator count");
+        let imported_graphs: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sbh_migration_graph WHERE status = 'verified'",
+        )
+        .fetch_one(&backend.require_postgres().expect("Postgres").pool)
+        .await
+        .expect("verified graph count");
+        assert_eq!(accelerators, imported_graphs);
+        let accelerated_objects: i64 = sqlx::query_scalar("SELECT count(*) FROM accel_object")
+            .fetch_one(&backend.require_postgres().expect("Postgres").pool)
+            .await
+            .expect("accelerated object count");
+        assert!(accelerated_objects > 0);
 
         // A second invocation re-verifies the target and returns the same run
         // rather than duplicating users, triples, or files.
@@ -1444,5 +1586,12 @@ mod tests {
                 .await
                 .expect("reindex job count");
         assert_eq!(reindex_jobs, 1);
+        let accelerators_after_rerun: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sbh_migration_accelerator WHERE status = 'verified'",
+        )
+        .fetch_one(&backend.require_postgres().expect("Postgres").pool)
+        .await
+        .expect("accelerator count after rerun");
+        assert_eq!(accelerators_after_rerun, accelerators);
     }
 }
