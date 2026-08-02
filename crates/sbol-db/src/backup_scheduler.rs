@@ -42,6 +42,7 @@ pub async fn run(
     cancel: CancellationToken,
 ) -> Result<()> {
     validate_interval(interval)?;
+    metrics::gauge!("sbol_db_backup_scheduler_interval_seconds").set(interval.as_secs_f64());
     loop {
         let now = Utc::now();
         let slot = schedule_slot(now, interval);

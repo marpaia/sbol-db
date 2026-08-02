@@ -18,7 +18,6 @@ use crate::runtime::filesystem::{
 };
 
 impl ManagedDataLayout {
-    #[allow(dead_code)] // Consumed once recovery history is exposed by the admin UI layer.
     pub fn recovery_status(&self) -> Result<RecoveryStatus> {
         let active_generation =
             read_generation_pointer(&self.root.join(CURRENT_FILE), "current-generation pointer")?;
@@ -332,7 +331,6 @@ impl ManagedDataLayout {
         atomic_write(&history_root, &history_root.join(name), &bytes)
     }
 
-    #[allow(dead_code)] // Consumed once recovery history is exposed by the admin UI layer.
     fn read_recovery_history(&self) -> Result<Vec<RecoveryEvent>> {
         let history_root = self.restore_root.join(RESTORE_HISTORY_DIR);
         reject_symlink(&history_root, "restore history directory")?;

@@ -460,20 +460,21 @@ use the same bearer token accepted elsewhere in V2.
 | Integrations | `GET /admin/integrations`, federation sync/join, registry, remote, and plugin mutation routes | Secret-shaped remote fields are recursively redacted before serialization. |
 | Jobs and ontology | `/admin/jobs*`, `GET/POST /admin/ontologies` | Read/enqueue/cancel and ontology loading without using the unscoped native endpoints from the UI. |
 | Search | `GET /admin/search`, `POST /admin/search/rebuild` | Capability-aware strategy status and a coalesced rebuild command. |
-| Backup | `GET /admin/backup`, `POST /admin/backup/validate`, `POST /admin/backup/restore` | Canonical, SHA3-256-checked `registry_graphs_only` archives and atomic restore. |
+| Complete backup | `GET/POST /admin/backup` | Status/history and enqueueing for the same encrypted RocksDB, blob, search, and ACME checkpoint used by manual, scheduled, and pre-deploy triggers. Available in the self-contained production profile. |
+| Edge runtime | `GET/PATCH /admin/edge` | Active and pending production settings, restart-required state, TLS/ACME/disk health, and bounded offline recovery history. Secrets and recovery identities are not accepted. |
 | Audit | `GET /admin/audit` | Newest-first append-only administrator events. |
 
 Destructive requests carry a `confirmation` value that must exactly name the
-target, such as `DELETE <username>` or `CANCEL JOB <uuid>`. Restore validation
-derives its confirmation phrase from the verified archive checksum; a changed
-archive cannot reuse an earlier confirmation. Administrator actions append an
-attempt/success/failure event to the dedicated audit graph.
+target, such as `DELETE <username>` or `CANCEL JOB <uuid>`. Administrator
+actions append an attempt/success/failure event to the dedicated audit graph.
 
-The portable backup format deliberately excludes accounts, password hashes,
-tokens, reset links, runtime configuration, integration secrets, and blobs.
-It is a registry-graph transfer artifact, not a full disaster-recovery image.
-Operators must back up identity, configuration, and blob storage through their
-deployment's protected infrastructure.
+There is one production disaster-recovery artifact, not a graph-only admin
+archive. It contains a native consistent RocksDB checkpoint (including durable
+configuration and account state), attachment blobs, search state, and ACME
+state. Success requires local semantic verification, encrypted upload, remote
+readback, and a second semantic verification. Verification, restore, and
+rollback are offline CLI operations because the recovery identity and atomic
+generation activation must remain outside the running web process.
 
 ## OpenAPI
 

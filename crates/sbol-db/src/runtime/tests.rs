@@ -256,7 +256,7 @@ fn production_rejects_ambiguous_storage_configuration() {
 }
 
 #[test]
-fn development_defaults_to_postgres_and_durable_blobs() {
+fn development_defaults_to_repo_local_rocksdb_and_durable_blobs() {
     let temp = tempfile::tempdir().expect("tempdir");
     let runtime = ServerRuntime::resolve(
         RuntimeProfile::Development,

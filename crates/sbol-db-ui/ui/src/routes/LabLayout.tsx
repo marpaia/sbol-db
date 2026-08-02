@@ -150,6 +150,11 @@ const TOP_LEVEL_SECTIONS: Array<{
     page: "Integrations",
   },
   {
+    prefix: adminPath("/settings/edge"),
+    section: "Administration",
+    page: "Edge runtime",
+  },
+  {
     prefix: adminPath("/operations/search"),
     section: "Administration",
     page: "Search indexes",
@@ -157,7 +162,7 @@ const TOP_LEVEL_SECTIONS: Array<{
   {
     prefix: adminPath("/operations/backup"),
     section: "Administration",
-    page: "Backup & restore",
+    page: "Backups & recovery",
   },
   {
     prefix: adminPath("/operations/audit"),

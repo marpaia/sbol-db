@@ -22,7 +22,8 @@ use sbol_db_search::ranked_text::RankedTextIndex;
 use sbol_db_search::VectorIndexMaintainerRegistry;
 use sbol_db_search_sdk::IndexMutationSource;
 use sbol_db_server::{
-    explorer_router, operations_router, public_router, AppState, Metrics, ServerProfile,
+    explorer_router, operations_router, public_router, AppState, EdgeAdminService,
+    EdgeRecoveryEvent, EdgeRecoverySnapshot, EdgeRuntimeIdentity, Metrics, ServerProfile,
 };
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{ConfigStore, JobQueue, SbolStore};
@@ -35,12 +36,14 @@ use crate::runtime::ServerRuntime;
 use crate::signal::shutdown_signal;
 use crate::tls::{run_acme, EdgeHttpConfig};
 
-pub async fn run(
-    backend: Backend,
-    runtime: ServerRuntime,
-    args: ServerArgs,
-    edge_http: EdgeHttpConfig,
-) -> Result<()> {
+pub async fn run(backend: Backend, runtime: ServerRuntime, mut args: ServerArgs) -> Result<()> {
+    let production = runtime.profile() == crate::cli::RuntimeProfile::Production;
+    let active_edge_settings = if production {
+        Some(crate::edge_config::resolve(backend.config.as_ref(), &mut args).await?)
+    } else {
+        None
+    };
+    let edge_http = EdgeHttpConfig::resolve(&runtime, &args)?;
     let ServerArgs {
         profile: _,
         data_dir: _,
@@ -65,7 +68,6 @@ pub async fn run(
         tls,
         tls_handshake_timeout,
     } = edge_http;
-    let production = runtime.profile() == crate::cli::RuntimeProfile::Production;
     if production && no_worker {
         bail!(
             "the production profile requires the embedded worker for complete backups; \
@@ -189,6 +191,38 @@ pub async fn run(
         config.text_index_path = Some(layout.search_root().to_path_buf());
     }
     config.complete_backups_enabled = backup_service.is_some();
+    if let Some(settings) = active_edge_settings {
+        let layout = runtime
+            .layout()
+            .expect("production edge settings require a managed layout");
+        let recovery = layout.recovery_status()?;
+        let recovery_event = |event: crate::runtime::RecoveryEvent| EdgeRecoveryEvent {
+            status: event.status.as_str().to_owned(),
+            backup_id: event.backup_id,
+            artifact_sha256: event.artifact_sha256,
+            previous_generation: event.previous_generation,
+            target_generation: event.target_generation,
+            updated_at: event.updated_at,
+        };
+        config.edge_admin = Some(Arc::new(EdgeAdminService::new(
+            backend.config.clone(),
+            settings,
+            EdgeRuntimeIdentity {
+                profile: "production",
+                layout_version: layout.layout_version().to_owned(),
+                generation: layout.generation(),
+                data_dir: layout.root().to_string_lossy().into_owned(),
+            },
+            metrics.clone(),
+            EdgeRecoverySnapshot {
+                activation_mode: "offline_cli",
+                active_generation: recovery.active_generation,
+                previous_generation: recovery.previous_generation,
+                last_operation: recovery.last_operation.map(&recovery_event),
+                history: recovery.history.into_iter().map(recovery_event).collect(),
+            },
+        )));
+    }
     let sparql_update = Arc::new(SparqlUpdateEngine::new(
         backend.triple_source.clone(),
         backend.triple_writer.clone(),
@@ -199,17 +233,9 @@ pub async fn run(
         public_graph = namespace.public_graph(),
         "registry namespace configured"
     );
-    let mut app_services = AppServices::from_backend(&backend).with_registry_namespace(namespace);
-    if let Some(root) = &config.blob_root {
-        std::fs::create_dir_all(root)
-            .with_context(|| format!("create durable blob root {}", root.display()))?;
-        app_services = app_services.with_blobs(Arc::new(FsBlobStore::new(root)));
-        tracing::info!(path = %root.display(), "durable blob store configured");
-    } else {
-        tracing::warn!(
-            "SBOL_DB_BLOB_ROOT is unset; attachment blobs use the ephemeral development path"
-        );
-    }
+    let mut app_services = AppServices::from_backend(&backend)
+        .with_registry_namespace(namespace)
+        .with_blobs(Arc::new(FsBlobStore::new(runtime.blob_root())));
     let mut durable_text_ready = false;
     if let Some(path) = &config.text_index_path {
         std::fs::create_dir_all(path)

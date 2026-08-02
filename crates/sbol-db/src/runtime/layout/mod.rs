@@ -21,7 +21,6 @@ pub(super) const PREVIOUS_FILE: &str = "PREVIOUS";
 pub(super) const LOCK_FILE: &str = "LOCK";
 pub(super) const RESTORE_JOURNAL_FILE: &str = "last-restore.json";
 pub(super) const RESTORE_HISTORY_DIR: &str = "history";
-#[allow(dead_code)] // Consumed once recovery history is exposed by the admin UI layer.
 pub(super) const MAX_RECOVERY_HISTORY: usize = 50;
 
 /// Paths for the active production generation. Holding this value also holds
@@ -84,7 +83,6 @@ pub struct RecoveryEvent {
 type RestoreJournal = RecoveryEvent;
 
 #[derive(Clone, Debug, Serialize)]
-#[allow(dead_code)] // Consumed once recovery history is exposed by the admin UI layer.
 pub struct RecoveryStatus {
     pub active_generation: Uuid,
     pub previous_generation: Option<Uuid>,

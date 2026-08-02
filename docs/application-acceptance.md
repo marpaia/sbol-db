@@ -201,12 +201,13 @@ complete available corpus or endpoint inventory appropriate to the claim.
 
 - Every privileged endpoint is inventoried and covered by one administrator
   policy; hiding navigation is never the security boundary.
-- Instance configuration, users, remotes, plugins, search indexes, jobs,
-  ontologies, backup/restore, and maintenance form coherent capability-aware
-  sections.
+- Instance configuration, users, remotes, plugins, edge runtime settings,
+  search indexes, jobs, ontologies, backups/recovery, and maintenance form
+  coherent capability-aware sections.
 - Read-only status and mutations are structurally separated; destructive
   operations have confirmation and audit evidence.
-- Backup/restore passes an integrity-checked round trip.
+- Complete backup and offline restore pass an encrypted, integrity-checked,
+  generation-atomic round trip including RocksDB, blobs, search, and ACME state.
 
 ### Phase 6: compatibility cutover preparation
 

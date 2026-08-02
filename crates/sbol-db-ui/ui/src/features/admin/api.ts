@@ -120,24 +120,80 @@ export interface AdminAuditResponse {
   items: AdminAuditEvent[];
 }
 
-export interface BackupArchive {
-  format: string;
-  version: number;
-  created_at: string;
-  scope: string;
-  documents: unknown[];
-  checksum: string;
+export type CompleteBackupTrigger = "manual" | "pre_deploy";
+
+export interface CompleteBackupStatus {
+  enabled: boolean;
+  strategy: "complete_encrypted_checkpoint";
+  components: Array<"rocksdb" | "blobs" | "search" | "acme">;
+  recent: RecentJob[];
 }
 
-export interface BackupValidation {
-  valid: true;
-  format: string;
+export interface CompleteBackupEnqueueResponse {
+  job: RecentJob;
+  deduplicated: boolean;
+}
+
+export interface EdgeSettings {
   version: number;
-  checksum: string;
-  documents: number;
-  confirmation: string;
-  scope: string;
-  excludes: string[];
+  hostname: string;
+  acme_contact: string;
+  acme_directory_url: string;
+  http_redirect_enabled: boolean;
+  tls_handshake_timeout_secs: number;
+  backup_recovery_recipient: string;
+  backup_repository_url: string;
+  backup_interval_secs: number;
+  backup_local_retention: number;
+  minimum_free_bytes: number;
+}
+
+export type EdgeSettingsPatch = Partial<Omit<EdgeSettings, "version">>;
+
+export interface EdgeAdminSnapshot {
+  active: EdgeSettings;
+  pending: EdgeSettings;
+  restart_required: boolean;
+  runtime: {
+    profile: "production";
+    layout_version: string;
+    generation: string;
+    data_dir: string;
+  };
+  health: {
+    tls: {
+      required: boolean;
+      ready: boolean;
+      certificate_not_after: string | null;
+      certificate_expires_in_secs: number | null;
+    };
+    acme: {
+      last_success_at: string | null;
+      last_failure_at: string | null;
+    };
+    disk: {
+      ready: boolean;
+      available_bytes: number | null;
+      minimum_free_bytes: number;
+      error: string | null;
+    } | null;
+  };
+  recovery: {
+    activation_mode: "offline_cli";
+    active_generation: string;
+    previous_generation: string | null;
+    last_operation: EdgeRecoveryEvent | null;
+    history: EdgeRecoveryEvent[];
+  };
+}
+
+export interface EdgeRecoveryEvent {
+  status: "staged" | "activated" | "rollback_pending" | "rolled_back";
+  backup_id: string;
+  artifact_sha256: string;
+  previous_generation: string | null;
+  target_generation: string;
+  updated_at: string;
 }
 
 export function fetchAdminOverview(signal?: AbortSignal) {
@@ -258,35 +314,29 @@ export function fetchAdminAudit(signal?: AbortSignal) {
   return request<AdminAuditResponse>("/audit?limit=200", { signal });
 }
 
-export async function downloadBackup(): Promise<void> {
-  const res = await fetch(`${ADMIN_API}/backup`);
-  if (!res.ok) throw await responseError(res);
-  const blob = await res.blob();
-  const disposition = res.headers.get("content-disposition") ?? "";
-  const filename =
-    disposition.match(/filename="([^"]+)"/)?.[1] ?? "sbol-db-registry.json";
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
+export function fetchCompleteBackupStatus(signal?: AbortSignal) {
+  return request<CompleteBackupStatus>("/backup", { signal });
 }
 
-export function validateBackup(archive: BackupArchive) {
-  return request<BackupValidation>(
-    "/backup/validate",
-    jsonRequest("POST", archive)
+export function triggerCompleteBackup(
+  trigger: CompleteBackupTrigger = "manual",
+  idempotencyKey?: string
+) {
+  return request<CompleteBackupEnqueueResponse>(
+    "/backup",
+    jsonRequest("POST", {
+      trigger,
+      ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+    })
   );
 }
 
-export function restoreBackup(archive: BackupArchive, confirmation: string) {
-  return request<{
-    status: "restored";
-    checksum: string;
-    documents: number;
-    rebuild_job: RecentJob;
-  }>("/backup/restore", jsonRequest("POST", { archive, confirmation }));
+export function fetchEdgeAdmin(signal?: AbortSignal) {
+  return request<EdgeAdminSnapshot>("/edge", { signal });
+}
+
+export function updateEdgeAdmin(payload: EdgeSettingsPatch) {
+  return request<EdgeAdminSnapshot>("/edge", jsonRequest("PATCH", payload));
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
