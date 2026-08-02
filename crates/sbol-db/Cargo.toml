@@ -64,17 +64,16 @@ axum.workspace = true
 axum-server.workspace = true
 async-trait.workspace = true
 fs2.workspace = true
-tempfile = "3"
 futures.workspace = true
 metrics.workspace = true
 pem.workspace = true
 rustls-acme.workspace = true
 url.workspace = true
 x509-parser.workspace = true
+tempfile = "3"
 
 [dev-dependencies]
 age.workspace = true
 assert_cmd.workspace = true
 rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
 reqwest.workspace = true
-sha1.workspace = true

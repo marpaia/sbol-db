@@ -61,7 +61,6 @@ pub(super) fn read_generation_pointer(path: &Path, label: &str) -> Result<Uuid> 
     parse_generation(&raw, path)
 }
 
-#[allow(dead_code)] // Exposed by the recovery-status API in the admin UI stack layer.
 pub(super) fn optional_generation_pointer(path: &Path, label: &str) -> Result<Option<Uuid>> {
     reject_symlink(path, label)?;
     match fs::read_to_string(path) {

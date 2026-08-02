@@ -16,6 +16,11 @@ the [README quickstart](../README.md#installation) is faster.
 
 ## Architecture
 
+For the consolidated one-server RocksDB appliance with native ACME TLS,
+complete S3/GCS backups, atomic restore, and Grafana assets, use the
+[self-contained edge deployment guide](edge-deployment.md). The Postgres and
+Kubernetes guidance below describes the separate multi-node topology.
+
 The conceptual model. Read this section once to understand what
 you're deploying; reach for the later sections to do the actual work.
 
@@ -36,9 +41,10 @@ the cluster via `FOR UPDATE SKIP LOCKED` against `sbol_jobs`, with no
 leader election or external broker. Migrations are idempotent and run
 before the serve pods roll.
 
-The HTTP surface exposes the SBOL query API, the async-job operator
-surface (`POST /jobs`, etc.), and three operational endpoints
-(`/healthz`, `/readyz`, `/metrics`) on a single port.
+The public HTTP surface exposes the SBOL query API and async-job operator
+surface (`POST /jobs`, etc.). A separate operations listener exposes
+`/healthz`, `/readyz`, and `/metrics`; the Helm chart keeps that listener on a
+cluster-internal Service port.
 
 ### Backend selection
 
@@ -571,8 +577,8 @@ timing knobs are exposed. Defaults match the
 | `ingress.{enabled,className,annotations,hosts,tls}` | `Ingress` | Multi-host + TLS supported. |
 | `autoscaling.{enabled,minReplicas,maxReplicas,targetCPUUtilizationPercentage,targetMemoryUtilizationPercentage}` | `HorizontalPodAutoscaler` v2 | Set memory target to `0` to disable that rule. |
 | `podDisruptionBudget.{enabled,minAvailable,maxUnavailable}` | `PodDisruptionBudget` | Exactly one of `minAvailable` / `maxUnavailable`. |
-| `serviceMonitor.{enabled,namespace,labels,interval,scrapeTimeout,honorLabels,relabelings,metricRelabelings}` | Prometheus Operator `ServiceMonitor` | Scrapes `/metrics` on the main port. When disabled, fallback `prometheus.io/scrape` annotations are added to the pod. |
-| `networkPolicy.{enabled,allowOntologyFetch,extraIngress,extraEgress}` | `NetworkPolicy` | Default-deny; allows ingress on 8080, egress to DNS + Postgres + (optional) HTTPS to OBO Foundry. |
+| `serviceMonitor.{enabled,namespace,labels,interval,scrapeTimeout,honorLabels,relabelings,metricRelabelings}` | Prometheus Operator `ServiceMonitor` | Scrapes `/metrics` on the cluster-internal operations port. When disabled, fallback `prometheus.io/scrape` annotations are added to the pod. |
+| `networkPolicy.{enabled,allowOntologyFetch,extraIngress,extraEgress}` | `NetworkPolicy` | Default-deny; allows ingress on public 8080 and operations 9090, plus egress to DNS, Postgres, and optional OBO Foundry HTTPS. |
 
 ## Operating sbol-db
 
@@ -583,7 +589,7 @@ The cluster-facing surfaces: probes, metrics, and logs.
 | Path | Method | Description |
 |---|---|---|
 | `/healthz` | `GET` | Static liveness. Returns `200 ok` if the process is running. Does **not** touch Postgres. Wire to `livenessProbe`. |
-| `/readyz` | `GET` | Readiness. Issues a 1s-timeout `SELECT 1` against the pool. `200 {"status":"ready"}` or `503 {"status":"not_ready","reason":"…"}`. Wire to `readinessProbe` and `startupProbe`. |
+| `/readyz` | `GET` | Readiness. Requires deployed TLS when configured, the managed-filesystem reserve when configured, and a 1s-timeout storage ping. Returns `200 {"status":"ready"}` or `503 {"status":"not_ready","reason":"…"}`. Wire to `readinessProbe` and `startupProbe`. |
 | `/metrics` | `GET` | Prometheus exposition format. See [Metrics](#metrics) below. |
 | `/docs` | `GET` | Scalar-rendered API explorer. |
 | `/openapi.json` | `GET` | OpenAPI 3.1 schema. |
@@ -608,10 +614,11 @@ understanding:
 
 ### Metrics
 
-Exposed in Prometheus text format at `/metrics` on the main HTTP port
-(no separate metrics port — sbol-db has no auth, so cluster-internal
-scraping is the assumed model). Add the `monitoring.coreos.com/v1`
-ServiceMonitor with `serviceMonitor.enabled=true`.
+Exposed in Prometheus text format at `/metrics` on the separate operations
+listener. The Helm chart publishes it as the cluster-internal `operations`
+Service port and never routes it through Ingress. Add the
+`monitoring.coreos.com/v1` ServiceMonitor with
+`serviceMonitor.enabled=true`.
 
 #### Metric catalog
 

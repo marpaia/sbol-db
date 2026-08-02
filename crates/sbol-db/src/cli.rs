@@ -80,7 +80,7 @@ pub struct ServerArgs {
     pub profile: RuntimeProfile,
 
     /// Durable server state root. Required, absolute, and exclusively locked in
-    /// production. Development defaults to `./sbol-db-data`.
+    /// production. Development defaults to `./.sbol-db`.
     #[arg(long, env = "SBOL_DB_DATA_DIR")]
     pub data_dir: Option<PathBuf>,
 

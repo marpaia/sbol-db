@@ -8,7 +8,10 @@ use axum::Router;
 use sbol_db_app::{AppServices, Registration};
 use sbol_db_backend::Backend;
 use sbol_db_core::User;
-use sbol_db_server::{router, AppState, Metrics, SchemaCache, ServerConfig};
+use sbol_db_server::{
+    router, write_edge_settings, AppState, EdgeAdminService, EdgeRecoverySnapshot,
+    EdgeRuntimeIdentity, EdgeSettings, Metrics, SchemaCache, ServerConfig,
+};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -46,6 +49,84 @@ async fn app_with_backups(complete_backups_enabled: bool) -> (Router, Arc<AppSer
         )),
         app: services.clone(),
         metrics: Metrics::install(None, env!("CARGO_PKG_VERSION")),
+        jobs: backend.jobs.clone(),
+        lab: backend.lab.clone(),
+        config: config.clone(),
+        backend_kind: backend.kind,
+        sql_console: backend.sql_console.clone(),
+        db_stats: backend.db_stats.clone(),
+        lsm_stats: backend.lsm_stats.clone(),
+        schema_cache: Arc::new(SchemaCache::new()),
+    };
+    (router(state, config), services, dir)
+}
+
+async fn app_with_edge() -> (Router, Arc<AppServices>, TempDir) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("v2-edge-admin.db");
+    let backend = Backend::open(&format!("sqlite://{}", path.display()))
+        .await
+        .expect("open sqlite");
+    backend
+        .migrator
+        .as_ref()
+        .expect("migrator")
+        .run_migrations()
+        .await
+        .expect("migrate");
+    let services = Arc::new(AppServices::from_backend(&backend));
+    let metrics = Metrics::install(None, env!("CARGO_PKG_VERSION"))
+        .with_data_disk(dir.path().to_path_buf(), 1);
+    metrics.require_tls();
+    let settings = EdgeSettings {
+        version: 1,
+        hostname: "registry.example.org".to_owned(),
+        acme_contact: "admin@example.org".to_owned(),
+        acme_directory_url: "https://acme.example.org/directory".to_owned(),
+        http_redirect_enabled: true,
+        tls_handshake_timeout_secs: 10,
+        backup_recovery_recipient: age::x25519::Identity::generate().to_public().to_string(),
+        backup_repository_url: "s3://backups/registry/production".to_owned(),
+        backup_interval_secs: 86_400,
+        backup_local_retention: 2,
+        minimum_free_bytes: 2_147_483_648,
+    }
+    .validate()
+    .expect("edge settings");
+    write_edge_settings(backend.config.as_ref(), &settings)
+        .await
+        .expect("persist edge settings");
+    let mut config = ServerConfig {
+        complete_backups_enabled: true,
+        ..ServerConfig::default()
+    };
+    config.edge_admin = Some(Arc::new(EdgeAdminService::new(
+        backend.config.clone(),
+        settings,
+        EdgeRuntimeIdentity {
+            profile: "production",
+            layout_version: "2".to_owned(),
+            generation: uuid::Uuid::new_v4(),
+            data_dir: dir.path().display().to_string(),
+        },
+        metrics.clone(),
+        EdgeRecoverySnapshot {
+            activation_mode: "offline_cli",
+            active_generation: uuid::Uuid::new_v4(),
+            previous_generation: None,
+            last_operation: None,
+            history: Vec::new(),
+        },
+    )));
+    let state = AppState {
+        service: backend.store.clone(),
+        sparql: Arc::new(SparqlEngine::new(backend.triple_source.clone())),
+        sparql_update: Arc::new(SparqlUpdateEngine::new(
+            backend.triple_source.clone(),
+            backend.triple_writer.clone(),
+        )),
+        app: services.clone(),
+        metrics,
         jobs: backend.jobs.clone(),
         lab: backend.lab.clone(),
         config: config.clone(),
@@ -363,4 +444,56 @@ async fn complete_backup_trigger_fails_closed_when_runtime_is_absent() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+}
+
+#[tokio::test]
+async fn edge_settings_are_validated_persisted_and_report_restart_state() {
+    let (app, services, _dir) = app_with_edge().await;
+    let (_admin, token) = register(&services, "edge-admin", true).await;
+
+    let initial = send(&app, "GET", "/api/v2/admin/edge", Some(&token), json!({})).await;
+    assert_eq!(initial.status(), StatusCode::OK);
+    let initial = body(initial).await;
+    assert_eq!(initial["restart_required"], false);
+    assert_eq!(initial["active"]["hostname"], "registry.example.org");
+    assert_eq!(initial["health"]["tls"]["required"], true);
+    assert_eq!(initial["health"]["disk"]["ready"], true);
+    assert_eq!(initial["recovery"]["activation_mode"], "offline_cli");
+    assert!(initial["recovery"]["history"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let updated = send(
+        &app,
+        "PATCH",
+        "/api/v2/admin/edge",
+        Some(&token),
+        json!({
+            "hostname": "next.example.org",
+            "backup_interval_secs": 3600,
+            "backup_local_retention": 4
+        }),
+    )
+    .await;
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated = body(updated).await;
+    assert_eq!(updated["restart_required"], true);
+    assert_eq!(updated["active"]["hostname"], "registry.example.org");
+    assert_eq!(updated["pending"]["hostname"], "next.example.org");
+    assert_eq!(updated["pending"]["backup_interval_secs"], 3600);
+
+    let persisted =
+        body(send(&app, "GET", "/api/v2/admin/edge", Some(&token), json!({})).await).await;
+    assert_eq!(persisted["pending"]["backup_local_retention"], 4);
+
+    let invalid = send(
+        &app,
+        "PATCH",
+        "/api/v2/admin/edge",
+        Some(&token),
+        json!({ "backup_repository_url": "https://example.org/archive" }),
+    )
+    .await;
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
 }

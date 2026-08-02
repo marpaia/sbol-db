@@ -1,0 +1,65 @@
+groups:
+  - name: sbol-db-edge
+    rules:
+      - alert: SbolDbDataDiskLow
+        expr: sbol_db_data_disk_ready == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: sbol-db managed data filesystem is below its reserve
+          description: Available bytes are below SBOL_DB_MIN_FREE_BYTES or the disk probe is failing.
+
+      - alert: SbolDbCompleteBackupStale
+        expr: (time() - sbol_db_backup_last_success_timestamp_seconds) > (2 * sbol_db_backup_scheduler_interval_seconds)
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: sbol-db has no recent verified complete backup
+          description: No complete backup has succeeded for two configured scheduling intervals.
+
+      - alert: SbolDbRemoteBackupStale
+        expr: (time() - sbol_db_backup_last_remote_verification_timestamp_seconds) > (2 * sbol_db_backup_scheduler_interval_seconds)
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: sbol-db object-store backup verification is stale
+          description: No S3 or GCS readback has verified successfully for two configured scheduling intervals.
+
+      - alert: SbolDbCompleteBackupFailed
+        expr: increase(sbol_db_backups_completed_total{status="failed"}[30m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: An sbol-db complete backup attempt failed
+          description: Inspect the complete_backup durable job and its structured attempt logs.
+
+      - alert: SbolDbTlsCertificateNotReady
+        expr: sbol_db_tls_certificate_ready == 0
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: sbol-db has no deployable TLS certificate
+          description: ACME has not loaded or issued a currently valid certificate.
+
+      - alert: SbolDbTlsCertificateExpiring
+        expr: sbol_db_tls_certificate_expires_in_seconds < 1209600
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: sbol-db TLS certificate expires within 14 days
+          description: Check ACME events, DNS, port 443 reachability, and the configured ACME directory.
+
+      - alert: SbolDbDeadJobs
+        expr: sum(sbol_db_jobs_queue_depth{status="dead"}) > 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: sbol-db has terminally failed durable jobs
+          description: Inspect the dead jobs and replay only after correcting their root cause.
+
+      - alert: SbolDbHighHttpErrorRate
+        expr: sum(rate(http_requests_total{status=~"5.."}[10m])) / clamp_min(sum(rate(http_requests_total[10m])), 0.001) > 0.05
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: sbol-db HTTP 5xx fraction exceeds 5 percent
+          description: Inspect route and status labels, application logs, and durable job pressure.

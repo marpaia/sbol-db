@@ -46,12 +46,43 @@ pub struct Metrics {
     tls_required: AtomicBool,
     tls_ready: AtomicBool,
     tls_not_after_unix: AtomicI64,
+    acme_last_success_unix: AtomicI64,
+    acme_last_failure_unix: AtomicI64,
 }
 
 #[derive(Clone, Debug)]
 struct DataDiskProbe {
     path: PathBuf,
     minimum_free_bytes: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct EdgeHealthSnapshot {
+    pub tls: TlsHealthSnapshot,
+    pub acme: AcmeHealthSnapshot,
+    pub disk: Option<DiskHealthSnapshot>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TlsHealthSnapshot {
+    pub required: bool,
+    pub ready: bool,
+    pub certificate_not_after: Option<DateTime<Utc>>,
+    pub certificate_expires_in_secs: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AcmeHealthSnapshot {
+    pub last_success_at: Option<DateTime<Utc>>,
+    pub last_failure_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DiskHealthSnapshot {
+    pub ready: bool,
+    pub available_bytes: Option<u64>,
+    pub minimum_free_bytes: u64,
+    pub error: Option<String>,
 }
 
 static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
@@ -104,6 +135,7 @@ impl Metrics {
             "sbol_db_backup_last_remote_verification_timestamp_seconds",
             "sbol_db_backup_scheduler_last_enqueue_timestamp_seconds",
             "sbol_db_backup_scheduler_next_timestamp_seconds",
+            "sbol_db_backup_scheduler_interval_seconds",
             "sbol_db_backup_local_artifacts",
         ] {
             metrics::gauge!(gauge).set(0.0);
@@ -117,6 +149,8 @@ impl Metrics {
             tls_required: AtomicBool::new(false),
             tls_ready: AtomicBool::new(false),
             tls_not_after_unix: AtomicI64::new(0),
+            acme_last_success_unix: AtomicI64::new(0),
+            acme_last_failure_unix: AtomicI64::new(0),
         })
     }
 
@@ -136,6 +170,56 @@ impl Metrics {
             .store(not_after_unix, Ordering::Release);
         self.tls_ready.store(true, Ordering::Release);
         self.snapshot_tls();
+    }
+
+    pub fn record_acme_event(&self, success: bool) {
+        let target = if success {
+            &self.acme_last_success_unix
+        } else {
+            &self.acme_last_failure_unix
+        };
+        target.store(Utc::now().timestamp(), Ordering::Release);
+    }
+
+    pub fn edge_health_snapshot(&self) -> EdgeHealthSnapshot {
+        let now = Utc::now().timestamp();
+        let tls_required = self.tls_required.load(Ordering::Acquire);
+        let not_after_unix = self.tls_not_after_unix.load(Ordering::Acquire);
+        let certificate_not_after = timestamp(not_after_unix);
+        let disk = self
+            .data_disk
+            .lock()
+            .map(|probe| probe.clone())
+            .ok()
+            .flatten()
+            .map(|probe| match fs2::available_space(&probe.path) {
+                Ok(available) => DiskHealthSnapshot {
+                    ready: available >= probe.minimum_free_bytes,
+                    available_bytes: Some(available),
+                    minimum_free_bytes: probe.minimum_free_bytes,
+                    error: None,
+                },
+                Err(error) => DiskHealthSnapshot {
+                    ready: false,
+                    available_bytes: None,
+                    minimum_free_bytes: probe.minimum_free_bytes,
+                    error: Some(error.to_string()),
+                },
+            });
+        EdgeHealthSnapshot {
+            tls: TlsHealthSnapshot {
+                required: tls_required,
+                ready: self.tls_ready_for_traffic(),
+                certificate_not_after,
+                certificate_expires_in_secs: tls_required
+                    .then_some(not_after_unix.saturating_sub(now).max(0)),
+            },
+            acme: AcmeHealthSnapshot {
+                last_success_at: timestamp(self.acme_last_success_unix.load(Ordering::Acquire)),
+                last_failure_at: timestamp(self.acme_last_failure_unix.load(Ordering::Acquire)),
+            },
+            disk,
+        }
     }
 
     /// Whether the process may receive public traffic under its TLS policy.
@@ -351,6 +435,12 @@ impl Metrics {
         self.snapshot_jobs().await;
         self.handle.render()
     }
+}
+
+fn timestamp(value: i64) -> Option<DateTime<Utc>> {
+    (value > 0)
+        .then(|| DateTime::from_timestamp(value, 0))
+        .flatten()
 }
 
 pub async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {

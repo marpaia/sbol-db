@@ -2,6 +2,7 @@
 
 mod auth;
 mod docs;
+mod edge;
 mod error;
 mod explorer;
 mod export;
@@ -17,6 +18,11 @@ mod session;
 mod synbiohub;
 mod v2;
 
+pub use edge::{
+    read_edge_settings, write_edge_settings, EdgeAdminError, EdgeAdminService, EdgeAdminSnapshot,
+    EdgeRecoveryEvent, EdgeRecoverySnapshot, EdgeRuntimeIdentity, EdgeSettings, EdgeSettingsPatch,
+    EDGE_SETTINGS_KEY,
+};
 pub use error::ApiError;
 pub use export::export_subject_rdf;
 #[cfg(feature = "lab")]
@@ -178,6 +184,12 @@ pub struct ServerConfig {
     /// SHA3-256 of the one-time first-launch setup token. The plaintext token is
     /// never retained in server state or printed by debug output.
     pub setup_token_hash: Option<[u8; 32]>,
+    /// Whether this process has the native complete-backup executor installed.
+    /// Admin routes fail closed when it is absent.
+    pub complete_backups_enabled: bool,
+    /// Production-appliance configuration and health control plane. It is absent
+    /// for development and non-managed deployments.
+    pub edge_admin: Option<Arc<EdgeAdminService>>,
     /// Optional runtime overrides for the registry's persistent RDF namespace.
     /// When absent, server startup reads the migrated `registryNamespace`
     /// config document before falling back to the historical local default.
@@ -188,9 +200,6 @@ pub struct ServerConfig {
     /// defaults for tests and development.
     pub blob_root: Option<PathBuf>,
     pub text_index_path: Option<PathBuf>,
-    /// Whether this process has the native complete-backup executor installed.
-    /// Admin routes fail closed when it is absent.
-    pub complete_backups_enabled: bool,
 }
 
 impl Default for ServerConfig {
@@ -216,11 +225,12 @@ impl Default for ServerConfig {
             cors: CorsPolicy::Permissive,
             https_security_headers: false,
             setup_token_hash: None,
+            complete_backups_enabled: false,
+            edge_admin: None,
             database_prefix: None,
             public_graph: None,
             blob_root: None,
             text_index_path: None,
-            complete_backups_enabled: false,
         }
     }
 }
@@ -287,11 +297,12 @@ impl ServerConfig {
             cors: CorsPolicy::Permissive,
             https_security_headers: defaults.https_security_headers,
             setup_token_hash: setup_token_hash_from_env(),
+            complete_backups_enabled: false,
+            edge_admin: None,
             database_prefix: std::env::var("SBOL_DB_DATABASE_PREFIX").ok(),
             public_graph: std::env::var("SBOL_DB_PUBLIC_GRAPH").ok(),
             blob_root: std::env::var_os("SBOL_DB_BLOB_ROOT").map(PathBuf::from),
             text_index_path: std::env::var_os("SBOL_DB_TEXT_INDEX_PATH").map(PathBuf::from),
-            complete_backups_enabled: false,
         };
         if let Ok(origins) = std::env::var("SBOL_DB_CORS_ALLOWED_ORIGINS") {
             match parse_cors_origins(&origins) {
