@@ -171,6 +171,23 @@ pub enum Command {
         action: UtilAction,
     },
 
+    /// Produce a policy-gated, strictly validated N-Quads artifact from a raw
+    /// Virtuoso export without modifying the raw export.
+    NormalizeSynbiohubRdf {
+        /// Immutable raw Virtuoso N-Quads export.
+        #[arg(long)]
+        input: PathBuf,
+        /// New normalized N-Quads artifact. Existing files are never replaced.
+        #[arg(long)]
+        output: PathBuf,
+        /// Exact-count, digest-addressed IRI normalization policy.
+        #[arg(long)]
+        policy: PathBuf,
+        /// New provenance report binding raw, policy, and normalized hashes.
+        #[arg(long)]
+        report: PathBuf,
+    },
+
     /// Inspect a classic SynBioHub snapshot without opening an SBOL DB target.
     ///
     /// Discovers the production filesystem layout, validates the SQLite
@@ -188,6 +205,11 @@ pub enum Command {
         /// `--source`; a raw `.db` alone is inventoried but cannot be reconciled.
         #[arg(long)]
         rdf: Option<PathBuf>,
+        /// Provenance report emitted by `normalize-synbiohub-rdf`. When set,
+        /// preflight re-hashes the raw export, policy, and normalized export,
+        /// strictly reparses the normalized export, and uses it as `--rdf`.
+        #[arg(long)]
+        rdf_normalization_report: Option<PathBuf>,
         /// Classic account SQLite database. Production-layout discovery checks
         /// `<source>/sbhData/data/synbiohub.sqlite` as well as the flat layout.
         #[arg(long)]

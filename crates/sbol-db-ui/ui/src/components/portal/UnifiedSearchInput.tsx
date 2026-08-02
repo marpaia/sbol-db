@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
-import { Dna, FileSearch, Network, Search, Sparkles } from "lucide-react";
+import { Dna, FileSearch, Network, Search, Tags } from "lucide-react";
 
 import { HowSearchWorks } from "@/components/portal/HowSearchWorks";
 import { Badge } from "@/components/ui/badge";
@@ -124,6 +124,7 @@ export function UnifiedSearchInput({
             }
             placeholder={placeholderFor(method)}
             aria-label={labelFor(method)}
+            autoFocus
             autoComplete="off"
             autoCapitalize={sequenceInput ? "characters" : undefined}
             spellCheck={!sequenceInput}
@@ -232,7 +233,7 @@ function buildSearchIntents(methods: SearchMethod[]): SearchIntent[] {
       hint: "Functions, concepts, and descriptions",
       description:
         "Describe what a design does or represents, even if the same words are not used in its record.",
-      icon: Sparkles,
+      icon: Tags,
       methods: meaning,
     },
     {

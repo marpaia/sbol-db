@@ -50,6 +50,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteRow};
 #[cfg(test)]
 use sqlx::{Row, SqlitePool};
 
+pub mod normalize;
 pub mod preflight;
 pub mod production;
 

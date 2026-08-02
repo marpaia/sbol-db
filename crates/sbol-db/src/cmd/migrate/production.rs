@@ -1328,6 +1328,7 @@ mod tests {
             source: None,
             virtuoso_db: None,
             rdf: Some(fixtures.join("dump.nq")),
+            rdf_normalization_report: None,
             sqlite: Some(sqlite_path),
             uploads: Some(fixtures.join("uploads")),
             config: Some(fixtures.join("config.local.json")),

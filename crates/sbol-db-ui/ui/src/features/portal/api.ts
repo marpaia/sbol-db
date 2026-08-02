@@ -15,6 +15,11 @@ export interface InstanceInfo {
   uri_prefix: string;
   front_page_text: string;
   setup_required: boolean;
+  machine_access?: {
+    api_url: string;
+    mcp_url?: string;
+    authorization_issuer?: string;
+  };
   policies: {
     allow_public_signup: boolean;
     require_login: boolean;

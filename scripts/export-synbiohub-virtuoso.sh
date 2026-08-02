@@ -12,6 +12,7 @@ source_db=$1
 output_nq=$2
 work_parent=${3:-${TMPDIR:-/tmp}}
 image='tenforce/virtuoso@sha256:de97286328aa0babb9e06e9626321d91363ba3f260529b9083d1fa02f36ad664'
+isql='/usr/local/virtuoso-opensource/bin/isql-v'
 container="sbol-db-virtuoso-export-$$"
 work_dir=$(mktemp -d "${work_parent%/}/sbol-db-virtuoso-export.XXXXXX")
 temporary_output=""
@@ -47,7 +48,7 @@ trap cleanup EXIT INT TERM
 mkdir -p "$work_dir/data/dumps"
 cp "$source_db" "$work_dir/data/virtuoso.db"
 
-docker run --detach --name "$container" \
+docker run --detach --platform linux/amd64 --name "$container" \
   --env DBA_PASSWORD=dba \
   --volume "$work_dir/data:/data" \
   "$image" >/dev/null
@@ -65,17 +66,29 @@ if [[ "$online" != 1 ]]; then
   echo "Virtuoso did not become ready" >&2
   exit 1
 fi
-if ! docker exec "$container" isql 1111 dba "$dba_password" \
-  exec='select count(*) from DB.DBA.RDF_QUAD;' >/dev/null 2>&1; then
-  echo "Virtuoso is online, but the supplied DBA credential was rejected." >&2
-  echo "Set VIRTUOSO_DBA_PASSWORD to the SQL DBA password recorded for this snapshot." >&2
+if ! docker exec "$container" test -x "$isql"; then
+  echo "Virtuoso is online, but the pinned image does not provide executable $isql." >&2
+  echo "The image layout changed; this is not a credential failure." >&2
   exit 1
 fi
 
-docker exec "$container" isql 1111 dba "$dba_password" \
+isql_diagnostic="$work_dir/isql-diagnostic.txt"
+if ! docker exec "$container" "$isql" 1111 dba "$dba_password" \
+  exec='select count(*) from DB.DBA.RDF_QUAD;' >"$isql_diagnostic" 2>&1; then
+  if grep -q 'CL034: Bad login' "$isql_diagnostic"; then
+    echo "Virtuoso is online, but the supplied DBA credential was rejected." >&2
+    echo "Set VIRTUOSO_DBA_PASSWORD to the SQL DBA password recorded for this snapshot." >&2
+  else
+    echo "Virtuoso is online and isql-v exists, but the validation query failed:" >&2
+    sed -E 's/(dba[[:space:]]+)[^[:space:]]+/\1[REDACTED]/g' "$isql_diagnostic" >&2
+  fi
+  exit 1
+fi
+
+docker exec "$container" "$isql" 1111 dba "$dba_password" \
   exec="dump_nquads('dumps', 1, 1000000000, 1);"
 
-docker stop --time 60 "$container" >/dev/null
+docker stop --timeout 60 "$container" >/dev/null
 
 fragments=()
 while IFS= read -r fragment; do

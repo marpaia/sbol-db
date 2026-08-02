@@ -1,7 +1,8 @@
 import {
   ArrowRight,
-  Bot,
+  Cable,
   Check,
+  ClipboardCheck,
   Copy,
   ExternalLink,
   FileCheck2,
@@ -12,15 +13,24 @@ import {
   ShieldCheck,
   Terminal,
   Users,
+  Workflow,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 
 const CLI_REFERENCE =
   "https://github.com/SynBioDex/sbol-rs/tree/master/crates/sbol-cli";
-const MCP_SERVER_ADDRESS = "https://sbol.io/mcp";
+const QUIET_ICON_TILE =
+  "flex shrink-0 items-center justify-center rounded-[3px] border border-foreground/10 bg-background text-primary";
+
+function currentMcpServerAddress() {
+  if (typeof window === "undefined") return "/mcp";
+  return new URL("/mcp", window.location.origin).toString();
+}
 
 const steps: CapabilityStepProps[] = [
   {
@@ -35,11 +45,11 @@ const steps: CapabilityStepProps[] = [
     icon: RefreshCw,
     title: "Sync with a registry",
     description:
-      "Pull canonical designs, inspect changes, and publish through an authenticated SBOL DB profile.",
+      "Check out collections, inspect local and remote changes, and synchronize through your SBOL account.",
   },
   {
     number: "03",
-    icon: Bot,
+    icon: Workflow,
     title: "Collaborate through agents",
     description:
       "Give AI tools the same permissioned design context, validation, and review workflows.",
@@ -124,7 +134,13 @@ const capabilityGroups: CapabilityGroupProps[] = [
   },
 ];
 
-export function MachineAccessSection() {
+export function MachineAccessSection({
+  mcpServerAddress,
+}: {
+  mcpServerAddress?: string;
+}) {
+  const serverAddress = mcpServerAddress ?? currentMcpServerAddress();
+
   return (
     <section
       id="machine-access"
@@ -133,26 +149,38 @@ export function MachineAccessSection() {
       <div className="relative mx-auto max-w-[90rem] px-4 py-14 sm:px-6 sm:py-16 lg:px-8">
         <div className="grid gap-8 lg:grid-cols-[1.05fr_0.95fr] lg:items-end">
           <div>
-            <p className="ledger-label text-primary">Machine access</p>
+            <p className="ledger-label text-primary">
+              Identity and machine access
+            </p>
             <h1 className="mt-3 max-w-3xl text-balance text-4xl font-medium tracking-[-0.03em] sm:text-5xl">
-              One design language for people, pipelines, and agents.
+              Connect your identity, designs, tools, and agents.
             </h1>
           </div>
           <div>
             <p className="max-w-2xl text-pretty text-sm leading-7 text-muted-foreground sm:text-base">
-              Move from a local SBOL file to a permissioned, collaborative
-              record without losing identity or context. The{" "}
-              <code className="text-foreground">sbol</code> CLI owns
-              standards-aware file workflows; SBOL DB carries registry state,
-              access control, and provenance; MCP opens that same contract to
-              agents.
+              Sign in to synthetic biology applications with your SBOL Identity.
+              Then decide which tools and agents may access or act on your
+              designs. The CLI and MCP use the same account, delegated scopes,
+              and record-level permissions as the registry.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <Badge
                 variant="outline"
                 className="gap-1.5 border-primary/20 bg-background/60"
               >
-                <ShieldCheck className="size-3" /> One identity and ACL model
+                <Users className="size-3" /> Sign in with SBOL
+              </Badge>
+              <Badge
+                variant="outline"
+                className="gap-1.5 border-primary/20 bg-background/60"
+              >
+                <ShieldCheck className="size-3" /> Scoped agent authority
+              </Badge>
+              <Badge
+                variant="outline"
+                className="gap-1.5 border-primary/20 bg-background/60"
+              >
+                <ClipboardCheck className="size-3" /> Reviewable writes
               </Badge>
             </div>
           </div>
@@ -175,7 +203,9 @@ export function MachineAccessSection() {
           <RegistryPromise />
         </div>
 
-        <McpDocumentation />
+        <IdentityDocumentation />
+
+        <McpDocumentation serverAddress={serverAddress} />
 
         <div className="mt-6 flex flex-col gap-3 border-t pt-5 text-sm sm:flex-row sm:items-center sm:justify-between">
           <p className="max-w-2xl text-muted-foreground">
@@ -236,35 +266,211 @@ function CapabilityStep({
 }
 
 function CliPreview() {
+  const terminalRef = useRef<HTMLDivElement>(null);
+  const [running, setRunning] = useState(false);
+  const [session, setSession] = useState(0);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    if (!("IntersectionObserver" in window)) return;
+
+    const observer = new window.IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        setRunning(true);
+        observer.disconnect();
+      },
+      { threshold: 0.35 }
+    );
+    observer.observe(terminal);
+    return () => observer.disconnect();
+  }, []);
+
   return (
-    <div className="self-start overflow-hidden rounded-[4px] border border-white/10 bg-zinc-950 text-zinc-100 shadow-xl shadow-primary/5">
-      <div className="flex items-center gap-2 border-b border-white/10 px-5 py-3.5">
-        <span className="size-2.5 rounded-full bg-red-400/80" />
-        <span className="size-2.5 rounded-full bg-amber-300/80" />
-        <span className="size-2.5 rounded-full bg-emerald-400/80" />
-      </div>
-      <div className="space-y-5 px-5 py-5 font-mono text-xs leading-6 sm:px-6 sm:text-[13px]">
-        <div>
-          <div className="mb-2 font-sans text-[11px] font-medium uppercase tracking-[0.14em] text-emerald-300">
-            Build confidence locally
-          </div>
-          <Command>sbol validate toggle-switch.ttl</Command>
-          <Command>sbol diff baseline.ttl candidate.ttl</Command>
+    <div
+      ref={terminalRef}
+      className="self-start overflow-hidden rounded-[4px] border border-white/10 bg-zinc-950 text-zinc-100 shadow-xl shadow-primary/5"
+    >
+      <div className="flex items-center justify-between gap-4 border-b border-white/10 px-5 py-3.5">
+        <div className="flex items-center gap-2" aria-hidden="true">
+          <span className="size-2.5 rounded-full bg-red-400/80" />
+          <span className="size-2.5 rounded-full bg-amber-300/80" />
+          <span className="size-2.5 rounded-full bg-emerald-400/80" />
         </div>
-        <div className="border-t border-white/10 pt-4">
-          <div className="mb-2 font-sans text-[11px] font-medium uppercase tracking-[0.14em] text-emerald-300">
-            Carry the same design into the registry
-          </div>
-          <Command>sbol registry login</Command>
-          <Command>
-            {
-              "sbol registry pull https://sbol.io/public/igem/BBa_J23100/1 -o design.ttl"
-            }
-          </Command>
-          <Command>sbol registry sync design.ttl --preview</Command>
-          <Command>sbol registry push design.ttl</Command>
-        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setRunning(true);
+            setSession((value) => value + 1);
+          }}
+          className="inline-flex items-center gap-1.5 rounded-[3px] px-2 py-1 font-sans text-[10px] font-medium uppercase tracking-[0.12em] text-zinc-500 transition-[color,background-color,transform] duration-150 [transition-timing-function:var(--ease-out)] hover:bg-white/5 hover:text-zinc-300 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 motion-reduce:transition-none"
+        >
+          <RefreshCw className="size-3" aria-hidden="true" />
+          Replay
+        </button>
       </div>
+      <TerminalSession key={session} running={running} />
+    </div>
+  );
+}
+
+function TerminalSession({ running }: { running: boolean }) {
+  return (
+    <div
+      className="terminal-session min-h-[27rem] space-y-3 px-5 py-5 font-mono text-xs leading-5 sm:px-6 sm:text-[13px]"
+      data-running={running}
+      aria-label="Animated SBOL registry command demonstration"
+    >
+      <AnimatedCommand command="sbol init" delay={200} duration={420}>
+        <TerminalSuccess>Created sbol.toml and designs/</TerminalSuccess>
+      </AnimatedCommand>
+
+      <AnimatedCommand
+        command="sbol pull https://sbol.io/public/igem/BBa_J23100/1"
+        delay={1150}
+        duration={1450}
+      >
+        <TerminalProgress
+          label="Resolve graph"
+          detail="14 objects"
+          offset={100}
+          duration={360}
+        />
+        <TerminalProgress
+          label="Fetch content"
+          detail="42.8 kB"
+          offset={520}
+          duration={1400}
+        />
+        <TerminalProgress
+          label="Verify content"
+          detail="sha256 verified"
+          offset={1980}
+          duration={520}
+        />
+        <TerminalProgress
+          label="Write lock"
+          detail="sbol.lock updated"
+          offset={2560}
+          duration={280}
+        />
+      </AnimatedCommand>
+
+      <AnimatedCommand command="sbol status" delay={5750} duration={420}>
+        <TerminalMuted>
+          BBa_J23100&nbsp;&nbsp;clean&nbsp;&nbsp;local = registry
+        </TerminalMuted>
+      </AnimatedCommand>
+
+      <AnimatedCommand
+        command="sbol sync --dry-run"
+        delay={6750}
+        duration={620}
+      >
+        <TerminalMuted>Plan&nbsp;&nbsp;0 pull&nbsp;&nbsp;0 push</TerminalMuted>
+        <TerminalSuccess>No registry changes required</TerminalSuccess>
+      </AnimatedCommand>
+
+      <AnimatedCommand command="sbol sync" delay={8100} duration={360}>
+        <TerminalProgress
+          label="Sync workspace"
+          detail="synchronized"
+          offset={80}
+          duration={900}
+        />
+      </AnimatedCommand>
+    </div>
+  );
+}
+
+type TerminalTimingStyle = CSSProperties & {
+  "--terminal-delay": string;
+  "--terminal-duration": string;
+  "--terminal-characters": number;
+};
+
+function AnimatedCommand({
+  command,
+  delay,
+  duration,
+  children,
+}: {
+  command: string;
+  delay: number;
+  duration: number;
+  children: ReactNode;
+}) {
+  const style: TerminalTimingStyle = {
+    "--terminal-delay": `${delay}ms`,
+    "--terminal-duration": `${duration}ms`,
+    "--terminal-characters": command.length,
+  };
+
+  return (
+    <div className="terminal-entry" style={style}>
+      <div className="flex min-w-0 gap-3">
+        <span aria-hidden="true" className="select-none text-emerald-300">
+          $
+        </span>
+        <code className="terminal-command-text min-w-0 max-w-full whitespace-nowrap text-zinc-100">
+          {command}
+        </code>
+      </div>
+      <div className="terminal-output ml-6 mt-1 space-y-1.5">{children}</div>
+    </div>
+  );
+}
+
+function TerminalSuccess({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 text-emerald-300">
+      <Check className="size-3.5 shrink-0" aria-hidden="true" />
+      <span>{children}</span>
+    </div>
+  );
+}
+
+function TerminalMuted({ children }: { children: ReactNode }) {
+  return <div className="text-zinc-500">{children}</div>;
+}
+
+type ProgressTimingStyle = CSSProperties & {
+  "--terminal-progress-offset": string;
+  "--terminal-progress-duration": string;
+};
+
+function TerminalProgress({
+  label,
+  detail,
+  offset,
+  duration,
+}: {
+  label: string;
+  detail: string;
+  offset: number;
+  duration: number;
+}) {
+  const style: ProgressTimingStyle = {
+    "--terminal-progress-offset": `${offset}ms`,
+    "--terminal-progress-duration": `${duration}ms`,
+  };
+
+  return (
+    <div
+      className="terminal-progress grid grid-cols-[6.5rem_minmax(3rem,1fr)_6.5rem] items-center gap-2 sm:grid-cols-[7.5rem_minmax(3rem,1fr)_6.5rem]"
+      style={style}
+    >
+      <span className="truncate text-zinc-400">{label}</span>
+      <span
+        className="h-1 overflow-hidden rounded-full bg-white/10"
+        aria-hidden="true"
+      >
+        <span className="terminal-progress-fill block h-full origin-left rounded-full bg-emerald-300" />
+      </span>
+      <span className="terminal-progress-detail whitespace-nowrap text-right text-[10px] text-zinc-500">
+        {detail}
+      </span>
     </div>
   );
 }
@@ -275,19 +481,19 @@ function RegistryPromise() {
       icon: Fingerprint,
       title: "Identity survives the handoff",
       description:
-        "Canonical IRIs, SBOL versions, and serialization choices remain explicit from disk to registry.",
+        "Canonical IRIs, SBOL versions, and biological-content fingerprints remain explicit from disk to registry.",
     },
     {
       icon: LockKeyhole,
       title: "Private means permissioned",
       description:
-        "The same caller scope governs the UI, REST API, CLI, and every agent request.",
+        "The same caller scope governs the UI, REST API, CLI, and every request from your agent.",
     },
     {
       icon: FileCheck2,
       title: "Changes are inspectable",
       description:
-        "Validation, collision analysis, ownership, review, and activity evidence travel with the workflow.",
+        "Validation runs before writes, identity collisions fail by default, and stale synchronized updates are rejected.",
     },
   ];
 
@@ -295,12 +501,18 @@ function RegistryPromise() {
     <div className="border border-foreground/15 border-l-2 border-l-primary bg-card p-5 sm:p-6">
       <p className="ledger-label text-primary">SBOL DB CLI</p>
       <h2 className="mt-2 text-xl font-semibold tracking-tight">
-        Keep the biological and social context together.
+        Local when you need it. Connected when the design is shared.
       </h2>
+      <p className="mt-3 text-sm leading-6 text-muted-foreground">
+        The CLI validates and compares files without a network request. A
+        credential-free project file and lock then track complete collections
+        across local and registry state without inferring deletion or silently
+        merging RDF.
+      </p>
       <div className="mt-5 space-y-4">
         {promises.map(({ icon: Icon, title, description }) => (
           <div key={title} className="flex gap-3">
-            <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <span className={`${QUIET_ICON_TILE} mt-0.5 size-8`}>
               <Icon className="size-4" />
             </span>
             <div>
@@ -316,20 +528,121 @@ function RegistryPromise() {
   );
 }
 
-function Command({ children }: { children: React.ReactNode }) {
+function IdentityDocumentation() {
+  const identityBenefits = [
+    {
+      icon: Users,
+      title: "One account",
+      description: "Carry your registry identity into compatible applications.",
+    },
+    {
+      icon: Fingerprint,
+      title: "Clear consent",
+      description: "See which identity details an application is requesting.",
+    },
+    {
+      icon: ShieldCheck,
+      title: "Scoped access",
+      description: "Tools and agents receive only approved capabilities.",
+    },
+  ];
+
   return (
-    <div className="flex min-w-0 gap-3">
-      <span aria-hidden="true" className="select-none text-primary">
-        $
-      </span>
-      <code className="min-w-0 whitespace-pre-wrap break-words text-zinc-200 sm:whitespace-nowrap">
-        {children}
-      </code>
-    </div>
+    <section
+      id="identity"
+      className="mt-8 scroll-mt-24 overflow-hidden rounded-[4px] border border-foreground/15 bg-card"
+    >
+      <div className="grid lg:grid-cols-[1.35fr_0.65fr]">
+        <div className="p-6 sm:p-8">
+          <div className="flex items-start gap-3.5">
+            <span className={`${QUIET_ICON_TILE} mt-0.5 size-10`}>
+              <Fingerprint className="size-[18px]" aria-hidden="true" />
+            </span>
+            <div className="max-w-2xl">
+              <p className="ledger-label text-primary">SBOL Identity</p>
+              <h2 className="mt-1.5 text-balance text-2xl font-semibold tracking-[-0.025em]">
+                Sign in with your SBOL Identity.
+              </h2>
+              <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+                Use one registry account across compatible synthetic biology
+                applications, then choose what each application or agent may
+                access.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-7 grid gap-5 sm:grid-cols-3">
+            {identityBenefits.map(({ icon: Icon, title, description }) => (
+              <div key={title}>
+                <Icon className="size-4 text-primary" aria-hidden="true" />
+                <h3 className="mt-3 text-sm font-semibold">{title}</h3>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  {description}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex flex-col border-t bg-zinc-950 p-6 text-zinc-100 lg:border-l lg:border-t-0 sm:p-8">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+            Example application
+          </p>
+          <div
+            className="mt-5 rounded-xl border border-white/10 bg-white/[0.04] p-5"
+            role="img"
+            aria-label="Example application sign-in screen using SBOL Identity"
+          >
+            <div className="flex items-center gap-3">
+              <span className="flex size-9 items-center justify-center rounded-[3px] border border-white/10 bg-white/5 text-sky-300">
+                <Fingerprint className="size-4" aria-hidden="true" />
+              </span>
+              <div>
+                <p className="text-sm font-semibold">SynBioSuite</p>
+                <p className="mt-0.5 text-[10px] text-zinc-500">
+                  https://synbiosuite.org/
+                </p>
+              </div>
+            </div>
+
+            <h3 className="mt-6 text-lg font-semibold tracking-[-0.015em]">
+              Sign in with your SBOL Identity
+            </h3>
+            <p className="mt-2 text-xs leading-5 text-zinc-400">
+              SynBioSuite will receive:
+            </p>
+            <div className="mt-3 space-y-2 border-y border-white/10 py-3 text-xs text-zinc-300">
+              <div className="flex items-center gap-2">
+                <Check
+                  className="size-3.5 text-emerald-300"
+                  aria-hidden="true"
+                />
+                Name and SBOL DB profile
+              </div>
+              <div className="flex items-center gap-2">
+                <Check
+                  className="size-3.5 text-emerald-300"
+                  aria-hidden="true"
+                />
+                Email address
+              </div>
+            </div>
+
+            <div className="mt-4 flex h-9 items-center justify-center gap-2 rounded-[3px] bg-sky-300 px-4 text-xs font-semibold text-zinc-950 shadow-sm shadow-sky-500/20">
+              <Fingerprint className="size-3.5" aria-hidden="true" />
+              Continue with SBOL
+            </div>
+            <p className="mt-3 text-center text-[10px] leading-4 text-zinc-500">
+              You can revoke access from your SBOL account.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
-function McpDocumentation() {
+function McpDocumentation({ serverAddress }: { serverAddress: string }) {
   const clipboard = useCopyToClipboard();
   const copyLabel = clipboard.copied
     ? "Server address copied"
@@ -345,8 +658,8 @@ function McpDocumentation() {
       <div className="grid lg:grid-cols-[1.35fr_0.65fr]">
         <div className="p-6 sm:p-8">
           <div className="flex items-start gap-3.5">
-            <span className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-[3px] border-l-2 border-primary bg-primary/10 text-primary">
-              <Bot className="size-[18px]" />
+            <span className={`${QUIET_ICON_TILE} mt-0.5 size-10`}>
+              <Cable className="size-[18px]" />
             </span>
             <div className="max-w-2xl">
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">
@@ -356,8 +669,9 @@ function McpDocumentation() {
                 Let your agent work safely with biological designs.
               </h2>
               <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-                Find designs, prepare changes, and move reviews forward—without
-                stepping outside your SBOL DB permissions.
+                Find designs, prepare exact changes, and move reviews forward
+                while staying inside your approved OAuth scopes and SBOL DB
+                permissions.
               </p>
             </div>
           </div>
@@ -376,8 +690,12 @@ function McpDocumentation() {
                 Connect your agent
               </p>
               <h3 className="mt-2 text-lg font-semibold tracking-[-0.015em]">
-                Add SBOL DB in a few clicks.
+                Add this registry as an MCP server.
               </h3>
+              <p className="mt-2 text-xs leading-5 text-zinc-400">
+                Use an MCP client that supports Streamable HTTP and browser
+                OAuth.
+              </p>
             </div>
           </div>
 
@@ -387,14 +705,14 @@ function McpDocumentation() {
             </p>
             <div className="mt-2 flex items-center gap-3">
               <code className="min-w-0 flex-1 break-all text-[13px] font-medium text-zinc-100">
-                {MCP_SERVER_ADDRESS}
+                {serverAddress}
               </code>
               <button
                 type="button"
-                onClick={() => clipboard.copy(MCP_SERVER_ADDRESS)}
+                onClick={() => clipboard.copy(serverAddress)}
                 aria-label={copyLabel}
                 title={copyLabel}
-                className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sky-300 text-zinc-950 shadow-sm shadow-sky-500/20 transition-colors hover:bg-sky-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
+                className="flex size-8 shrink-0 items-center justify-center rounded-[3px] bg-sky-300 text-zinc-950 shadow-sm shadow-sky-500/20 transition-[background-color,transform] duration-150 [transition-timing-function:var(--ease-out)] hover:bg-sky-200 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 motion-reduce:transition-none"
               >
                 {clipboard.copied ? (
                   <Check className="size-4" />
@@ -416,13 +734,13 @@ function McpDocumentation() {
             />
             <ConnectionStep
               number="2"
-              title="Sign in to SBOL DB"
-              description="Use your normal registry account when your agent prompts you."
+              title="Sign in on SBOL DB"
+              description="The registry opens in your browser and names the capabilities your agent is requesting."
             />
             <ConnectionStep
               number="3"
-              title="Start with a request"
-              description="Ask your agent to find, validate, share, or review a design."
+              title="Approve the initial scope"
+              description="Begin with read access. Additional capabilities are requested only when a task needs them."
             />
           </ol>
 
@@ -432,12 +750,12 @@ function McpDocumentation() {
                 <LockKeyhole className="mt-0.5 size-4 shrink-0 text-sky-300" />
                 <div>
                   <p className="text-xs font-medium text-zinc-100">
-                    Your access rules still apply.
+                    Exact audience, exact account.
                   </p>
                   <p className="mt-1 text-xs leading-5 text-zinc-400">
-                    Your agent can only see and change what you can. Public,
-                    shared, and private designs continue to follow your SBOL DB
-                    permissions.
+                    API and identity tokens cannot be replayed at MCP. The grant
+                    is bound to this server, OAuth client, account, and approved
+                    scopes.
                   </p>
                 </div>
               </div>
@@ -445,7 +763,68 @@ function McpDocumentation() {
           </div>
         </div>
       </div>
+      <PreparedChangeDocumentation />
     </div>
+  );
+}
+
+function PreparedChangeDocumentation() {
+  return (
+    <div className="border-t border-foreground/15 bg-muted/15 p-6 sm:p-8">
+      <div className="grid gap-7 lg:grid-cols-[0.72fr_1.28fr] lg:items-start">
+        <div>
+          <p className="ledger-label text-primary">Prepared changes</p>
+          <h3 className="mt-3 text-balance text-2xl font-semibold tracking-[-0.025em]">
+            Your agent proposes. You review. SBOL DB applies exactly that
+            change.
+          </h3>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">
+            Your agent's mutations are two-step workflows. Preparation validates
+            the complete payload and returns a human-readable effect. Registry
+            data does not change until the one-time plan is applied.
+          </p>
+        </div>
+        <ol className="grid gap-px border bg-foreground/15 sm:grid-cols-3">
+          <PreparedStep
+            number="01"
+            title="Prepare"
+            description="Check permissions, content, identities, collisions, and the current design baseline."
+          />
+          <PreparedStep
+            number="02"
+            title="Review"
+            description="Show the intended effect, input fingerprint, expiry, and opaque one-time plan token."
+          />
+          <PreparedStep
+            number="03"
+            title="Apply"
+            description="Consume the stored payload once. Replay, substitution, expiry, or stale state fails closed."
+          />
+        </ol>
+      </div>
+    </div>
+  );
+}
+
+function PreparedStep({
+  number,
+  title,
+  description,
+}: {
+  number: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <li className="bg-card p-4 sm:p-5">
+      <span className="font-mono text-[10px] tracking-[0.16em] text-primary">
+        {number}
+      </span>
+      <h4 className="mt-3 text-sm font-semibold">{title}</h4>
+      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        {description}
+      </p>
+    </li>
   );
 }
 
@@ -486,7 +865,7 @@ function CapabilityGroup({
 }: CapabilityGroupProps) {
   return (
     <article className="border-t pt-5 first:border-t-0 first:pt-0 sm:border-l sm:border-t-0 sm:pl-5 sm:pt-0 sm:first:border-l-0 sm:first:pl-0">
-      <span className="flex size-8 items-center justify-center rounded-lg border border-primary/10 bg-primary/10 text-primary">
+      <span className={`${QUIET_ICON_TILE} size-8`}>
         <Icon className="size-[15px]" />
       </span>
       <h3 className="mt-3 text-sm font-semibold tracking-[-0.015em]">

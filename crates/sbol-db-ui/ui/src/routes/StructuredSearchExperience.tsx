@@ -5,7 +5,8 @@ import {
   ChevronRight,
   Database,
   Dna,
-  Sparkles,
+  Network,
+  Tags,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
@@ -35,6 +36,12 @@ export function StructuredSearchExperience({
   query: string;
 }) {
   const copy = structuredSearchCopy(method.input);
+  const EmptySearchIcon =
+    method.input === "sequence"
+      ? Dna
+      : method.input === "similar"
+        ? Network
+        : Tags;
   const [params, setParams] = useSearchParams();
   const cursor = params.get("cursor") || undefined;
   const limit = boundedLimit(params.get("limit"));
@@ -190,11 +197,7 @@ export function StructuredSearchExperience({
 
         {!query ? (
           <div className="mt-5 rounded-xl border border-dashed bg-muted/10 px-6 py-14 text-center">
-            {method.input === "sequence" ? (
-              <Dna className="mx-auto size-7 text-primary" />
-            ) : (
-              <Sparkles className="mx-auto size-7 text-primary" />
-            )}
+            <EmptySearchIcon className="mx-auto size-7 text-primary" />
             <h2 className="mt-4 font-medium">{copy.emptyTitle}</h2>
             <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
               {copy.emptyDescription} The selected method and its settings stay

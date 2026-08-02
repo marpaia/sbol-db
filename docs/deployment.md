@@ -123,7 +123,6 @@ Built-in handlers ship in `sbol-db-jobs::handlers`. Today:
 |---|---|
 | `import_document` | Async equivalent of `POST /graphs`. Payload is the inline import body, format (`turtle`, `jsonld`, `rdfxml`, `ntriples`, `genbank`, or `fasta`), optional namespace, and metadata; `result` is the `ImportReport`. |
 | `import_remote_document` | Worker-side public HTTPS fetch followed by the same import pipeline. Payload is `{url, format, namespace?, document_iri?, name?, description?, created_by?}`; the worker rejects non-HTTPS, local, and private-address URLs before fetching. |
-| `import_synbiohub_collection` | Enumerate a remote SynBioHub collection and enqueue bounded child import jobs. |
 | `rebuild_search_index` | Reconcile sequence sketches/clusters, PageRank, and the shared ranked-text index from authoritative storage. |
 | `rebuild_vector_index` | Embed the complete derived object view into a new vector generation, then atomically activate it. |
 | `maintain_vector_index` | Resolve the generation active at execution time and synchronize named desired-state documents into it. |

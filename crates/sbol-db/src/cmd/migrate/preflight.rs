@@ -26,7 +26,7 @@ use sqlx::{Row, SqlitePool};
 use crate::cmd::migrate::rdf_format_for;
 use crate::output::print_json;
 
-pub(crate) const MANIFEST_SCHEMA: &str = "sbol-db.synbiohub-preflight.v1";
+pub(crate) const MANIFEST_SCHEMA: &str = "sbol-db.synbiohub-preflight.v2";
 const REDACTED_CONFIG_VALUE: &str = "[REDACTED: read from verified source at import time]";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const SBOL2_COLLECTION: &str = "http://sbols.org/v2#Collection";
@@ -41,6 +41,7 @@ pub struct PreflightInputs {
     pub source: Option<PathBuf>,
     pub virtuoso_db: Option<PathBuf>,
     pub rdf: Option<PathBuf>,
+    pub rdf_normalization_report: Option<PathBuf>,
     pub sqlite: Option<PathBuf>,
     pub uploads: Option<PathBuf>,
     pub config: Option<PathBuf>,
@@ -55,7 +56,15 @@ pub struct PreflightInputs {
 pub struct ResolvedSource {
     pub root: Option<PathBuf>,
     pub virtuoso_db: Option<PathBuf>,
+    /// Strictly parseable artifact used by the importer.
     pub rdf: Option<PathBuf>,
+    /// Immutable raw Virtuoso export from which `rdf` was normalized.
+    #[serde(default)]
+    pub rdf_raw: Option<PathBuf>,
+    #[serde(default)]
+    pub rdf_normalization_policy: Option<PathBuf>,
+    #[serde(default)]
+    pub rdf_normalization_report: Option<PathBuf>,
     pub sqlite: Option<PathBuf>,
     pub sqlite_wal: Option<PathBuf>,
     pub sqlite_shm: Option<PathBuf>,
@@ -433,6 +442,17 @@ pub(crate) async fn inspect(inputs: PreflightInputs) -> Result<PreflightReport> 
     let mut artifacts = Vec::new();
     add_artifact(&mut artifacts, "virtuoso_db", source.virtuoso_db.as_deref())?;
     add_artifact(&mut artifacts, "rdf_export", source.rdf.as_deref())?;
+    add_artifact(&mut artifacts, "rdf_export_raw", source.rdf_raw.as_deref())?;
+    add_artifact(
+        &mut artifacts,
+        "rdf_normalization_policy",
+        source.rdf_normalization_policy.as_deref(),
+    )?;
+    add_artifact(
+        &mut artifacts,
+        "rdf_normalization_report",
+        source.rdf_normalization_report.as_deref(),
+    )?;
     add_artifact(&mut artifacts, "sqlite", source.sqlite.as_deref())?;
     add_artifact(&mut artifacts, "sqlite_wal", source.sqlite_wal.as_deref())?;
     add_artifact(&mut artifacts, "sqlite_shm", source.sqlite_shm.as_deref())?;
@@ -486,6 +506,7 @@ fn resolve_source(inputs: &PreflightInputs) -> Result<ResolvedSource> {
     if inputs.source.is_none()
         && inputs.virtuoso_db.is_none()
         && inputs.rdf.is_none()
+        && inputs.rdf_normalization_report.is_none()
         && inputs.sqlite.is_none()
         && inputs.uploads.is_none()
         && inputs.config.is_none()
@@ -498,11 +519,41 @@ fn resolve_source(inputs: &PreflightInputs) -> Result<ResolvedSource> {
         root,
         &["virtuoso.db", "virtuoso/virtuoso.db"],
     );
-    let rdf = explicit_or_discovered(
+    let mut rdf = explicit_or_discovered(
         &inputs.rdf,
         root,
         &["dump.nq", "dump.nquads", "dump.trig", "dumps/dump.nq"],
     );
+    let mut rdf_raw = None;
+    let mut rdf_normalization_policy = None;
+    let mut rdf_normalization_report = None;
+    if let Some(report_path) = &inputs.rdf_normalization_report {
+        let normalization = super::normalize::verify_report(report_path)?;
+        if let Some(explicit_rdf) = &inputs.rdf {
+            let explicit = std::fs::canonicalize(explicit_rdf).with_context(|| {
+                format!(
+                    "canonicalizing explicit RDF path {}",
+                    explicit_rdf.display()
+                )
+            })?;
+            let normalized =
+                std::fs::canonicalize(&normalization.normalized.path).with_context(|| {
+                    format!(
+                        "canonicalizing normalized RDF path {}",
+                        normalization.normalized.path.display()
+                    )
+                })?;
+            if explicit != normalized {
+                bail!(
+                    "--rdf does not name the normalized artifact bound by --rdf-normalization-report"
+                );
+            }
+        }
+        rdf = Some(normalization.normalized.path);
+        rdf_raw = Some(normalization.raw.path);
+        rdf_normalization_policy = Some(normalization.policy.path);
+        rdf_normalization_report = Some(report_path.clone());
+    }
     let sqlite = explicit_or_discovered(
         &inputs.sqlite,
         root,
@@ -533,6 +584,9 @@ fn resolve_source(inputs: &PreflightInputs) -> Result<ResolvedSource> {
         root: inputs.source.clone(),
         virtuoso_db,
         rdf,
+        rdf_raw,
+        rdf_normalization_policy,
+        rdf_normalization_report,
         sqlite,
         sqlite_wal,
         sqlite_shm,
@@ -1824,6 +1878,7 @@ mod tests {
             source: Some(root.path().to_path_buf()),
             virtuoso_db: None,
             rdf: None,
+            rdf_normalization_report: None,
             sqlite: None,
             uploads: None,
             config: None,
@@ -2021,6 +2076,7 @@ mod tests {
             source: None,
             virtuoso_db: None,
             rdf: Some(fixtures.join("dump.nq")),
+            rdf_normalization_report: None,
             sqlite: Some(sqlite),
             uploads: Some(uploads),
             config: Some(fixtures.join("config.local.json")),

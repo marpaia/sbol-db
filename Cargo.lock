@@ -4009,6 +4009,7 @@ dependencies = [
  "clap",
  "flate2",
  "hex",
+ "oxiri",
  "oxrdf",
  "oxrdfio",
  "sbol",

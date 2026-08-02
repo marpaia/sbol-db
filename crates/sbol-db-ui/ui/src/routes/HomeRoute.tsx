@@ -20,7 +20,6 @@ import {
   usePortalSearch,
   useSession,
 } from "@/features/portal/queries";
-import { PRODUCT_NAME } from "@/lib/product";
 
 export default function HomeRoute() {
   const navigate = useNavigate();
@@ -44,9 +43,10 @@ export default function HomeRoute() {
               <span className="block">biological designs.</span>
             </h1>
             <p className="mt-7 max-w-2xl text-pretty text-base leading-7 text-muted-foreground sm:text-lg">
-              Search {PRODUCT_NAME} for parts, systems, sequences, and
-              collections. Every result keeps its SBOL identity, provenance, and
-              machine-readable representation close at hand.
+              Search for individual biological parts, systems built from those
+              parts, DNA, RNA, and protein sequences, and collections of related
+              designs. Find the context and structured data needed to evaluate,
+              exchange, and reuse each design.
             </p>
             <SearchBox
               size="hero"
@@ -58,9 +58,15 @@ export default function HomeRoute() {
               }
             />
             <dl className="mt-7 grid max-w-3xl gap-px overflow-hidden border-y border-foreground/15 bg-foreground/15 text-xs sm:grid-cols-3">
-              <RegistryFact term="Scope" detail="ACL-aware records" />
-              <RegistryFact term="Standard" detail="SBOL 2 and SBOL 3" />
-              <RegistryFact term="Access" detail="REST, RDF, and files" />
+              <RegistryFact
+                term="Formats"
+                detail="SBOL2, SBOL3, GenBank, FASTA"
+              />
+              <RegistryFact term="Interfaces" detail="REST API, CLI, MCP" />
+              <RegistryFact
+                term="Discovery"
+                detail="Keyword, semantic, sequence"
+              />
             </dl>
           </div>
           <RegistryPrimer />
@@ -282,8 +288,8 @@ function RegistryPrimer() {
     },
   ];
   return (
-    <aside className="flex flex-col justify-center bg-card/45 px-4 py-12 sm:px-6 lg:px-10 lg:py-20 xl:px-14">
-      <div className="border border-foreground/20 bg-background/85">
+    <aside className="flex flex-col items-center justify-center bg-background px-4 py-12 sm:px-6 lg:w-[calc(100%+max(0px,calc(50vw-45rem)))] lg:px-10 lg:py-20 xl:px-14">
+      <div className="w-full max-w-2xl border border-foreground/20 bg-muted/35">
         <div className="flex items-center justify-between border-b border-foreground/15 px-4 py-3">
           <span className="ledger-label text-muted-foreground">
             Anatomy of a record
@@ -294,9 +300,9 @@ function RegistryPrimer() {
         </div>
         <div className="border-b border-foreground/15 bg-muted/15 px-4 py-5 sm:px-5">
           <p className="font-display text-xl font-medium tracking-[-0.02em]">
-            What makes a design reusable.
+            What makes a biological design reusable?
           </p>
-          <p className="mt-2 max-w-md text-xs leading-5 text-muted-foreground">
+          <p className="mt-2 text-xs leading-5 text-muted-foreground">
             Reusable designs preserve their identity, composition, function, and
             provenance as they move between people, tools, and repositories.
           </p>

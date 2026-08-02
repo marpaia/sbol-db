@@ -54,7 +54,8 @@ flowchart LR
   A["Frozen classic snapshot"] --> B["Pinned Virtuoso private-copy export"]
   A --> C["Read-only SQLite private copy"]
   A --> D["Upload and config inventory"]
-  B --> E["Content-addressed preflight manifest"]
+  B --> Q["Digest-addressed IRI normalization"]
+  Q --> E["Content-addressed preflight manifest"]
   C --> E
   D --> E
   E --> F["Explicit blocker and graph policy"]
@@ -116,7 +117,33 @@ uses `dump_nquads`, concatenates fragments in name order, atomically publishes
 the output, and prints the final size and SHA-256. It refuses to overwrite an
 existing export.
 
-## 2. Produce the preflight manifest
+## 2. Normalize invalid legacy IRIs
+
+Keep the Virtuoso export immutable. If strict N-Quads parsing identifies
+legacy IRIs that are not valid absolute IRIs, review the complete inventory
+and record every accepted rewrite in an exact-count, digest-addressed policy.
+Then produce a new artifact and provenance report:
+
+```sh
+cargo run -p sbol-db -- normalize-synbiohub-rdf \
+  --input /snapshot/export/production.nq \
+  --output /snapshot/export/production.normalized.nq \
+  --policy /evidence/iri-normalization-policy.json \
+  --report /evidence/rdf-normalization.json
+```
+
+The normalizer scans only N-Quads IRI tokens, never literal contents. It
+decodes N-Quads Unicode escapes before validation, validates every resulting
+IRI as absolute, rejects unapproved invalid IRIs and target collisions, and
+checks the policy's exact occurrence, replacement, IRI-role, and graph counts.
+`percent_encode_spaces` preserves a malformed absolute IRI by encoding its
+spaces. `map_relative_iri_to_urn` preserves an otherwise base-less relative
+reference injectively under `urn:synbiohub:legacy-relative-iri:` rather than
+inventing an ontology namespace. The output is strictly reparsed and must have
+the same quad count as the input. Existing output and report files are never
+overwritten.
+
+## 3. Produce the preflight manifest
 
 Preflight does not open a target database. SQLite is inspected from a private
 copy including its WAL/SHM sidecars. The RDF parser and blob verifier stream
@@ -125,15 +152,16 @@ their inputs with bounded buffers.
 ```sh
 cargo run -p sbol-db -- preflight-synbiohub \
   --source /snapshot \
-  --rdf /snapshot/export/production.nq \
+  --rdf /snapshot/export/production.normalized.nq \
+  --rdf-normalization-report /evidence/rdf-normalization.json \
   --config-defaults /path/to/classic-synbiohub/config.json \
   --report /evidence/synbiohub-preflight.json
 ```
 
 The manifest commits to:
 
-- byte size and SHA-256 for the raw database, RDF export, SQLite main/WAL/SHM,
-  and configuration files;
+- byte size and SHA-256 for the raw database, raw and normalized RDF exports,
+  normalization policy/report, SQLite main/WAL/SHM, and configuration files;
 - a logical SHA-256 over all classic account fields in source-id order;
 - every upload's expected SHA-1, content SHA-1, compressed SHA-256, compressed
   and uncompressed size, and gzip validity;
@@ -153,7 +181,7 @@ again from the hash-verified source files, not from the redacted preview.
 Do not use `--allow-blockers` for a cutover manifest. That flag exists only so
 an operator can save an incomplete inventory while fixing its source.
 
-## 3. Resolve policy explicitly
+## 4. Resolve policy explicitly
 
 No blocker can be ignored at the command line. If an exceptional source issue
 is accepted, record its code and a non-empty reason in a policy file. Every
@@ -175,7 +203,7 @@ is to preserve every such graph.
 The production importer does not support an `exclude` disposition: a run that
 drops a source graph cannot claim to be a 1:1 migration.
 
-## 4. Rehearse on a disposable Postgres target
+## 5. Rehearse on a disposable Postgres target
 
 Use a fresh database and a blob root whose `uploads/` path is absent or empty.
 
@@ -222,7 +250,7 @@ fingerprints, identities, and the promoted upload tree.
 `--no-reindex` is useful only for loader development. A cutover is not ready
 until the derived-index job succeeds.
 
-## 5. Runtime configuration
+## 6. Runtime configuration
 
 Run the server with durable paths and the original classic salts supplied from
 the deployment's secret manager:
@@ -245,7 +273,7 @@ The original password salt is required until every legacy SHA-1 credential has
 successfully logged in and transparently upgraded to Argon2 or has been reset.
 The share-link salt preserves already-issued private-object share URLs.
 
-## 6. Cutover gates
+## 7. Cutover gates
 
 Record all evidence against the exact manifest/run pair. Do not switch traffic
 until all gates pass:

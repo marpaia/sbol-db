@@ -45,6 +45,7 @@ sbol-rdf.workspace = true
 sqlx = { workspace = true, features = ["sqlite"] }
 oxrdf.workspace = true
 oxrdfio.workspace = true
+oxiri.workspace = true
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true

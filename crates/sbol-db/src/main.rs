@@ -32,12 +32,30 @@ async fn main() -> Result<()> {
         return cmd::util::run(action).await;
     }
 
+    // RDF acquisition and normalization are target-free and preserve the raw
+    // export, so they must not open or mutate a destination database.
+    if let Command::NormalizeSynbiohubRdf {
+        input,
+        output,
+        policy,
+        report,
+    } = cli.command
+    {
+        return cmd::migrate::normalize::run(cmd::migrate::normalize::NormalizeInputs {
+            input,
+            output,
+            policy,
+            report,
+        });
+    }
+
     // Source preflight is intentionally target-free: it must work before a
     // destination database exists and must never mutate one accidentally.
     if let Command::PreflightSynbiohub {
         source,
         virtuoso_db,
         rdf,
+        rdf_normalization_report,
         sqlite,
         uploads,
         config,
@@ -50,6 +68,7 @@ async fn main() -> Result<()> {
             source,
             virtuoso_db,
             rdf,
+            rdf_normalization_report,
             sqlite,
             uploads,
             config,
@@ -142,6 +161,7 @@ async fn main() -> Result<()> {
             .await
         }
         Command::PreflightSynbiohub { .. } => unreachable!("handled before backend open"),
+        Command::NormalizeSynbiohubRdf { .. } => unreachable!("handled before backend open"),
         Command::Util { .. } => unreachable!("handled before backend open"),
     }
 }

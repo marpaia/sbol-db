@@ -155,9 +155,14 @@ async fn docs_page_renders_three_surfaces_in_one_reference() {
         assert!(
             docs_body.contains("class=\"sbol-docs-header\"")
                 && docs_body.contains("data-sbol-docs-shell")
-                && docs_body.contains("sbol-mark-promoter")
+                && docs_body.contains("m 29.000111,5.2464081 8.5,7.4999999 -8.5,7.3333")
+                && docs_body.contains("m 7.5001114,39.746408 0,-27 28.9999996,0")
+                && docs_body.contains("--sbol-brand-promoter: hsl(171 66% 31%)")
+                && docs_body.contains("--sbol-brand-promoter: hsl(178 55% 60%)")
+                && !docs_body.contains("sbol-mark-cds")
+                && !docs_body.contains("sbol-mark-terminator")
                 && docs_body.contains(">Back to registry</span>"),
-            "the {name} docs page includes the product identity and return affordance"
+            "the {name} docs page uses the registry promoter mark and includes the return affordance"
         );
     }
 }

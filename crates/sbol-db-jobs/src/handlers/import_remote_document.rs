@@ -233,14 +233,14 @@ mod tests {
 
     #[test]
     fn accepts_public_https_urls() {
-        let url = validate_public_https_url("https://synbiohub.org/public/igem/BBa_B0034/1/sbol")
+        let url = validate_public_https_url("https://example.org/designs/example.xml")
             .expect("public URL");
         assert_eq!(url.scheme(), "https");
     }
 
     #[test]
     fn rejects_non_https_urls() {
-        let err = validate_public_https_url("http://synbiohub.org/public/igem/BBa_B0034/1/sbol")
+        let err = validate_public_https_url("http://example.org/designs/example.xml")
             .expect_err("http must be rejected");
         assert!(err.to_string().contains("https"));
     }
