@@ -62,8 +62,8 @@ export default function PublicObjectRoute() {
   return (
     <>
       <ObjectHeader object={data} />
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
-        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] xl:gap-8">
+      <div className="mx-auto max-w-[90rem] px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
+        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] xl:gap-8">
           <div className="min-w-0 space-y-6">
             <ObjectIdentity object={data} />
             <ObjectProvenance object={data} />
@@ -117,7 +117,7 @@ function ObjectPageSkeleton() {
   return (
     <div aria-label="Loading object">
       <div className="border-b bg-muted/10">
-        <div className="mx-auto max-w-7xl space-y-5 px-4 py-9 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-[90rem] space-y-5 px-4 py-9 sm:px-6 lg:px-8">
           <Skeleton className="h-5 w-28" />
           <div className="flex gap-4">
             <Skeleton className="size-14 shrink-0 rounded-xl" />
@@ -129,7 +129,7 @@ function ObjectPageSkeleton() {
           </div>
         </div>
       </div>
-      <div className="mx-auto grid max-w-7xl gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:px-8">
+      <div className="mx-auto grid max-w-[90rem] gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:px-8">
         <div className="space-y-6">
           <Skeleton className="h-80 rounded-xl" />
           <Skeleton className="h-64 rounded-xl" />

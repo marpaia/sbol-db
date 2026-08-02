@@ -19,8 +19,8 @@ export interface SchemaSidebarProps {
 
 export function SchemaSidebar({ dialect, onInsert }: SchemaSidebarProps) {
   return (
-    <div className="h-full w-full overflow-y-auto border-r bg-background">
-      <div className="flex items-center gap-2 border-b px-3 py-2 text-[11px] uppercase tracking-wider text-muted-foreground">
+    <div className="h-full w-full overflow-y-auto border-r bg-card/35">
+      <div className="flex items-center gap-2 border-b border-t-2 border-t-sbol-promoter bg-background/60 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
         {dialect === "sql" ? (
           <>
             <Database size={12} /> Tables

@@ -128,7 +128,7 @@ async fn docs_page_renders_three_surfaces_in_one_reference() {
             "the {name} docs page does not retain Scalar's purple theme"
         );
         assert!(
-            docs_body.contains("--scalar-color-accent: hsl(178 60% 32%)")
+            docs_body.contains("--scalar-color-accent: hsl(171 66% 25%)")
                 && docs_body.contains("--scalar-sidebar-background-1")
                 && docs_body.contains("--scalar-custom-header-height: 64px"),
             "the {name} docs page carries the shared SBOL DB Scalar theme"
@@ -154,6 +154,8 @@ async fn docs_page_renders_three_surfaces_in_one_reference() {
         );
         assert!(
             docs_body.contains("class=\"sbol-docs-header\"")
+                && docs_body.contains("data-sbol-docs-shell")
+                && docs_body.contains("sbol-mark-promoter")
                 && docs_body.contains(">Back to registry</span>"),
             "the {name} docs page includes the product identity and return affordance"
         );

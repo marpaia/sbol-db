@@ -1,16 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="6" fill="#1a8482" />
-  <g
-    fill="none"
-    stroke="#ffffff"
-    stroke-width="2.2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  >
-    <path d="M5 9c5 0 6 14 11 14s6-14 11-14" />
-    <path d="M5 23c5 0 6-14 11-14s6 14 11 14" />
-    <path d="M8 11v10" />
-    <path d="M24 11v10" />
-    <path d="M16 13v6" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45" fill="none">
+  <!-- Official SBOL Visual 3.0 promoter; see src/assets/sbol-glyphs/README.md. -->
+  <style>
+    .promoter { stroke: #1b8474; }
+    @media (prefers-color-scheme: dark) { .promoter { stroke: #61d1cd; } }
+  </style>
+  <g class="promoter" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m 29.000111,5.2464081 8.5,7.4999999 -8.5,7.3333" />
+    <path d="m 7.5001114,39.746408 0,-27 28.9999996,0" />
   </g>
 </svg>

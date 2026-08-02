@@ -58,7 +58,7 @@ export function ObjectProvenance({ object }: { object: PortalObjectDetails }) {
         />
       </dl>
 
-      <div className="mt-5 rounded-xl border bg-muted/10 p-4">
+      <div className="mt-5 border-l-2 border-primary bg-muted/15 p-4">
         <div className="text-xs font-medium text-muted-foreground">
           Source graph
         </div>
@@ -100,7 +100,7 @@ function Fact({
   title?: string;
 }) {
   return (
-    <div className="rounded-xl border bg-card p-3.5">
+    <div className="border border-foreground/15 bg-card p-3.5">
       <dt className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
         <Icon className="size-3.5" aria-hidden="true" /> {label}
       </dt>
@@ -122,7 +122,7 @@ function ValueList({ label, values }: { label: string; values: string[] }) {
           {values.map((value) => (
             <li
               key={value}
-              className="break-words rounded-lg bg-muted/35 px-3 py-2 text-sm leading-5"
+              className="break-words border-l border-foreground/20 bg-muted/35 px-3 py-2 text-sm leading-5"
               title={value}
             >
               {safeUrl(value) ? (

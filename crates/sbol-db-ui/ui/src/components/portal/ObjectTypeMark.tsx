@@ -19,11 +19,12 @@ export function ObjectTypeMark({
   objectType: string | null | undefined;
   className?: string;
 }) {
-  const Icon = iconForObjectType(objectType);
+  const { Icon, tone } = visualForObjectType(objectType);
   return (
     <span
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/10",
+        "flex shrink-0 items-center justify-center border border-foreground/15 border-l-2 bg-background/60",
+        tone,
         className
       )}
       aria-hidden="true"
@@ -33,18 +34,31 @@ export function ObjectTypeMark({
   );
 }
 
-function iconForObjectType(objectType: string | null | undefined) {
+function visualForObjectType(objectType: string | null | undefined) {
   const type = shortIri(objectType).toLowerCase();
-  if (type.includes("collection")) return FolderArchive;
-  if (type.includes("sequence")) return Braces;
-  if (type.includes("component")) return Dna;
+  if (type.includes("collection")) {
+    return { Icon: FolderArchive, tone: "border-l-sbol-rbs text-sbol-rbs" };
+  }
+  if (type.includes("sequence")) {
+    return { Icon: Braces, tone: "border-l-sbol-promoter text-sbol-promoter" };
+  }
+  if (type.includes("component")) {
+    return { Icon: Dna, tone: "border-l-sbol-cds text-sbol-cds" };
+  }
   if (type.includes("interaction") || type.includes("participation")) {
-    return Network;
+    return {
+      Icon: Network,
+      tone: "border-l-sbol-terminator text-sbol-terminator",
+    };
   }
   if (type.includes("experiment") || type.includes("implementation")) {
-    return FlaskConical;
+    return { Icon: FlaskConical, tone: "border-l-sbol-rbs text-sbol-rbs" };
   }
-  if (type.includes("attachment")) return Paperclip;
-  if (type.includes("module") || type.includes("system")) return Boxes;
-  return Box;
+  if (type.includes("attachment")) {
+    return { Icon: Paperclip, tone: "border-l-primary text-primary" };
+  }
+  if (type.includes("module") || type.includes("system")) {
+    return { Icon: Boxes, tone: "border-l-sbol-cds text-sbol-cds" };
+  }
+  return { Icon: Box, tone: "border-l-muted-foreground text-muted-foreground" };
 }

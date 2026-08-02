@@ -71,7 +71,7 @@ export function parseDiscoveryParams(
         1000
       ),
     },
-    view: params.get("view") === "list" ? "list" : "grid",
+    view: params.get("view") === "grid" ? "grid" : "list",
     compatibilityWarnings: params
       .getAll("compat_warning")
       .map((warning) => warning.trim())

@@ -128,16 +128,13 @@ export function MachineAccessSection() {
   return (
     <section
       id="machine-access"
-      className="relative scroll-mt-16 overflow-hidden border-y bg-muted/20"
+      className="registry-field relative scroll-mt-16 overflow-hidden border-y border-foreground/15 bg-muted/20"
     >
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_85%_8%,hsl(var(--primary)/0.12),transparent_28%)]" />
-      <div className="relative mx-auto max-w-7xl px-4 py-14 sm:px-6 sm:py-16 lg:px-8">
+      <div className="relative mx-auto max-w-[90rem] px-4 py-14 sm:px-6 sm:py-16 lg:px-8">
         <div className="grid gap-8 lg:grid-cols-[1.05fr_0.95fr] lg:items-end">
           <div>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-primary">
-              Machine access
-            </p>
-            <h1 className="mt-3 max-w-3xl text-balance text-3xl font-semibold tracking-[-0.025em] sm:text-4xl">
+            <p className="ledger-label text-primary">Machine access</p>
+            <h1 className="mt-3 max-w-3xl text-balance text-4xl font-medium tracking-[-0.03em] sm:text-5xl">
               One design language for people, pipelines, and agents.
             </h1>
           </div>
@@ -221,9 +218,9 @@ function CapabilityStep({
   description,
 }: CapabilityStepProps) {
   return (
-    <li className="relative rounded-2xl border bg-card/90 p-4 shadow-sm backdrop-blur sm:p-5">
+    <li className="relative border border-foreground/15 border-t-2 border-t-primary/60 bg-card/90 p-4 sm:p-5">
       <div className="flex items-center justify-between gap-3">
-        <span className="relative z-10 flex size-12 items-center justify-center rounded-xl border bg-background text-primary shadow-sm">
+        <span className="relative z-10 flex size-12 items-center justify-center rounded-[3px] border bg-background text-primary">
           <Icon className="size-5" />
         </span>
         <span className="font-mono text-[10px] tracking-[0.18em] text-muted-foreground">
@@ -240,7 +237,7 @@ function CapabilityStep({
 
 function CliPreview() {
   return (
-    <div className="self-start overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 text-zinc-100 shadow-xl shadow-primary/5">
+    <div className="self-start overflow-hidden rounded-[4px] border border-white/10 bg-zinc-950 text-zinc-100 shadow-xl shadow-primary/5">
       <div className="flex items-center gap-2 border-b border-white/10 px-5 py-3.5">
         <span className="size-2.5 rounded-full bg-red-400/80" />
         <span className="size-2.5 rounded-full bg-amber-300/80" />
@@ -295,10 +292,8 @@ function RegistryPromise() {
   ];
 
   return (
-    <div className="rounded-2xl border bg-card p-5 shadow-sm sm:p-6">
-      <p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">
-        SBOL DB CLI
-      </p>
+    <div className="border border-foreground/15 border-l-2 border-l-primary bg-card p-5 sm:p-6">
+      <p className="ledger-label text-primary">SBOL DB CLI</p>
       <h2 className="mt-2 text-xl font-semibold tracking-tight">
         Keep the biological and social context together.
       </h2>
@@ -345,12 +340,12 @@ function McpDocumentation() {
   return (
     <div
       id="mcp"
-      className="mt-8 scroll-mt-24 overflow-hidden rounded-3xl border bg-card shadow-sm"
+      className="mt-8 scroll-mt-24 overflow-hidden rounded-[4px] border border-foreground/15 bg-card"
     >
       <div className="grid lg:grid-cols-[1.35fr_0.65fr]">
         <div className="p-6 sm:p-8">
           <div className="flex items-start gap-3.5">
-            <span className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-xl border border-primary/10 bg-primary/10 text-primary shadow-sm">
+            <span className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-[3px] border-l-2 border-primary bg-primary/10 text-primary">
               <Bot className="size-[18px]" />
             </span>
             <div className="max-w-2xl">

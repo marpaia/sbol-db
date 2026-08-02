@@ -6,9 +6,9 @@ import { cn } from "@/lib/utils";
 export type SurfaceDensity = "comfortable" | "compact" | "workbench";
 
 const surfaceDensity: Record<SurfaceDensity, string> = {
-  comfortable: "rounded-xl shadow-sm",
-  compact: "rounded-lg",
-  workbench: "rounded-md",
+  comfortable: "rounded-[4px] shadow-[0_1px_0_hsl(var(--foreground)/0.06)]",
+  compact: "rounded-[3px]",
+  workbench: "rounded-[2px]",
 };
 
 const headerDensity: Record<SurfaceDensity, string> = {
@@ -73,7 +73,7 @@ export function ProductSurfaceHeader({
     >
       <div className="flex min-w-0 items-start gap-3.5">
         {Icon && (
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-inset ring-primary/10">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-[3px] border-l-2 border-primary bg-primary/10 text-primary">
             <Icon className="size-4" aria-hidden="true" />
           </span>
         )}
