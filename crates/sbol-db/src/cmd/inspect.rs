@@ -91,6 +91,7 @@ pub async fn run(stats: Arc<dyn DbStats>, action: InspectAction) -> Result<()> {
                 "lab_sql_row_cap_max": cfg.lab_sql_row_cap_max,
                 "allow_public_signup": cfg.allow_public_signup,
                 "sparql_write_enabled": cfg.sparql_write_enabled,
+                "https_security_headers": cfg.https_security_headers,
                 "cors": cors,
                 "setup_token_configured": cfg.setup_token_hash.is_some(),
             }))

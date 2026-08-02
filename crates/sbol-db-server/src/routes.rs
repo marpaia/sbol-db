@@ -38,6 +38,15 @@ pub async fn healthz() -> &'static str {
 }
 
 pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
+    if !state.metrics.tls_ready_for_traffic() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "status": "not_ready",
+                "reason": "TLS certificate has not been deployed"
+            })),
+        );
+    }
     match tokio::time::timeout(READYZ_TIMEOUT, state.service.ping()).await {
         Ok(Ok(())) => (StatusCode::OK, Json(json!({ "status": "ready" }))),
         Ok(Err(err)) => (

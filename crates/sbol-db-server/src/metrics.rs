@@ -8,6 +8,7 @@
 //! requests that didn't match a route are bucketed as `unmatched`.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -40,6 +41,9 @@ pub struct Metrics {
     api_pool: Option<PgPool>,
     worker_pool: std::sync::Mutex<Option<PgPool>>,
     jobs: std::sync::Mutex<Option<Arc<dyn JobQueue>>>,
+    tls_required: AtomicBool,
+    tls_ready: AtomicBool,
+    tls_not_after_unix: AtomicI64,
 }
 
 static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
@@ -91,7 +95,51 @@ impl Metrics {
             api_pool: pool,
             worker_pool: std::sync::Mutex::new(None),
             jobs: std::sync::Mutex::new(None),
+            tls_required: AtomicBool::new(false),
+            tls_ready: AtomicBool::new(false),
+            tls_not_after_unix: AtomicI64::new(0),
         })
+    }
+
+    /// Require a deployed TLS certificate before `/readyz` reports success.
+    /// Called before the operations router is published for an ACME listener.
+    pub fn require_tls(&self) {
+        self.tls_required.store(true, Ordering::Release);
+        self.tls_ready.store(false, Ordering::Release);
+        self.tls_not_after_unix.store(0, Ordering::Release);
+        metrics::gauge!("sbol_db_tls_certificate_ready").set(0.0);
+    }
+
+    /// Mark the current ACME certificate as installed in rustls. Both a valid
+    /// cached certificate and a newly issued certificate satisfy readiness.
+    pub fn mark_tls_ready(&self, not_after_unix: i64) {
+        self.tls_not_after_unix
+            .store(not_after_unix, Ordering::Release);
+        self.tls_ready.store(true, Ordering::Release);
+        self.snapshot_tls();
+    }
+
+    /// Whether the process may receive public traffic under its TLS policy.
+    pub fn tls_ready_for_traffic(&self) -> bool {
+        !self.tls_required.load(Ordering::Acquire)
+            || (self.tls_ready.load(Ordering::Acquire)
+                && self.tls_not_after_unix.load(Ordering::Acquire) > Utc::now().timestamp())
+    }
+
+    fn snapshot_tls(&self) {
+        if !self.tls_required.load(Ordering::Acquire) {
+            return;
+        }
+        let not_after = self.tls_not_after_unix.load(Ordering::Acquire);
+        let remaining = not_after.saturating_sub(Utc::now().timestamp()).max(0);
+        metrics::gauge!("sbol_db_tls_certificate_ready").set(if self.tls_ready_for_traffic() {
+            1.0
+        } else {
+            0.0
+        });
+        metrics::gauge!("sbol_db_tls_certificate_not_after_timestamp_seconds")
+            .set(not_after.max(0) as f64);
+        metrics::gauge!("sbol_db_tls_certificate_expires_in_seconds").set(remaining as f64);
     }
 
     /// Attach the worker connection pool. Enables the
@@ -205,6 +253,7 @@ impl Metrics {
     }
 
     async fn render(&self) -> String {
+        self.snapshot_tls();
         if let Some(pool) = self.api_pool.as_ref() {
             Self::snapshot_pool("sbol_db", pool);
         }

@@ -25,6 +25,7 @@ const LOCK_FILE: &str = "LOCK";
 #[derive(Debug)]
 pub struct ServerRuntime {
     profile: RuntimeProfile,
+    data_root: PathBuf,
     database_url: String,
     blob_root: PathBuf,
     layout: Option<ManagedDataLayout>,
@@ -74,6 +75,7 @@ impl ServerRuntime {
                 let blob_root = layout.blob_root().to_path_buf();
                 Ok(Self {
                     profile,
+                    data_root: layout.root().to_path_buf(),
                     database_url,
                     blob_root,
                     layout: Some(layout),
@@ -90,6 +92,7 @@ impl ServerRuntime {
                 prepare_directory(&blob_root, "blob root")?;
                 Ok(Self {
                     profile,
+                    data_root: data_dir,
                     database_url,
                     blob_root,
                     layout: None,
@@ -104,6 +107,12 @@ impl ServerRuntime {
 
     pub fn database_url(&self) -> &str {
         &self.database_url
+    }
+
+    /// Root for process-level durable state such as ACME account and
+    /// certificate material. In production this is the managed layout root.
+    pub fn data_root(&self) -> &Path {
+        &self.data_root
     }
 
     pub fn blob_root(&self) -> &Path {
