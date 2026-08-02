@@ -1,31 +1,29 @@
 import { cn } from "@/lib/utils";
 
-/** A compact SBOL design signature: promoter, CDS, and terminator on one rail. */
+/**
+ * The official SBOL Visual 3.0 promoter glyph, used as the compact product
+ * mark at sizes where a complete cassette would lose legibility.
+ */
 export function BrandMark({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "flex aspect-square size-8 items-center justify-center rounded-[4px] border border-foreground/20 bg-card text-foreground shadow-[0_1px_0_hsl(var(--foreground)/0.08)]",
+        "flex aspect-square size-8 items-center justify-center text-foreground",
         className
       )}
       aria-hidden="true"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 32 32"
+        viewBox="0 0 45 45"
         fill="none"
-        strokeWidth={1.8}
+        strokeWidth={3}
         strokeLinecap="round"
         strokeLinejoin="round"
-        className="size-5"
+        className="size-[78%] stroke-sbol-promoter"
       >
-        <path d="M3 23H29" className="stroke-foreground/35" />
-        <path d="M5 22V10h6m0 0-3-3m3 3-3 3" className="stroke-sbol-promoter" />
-        <path
-          d="M13 16h7l4 4-4 4h-7z"
-          className="fill-sbol-cds/15 stroke-sbol-cds"
-        />
-        <path d="M27 12v11m-4-11h8" className="stroke-sbol-terminator" />
+        <path d="m 29.000111,5.2464081 8.5,7.4999999 -8.5,7.3333" />
+        <path d="m 7.5001114,39.746408 0,-27 28.9999996,0" />
       </svg>
     </div>
   );

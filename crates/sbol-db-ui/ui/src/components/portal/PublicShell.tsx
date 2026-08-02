@@ -16,7 +16,6 @@ import type { LucideIcon } from "lucide-react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 
 import { BrandMark } from "@/components/lab/BrandMark";
-import { SbolDesignRail } from "@/components/portal/SbolDesignRail";
 import { ProductAccountMenu } from "@/components/product/ProductAccountMenu";
 import { Button } from "@/components/ui/button";
 import {
@@ -65,8 +64,8 @@ export default function PublicShell() {
       <header className="sticky top-0 z-40 border-b border-foreground/15 bg-background/94 backdrop-blur-xl supports-[backdrop-filter]:bg-background/82">
         <div className="flex h-1" aria-hidden="true">
           <span className="flex-1 bg-sbol-promoter" />
-          <span className="flex-[2] bg-sbol-cds" />
-          <span className="flex-1 bg-sbol-rbs" />
+          <span className="flex-[2] bg-sbol-rbs" />
+          <span className="flex-1 bg-sbol-cds" />
           <span className="flex-1 bg-sbol-terminator" />
         </div>
         <div className="mx-auto flex h-[4.25rem] w-full max-w-[90rem] items-center gap-7 px-4 sm:px-6 lg:px-8">
@@ -168,39 +167,32 @@ export default function PublicShell() {
         <Outlet />
       </main>
 
-      <footer className="border-t border-foreground/15 bg-foreground text-background">
-        <SbolDesignRail
-          compact
-          className="border-background/15 bg-background/5"
-        />
-        <div className="mx-auto grid max-w-[90rem] gap-8 px-4 py-10 text-xs text-background/65 sm:grid-cols-[1.4fr_0.6fr] sm:px-6 lg:px-8">
+      <footer className="border-t border-foreground/15 bg-card text-card-foreground">
+        <div className="mx-auto grid max-w-[90rem] gap-8 px-4 py-10 text-xs text-muted-foreground sm:grid-cols-[1.4fr_0.6fr] sm:px-6 lg:px-8">
           <div className="flex max-w-xl items-start gap-3">
-            <BrandMark className="size-8 border-background/25 bg-background/10 [&_svg]:text-background" />
+            <BrandMark className="size-8" />
             <div>
-              <div className="font-mono text-sm font-semibold tracking-[0.08em] text-background">
+              <div className="font-mono text-sm font-semibold tracking-[0.08em] text-foreground">
                 {PRODUCT_NAME}
               </div>
-              <p className="mt-1 leading-5">
-                {deployment || PRODUCT_TAGLINE}. Identity, provenance, and
-                biological structure remain attached to every design.
-              </p>
+              <p className="mt-1 leading-5">{deployment || PRODUCT_TAGLINE}.</p>
             </div>
           </div>
           <div className="flex flex-wrap content-start gap-x-5 gap-y-3 sm:justify-end">
             <Link
-              className="text-background/70 hover:text-background"
+              className="text-muted-foreground hover:text-foreground"
               to="/connect"
             >
               Connect tools
             </Link>
             <a
-              className="text-background/70 hover:text-background"
+              className="text-muted-foreground hover:text-foreground"
               href="/api/v2/docs"
             >
               API reference
             </a>
             <a
-              className="text-background/70 hover:text-background"
+              className="text-muted-foreground hover:text-foreground"
               href="https://sbolstandard.org"
               target="_blank"
               rel="noopener noreferrer"

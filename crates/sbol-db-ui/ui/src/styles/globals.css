@@ -47,20 +47,20 @@
     --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
     --motion-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 
-    /* SBOL Visual category hues. Bound to top-level nav groups. */
-    --sbol-promoter: 30 88% 48%;
-    --sbol-cds: 171 66% 31%;
+    /* SBOL DB presentation hues; SBOL Visual does not prescribe these colors. */
+    --sbol-promoter: 171 66% 31%;
+    --sbol-cds: 30 88% 48%;
     --sbol-terminator: 353 65% 52%;
     --sbol-rbs: 269 46% 55%;
 
-    --sidebar-background: 218 35% 13%;
-    --sidebar-foreground: 40 18% 83%;
-    --sidebar-primary: 168 57% 57%;
-    --sidebar-primary-foreground: 218 35% 10%;
-    --sidebar-accent: 214 24% 20%;
-    --sidebar-accent-foreground: 42 28% 94%;
-    --sidebar-border: 215 22% 23%;
-    --sidebar-ring: 168 57% 57%;
+    --sidebar-background: 40 26% 94%;
+    --sidebar-foreground: 218 30% 18%;
+    --sidebar-primary: 171 66% 25%;
+    --sidebar-primary-foreground: 42 40% 98%;
+    --sidebar-accent: 40 25% 89%;
+    --sidebar-accent-foreground: 218 30% 15%;
+    --sidebar-border: 39 16% 80%;
+    --sidebar-ring: 171 66% 30%;
   }
 
   .dark {
@@ -96,8 +96,8 @@
     --ring: 168 57% 57%;
     --rule: 40 20% 82%;
 
-    --sbol-promoter: 28 75% 62%;
-    --sbol-cds: 178 55% 60%;
+    --sbol-promoter: 178 55% 60%;
+    --sbol-cds: 28 75% 62%;
     --sbol-terminator: 348 60% 65%;
     --sbol-rbs: 268 55% 70%;
 
@@ -163,15 +163,11 @@
 
   .registry-field {
     background-color: hsl(var(--background));
-    background-image:
-      linear-gradient(90deg, hsl(var(--sbol-promoter) / 0.08), transparent 24%),
-      repeating-linear-gradient(
-        0deg,
-        transparent 0,
-        transparent 31px,
-        hsl(var(--border) / 0.34) 31px,
-        hsl(var(--border) / 0.34) 32px
-      );
+    background-image: linear-gradient(
+      90deg,
+      hsl(var(--sbol-promoter) / 0.07),
+      transparent 24%
+    );
   }
 
   .ledger-rule {

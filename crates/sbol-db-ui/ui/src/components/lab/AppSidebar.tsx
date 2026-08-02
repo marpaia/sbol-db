@@ -212,17 +212,8 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
         </SidebarMenu>
         <ProductModeSwitch
           mode="admin"
-          className="w-full justify-stretch bg-sidebar-accent/35 [&>a]:flex-1 [&>a]:justify-center group-data-[collapsible=icon]:hidden"
+          className="group-data-[collapsible=icon]:hidden"
         />
-        <div
-          className="flex h-1 overflow-hidden rounded-[2px] group-data-[collapsible=icon]:hidden"
-          aria-hidden="true"
-        >
-          <span className="flex-1 bg-sbol-promoter" />
-          <span className="flex-[2] bg-sbol-cds" />
-          <span className="flex-1 bg-sbol-rbs" />
-          <span className="flex-1 bg-sbol-terminator" />
-        </div>
       </SidebarHeader>
 
       <SidebarContent>
