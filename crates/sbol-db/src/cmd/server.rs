@@ -152,7 +152,10 @@ pub async fn run(
     // `/similar` and the ranked search.
     if let Some(setup) = worker_setup.as_mut() {
         setup.search = Some(SearchIndexHandles {
-            cluster: backend.cluster.clone(),
+            // Use the facade's invalidating wrapper so a completed rebuild is
+            // visible to the next ranked request immediately instead of after
+            // the production cluster-map cache TTL.
+            cluster: app_services.cluster.clone(),
             pagerank: backend.pagerank.clone(),
             sketch: backend.sketch.clone(),
             text_index: app_services.text_search.clone(),

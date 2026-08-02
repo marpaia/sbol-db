@@ -15,7 +15,7 @@ use sbol_db_core::{DomainError, NewUser, User, UserId};
 use sbol_db_storage::UserStore;
 use uuid::Uuid;
 
-use crate::db::Db;
+use crate::db::{Db, SEP};
 
 const CF_USERS: &str = "users";
 const CF_BY_USERNAME: &str = "users_by_username";
@@ -34,6 +34,31 @@ impl RocksdbUserStore {
             writes: Arc::new(Mutex::new(())),
         }
     }
+
+    /// Import already-materialized accounts without regenerating ids or
+    /// timestamps. Backend conversion uses this to preserve the production
+    /// identity rows exactly, including classic duplicate-email accounts.
+    pub async fn import_exact(&self, users: Vec<User>) -> Result<(), DomainError> {
+        let db = self.db.clone();
+        let writes = self.writes.clone();
+        blocking(move || {
+            let _guard = writes.lock().unwrap();
+            let mut batch = WriteBatch::default();
+            for user in &users {
+                if let Some(existing) = db.get_cf(CF_BY_USERNAME, user.username.as_bytes())? {
+                    if existing.as_slice() != user.id.as_uuid().as_bytes() {
+                        return Err(DomainError::Database(format!(
+                            "username `{}` already belongs to another account",
+                            user.username
+                        )));
+                    }
+                }
+                stage_user(&db, &mut batch, user)?;
+            }
+            db.write(batch)
+        })
+        .await
+    }
 }
 
 #[async_trait]
@@ -47,12 +72,6 @@ impl UserStore for RocksdbUserStore {
                 return Err(DomainError::Database(format!(
                     "username `{}` already exists",
                     new_user.username
-                )));
-            }
-            if db.exists_cf(CF_BY_EMAIL, new_user.email.as_bytes())? {
-                return Err(DomainError::Database(format!(
-                    "email `{}` already exists",
-                    new_user.email
                 )));
             }
             let now = Utc::now();
@@ -84,16 +103,32 @@ impl UserStore for RocksdbUserStore {
         let db = self.db.clone();
         let identifier = identifier.to_owned();
         blocking(move || {
-            let id = match db.get_cf(CF_BY_USERNAME, identifier.as_bytes())? {
-                Some(bytes) => Some(user_id_from_bytes(&bytes)?),
-                None => match db.get_cf(CF_BY_EMAIL, identifier.as_bytes())? {
-                    Some(bytes) => Some(user_id_from_bytes(&bytes)?),
-                    None => None,
-                },
-            };
-            match id {
-                Some(id) => get_user(&db, id),
-                None => Ok(None),
+            if let Some(bytes) = db.get_cf(CF_BY_USERNAME, identifier.as_bytes())? {
+                return get_user(&db, user_id_from_bytes(&bytes)?);
+            }
+            let prefix = email_prefix(&identifier);
+            let mut ids = Vec::new();
+            db.for_each_prefix(CF_BY_EMAIL, &prefix, |key, _| {
+                ids.push(user_id_from_email_key(&prefix, key)?);
+                Ok(ids.len() < 2)
+            })?;
+            // Version-1 databases used one direct `email -> id` row. Include
+            // that row during the transition; once the same user is rewritten
+            // into the composite index, dedup keeps it from looking ambiguous.
+            if ids.len() < 2 {
+                if let Some(legacy) = db.get_cf(CF_BY_EMAIL, identifier.as_bytes())? {
+                    let id = user_id_from_bytes(&legacy)?;
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+            }
+            match ids.len() {
+                0 => Ok(None),
+                1 => get_user(&db, ids[0]),
+                _ => Err(DomainError::Validation(
+                    "multiple accounts use this email; log in with your username".to_owned(),
+                )),
             }
         })
         .await
@@ -210,7 +245,13 @@ impl UserStore for RocksdbUserStore {
             let mut batch = WriteBatch::default();
             batch.delete_cf(&db.cf(CF_USERS), id.as_uuid().as_bytes());
             batch.delete_cf(&db.cf(CF_BY_USERNAME), user.username.as_bytes());
-            batch.delete_cf(&db.cf(CF_BY_EMAIL), user.email.as_bytes());
+            batch.delete_cf(&db.cf(CF_BY_EMAIL), email_key(&user.email, id));
+            if db
+                .get_cf(CF_BY_EMAIL, user.email.as_bytes())?
+                .is_some_and(|legacy| legacy.as_slice() == id.as_uuid().as_bytes())
+            {
+                batch.delete_cf(&db.cf(CF_BY_EMAIL), user.email.as_bytes());
+            }
             db.write(batch)?;
             Ok(true)
         })
@@ -236,12 +277,35 @@ impl UserStore for RocksdbUserStore {
 
 /// Write an account plus its username/email lookup entries in one batch.
 fn put_user(db: &Db, user: &User) -> Result<(), DomainError> {
-    let id_bytes = user.id.as_uuid().into_bytes();
     let mut batch = WriteBatch::default();
+    stage_user(db, &mut batch, user)?;
+    db.write(batch)
+}
+
+fn stage_user(db: &Db, batch: &mut WriteBatch, user: &User) -> Result<(), DomainError> {
+    let id_bytes = user.id.as_uuid().into_bytes();
     batch.put_cf(&db.cf(CF_USERS), id_bytes, encode(user)?);
     batch.put_cf(&db.cf(CF_BY_USERNAME), user.username.as_bytes(), id_bytes);
-    batch.put_cf(&db.cf(CF_BY_EMAIL), user.email.as_bytes(), id_bytes);
-    db.write(batch)
+    batch.put_cf(&db.cf(CF_BY_EMAIL), email_key(&user.email, user.id), []);
+    Ok(())
+}
+
+fn email_prefix(email: &str) -> Vec<u8> {
+    let mut key = email.as_bytes().to_vec();
+    key.push(SEP);
+    key
+}
+
+fn email_key(email: &str, id: UserId) -> Vec<u8> {
+    let mut key = email_prefix(email);
+    key.extend_from_slice(id.as_uuid().as_bytes());
+    key
+}
+
+fn user_id_from_email_key(prefix: &[u8], key: &[u8]) -> Result<UserId, DomainError> {
+    key.strip_prefix(prefix)
+        .ok_or_else(|| DomainError::Database("email index key has the wrong prefix".into()))
+        .and_then(user_id_from_bytes)
 }
 
 fn get_user(db: &Db, id: UserId) -> Result<Option<User>, DomainError> {

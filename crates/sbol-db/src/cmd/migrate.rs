@@ -53,6 +53,7 @@ use sqlx::{Row, SqlitePool};
 pub mod normalize;
 pub mod preflight;
 pub mod production;
+pub mod rocksdb;
 
 /// The default filenames a migration looks for under `--source` when a part is
 /// not given its own explicit path.

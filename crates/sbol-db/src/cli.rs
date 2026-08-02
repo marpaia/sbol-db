@@ -261,6 +261,25 @@ pub enum Command {
         #[arg(long)]
         no_reindex: bool,
     },
+
+    /// Copy a reconciled production SynBioHub import from Postgres to RocksDB.
+    ///
+    /// The source is the global `--database-url` and must contain one ready
+    /// production-migration ledger. The destination is bound to that source,
+    /// populated in bounded idempotent pages, and fully cardinality-reconciled.
+    CopyPostgresToRocksdb {
+        /// Fresh or resumable RocksDB directory.
+        #[arg(long)]
+        destination: PathBuf,
+        /// Source/read and destination/write page size.
+        #[arg(long, default_value_t = 25_000)]
+        chunk_size: usize,
+        /// Explicitly omit only terminal job history. Queued/running jobs are
+        /// always blockers; canonical data, identities, tokens, configuration,
+        /// and derived search state are always copied.
+        #[arg(long)]
+        omit_completed_job_history: bool,
+    },
 }
 
 // -----------------------------------------------------------------------

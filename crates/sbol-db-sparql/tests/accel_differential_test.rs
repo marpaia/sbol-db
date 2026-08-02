@@ -176,6 +176,34 @@ fn templates() -> Vec<(&'static str, String)> {
          ?subject sbh:topLevel ?subject . \
          OPTIONAL{{?subject sbol2:role ?role}} }}"
     );
+    let search_by_type = format!(
+        "{prefixes}\
+         SELECT DISTINCT ?subject ?displayId WHERE {{ \
+         ?subject a sbol2:ComponentDefinition . ?subject a ?type . \
+         ?subject sbh:topLevel ?subject . \
+         OPTIONAL{{?subject sbol2:displayId ?displayId}} }} LIMIT 50"
+    );
+    let search_by_type_and_role = format!(
+        "{prefixes}\
+         SELECT DISTINCT ?subject WHERE {{ \
+         ?subject a sbol2:ComponentDefinition . \
+         ?subject sbol2:role <http://identifiers.org/so/SO:0000167> . \
+         ?subject sbh:topLevel ?subject }}"
+    );
+    let root_collections = format!(
+        "{prefixes}\
+         SELECT ?object ?name WHERE {{ ?object a sbol2:Collection . \
+         FILTER NOT EXISTS {{ ?otherCollection sbol2:member ?object }} \
+         OPTIONAL{{?object dcterms:title ?name}} }}"
+    );
+    let root_toplevel_collections = format!(
+        "{prefixes}\
+         SELECT DISTINCT ?subject ?displayId ?type WHERE {{ \
+         ?subject a sbol2:Collection . \
+         FILTER NOT EXISTS {{ ?otherCollection sbol2:member ?subject }} \
+         ?subject a ?type . ?subject sbh:topLevel ?subject . \
+         OPTIONAL{{?subject sbol2:displayId ?displayId}} }}"
+    );
     let get_collections = format!(
         "{prefixes}\
          SELECT DISTINCT ?subject ?displayId ?name WHERE {{ ?subject a sbol2:Collection . \
@@ -195,6 +223,14 @@ fn templates() -> Vec<(&'static str, String)> {
     );
     let facet_creators =
         format!("{prefixes}SELECT DISTINCT ?object WHERE {{ ?tl dc:creator ?object }}");
+    let facet_type_counts = format!(
+        "{prefixes}SELECT ?value (COUNT(DISTINCT ?subject) AS ?count) WHERE {{ \
+         ?subject a ?value . ?subject sbh:topLevel ?subject }} GROUP BY ?value"
+    );
+    let facet_role_counts = format!(
+        "{prefixes}SELECT ?value (COUNT(DISTINCT ?subject) AS ?count) WHERE {{ \
+         ?subject sbol2:role ?value . ?subject sbh:topLevel ?subject }} GROUP BY ?value"
+    );
     let members_all = format!(
         "{prefixes}\
          SELECT DISTINCT ?uri ?displayId ?name ?description ?type ?sbolType ?role WHERE {{ \
@@ -239,11 +275,17 @@ fn templates() -> Vec<(&'static str, String)> {
         ("search", search),
         ("search_count", search_count),
         ("search_by_role", search_by_role),
+        ("search_by_type", search_by_type),
+        ("search_by_type_and_role", search_by_type_and_role),
+        ("root_collections", root_collections),
+        ("root_toplevel_collections", root_toplevel_collections),
         ("get_collections", get_collections),
         ("count_by_type", count_by_type),
         ("facet_types", facet_types),
         ("facet_roles", facet_roles),
         ("facet_creators", facet_creators),
+        ("facet_type_counts", facet_type_counts),
+        ("facet_role_counts", facet_role_counts),
         ("members_all", members_all),
         ("members_root", members_root),
         ("count_members", count_members),

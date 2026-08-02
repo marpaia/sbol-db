@@ -250,7 +250,55 @@ fingerprints, identities, and the promoted upload tree.
 `--no-reindex` is useful only for loader development. A cutover is not ready
 until the derived-index job succeeds.
 
-## 6. Runtime configuration
+## 6. Convert a reconciled Postgres rehearsal to RocksDB
+
+RocksDB is an embedded, single-host deployment target. Convert only from a
+Postgres import whose production migration run is already `ready`, while every
+API server and worker that can write to that Postgres database is stopped:
+
+```sh
+sbol-db \
+  --database-url postgres://sbol:REDACTED@127.0.0.1:5432/sbol_rehearsal \
+  copy-postgres-to-rocksdb \
+  --destination /var/lib/sbol-db/production.rocksdb \
+  --chunk-size 25000 \
+  --omit-completed-job-history
+```
+
+The command refuses an active job, an unverified graph or accelerator ledger,
+a dirty accelerator graph, a source without exactly one ready production run,
+or a non-empty RocksDB destination belonging to another source. It also refuses
+typed SBOL documents, objects, sequences, or ontologies because this conversion
+path currently targets the verbatim classic SynBioHub corpus; accepting those
+rows would silently omit native SBOL DB state.
+
+Users, duplicate-email identity semantics, timestamps, password hashes, roles,
+API-token hashes, configuration, verbatim graph IRIs and triples, query
+accelerators, PageRank, sequence clusters, sketches, and LSH bands are copied
+exactly. Completed job history is operational history rather than registry
+state, so omitting it requires the explicit flag shown above. Blobs and the
+ranked text index remain in their durable filesystem paths and are reused at
+runtime.
+
+Every page commits its source keyset checkpoint in the same RocksDB batch as
+its data. Rerun the identical command after an interruption; it resumes safely.
+The target is marked `ready` only after the source is re-counted to prove that
+it stayed quiescent and every destination column-family cardinality matches.
+
+Start the first validation server without a worker so no startup reconciliation
+job mutates derived state while API and restore checks run:
+
+```sh
+sbol-db \
+  --database-url rocksdb:///var/lib/sbol-db/production.rocksdb \
+  server --bind 127.0.0.1:8888 --no-worker
+```
+
+RocksDB admits one local process opening the database and is not a shared
+multi-node backend. After validation, enable a worker only on that same host
+when the deployment is ready to process new writes and maintenance jobs.
+
+## 7. Runtime configuration
 
 Run the server with durable paths and the original classic salts supplied from
 the deployment's secret manager:
@@ -273,7 +321,7 @@ The original password salt is required until every legacy SHA-1 credential has
 successfully logged in and transparently upgraded to Argon2 or has been reset.
 The share-link salt preserves already-issued private-object share URLs.
 
-## 7. Cutover gates
+## 8. Cutover gates
 
 Record all evidence against the exact manifest/run pair. Do not switch traffic
 until all gates pass:

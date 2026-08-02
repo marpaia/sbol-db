@@ -4020,6 +4020,7 @@ dependencies = [
  "sbol-db-jobs",
  "sbol-db-postgres",
  "sbol-db-rdf",
+ "sbol-db-rocksdb",
  "sbol-db-search",
  "sbol-db-search-faiss",
  "sbol-db-search-sdk",

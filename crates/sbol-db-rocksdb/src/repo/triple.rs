@@ -115,6 +115,40 @@ impl TripleRepository {
         Ok(inserted)
     }
 
+    /// Stage triples from a trusted, set-valued backend export without the
+    /// get-before-put membership probe used by interactive writes. Replaying a
+    /// page is safe because every dictionary/index key is content-derived and
+    /// a repeated RocksDB put replaces the identical value. This is the
+    /// bounded production-copy primitive; it avoids tens of millions of point
+    /// reads while retaining exact set semantics.
+    pub(crate) fn stage_bulk_insert(
+        &self,
+        batch: &mut WriteBatch,
+        triples: &[Triple],
+    ) -> Result<usize, DomainError> {
+        let mut seen = HashSet::with_capacity(triples.len());
+        let mut seen_terms = HashSet::with_capacity(triples.len());
+        let mut inserted = 0;
+        for triple in triples {
+            let (terms, quad, count) = Self::decompose(triple);
+            let primary_key = quad.key(Self::primary(&quad));
+            if !seen.insert(primary_key) {
+                continue;
+            }
+            let id2term = self.db.cf("id2term");
+            for (id, term) in &terms[..count] {
+                if seen_terms.insert(*id) {
+                    batch.put_cf(&id2term, id, term.encode());
+                }
+            }
+            for index in Self::indexes_for(&quad) {
+                batch.put_cf(&self.db.cf(index.cf), quad.key(*index), []);
+            }
+            inserted += 1;
+        }
+        Ok(inserted)
+    }
+
     /// Stage deletion of every triple matching one of `triples` on all RDF
     /// positions. Returns the count actually present and deleted.
     pub fn stage_delete(

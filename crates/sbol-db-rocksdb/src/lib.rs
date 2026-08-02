@@ -8,6 +8,7 @@
 //! hand-built over their own column families to match the contract the SQL
 //! backends implement.
 
+mod bulk;
 mod codec;
 mod db;
 mod jobs;
@@ -21,6 +22,10 @@ use std::path::Path;
 
 use sbol_db_core::DomainError;
 
+pub use bulk::{
+    AccelCountImport, AccelCountKind, AccelFacetImport, AccelMemberImport, AccelObjectImport,
+    RocksdbBulkLoader, SketchBandImport, SketchImport,
+};
 pub use db::Db;
 pub use jobs::RocksdbJobs;
 pub use migrate::RocksdbMigrator;

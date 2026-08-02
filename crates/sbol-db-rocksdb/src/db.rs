@@ -84,6 +84,7 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     "acc_byrole",     // graph + SEP + role + SEP + displayId + SEP + iri -> ()
     "acc_member",     // graph + SEP + collection + SEP + displayId + SEP + iri -> ()
     "acc_rootmember", // graph + SEP + collection + SEP + displayId + SEP + iri -> () (anti-join)
+    "acc_member_of",  // graph + SEP + member iri -> () (reverse-membership existence)
     "acc_facet",      // graph + SEP + kind + SEP + value -> ()
     "acc_count",      // graph + SEP + scope -> u64 LE (precomputed counts)
     "acc_dirty",      // graph -> () (presence = indexes stale, rebuild on next read)

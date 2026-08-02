@@ -79,6 +79,22 @@ async fn main() -> Result<()> {
         .await;
     }
 
+    if let Command::CopyPostgresToRocksdb {
+        destination,
+        chunk_size,
+        omit_completed_job_history,
+    } = cli.command
+    {
+        let source_url = resolve_connection(cli.backend, &cli.database_url)?;
+        return cmd::migrate::rocksdb::run(cmd::migrate::rocksdb::CopyInputs {
+            source_url,
+            destination,
+            chunk_size,
+            omit_completed_job_history,
+        })
+        .await;
+    }
+
     let database_url = resolve_connection(cli.backend, &cli.database_url)?;
     let backend = open_backend(&database_url, &cli.command).await?;
 
@@ -162,6 +178,7 @@ async fn main() -> Result<()> {
         }
         Command::PreflightSynbiohub { .. } => unreachable!("handled before backend open"),
         Command::NormalizeSynbiohubRdf { .. } => unreachable!("handled before backend open"),
+        Command::CopyPostgresToRocksdb { .. } => unreachable!("handled before backend open"),
         Command::Util { .. } => unreachable!("handled before backend open"),
     }
 }

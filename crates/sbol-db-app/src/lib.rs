@@ -86,14 +86,67 @@ use std::time::Instant;
 
 use futures::lock::Mutex as AsyncMutex;
 use sbol_db_backend::Backend;
+use sbol_db_core::DomainError;
 use sbol_db_search::ranked_text::{ClusterMap, RankedTextIndex};
 use sbol_db_search::{SearchDeployment, SearchRuntime, VectorRouter};
 use sbol_db_search_sdk::{IndexMaintenanceEvent, IndexMaintenanceRegistry, IndexMutationSource};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{
-    AclStore, BlobStore, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore,
+    AclStore, BlobStore, ClusterId, ClusterStore, ConfigStore, JobQueue, PageRankStore, SbolStore,
     SketchStore, TokenStore, UserStore,
 };
+
+/// Cache-aware view of a durable cluster store. Every mutation invalidates the
+/// expanded ranking map after the backend commit succeeds, while reads retain
+/// the production-scale TTL/single-flight optimization.
+struct InvalidatingClusterStore {
+    inner: Arc<dyn ClusterStore>,
+    cache: Arc<RwLock<Option<(Instant, Arc<ClusterMap>)>>>,
+}
+
+impl InvalidatingClusterStore {
+    fn new(
+        inner: Arc<dyn ClusterStore>,
+        cache: Arc<RwLock<Option<(Instant, Arc<ClusterMap>)>>>,
+    ) -> Self {
+        Self { inner, cache }
+    }
+
+    fn invalidate(&self) {
+        *self.cache.write().expect("cluster map cache lock poisoned") = None;
+    }
+}
+
+#[async_trait::async_trait]
+impl ClusterStore for InvalidatingClusterStore {
+    async fn cluster_id_of(&self, iri: &str) -> Result<Option<ClusterId>, DomainError> {
+        self.inner.cluster_id_of(iri).await
+    }
+
+    async fn cluster_mates(&self, iri: &str) -> Result<Vec<String>, DomainError> {
+        self.inner.cluster_mates(iri).await
+    }
+
+    async fn replace_clusters(&self, pairs: Vec<(String, ClusterId)>) -> Result<(), DomainError> {
+        self.inner.replace_clusters(pairs).await?;
+        self.invalidate();
+        Ok(())
+    }
+
+    async fn all_assignments(&self) -> Result<Vec<(String, ClusterId)>, DomainError> {
+        self.inner.all_assignments().await
+    }
+
+    async fn assign_cluster(&self, iri: &str, cluster: ClusterId) -> Result<(), DomainError> {
+        self.inner.assign_cluster(iri, cluster).await?;
+        self.invalidate();
+        Ok(())
+    }
+
+    async fn max_cluster_id(&self) -> Result<Option<ClusterId>, DomainError> {
+        self.inner.max_cluster_id().await
+    }
+}
 
 /// The application facade: the neutral trait objects plus the identity-aware
 /// subsystems every HTTP adapter shares.
@@ -246,10 +299,14 @@ impl AppServices {
         cluster: Arc<dyn ClusterStore>,
         sketch: Arc<dyn SketchStore>,
     ) -> Self {
+        let cluster_map_cache = Arc::new(RwLock::new(None));
         self.pagerank = pagerank;
-        self.cluster = cluster;
+        self.cluster = Arc::new(InvalidatingClusterStore::new(
+            cluster,
+            cluster_map_cache.clone(),
+        ));
         self.sketch = sketch;
-        self.cluster_map_cache = Arc::new(RwLock::new(None));
+        self.cluster_map_cache = cluster_map_cache;
         self.cluster_map_refresh = Arc::new(AsyncMutex::new(()));
         // The built-in legacy strategy captures the cluster store. Reset the
         // lazy runtime so it observes the newly installed durable handle.
@@ -493,7 +550,11 @@ impl AppServices {
             std::env::temp_dir().join("sbol-db-blobs"),
         ));
         let pagerank: Arc<dyn PageRankStore> = Arc::new(memory::InMemoryPageRankStore::new());
-        let cluster: Arc<dyn ClusterStore> = Arc::new(memory::InMemoryClusterStore::new());
+        let cluster_map_cache = Arc::new(RwLock::new(None));
+        let cluster: Arc<dyn ClusterStore> = Arc::new(InvalidatingClusterStore::new(
+            Arc::new(memory::InMemoryClusterStore::new()),
+            cluster_map_cache.clone(),
+        ));
         let sketch: Arc<dyn SketchStore> = Arc::new(memory::InMemorySketchStore::new());
         let config: Arc<dyn ConfigStore> = Arc::new(memory::InMemoryConfigStore::new());
         let federation_client: Arc<dyn WebOfRegistriesClient> =
@@ -502,7 +563,6 @@ impl AppServices {
         let expose = Arc::new(plugin::ExposeRegistry::new());
         let stream = Arc::new(plugin::StreamRegistry::new());
         let search_runtime = Arc::new(OnceLock::new());
-        let cluster_map_cache = Arc::new(RwLock::new(None));
         let cluster_map_refresh = Arc::new(AsyncMutex::new(()));
         let search_maintenance = Arc::new(SearchMaintenanceScheduler::new(
             jobs.clone(),
