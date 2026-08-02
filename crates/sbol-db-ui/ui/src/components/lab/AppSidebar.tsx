@@ -202,8 +202,8 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
                   <span className="truncate font-semibold tracking-tight">
                     {PRODUCT_NAME}
                   </span>
-                  <span className="truncate text-xs text-sidebar-foreground/60">
-                    {deployment || "Admin workspace"}
+                  <span className="truncate font-mono text-[10px] uppercase tracking-[0.1em] text-sidebar-foreground/60">
+                    {deployment || "Registry instrument"}
                   </span>
                 </div>
               </NavLink>
@@ -212,7 +212,7 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
         </SidebarMenu>
         <ProductModeSwitch
           mode="admin"
-          className="w-full justify-stretch bg-sidebar-accent/35 [&>a]:flex-1 [&>a]:justify-center group-data-[collapsible=icon]:hidden"
+          className="group-data-[collapsible=icon]:hidden"
         />
       </SidebarHeader>
 

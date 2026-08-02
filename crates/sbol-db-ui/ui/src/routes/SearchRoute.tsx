@@ -125,12 +125,10 @@ function SearchExperience() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
+    <div className="mx-auto w-full max-w-[90rem] px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
       <header className="max-w-4xl">
-        <p className="text-xs font-medium uppercase tracking-[0.16em] text-primary">
-          Registry search
-        </p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-[-0.025em] sm:text-4xl">
+        <p className="ledger-label text-primary">Registry search</p>
+        <h1 className="mt-3 text-4xl font-medium tracking-[-0.03em] sm:text-5xl">
           Search biological designs
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">

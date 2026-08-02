@@ -124,7 +124,7 @@ function DesignTrack({
   const height = featuresY + lanes * (FEATURE_HEIGHT + LANE_GAP) + 36;
 
   return (
-    <div className="overflow-hidden rounded-xl border bg-background">
+    <div className="overflow-hidden border border-foreground/15 bg-background">
       <div className="flex items-center justify-between gap-4 border-b bg-muted/20 px-4 py-2.5 text-[11px] font-medium text-muted-foreground">
         <span>1 bp</span>
         <span>{maximum.toLocaleString()} bp</span>
@@ -190,7 +190,6 @@ function DesignTrack({
                       ? `translate(${x + width} 0) scale(-1 1)`
                       : `translate(${x} 0)`
                   }
-                  className="text-primary"
                 >
                   <Glyph kind={feature.glyph} width={width} y={y} />
                 </g>
@@ -222,12 +221,12 @@ function Glyph({
 }) {
   const middle = y + FEATURE_HEIGHT / 2;
   const bodyWidth = Math.max(8, width - 10);
-  const shared = "fill-primary/15 stroke-primary";
+  const shared = "fill-sbol-cds/15 stroke-sbol-cds";
   if (kind === "promoter") {
     return (
       <path
         d={`M 1 ${y + FEATURE_HEIGHT} V ${y + 4} H ${bodyWidth} M ${bodyWidth - 8} ${y} L ${bodyWidth} ${y + 4} L ${bodyWidth - 8} ${y + 8}`}
-        className="fill-none stroke-primary"
+        className="fill-none stroke-sbol-promoter"
         strokeWidth="2.5"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -247,7 +246,7 @@ function Glyph({
     return (
       <path
         d={`M 1 ${middle} Q ${width / 2} ${y - 5} ${width - 1} ${middle}`}
-        className="fill-none stroke-primary"
+        className="fill-none stroke-sbol-rbs"
         strokeWidth="3"
         strokeLinecap="round"
       />
@@ -257,7 +256,7 @@ function Glyph({
     return (
       <path
         d={`M ${width / 2} ${y + 2} V ${y + FEATURE_HEIGHT} M 2 ${y + 2} H ${width - 2}`}
-        className="fill-none stroke-primary"
+        className="fill-none stroke-sbol-terminator"
         strokeWidth="3"
         strokeLinecap="round"
       />
@@ -271,7 +270,7 @@ function Glyph({
         width={Math.max(12, width - 2)}
         height={FEATURE_HEIGHT - 6}
         rx="2"
-        className={shared}
+        className="fill-sbol-rbs/10 stroke-sbol-rbs"
         strokeWidth="2"
       />
     );

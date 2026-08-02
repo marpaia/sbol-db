@@ -34,15 +34,18 @@ export function WorkbenchShell({
   children,
 }: WorkbenchShellProps) {
   return (
-    <PanelGroup direction="horizontal" className="h-full">
+    <PanelGroup
+      direction="horizontal"
+      className="h-full bg-[linear-gradient(to_bottom,hsl(var(--background)),hsl(var(--background)))]"
+    >
       <Panel defaultSize={18} minSize={10} maxSize={35}>
         <SchemaSidebar dialect={dialect} onInsert={onInsertIntoEditor} />
       </Panel>
-      <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-ring/40" />
+      <PanelResizeHandle className="w-px bg-foreground/15 transition-colors hover:bg-primary" />
       <Panel defaultSize={62} minSize={30}>
         {children}
       </Panel>
-      <PanelResizeHandle className="w-px bg-border transition-colors hover:bg-ring/40" />
+      <PanelResizeHandle className="w-px bg-foreground/15 transition-colors hover:bg-primary" />
       <Panel defaultSize={20} minSize={12} maxSize={35}>
         <PanelGroup direction="vertical" className="h-full">
           <Panel defaultSize={50} minSize={20}>
@@ -52,7 +55,7 @@ export function WorkbenchShell({
               onLoad={onLoadQuery}
             />
           </Panel>
-          <PanelResizeHandle className="h-px bg-border transition-colors hover:bg-ring/40" />
+          <PanelResizeHandle className="h-px bg-foreground/15 transition-colors hover:bg-primary" />
           <Panel defaultSize={50} minSize={20}>
             <QueryHistoryList dialect={dialect} onLoad={onLoadQuery} />
           </Panel>

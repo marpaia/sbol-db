@@ -60,19 +60,25 @@ export default function PublicShell() {
     : navItems;
 
   return (
-    <div className="flex min-h-svh flex-col bg-background">
-      <header className="sticky top-0 z-40 border-b bg-background/90 backdrop-blur-xl supports-[backdrop-filter]:bg-background/75">
-        <div className="mx-auto flex h-16 w-full max-w-7xl items-center gap-6 px-4 sm:px-6 lg:px-8">
+    <div className="public-registry flex min-h-svh flex-col bg-background">
+      <header className="sticky top-0 z-40 border-b border-foreground/15 bg-background/94 backdrop-blur-xl supports-[backdrop-filter]:bg-background/82">
+        <div className="flex h-1" aria-hidden="true">
+          <span className="flex-1 bg-sbol-promoter" />
+          <span className="flex-[2] bg-sbol-rbs" />
+          <span className="flex-1 bg-sbol-cds" />
+          <span className="flex-1 bg-sbol-terminator" />
+        </div>
+        <div className="mx-auto flex h-[4.25rem] w-full max-w-[90rem] items-center gap-7 px-4 sm:px-6 lg:px-8">
           <Link
             to="/"
-            className="flex shrink-0 items-center gap-3 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            className="flex min-w-0 shrink-0 items-center gap-3 rounded-[4px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
-            <BrandMark className="size-9 rounded-xl" />
+            <BrandMark className="size-10" />
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold tracking-tight">
+              <div className="truncate font-mono text-sm font-semibold tracking-[0.08em]">
                 {PRODUCT_NAME}
               </div>
-              <div className="hidden text-[11px] text-muted-foreground sm:block">
+              <div className="hidden text-[10px] uppercase tracking-[0.12em] text-muted-foreground sm:block">
                 {deployment || PRODUCT_TAGLINE}
               </div>
             </div>
@@ -80,7 +86,7 @@ export default function PublicShell() {
 
           <nav
             aria-label="Primary navigation"
-            className="hidden items-center gap-1 xl:flex"
+            className="hidden h-full items-stretch border-l border-foreground/10 xl:flex"
           >
             {visibleNavItems.map((item) =>
               item.external ? (
@@ -89,7 +95,7 @@ export default function PublicShell() {
                   href={item.to}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  className="inline-flex items-center gap-2 border-r border-foreground/10 px-4 text-sm text-muted-foreground transition-colors duration-150 hover:bg-accent/65 hover:text-foreground"
                 >
                   <item.icon className="size-3.5" />
                   {item.label}
@@ -100,10 +106,10 @@ export default function PublicShell() {
                   to={item.to}
                   className={({ isActive }) =>
                     cn(
-                      "inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm transition-colors",
+                      "relative inline-flex items-center gap-2 border-r border-foreground/10 px-4 text-sm transition-colors duration-150 after:absolute after:inset-x-4 after:bottom-0 after:h-0.5 after:origin-left after:scale-x-0 after:bg-primary after:transition-transform after:duration-150 after:[transition-timing-function:var(--ease-out)]",
                       isActive
-                        ? "bg-accent text-accent-foreground"
-                        : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                        ? "bg-accent/55 text-accent-foreground after:scale-x-100"
+                        : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
                     )
                   }
                 >
@@ -148,7 +154,7 @@ export default function PublicShell() {
 
       {instance.data?.setup_required && (
         <div className="border-b border-primary/20 bg-primary/5">
-          <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-2.5 text-sm sm:px-6 lg:px-8">
+          <div className="mx-auto flex max-w-[90rem] items-center justify-between gap-4 px-4 py-2.5 text-sm sm:px-6 lg:px-8">
             <span>This registry needs its first administrator.</span>
             <Button asChild size="sm">
               <Link to="/setup">Set up instance</Link>
@@ -161,24 +167,32 @@ export default function PublicShell() {
         <Outlet />
       </main>
 
-      <footer className="border-t bg-muted/20">
-        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-8 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-          <div className="flex items-center gap-2">
-            <BrandMark className="size-6 rounded-md" />
-            <span>
-              {PRODUCT_NAME}
-              {deployment ? ` · ${deployment}` : ` · ${PRODUCT_TAGLINE}`}
-            </span>
+      <footer className="border-t border-foreground/15 bg-card text-card-foreground">
+        <div className="mx-auto grid max-w-[90rem] gap-8 px-4 py-10 text-xs text-muted-foreground sm:grid-cols-[1.4fr_0.6fr] sm:px-6 lg:px-8">
+          <div className="flex max-w-xl items-start gap-3">
+            <BrandMark className="size-8" />
+            <div>
+              <div className="font-mono text-sm font-semibold tracking-[0.08em] text-foreground">
+                {PRODUCT_NAME}
+              </div>
+              <p className="mt-1 leading-5">{deployment || PRODUCT_TAGLINE}.</p>
+            </div>
           </div>
-          <div className="flex items-center gap-4">
-            <Link className="hover:text-foreground" to="/connect">
+          <div className="flex flex-wrap content-start gap-x-5 gap-y-3 sm:justify-end">
+            <Link
+              className="text-muted-foreground hover:text-foreground"
+              to="/connect"
+            >
               Connect tools
             </Link>
-            <a className="hover:text-foreground" href="/api/v2/docs">
+            <a
+              className="text-muted-foreground hover:text-foreground"
+              href="/api/v2/docs"
+            >
               API reference
             </a>
             <a
-              className="hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground"
               href="https://sbolstandard.org"
               target="_blank"
               rel="noopener noreferrer"
@@ -209,7 +223,7 @@ function MobileNavigation({ authenticated }: { authenticated: boolean }) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56 xl:hidden">
-        <DropdownMenuLabel>Explore SBOL DB</DropdownMenuLabel>
+        <DropdownMenuLabel>Registry index</DropdownMenuLabel>
         <DropdownMenuSeparator />
         {visibleNavItems.map((item) =>
           item.external ? (
