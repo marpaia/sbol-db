@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
+use sbol_db_backup::CompleteBackupService;
 use sbol_db_core::{DomainError, JobId};
 use sbol_db_search::VectorIndexMaintainerRegistry;
 use sbol_db_storage::{ConfigStore, JobQueue, JobStatus, SbolJob, SbolStore, DEFAULT_QUEUE};
@@ -107,6 +108,7 @@ pub struct Worker {
     search: Option<SearchIndexHandles>,
     vector_indexes: Option<Arc<VectorIndexMaintainerRegistry>>,
     config_store: Option<Arc<dyn ConfigStore>>,
+    backups: Option<Arc<CompleteBackupService>>,
 }
 
 impl Worker {
@@ -126,6 +128,7 @@ impl Worker {
             search: None,
             vector_indexes: None,
             config_store: None,
+            backups: None,
         }
     }
 
@@ -153,6 +156,12 @@ impl Worker {
     /// job kind runs unaffected.
     pub fn with_config_store(mut self, config: Arc<dyn ConfigStore>) -> Self {
         self.config_store = Some(config);
+        self
+    }
+
+    /// Install the self-contained appliance's complete-backup executor.
+    pub fn with_backups(mut self, backups: Arc<CompleteBackupService>) -> Self {
+        self.backups = Some(backups);
         self
     }
 
@@ -307,6 +316,7 @@ impl Worker {
                 search: self.search.clone(),
                 vector_indexes: self.vector_indexes.clone(),
                 config: self.config_store.clone(),
+                backups: self.backups.clone(),
             };
             let repo = self.repo.clone();
             let cfg = self.config.clone();

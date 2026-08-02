@@ -16,6 +16,7 @@ members = [
     "crates/sbol-db-sqlite",
     "crates/sbol-db-rocksdb",
     "crates/sbol-db-backend",
+    "crates/sbol-db-backup",
     "crates/sbol-db-conformance",
     "crates/sbol-db-sparql",
     "crates/sbol-db-search",
@@ -42,6 +43,9 @@ sbol-fasta = "0.2.0"
 # COMBINE (OMEX) archive assembly. `Stored` entries need no compression
 # backend, so default features (which pull flate2/zstd/lzma) are off.
 zip = { version = "4", default-features = false }
+age = "0.12.1"
+tar = "0.4"
+zstd = "0.13"
 
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio-rustls",
@@ -87,6 +91,7 @@ url = "2"
 
 assert_cmd = "2"
 criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
 
 spareval = "0.2.6"
 spargebra = "0.4.6"
@@ -130,6 +135,7 @@ sbol-db-postgres = { path = "crates/sbol-db-postgres", version = "0.1.3" }
 sbol-db-sqlite = { path = "crates/sbol-db-sqlite", version = "0.1.3" }
 sbol-db-rocksdb = { path = "crates/sbol-db-rocksdb", version = "0.1.3" }
 sbol-db-backend = { path = "crates/sbol-db-backend", version = "0.1.3" }
+sbol-db-backup = { path = "crates/sbol-db-backup", version = "0.1.3" }
 sbol-db-conformance = { path = "crates/sbol-db-conformance", version = "0.1.3" }
 sbol-db-sparql = { path = "crates/sbol-db-sparql", version = "0.1.3" }
 sbol-db-search = { path = "crates/sbol-db-search", version = "0.1.3" }

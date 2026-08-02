@@ -188,6 +188,9 @@ pub struct ServerConfig {
     /// defaults for tests and development.
     pub blob_root: Option<PathBuf>,
     pub text_index_path: Option<PathBuf>,
+    /// Whether this process has the native complete-backup executor installed.
+    /// Admin routes fail closed when it is absent.
+    pub complete_backups_enabled: bool,
 }
 
 impl Default for ServerConfig {
@@ -217,6 +220,7 @@ impl Default for ServerConfig {
             public_graph: None,
             blob_root: None,
             text_index_path: None,
+            complete_backups_enabled: false,
         }
     }
 }
@@ -287,6 +291,7 @@ impl ServerConfig {
             public_graph: std::env::var("SBOL_DB_PUBLIC_GRAPH").ok(),
             blob_root: std::env::var_os("SBOL_DB_BLOB_ROOT").map(PathBuf::from),
             text_index_path: std::env::var_os("SBOL_DB_TEXT_INDEX_PATH").map(PathBuf::from),
+            complete_backups_enabled: false,
         };
         if let Ok(origins) = std::env::var("SBOL_DB_CORS_ALLOWED_ORIGINS") {
             match parse_cors_origins(&origins) {

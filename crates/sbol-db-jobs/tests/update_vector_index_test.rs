@@ -146,6 +146,7 @@ async fn job_projects_current_state_as_idempotent_upsert_then_delete() {
         search: None,
         vector_indexes: Some(maintainers),
         config: None,
+        backups: None,
     };
     let payload = UpdateVectorIndexPayload {
         artifact_id: "components".to_owned(),

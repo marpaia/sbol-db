@@ -81,12 +81,21 @@ pub struct Backend {
     /// dedicated worker pool, connection-pool gauges, and LISTEN/NOTIFY reach
     /// the pool.
     pub postgres: Option<PostgresHandle>,
+    /// Present when the native single-node RocksDB backend is active. Complete
+    /// backups use this handle to create a consistent engine checkpoint.
+    pub rocksdb: Option<RocksdbHandle>,
 }
 
 /// Concrete handle to an open Postgres backend.
 pub struct PostgresHandle {
     pub pool: PgPool,
     pub service: Arc<SbolObjectService>,
+}
+
+/// Concrete handle to the open RocksDB engine.
+#[derive(Clone)]
+pub struct RocksdbHandle {
+    pub db: sbol_db_rocksdb::Db,
 }
 
 impl Backend {
@@ -172,6 +181,7 @@ impl Backend {
             lsm_stats: None,
             sql_console: Some(sql_console),
             postgres: None,
+            rocksdb: None,
         }
     }
 
@@ -188,7 +198,7 @@ impl Backend {
         let users: Arc<dyn UserStore> = Arc::new(RocksdbUserStore::new(db.clone()));
         let tokens: Arc<dyn TokenStore> = Arc::new(RocksdbTokenStore::new(db.clone()));
         let migrator: Arc<dyn Migrator> = Arc::new(RocksdbMigrator::new(db.clone()));
-        let lsm_stats: Arc<dyn LsmStats> = Arc::new(RocksdbStats::new(db));
+        let lsm_stats: Arc<dyn LsmStats> = Arc::new(RocksdbStats::new(db.clone()));
         let lab: Arc<dyn LabStore> = store.clone();
         Self {
             kind: BackendKind::Rocksdb,
@@ -210,6 +220,7 @@ impl Backend {
             lsm_stats: Some(lsm_stats),
             sql_console: None,
             postgres: None,
+            rocksdb: Some(RocksdbHandle { db }),
         }
     }
 
@@ -249,6 +260,7 @@ impl Backend {
             lsm_stats: None,
             sql_console: Some(sql_console),
             postgres: Some(PostgresHandle { pool, service }),
+            rocksdb: None,
         }
     }
 

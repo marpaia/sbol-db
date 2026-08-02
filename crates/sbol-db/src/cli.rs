@@ -161,6 +161,11 @@ pub struct ServerArgs {
     /// JSON search-plugin topology and concrete provider/backend config.
     #[arg(long, env = "SBOL_DB_SEARCH_CONFIG")]
     pub search_config: Option<PathBuf>,
+
+    /// Public age X25519 recipient whose secret recovery identity is held
+    /// outside this server. Required by the production profile.
+    #[arg(long, env = "SBOL_DB_BACKUP_RECOVERY_RECIPIENT")]
+    pub backup_recovery_recipient: Option<String>,
 }
 
 impl BackendKind {
@@ -194,7 +199,7 @@ pub enum Command {
     /// (see `sbol-db worker`).
     Server {
         #[command(flatten)]
-        args: ServerArgs,
+        args: Box<ServerArgs>,
     },
 
     /// Run a standalone async-job worker (no HTTP listener).
@@ -255,6 +260,12 @@ pub enum Command {
     Inspect {
         #[command(subcommand)]
         action: InspectAction,
+    },
+
+    /// Complete encrypted backup operations that do not require a live server.
+    Backup {
+        #[command(subcommand)]
+        action: BackupAction,
     },
 
     /// Local utilities (file hashing, k-mer debug, ...).
@@ -373,6 +384,46 @@ pub enum Command {
         /// and derived search state are always copied.
         #[arg(long)]
         omit_completed_job_history: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BackupAction {
+    /// Decrypt and fully verify a complete backup artifact offline.
+    Verify {
+        /// Encrypted `.sbolbackup.age` artifact to verify.
+        #[arg(long)]
+        artifact: PathBuf,
+        /// Private age X25519 identity file for this artifact.
+        #[arg(long, env = "SBOL_DB_BACKUP_IDENTITY_FILE")]
+        identity_file: PathBuf,
+        /// Existing or newly created private directory for temporary extraction.
+        #[arg(long)]
+        staging_dir: PathBuf,
+    },
+    /// Verify, stage, and atomically activate a complete backup offline.
+    Restore {
+        /// Encrypted `.sbolbackup.age` artifact to restore.
+        #[arg(long)]
+        artifact: PathBuf,
+        /// Private age X25519 identity file for this artifact.
+        #[arg(long, env = "SBOL_DB_BACKUP_IDENTITY_FILE")]
+        identity_file: PathBuf,
+        /// Absolute managed production data directory. The server must be stopped.
+        #[arg(long, env = "SBOL_DB_DATA_DIR")]
+        data_dir: PathBuf,
+        /// Exact destructive-operation confirmation printed by `backup verify`.
+        #[arg(long)]
+        confirmation: String,
+    },
+    /// Atomically return to the generation retained by the last restore.
+    Rollback {
+        /// Absolute managed production data directory. The server must be stopped.
+        #[arg(long, env = "SBOL_DB_DATA_DIR")]
+        data_dir: PathBuf,
+        /// Exact confirmation returned by the restore operation.
+        #[arg(long)]
+        confirmation: String,
     },
 }
 
