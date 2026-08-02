@@ -65,6 +65,29 @@ def test_non_json_error_falls_back_to_base_error() -> None:
     assert exc.value.kind is None
 
 
+def test_health_uses_configured_operations_origin_without_application_auth() -> None:
+    seen: List[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/healthz":
+            return httpx.Response(200, text="ok")
+        return httpx.Response(200, json={"status": "ready"})
+
+    with SbolDbClient(
+        "https://registry.example",
+        user="admin",
+        password="secret",
+        operations_url="http://127.0.0.1:9090",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        assert client.healthz() is True
+        assert client.readyz() == {"status": "ready"}
+
+    assert [request.url.host for request in seen] == ["127.0.0.1", "127.0.0.1"]
+    assert all("authorization" not in request.headers for request in seen)
+
+
 # -- request shaping ------------------------------------------------------
 
 

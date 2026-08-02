@@ -61,6 +61,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 axum.workspace = true
 async-trait.workspace = true
+fs2.workspace = true
 tempfile = "3"
 
 [dev-dependencies]

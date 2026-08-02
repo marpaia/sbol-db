@@ -27,6 +27,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Iterator, List, Optional
 
 import httpx
@@ -35,6 +36,12 @@ import pytest
 from sbol_db import SbolDbClient
 
 NAMESPACE = "https://sbol-db.test/e2e"
+
+
+@dataclass(frozen=True)
+class LiveServer:
+    base_url: str
+    operations_url: str
 
 
 def _configured_backends() -> List[str]:
@@ -86,7 +93,7 @@ def _database_url(backend: str, tmpdir: str) -> str:
 
 
 @pytest.fixture(scope="session", params=_configured_backends())
-def live_server(request: pytest.FixtureRequest) -> Iterator[str]:
+def live_server(request: pytest.FixtureRequest) -> Iterator[LiveServer]:
     backend = request.param
     binary = _find_binary()
     if binary is None:
@@ -98,22 +105,46 @@ def live_server(request: pytest.FixtureRequest) -> Iterator[str]:
     subprocess.run([binary, "db", "migrate"], env=env, check=True, capture_output=True)
 
     port = _free_port()
+    operations_port = _free_port()
+    while operations_port == port:
+        operations_port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
+    operations_url = f"http://127.0.0.1:{operations_port}"
     proc = subprocess.Popen(
-        [binary, "server", "--bind", f"127.0.0.1:{port}", "--no-worker"],
+        [
+            binary,
+            "server",
+            "--bind",
+            f"127.0.0.1:{port}",
+            "--operations-bind",
+            f"127.0.0.1:{operations_port}",
+            "--no-worker",
+        ],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
     try:
-        _wait_ready(base_url, proc)
-        yield base_url
-    finally:
-        proc.terminate()
         try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+            _wait_ready(operations_url, proc)
+        except Exception as error:
+            proc.terminate()
+            try:
+                output = proc.communicate(timeout=10)[0]
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                output = proc.communicate()[0]
+            detail = output.decode("utf-8", errors="replace") if output else "<no output>"
+            raise RuntimeError(f"{error}\nserver output:\n{detail}") from error
+        yield LiveServer(base_url=base_url, operations_url=operations_url)
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
@@ -131,8 +162,11 @@ def unique(run_id: str) -> str:
 
 
 @pytest.fixture()
-def client(live_server: str) -> Iterator[SbolDbClient]:
-    with SbolDbClient(live_server) as c:
+def client(live_server: LiveServer) -> Iterator[SbolDbClient]:
+    with SbolDbClient(
+        live_server.base_url,
+        operations_url=live_server.operations_url,
+    ) as c:
         yield c
 
 

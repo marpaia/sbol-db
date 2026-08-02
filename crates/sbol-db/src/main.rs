@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 use sbol_db_backend::Backend;
 
@@ -16,10 +16,12 @@ mod cli;
 mod cmd;
 mod format;
 mod output;
+mod runtime;
 mod search_config;
 mod signal;
 
-use crate::cli::{BackendKind, Cli, Command};
+use crate::cli::{Cli, Command};
+use crate::runtime::{resolve_connection, ServerRuntime};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -85,7 +87,7 @@ async fn main() -> Result<()> {
         omit_completed_job_history,
     } = cli.command
     {
-        let source_url = resolve_connection(cli.backend, &cli.database_url)?;
+        let source_url = resolve_connection(cli.backend, cli.database_url.as_deref())?;
         return cmd::migrate::rocksdb::run(cmd::migrate::rocksdb::CopyInputs {
             source_url,
             destination,
@@ -95,29 +97,30 @@ async fn main() -> Result<()> {
         .await;
     }
 
-    let database_url = resolve_connection(cli.backend, &cli.database_url)?;
+    let mut server_runtime = match &cli.command {
+        Command::Server { args } => Some(ServerRuntime::resolve(
+            args.profile,
+            args.data_dir.as_deref(),
+            args.blob_root.as_deref(),
+            cli.backend,
+            cli.database_url.as_deref(),
+        )?),
+        _ => None,
+    };
+    let database_url = match server_runtime.as_ref() {
+        Some(runtime) => runtime.database_url().to_owned(),
+        None => resolve_connection(cli.backend, cli.database_url.as_deref())?,
+    };
     let backend = open_backend(&database_url, &cli.command).await?;
 
     match cli.command {
-        Command::Server {
-            bind,
-            explorer_bind,
-            no_worker,
-            worker_concurrency,
-            worker_queues,
-            worker_id,
-            search_config,
-        } => {
+        Command::Server { args } => {
             cmd::server::run(
                 backend,
-                &database_url,
-                bind,
-                explorer_bind,
-                no_worker,
-                worker_concurrency,
-                worker_queues,
-                worker_id,
-                search_config,
+                server_runtime
+                    .take()
+                    .expect("server runtime is resolved before backend open"),
+                args,
             )
             .await
         }
@@ -208,28 +211,6 @@ fn init_logging() {
     }
 }
 
-/// Resolve the effective connection string from the optional `--backend`
-/// selector and `--database-url`. With no selector the URL stands as given (its
-/// scheme picks the backend). With a selector, the URL must either already carry
-/// that backend's scheme or be a bare path the scheme completes; a conflicting
-/// scheme is an error so a Postgres URL is never silently opened as something
-/// else.
-fn resolve_connection(backend: Option<BackendKind>, url: &str) -> Result<String> {
-    let Some(backend) = backend else {
-        return Ok(url.to_owned());
-    };
-    match url.split_once("://") {
-        Some((scheme, _)) if backend.accepts_scheme(scheme) => Ok(url.to_owned()),
-        Some((scheme, _)) => bail!(
-            "--backend {} conflicts with --database-url scheme `{scheme}://`; \
-             pass a {}:// connection string (or a bare path) or drop --backend",
-            backend.scheme(),
-            backend.scheme(),
-        ),
-        None => Ok(format!("{}://{url}", backend.scheme())),
-    }
-}
-
 /// Open the storage backend selected by `database_url`'s scheme. Commands that
 /// need a long startup retry loop honor `DATABASE_STARTUP_TIMEOUT_SECS`;
 /// everything else fails fast on the first connection error.
@@ -250,7 +231,6 @@ async fn open_backend(database_url: &str, command: &Command) -> Result<Backend> 
     };
     Backend::open_with_retry(database_url, deadline).await
 }
-
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;
@@ -258,21 +238,19 @@ mod tests {
     use clap::CommandFactory;
 
     use super::*;
+    use crate::cli::BackendKind;
 
     #[test]
-    fn database_argument_defaults_to_repo_local_rocksdb() {
+    fn database_argument_defers_its_default_to_runtime_resolution() {
         // Inspect the clap schema rather than parsing the ambient process
         // environment: CI intentionally sets DATABASE_URL for Postgres tests,
-        // and clap's env source correctly takes precedence over this default.
+        // and clap's env source correctly takes precedence over runtime fallback.
         let command = Cli::command();
         let database_url = command
             .get_arguments()
             .find(|argument| argument.get_id() == "database_url")
             .expect("database_url argument");
-        assert_eq!(
-            database_url.get_default_values(),
-            [OsStr::new(crate::cli::DEFAULT_LOCAL_DATABASE_URL)]
-        );
+        assert!(database_url.get_default_values().is_empty());
         assert_eq!(database_url.get_env(), Some(OsStr::new("DATABASE_URL")));
 
         let cli = Cli::try_parse_from([
@@ -283,13 +261,21 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(cli.backend, None);
+        assert_eq!(
+            cli.database_url.as_deref(),
+            Some(crate::cli::DEFAULT_LOCAL_DATABASE_URL)
+        );
         assert!(matches!(cli.command, Command::Server { .. }));
+        assert_eq!(
+            resolve_connection(None, None).unwrap(),
+            crate::cli::DEFAULT_LOCAL_DATABASE_URL
+        );
     }
 
     #[test]
     fn no_selector_passes_url_through() {
         assert_eq!(
-            resolve_connection(None, "sqlite:///tmp/x.db").unwrap(),
+            resolve_connection(None, Some("sqlite:///tmp/x.db")).unwrap(),
             "sqlite:///tmp/x.db"
         );
     }
@@ -297,12 +283,12 @@ mod tests {
     #[test]
     fn selector_accepts_matching_scheme() {
         assert_eq!(
-            resolve_connection(Some(BackendKind::Rocksdb), "rocksdb:///data/x").unwrap(),
+            resolve_connection(Some(BackendKind::Rocksdb), Some("rocksdb:///data/x")).unwrap(),
             "rocksdb:///data/x"
         );
         // Postgres answers to both schemes.
         assert_eq!(
-            resolve_connection(Some(BackendKind::Postgres), "postgresql://h/db").unwrap(),
+            resolve_connection(Some(BackendKind::Postgres), Some("postgresql://h/db")).unwrap(),
             "postgresql://h/db"
         );
     }
@@ -310,11 +296,11 @@ mod tests {
     #[test]
     fn selector_completes_a_bare_path() {
         assert_eq!(
-            resolve_connection(Some(BackendKind::Rocksdb), "/var/lib/sbol.rocksdb").unwrap(),
+            resolve_connection(Some(BackendKind::Rocksdb), Some("/var/lib/sbol.rocksdb")).unwrap(),
             "rocksdb:///var/lib/sbol.rocksdb"
         );
         assert_eq!(
-            resolve_connection(Some(BackendKind::Sqlite), "/tmp/x.db").unwrap(),
+            resolve_connection(Some(BackendKind::Sqlite), Some("/tmp/x.db")).unwrap(),
             "sqlite:///tmp/x.db"
         );
     }
@@ -323,7 +309,7 @@ mod tests {
     fn selector_rejects_conflicting_scheme() {
         let err = resolve_connection(
             Some(BackendKind::Sqlite),
-            "postgres://sbol:sbol@localhost/sbol",
+            Some("postgres://sbol:sbol@localhost/sbol"),
         )
         .unwrap_err()
         .to_string();

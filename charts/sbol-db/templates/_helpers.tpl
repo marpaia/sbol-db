@@ -140,6 +140,8 @@ request timeout are server-only; the migrate Job doesn't serve HTTP.
 {{- define "sbol-db.serveEnv" -}}
 - name: SBOL_DB_BIND
   value: {{ .Values.config.bind | quote }}
+- name: SBOL_DB_OPERATIONS_BIND
+  value: {{ .Values.config.operationsBind | quote }}
 - name: SBOL_DB_REQUEST_TIMEOUT_SECS
   value: {{ .Values.config.server.requestTimeoutSecs | quote }}
 - name: SBOL_DB_MAX_BODY_BYTES
