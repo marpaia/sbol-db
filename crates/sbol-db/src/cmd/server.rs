@@ -22,6 +22,9 @@ use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use sbol_db_storage::{ConfigStore, JobQueue, SbolStore};
 use tokio_util::sync::CancellationToken;
 
+use crate::cli::{
+    DEFAULT_LOCAL_BLOB_ROOT, DEFAULT_LOCAL_DATABASE_URL, DEFAULT_LOCAL_TEXT_INDEX_PATH,
+};
 use crate::signal::shutdown_signal;
 
 #[allow(clippy::too_many_arguments)]
@@ -68,7 +71,8 @@ pub async fn run(
         None => metrics,
     };
 
-    let config = sbol_db_server::ServerConfig::from_env();
+    let mut config = sbol_db_server::ServerConfig::from_env();
+    apply_local_runtime_defaults(database_url, &mut config);
     let sparql_update = Arc::new(SparqlUpdateEngine::new(
         backend.triple_source.clone(),
         backend.triple_writer.clone(),
@@ -111,10 +115,11 @@ pub async fn run(
     }
 
     let built_in_search = search_config.is_none();
+    let local_rocksdb_search = built_in_search && database_url == DEFAULT_LOCAL_DATABASE_URL;
     if built_in_search && no_worker {
         tracing::warn!(
-            "the built-in in-process vector index is disabled with --no-worker; \
-             configure a shared vector backend with --search-config for an external worker"
+            "the built-in search runtime is disabled with --no-worker; configure a shared \
+             search backend with --search-config for an external worker"
         );
     } else {
         let deployment = match search_config {
@@ -125,6 +130,13 @@ pub async fn run(
                     app_services.cluster.clone(),
                 )))?
                 .build()?,
+            None if local_rocksdb_search => crate::search_config::built_in_legacy_deployment(
+                Arc::new(LegacyExplorerStrategy::new(
+                    app_services.text_search.clone(),
+                    app_services.cluster.clone(),
+                )),
+                durable_text_ready,
+            )?,
             None => crate::search_config::built_in_text_deployment(durable_text_ready).await?,
         };
         if let Some(setup) = worker_setup.as_mut() {
@@ -140,6 +152,7 @@ pub async fn run(
             strategies = app_services.search_runtime().descriptors().len(),
             vector_indexes = deployment.maintainers().len(),
             built_in = built_in_search,
+            local_rocksdb = local_rocksdb_search,
             "search plugin deployment configured"
         );
     }
@@ -278,6 +291,18 @@ pub async fn run(
     }
     tracing::info!("sbol-db server loop exited cleanly");
     Ok(())
+}
+
+fn apply_local_runtime_defaults(database_url: &str, config: &mut sbol_db_server::ServerConfig) {
+    if database_url != DEFAULT_LOCAL_DATABASE_URL {
+        return;
+    }
+    config
+        .blob_root
+        .get_or_insert_with(|| PathBuf::from(DEFAULT_LOCAL_BLOB_ROOT));
+    config
+        .text_index_path
+        .get_or_insert_with(|| PathBuf::from(DEFAULT_LOCAL_TEXT_INDEX_PATH));
 }
 
 async fn resolve_registry_namespace(
@@ -451,4 +476,43 @@ pub(crate) async fn build_worker_setup(
 
 fn is_postgres(url: &str) -> bool {
     url.starts_with("postgres://") || url.starts_with("postgresql://")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repo_local_database_selects_durable_runtime_paths() {
+        let mut config = sbol_db_server::ServerConfig::default();
+        apply_local_runtime_defaults(DEFAULT_LOCAL_DATABASE_URL, &mut config);
+
+        assert_eq!(
+            config.blob_root.as_deref(),
+            Some(std::path::Path::new(DEFAULT_LOCAL_BLOB_ROOT))
+        );
+        assert_eq!(
+            config.text_index_path.as_deref(),
+            Some(std::path::Path::new(DEFAULT_LOCAL_TEXT_INDEX_PATH))
+        );
+    }
+
+    #[test]
+    fn explicit_runtime_paths_are_not_overwritten() {
+        let mut config = sbol_db_server::ServerConfig {
+            blob_root: Some(PathBuf::from("/tmp/explicit-blobs")),
+            text_index_path: Some(PathBuf::from("/tmp/explicit-text")),
+            ..sbol_db_server::ServerConfig::default()
+        };
+        apply_local_runtime_defaults(DEFAULT_LOCAL_DATABASE_URL, &mut config);
+
+        assert_eq!(
+            config.blob_root.as_deref(),
+            Some(std::path::Path::new("/tmp/explicit-blobs"))
+        );
+        assert_eq!(
+            config.text_index_path.as_deref(),
+            Some(std::path::Path::new("/tmp/explicit-text"))
+        );
+    }
 }

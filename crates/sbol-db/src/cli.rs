@@ -15,6 +15,11 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+/// Repo-local RocksDB runtime used when no database configuration is supplied.
+pub const DEFAULT_LOCAL_DATABASE_URL: &str = "rocksdb://./.sbol-db/rocksdb";
+pub const DEFAULT_LOCAL_BLOB_ROOT: &str = ".sbol-db/blobs";
+pub const DEFAULT_LOCAL_TEXT_INDEX_PATH: &str = ".sbol-db/text-index";
+
 #[derive(Parser, Debug)]
 #[command(version, about = "sbol-db CLI", long_about = None)]
 pub struct Cli {
@@ -24,7 +29,7 @@ pub struct Cli {
     #[arg(
         long,
         env = "DATABASE_URL",
-        default_value = "postgres://sbol:sbol@localhost:5432/sbol"
+        default_value = DEFAULT_LOCAL_DATABASE_URL
     )]
     pub database_url: String,
 

@@ -14,7 +14,7 @@ reverse-complement search, and ontology-aware role expansion.
 The persistence layer sits behind a backend-neutral storage contract
 (the `sbol-db-storage` crate), so the same query surface runs on
 Postgres, SQLite, or an embedded RocksDB engine. The connection-string
-scheme picks the backend; Postgres is the default. See
+scheme picks the backend; a repo-local RocksDB runtime is the default. See
 [**docs/storage.md**](docs/storage.md).
 
 <p align="center">
@@ -43,33 +43,44 @@ Built on:
   validation, and RDF I/O.
 - Postgres, SQLite, or RocksDB as the storage engine, each implementing
   the `sbol-db-storage` contract. The scheme in `--database-url` selects
-  the engine; Postgres is the default. See [storage.md](docs/storage.md).
+  the engine; repo-local RocksDB is the default. See [storage.md](docs/storage.md).
 - The [Oxigraph](https://github.com/oxigraph/oxigraph) ecosystem
   (`oxrdf`, `spareval`, `spargebra`, `sparesults`) for SPARQL.
-- A zero-configuration, local BGE-small vector-search index over stable SBOL
-  object metadata. Its verified weights ship in the production image; it
-  rebuilds at startup and follows committed writes. See
+- A zero-configuration, local ranked-text search index over stable SBOL object
+  metadata. Explicit deployments can additionally configure the BGE-small
+  vector-search index whose verified weights ship in the production image. See
   [search-plugins.md](docs/search-plugins.md) and
   [builtin-bge-small-model.md](docs/builtin-bge-small-model.md).
 
 ## Installation
 
-Bring up the dev Postgres (one command; the schema is applied on first
-CLI invocation):
+Build and run the server. With no environment variables or CLI overrides it
+uses `.sbol-db/rocksdb`, `.sbol-db/blobs`, and `.sbol-db/text-index` under the
+current checkout; the ignored directory is created automatically when absent:
 
 ```sh
-docker compose up -d
+cargo build
+./target/debug/sbol-db server
 ```
 
-Build and install the CLI, then apply migrations. When running the server from
-a source build, fetch its verified BGE-small model once; the installed binary
-discovers this cache automatically and already carries ONNX Runtime:
+To install the CLI, run:
 
 ```sh
-make model/bge-small
 cargo install --path crates/sbol-db
-sbol-db db migrate
 ```
+
+Postgres remains available for multi-process and production testing. Start the
+Compose service and select it explicitly:
+
+```sh
+docker compose up -d postgres
+./target/debug/sbol-db \
+  --database-url postgres://sbol:sbol@localhost:5432/sbol \
+  server
+```
+
+Explicit BGE-small source deployments first run `make model/bge-small`; the
+installed production image already carries the verified ONNX bundle.
 
 ## Quickstart — CLI
 

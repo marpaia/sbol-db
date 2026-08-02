@@ -256,6 +256,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn no_database_configuration_defaults_to_repo_local_rocksdb() {
+        let cli = Cli::try_parse_from(["sbol-db", "server"]).unwrap();
+        assert_eq!(cli.database_url, crate::cli::DEFAULT_LOCAL_DATABASE_URL);
+        assert_eq!(cli.backend, None);
+        assert!(matches!(cli.command, Command::Server { .. }));
+    }
+
+    #[test]
     fn no_selector_passes_url_through() {
         assert_eq!(
             resolve_connection(None, "sqlite:///tmp/x.db").unwrap(),

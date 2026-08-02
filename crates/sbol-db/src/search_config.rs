@@ -16,7 +16,7 @@ use sbol_db_search::{
 use sbol_db_search_faiss::{FaissBackendConfig, FaissVectorBackend};
 use sbol_db_search_sdk::{
     DistanceMetric, EmbeddingProvider, IndexMaintenanceDescriptor, IndexMaintenanceEvent,
-    IndexMaintenancePlugin, IndexMaintenanceTask, IndexMutationSource, SearchError,
+    IndexMaintenancePlugin, IndexMaintenanceTask, IndexMutationSource, SearchError, SearchStrategy,
 };
 use sbol_db_vector_flat::ExactFlatVectorBackend;
 use sbol_db_vector_qdrant::{QdrantRemoteBackend, QdrantRemoteConfig};
@@ -117,6 +117,25 @@ impl IndexMaintenancePlugin for LegacyExplorerMaintenance {
 
 fn legacy_explorer_maintenance(skip_startup: bool) -> Arc<dyn IndexMaintenancePlugin> {
     Arc::new(LegacyExplorerMaintenance::new(skip_startup))
+}
+
+/// Assemble the durable Tantivy/PageRank/cluster search profile used by the
+/// repo-local RocksDB runtime. Unlike the built-in BGE profile, this has no
+/// process-local vector generation to rebuild on every restart.
+pub fn built_in_legacy_deployment(
+    strategy: Arc<dyn SearchStrategy>,
+    skip_legacy_startup: bool,
+) -> Result<SearchDeployment> {
+    let default_strategy = strategy.descriptor().id.clone();
+    SearchDeploymentBuilder::new(SearchTopologyConfig {
+        default_strategy,
+        indexes: Vec::new(),
+        embedding_strategies: Vec::new(),
+    })
+    .register_strategy(strategy)?
+    .register_maintenance_plugin(legacy_explorer_maintenance(skip_legacy_startup))?
+    .build()
+    .map_err(Into::into)
 }
 
 /// The no-configuration search deployment shipped by the server binary.
