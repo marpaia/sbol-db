@@ -47,6 +47,15 @@ pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
             })),
         );
     }
+    if let Err(reason) = state.metrics.data_disk_ready_for_traffic() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "status": "not_ready",
+                "reason": reason
+            })),
+        );
+    }
     match tokio::time::timeout(READYZ_TIMEOUT, state.service.ping()).await {
         Ok(Ok(())) => (StatusCode::OK, Json(json!({ "status": "ready" }))),
         Ok(Err(err)) => (

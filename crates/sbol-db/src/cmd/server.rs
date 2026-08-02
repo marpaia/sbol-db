@@ -13,7 +13,10 @@ use sbol_db_app::{
     DEFAULT_REGISTRY_DATABASE_PREFIX,
 };
 use sbol_db_backend::Backend;
-use sbol_db_backup::{load_or_create_encryption, CompleteBackupConfig, CompleteBackupService};
+use sbol_db_backup::{
+    load_or_create_encryption, CompleteBackupConfig, CompleteBackupService,
+    ObjectStoreBackupRepository,
+};
 use sbol_db_jobs::{default_registry, SearchIndexHandles, Worker, WorkerConfig};
 use sbol_db_search::ranked_text::RankedTextIndex;
 use sbol_db_search::VectorIndexMaintainerRegistry;
@@ -50,6 +53,10 @@ pub async fn run(
         worker_id,
         search_config,
         backup_recovery_recipient,
+        backup_repository_url,
+        backup_interval_secs,
+        minimum_free_bytes,
+        backup_local_retention,
         ..
     } = args;
     let EdgeHttpConfig {
@@ -70,6 +77,13 @@ pub async fn run(
             "production --operations-bind must use a loopback address; \
              run the local telemetry collector on the same server"
         );
+    }
+    let backup_interval = Duration::from_secs(backup_interval_secs);
+    if production {
+        crate::backup_scheduler::validate_interval(backup_interval)?;
+        if !(1..=30).contains(&backup_local_retention) {
+            bail!("production local backup retention must be between 1 and 30 artifacts");
+        }
     }
     let database_url = runtime.database_url().to_owned();
     let engine = Arc::new(SparqlEngine::new(backend.triple_source.clone()));
@@ -105,23 +119,33 @@ pub async fn run(
         let recovery_recipient = backup_recovery_recipient
             .as_deref()
             .context("production requires SBOL_DB_BACKUP_RECOVERY_RECIPIENT")?;
+        let repository_url = backup_repository_url
+            .as_deref()
+            .context("production requires SBOL_DB_BACKUP_REPOSITORY_URL")?;
         let verification_identity_path =
             layout.backups_root().join(".verification-identity.agekey");
         let encryption =
             load_or_create_encryption(recovery_recipient, &verification_identity_path)?;
-        let service = Arc::new(CompleteBackupService::new(
-            CompleteBackupConfig {
-                db: rocksdb.db.clone(),
-                blobs_root: layout.blob_root().to_path_buf(),
-                search_root: layout.search_root().to_path_buf(),
-                acme_root: layout.acme_root().to_path_buf(),
-                backups_root: layout.backups_root().to_path_buf(),
-                generation: layout.generation(),
-                layout_version: layout.layout_version().to_owned(),
-                application_version: env!("CARGO_PKG_VERSION").to_owned(),
-            },
-            encryption,
-        ));
+        let repository = Arc::new(ObjectStoreBackupRepository::from_url(repository_url)?);
+        let service = Arc::new(
+            CompleteBackupService::new(
+                CompleteBackupConfig {
+                    db: rocksdb.db.clone(),
+                    database_root: layout.database_path().to_path_buf(),
+                    blobs_root: layout.blob_root().to_path_buf(),
+                    search_root: layout.search_root().to_path_buf(),
+                    acme_root: layout.acme_root().to_path_buf(),
+                    backups_root: layout.backups_root().to_path_buf(),
+                    generation: layout.generation(),
+                    layout_version: layout.layout_version().to_owned(),
+                    application_version: env!("CARGO_PKG_VERSION").to_owned(),
+                    minimum_free_bytes,
+                    local_retention: backup_local_retention,
+                },
+                encryption,
+            )
+            .with_repository(repository),
+        );
         worker_setup
             .as_mut()
             .expect("production requires the embedded worker")
@@ -139,6 +163,10 @@ pub async fn run(
         metrics.require_tls();
     }
     let metrics = metrics.with_jobs_repo(backend.jobs.clone());
+    let metrics = match runtime.layout() {
+        Some(layout) => metrics.with_data_disk(layout.root().to_path_buf(), minimum_free_bytes),
+        None => metrics,
+    };
     let metrics = match worker_setup.as_ref().and_then(|s| s.listener_pool.as_ref()) {
         Some(pool) => metrics.with_worker_pool(pool.clone()),
         None => metrics,
@@ -404,6 +432,18 @@ pub async fn run(
     }
 
     let mut tasks = tokio::task::JoinSet::<Result<()>>::new();
+    if production {
+        let scheduler_jobs = backend.jobs.clone();
+        let scheduler_cancel = cancel.clone();
+        tasks.spawn(async move {
+            crate::backup_scheduler::run(scheduler_jobs, backup_interval, scheduler_cancel.clone())
+                .await?;
+            if !scheduler_cancel.is_cancelled() {
+                bail!("complete-backup scheduler exited unexpectedly");
+            }
+            Ok(())
+        });
+    }
     match tls_runtime {
         Some((acceptor, acme_state, certificate_state)) => {
             let std_listener = listener
