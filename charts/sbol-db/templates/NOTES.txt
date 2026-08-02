@@ -42,7 +42,7 @@ your managed Postgres.
 
 {{- if not .Values.serviceMonitor.enabled }}
 
-Metrics are exposed on the main port at `/metrics` and the pods carry
+Metrics are exposed on the cluster-internal operations port at `/metrics` and the pods carry
 `prometheus.io/scrape` annotations. For Prometheus Operator clusters,
 set `serviceMonitor.enabled=true` to switch to a CR-driven scrape.
 {{- end }}

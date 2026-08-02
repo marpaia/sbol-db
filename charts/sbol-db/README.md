@@ -7,8 +7,9 @@ Kubernetes. Wraps the `ghcr.io/marpaia/sbol-db` container image with:
 - A pre-install / pre-upgrade `Job` running `sbol-db db migrate` so the
   schema is current before the Deployment rolls.
 - Probes wired to `/healthz` (liveness) and `/readyz` (readiness — hits
-  Postgres).
-- Optional `ServiceMonitor` for Prometheus Operator to scrape `/metrics`.
+  Postgres) on the separate operations port.
+- Optional `ServiceMonitor` for Prometheus Operator to scrape `/metrics` from
+  that cluster-internal operations port.
 - Optional `Ingress`, `HorizontalPodAutoscaler`, `PodDisruptionBudget`,
   `NetworkPolicy`.
 
@@ -86,6 +87,9 @@ Provided by the binary (see `docs/crate-guide.md`):
 | `/readyz`  | `readinessProbe`, `startupProbe` |
 | `/metrics` | `ServiceMonitor` (when enabled) |
 
+These endpoints use the Service's `operations` port (9090), which is not
+routed through the chart's Ingress.
+
 ## Tunable configuration (`config:`)
 
 Everything under `config:` becomes an environment variable on the
@@ -98,6 +102,7 @@ covers when you'd change them.
 | `config.logFormat`                  | `LOG_FORMAT`                     | `json`      | `text` for human-readable logs when running locally. |
 | `config.rustLog`                    | `RUST_LOG`                       | `info`      | Set `info,sbol_db=debug,sqlx=warn` to debug a specific crate. |
 | `config.bind`                       | `SBOL_DB_BIND`                   | `0.0.0.0:8080` | Change only if you also rebuild the container on a different port. |
+| `config.operationsBind`             | `SBOL_DB_OPERATIONS_BIND`        | `0.0.0.0:9090` | Cluster-internal probe/metrics listener; do not route it through Ingress. |
 | `config.server.requestTimeoutSecs`  | `SBOL_DB_REQUEST_TIMEOUT_SECS`   | `60`        | Lower behind a fast load balancer; raise for huge imports. SPARQL has its own 30s timeout that fires first. |
 | `config.server.maxBodyBytes`        | `SBOL_DB_MAX_BODY_BYTES`         | `33554432`  | Raise if you import very large SBOL documents; lower for safety on public endpoints. |
 | `config.database.maxConnections`    | `DATABASE_MAX_CONNECTIONS`       | `8`         | Match to `replicaCount * pool` ≤ Postgres `max_connections`. |

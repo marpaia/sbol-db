@@ -16,6 +16,7 @@ use sbol_db_core::User;
 use sbol_db_server::{router, AppState, Metrics, SchemaCache, ServerConfig};
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
 use serde_json::{json, Value};
+use sha3::{Digest, Sha3_256};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -71,6 +72,101 @@ async fn register(services: &AppServices, username: &str, email: &str, is_admin:
         })
         .await
         .expect("register user")
+}
+
+#[tokio::test]
+async fn first_launch_setup_requires_the_configured_one_time_token() {
+    let token = "phase-two-setup-token-with-more-than-32-characters";
+    let config = ServerConfig {
+        setup_token_hash: Some(Sha3_256::digest(token.as_bytes()).into()),
+        allow_public_signup: false,
+        ..ServerConfig::default()
+    };
+    let (app, services, _directory) = app_with(config).await;
+    let setup = json!({
+        "instanceName": "Production Registry",
+        "userName": "admin",
+        "userFullName": "Administrator",
+        "userEmail": "admin@example.org",
+        "userPassword": "correct horse battery staple",
+        "userPasswordConfirm": "correct horse battery staple"
+    })
+    .to_string();
+
+    let missing = send(
+        &app,
+        "POST",
+        "/setup",
+        &[("content-type", "application/json")],
+        setup.clone(),
+    )
+    .await;
+    assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+    assert!(!services.auth.any_admin().await.expect("admin lookup"));
+
+    let accepted = send(
+        &app,
+        "POST",
+        "/setup",
+        &[
+            ("content-type", "application/json"),
+            ("x-sbol-db-setup-token", token),
+        ],
+        setup,
+    )
+    .await;
+    assert_eq!(accepted.status(), StatusCode::OK);
+    assert!(services.auth.any_admin().await.expect("admin lookup"));
+
+    let theme = services
+        .config
+        .get("theme")
+        .await
+        .expect("theme lookup")
+        .expect("theme stored");
+    assert_eq!(theme["allowPublicSignup"], false);
+}
+
+#[tokio::test]
+async fn concurrent_first_launch_requests_create_exactly_one_admin() {
+    let (app, services, _directory) = app_with(ServerConfig::default()).await;
+    let first = json!({
+        "userName": "first-admin",
+        "userEmail": "first@example.org",
+        "userPassword": "first password",
+        "userPasswordConfirm": "first password"
+    })
+    .to_string();
+    let second = json!({
+        "userName": "second-admin",
+        "userEmail": "second@example.org",
+        "userPassword": "second password",
+        "userPasswordConfirm": "second password"
+    })
+    .to_string();
+
+    let first_request = send(
+        &app,
+        "POST",
+        "/setup",
+        &[("content-type", "application/json")],
+        first,
+    );
+    let second_request = send(
+        &app,
+        "POST",
+        "/setup",
+        &[("content-type", "application/json")],
+        second,
+    );
+    let (first_response, second_response) = tokio::join!(first_request, second_request);
+    let mut statuses = [first_response.status(), second_response.status()];
+    statuses.sort_unstable();
+    assert_eq!(statuses, [StatusCode::OK, StatusCode::FORBIDDEN]);
+
+    let users = services.users.list_users().await.expect("list users");
+    assert_eq!(users.len(), 1);
+    assert!(users[0].is_admin);
 }
 
 async fn send(

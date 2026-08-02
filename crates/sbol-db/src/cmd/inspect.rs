@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use sbol_db_server::ServerConfig;
+use sbol_db_server::{CorsPolicy, ServerConfig};
 use sbol_db_storage::DbStats;
 
 use crate::cli::InspectAction;
@@ -69,6 +69,17 @@ pub async fn run(stats: Arc<dyn DbStats>, action: InspectAction) -> Result<()> {
         }
         InspectAction::Config => {
             let cfg = ServerConfig::from_env();
+            let cors = match &cfg.cors {
+                CorsPolicy::Permissive => serde_json::json!({ "mode": "permissive" }),
+                CorsPolicy::SameOrigin => serde_json::json!({ "mode": "same_origin" }),
+                CorsPolicy::AllowList(origins) => serde_json::json!({
+                    "mode": "allowlist",
+                    "origins": origins
+                        .iter()
+                        .filter_map(|origin| origin.to_str().ok())
+                        .collect::<Vec<_>>(),
+                }),
+            };
             print_json(&serde_json::json!({
                 "request_timeout_secs": cfg.request_timeout.as_secs(),
                 "max_body_bytes": cfg.max_body_bytes,
@@ -78,6 +89,10 @@ pub async fn run(stats: Arc<dyn DbStats>, action: InspectAction) -> Result<()> {
                 "admin_api_auth_required": cfg.admin_api_auth_required,
                 "lab_sql_timeout_ms_max": cfg.lab_sql_timeout_ms_max,
                 "lab_sql_row_cap_max": cfg.lab_sql_row_cap_max,
+                "allow_public_signup": cfg.allow_public_signup,
+                "sparql_write_enabled": cfg.sparql_write_enabled,
+                "cors": cors,
+                "setup_token_configured": cfg.setup_token_hash.is_some(),
             }))
         }
     }

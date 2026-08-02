@@ -28,7 +28,10 @@ from sbol_db import SbolDbClient, PartShop
 ```python
 from sbol_db import SbolDbClient
 
-db = SbolDbClient("http://localhost:8888")
+db = SbolDbClient(
+    "http://localhost:8888",
+    operations_url="http://localhost:9090",
+)
 
 # import a document, search, pull, delete
 db.create_graph(open("part.ttl").read(), format="turtle",
@@ -40,6 +43,11 @@ rdf = db.export_rdf("https://ex.org/pLac", version="sbol2")   # server converts
 rows = db.sparql("SELECT ?s WHERE { ?s ?p ?o } LIMIT 10").bindings()
 db.delete_graph_by_document_iri("https://ex.org/part")
 ```
+
+Production keeps `/healthz`, `/readyz`, and `/metrics` off the public listener.
+Pass the loopback `operations_url` when `healthz()` or `readyz()` should target
+that hardened operations surface. It defaults to `base_url` for compatibility
+with older deployments.
 
 ## PartShop facade
 

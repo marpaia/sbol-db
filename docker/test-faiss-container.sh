@@ -9,7 +9,9 @@ readonly corpus="$repository_root/crates/sbol-db-postgres/tests/fixtures/simple_
 readonly container_name="sbol-db-faiss-e2e-$$"
 readonly volume_name="sbol-db-faiss-e2e-$$"
 readonly host_port="${SBOL_DB_FAISS_SMOKE_PORT:-18080}"
+readonly operations_host_port="${SBOL_DB_FAISS_SMOKE_OPERATIONS_PORT:-19090}"
 readonly base_url="http://127.0.0.1:${host_port}"
+readonly operations_url="http://127.0.0.1:${operations_host_port}"
 readonly public_graph="http://synbiohub.org/public"
 readonly expected_uri="https://example.org/sbol-db/test/promoter_j23119"
 readonly builtin_model_dir="/opt/sbol-db/models/bge-small-en-v1.5"
@@ -120,24 +122,30 @@ docker run --rm \
 start_container() {
   docker run --detach --name "$container_name" \
     --publish "127.0.0.1:${host_port}:8080" \
+    --publish "127.0.0.1:${operations_host_port}:9090" \
     --volume "$volume_name:/var/lib/sbol-db" \
     --volume "$test_root/search.json:/etc/sbol-db/search.json:ro" \
     --env DATABASE_URL=sqlite:///var/lib/sbol-db/sbol.db \
     --env SBOL_DB_SEARCH_CONFIG=/etc/sbol-db/search.json \
-    "$image" >/dev/null
+    "$image" server \
+      --bind 0.0.0.0:8080 \
+      --operations-bind 0.0.0.0:9090 >/dev/null
 }
 
 start_builtin_container() {
   docker run --detach --name "$container_name" \
     --publish "127.0.0.1:${host_port}:8080" \
+    --publish "127.0.0.1:${operations_host_port}:9090" \
     --volume "$volume_name:/var/lib/sbol-db" \
     --env DATABASE_URL=sqlite:///var/lib/sbol-db/sbol.db \
-    "$image" >/dev/null
+    "$image" server \
+      --bind 0.0.0.0:8080 \
+      --operations-bind 0.0.0.0:9090 >/dev/null
 }
 
 wait_for_health() {
   for attempt in $(seq 1 60); do
-    if curl -fsS "$base_url/healthz" >/dev/null 2>&1; then
+    if curl -fsS "$operations_url/healthz" >/dev/null 2>&1; then
       return
     fi
     if [ "$attempt" -eq 60 ]; then
