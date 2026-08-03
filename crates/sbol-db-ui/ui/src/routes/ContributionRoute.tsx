@@ -118,19 +118,6 @@ export default function ContributionRoute() {
     );
   }
 
-  if (!session.data.user.is_member && !session.data.user.is_admin) {
-    return (
-      <div className="mx-auto max-w-3xl px-4 py-20 sm:px-6">
-        <SurfaceState
-          variant="unsupported"
-          icon={LockKeyhole}
-          title="Membership is required"
-          description="Your account can browse this registry, but an active member role is required to create a collection."
-        />
-      </div>
-    );
-  }
-
   return <ContributionWorkspace />;
 }
 

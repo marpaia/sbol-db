@@ -12,7 +12,7 @@ use std::time::Duration;
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, Response, StatusCode};
 use sbol::v3::Document;
-use sbol_db_app::{AppServices, PUBLIC_GRAPH};
+use sbol_db_app::{AppServices, Registration, PUBLIC_GRAPH};
 use sbol_db_backend::Backend;
 use sbol_db_core::SerializationFormat;
 use sbol_db_server::{router, AppState, Metrics, SchemaCache, ServerConfig};
@@ -270,6 +270,54 @@ async fn post_collection_creates_a_readable_resource() {
     let (status, body, _) = send(&app, "GET", &uri, Some(&token), None, None).await;
     assert_eq!(status, StatusCode::OK, "download body: {body}");
     assert!(!body.is_empty(), "the closure download is non-empty");
+}
+
+#[tokio::test]
+async fn authenticated_non_member_can_validate_and_create_a_collection() {
+    let (app, services, _dir) = app_with_services().await;
+    let user = services
+        .auth
+        .register(Registration {
+            username: "visitor".into(),
+            name: "Visitor".into(),
+            email: "visitor@example.org".into(),
+            affiliation: None,
+            password: "s3cret".into(),
+            is_admin: false,
+            is_curator: false,
+            is_member: false,
+        })
+        .await
+        .expect("register non-member");
+    let token = services
+        .auth
+        .issue_token(user.id)
+        .await
+        .expect("issue token");
+
+    let request = serde_json::json!({
+        "id": "visitor_submission",
+        "version": "1",
+        "format": "turtle",
+        "content": FIXTURE,
+    })
+    .to_string();
+    let (status, body, _) = send(
+        &app,
+        "POST",
+        "/api/v2/collections/validate",
+        Some(&token),
+        Some("application/json"),
+        Some(request),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "validation body: {body}");
+
+    let collection = create_collection(&app, &token, "visitor_submission").await;
+    assert_eq!(
+        collection,
+        "http://synbiohub.org/user/visitor/visitor_submission/visitor_submission_collection/1"
+    );
 }
 
 #[tokio::test]

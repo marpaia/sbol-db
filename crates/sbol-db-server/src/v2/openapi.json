@@ -1512,7 +1512,7 @@
       "post": {
         "tags": ["Collections"],
         "summary": "Validate and preview a contribution",
-        "description": "Runs the same parsing, validation, optional GenBank/FASTA conversion, identity minting, and collision analysis as commit without persisting anything. Requires an active member or administrator account.",
+        "description": "Runs the same parsing, validation, optional GenBank/FASTA conversion, identity minting, and collision analysis as commit without persisting anything. Identity-gated: an anonymous caller is `403`.",
         "operationId": "v2ValidateCollection",
         "requestBody": {
           "required": true,

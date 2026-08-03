@@ -67,7 +67,7 @@ pub async fn create_collection(
     Extension(identity): Extension<Identity>,
     request: Request,
 ) -> Result<Response, V2Error> {
-    let user = require_contributor(&identity)?;
+    let user = require_user(&identity)?;
     let form = parse_create_form(request, &state).await?;
     let request = submit_request(form, &user)?;
 
@@ -96,7 +96,7 @@ pub async fn validate_collection(
     Extension(identity): Extension<Identity>,
     request: Request,
 ) -> Result<Response, V2Error> {
-    let user = require_contributor(&identity)?;
+    let user = require_user(&identity)?;
     let form = parse_create_form(request, &state).await?;
     let request = submit_request(form, &user)?;
     let preview = state.app.submission_service().preview(&request).await?;
@@ -112,7 +112,7 @@ pub async fn add_member(
     Path(collection): Path<String>,
     body: Bytes,
 ) -> Result<StatusCode, V2Error> {
-    let user = require_contributor(&identity)?;
+    let user = require_user(&identity)?;
     let form: MemberBody = super::util::parse_json(&body)?;
     let member = required(form.member, "member")?;
     validate_iri(&collection, "collection")?;
@@ -131,7 +131,7 @@ pub async fn remove_member(
     Extension(identity): Extension<Identity>,
     Path((collection, member)): Path<(String, String)>,
 ) -> Result<StatusCode, V2Error> {
-    let user = require_contributor(&identity)?;
+    let user = require_user(&identity)?;
     validate_iri(&collection, "collection")?;
     validate_iri(&member, "member")?;
     state
@@ -150,7 +150,7 @@ pub async fn delete_collection(
     Extension(identity): Extension<Identity>,
     Path(collection): Path<String>,
 ) -> Result<StatusCode, V2Error> {
-    let user = require_contributor(&identity)?;
+    let user = require_user(&identity)?;
     validate_iri(&collection, "collection")?;
     state
         .app
@@ -168,16 +168,6 @@ fn validate_iri(value: &str, field: &str) -> Result<(), V2Error> {
                 "invalid {field} IRI: {error}"
             )))
         })
-}
-
-fn require_contributor(identity: &Identity) -> Result<User, V2Error> {
-    let user = require_user(identity)?;
-    if !user.is_member && !user.is_admin {
-        return Err(V2Error::from(ApiError::Forbidden(
-            "an active member account is required to contribute".to_owned(),
-        )));
-    }
-    Ok(user)
 }
 
 async fn parse_create_form(request: Request, state: &AppState) -> Result<CreateForm, V2Error> {
