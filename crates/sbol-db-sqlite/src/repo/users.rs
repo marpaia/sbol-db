@@ -130,6 +130,36 @@ impl UserStore for SqliteUserStore {
         row_to_user(row)
     }
 
+    async fn set_sole_admin(&self, id: UserId) -> Result<(), DomainError> {
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let id = id.as_uuid().to_string();
+        let exists: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sbh_user WHERE id = ?)")
+            .bind(&id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        if exists == 0 {
+            return Err(DomainError::NotFound(format!("user {id}")));
+        }
+        let now = Utc::now();
+        sqlx::query(
+            "UPDATE sbh_user \
+                SET updated_at = CASE \
+                        WHEN is_admin != CASE WHEN id = ? THEN 1 ELSE 0 END THEN ? \
+                        ELSE updated_at \
+                    END, \
+                    is_admin = CASE WHEN id = ? THEN 1 ELSE 0 END",
+        )
+        .bind(&id)
+        .bind(now)
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(())
+    }
+
     async fn set_password_hash(&self, id: UserId, password_hash: &str) -> Result<(), DomainError> {
         sqlx::query("UPDATE sbh_user SET password_hash = ?, updated_at = ? WHERE id = ?")
             .bind(password_hash)

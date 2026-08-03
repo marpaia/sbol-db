@@ -30,7 +30,7 @@ use sbol_db_app::{
 };
 use sbol_db_core::{
     Direction, DomainError, GraphId, IriString, NeighborhoodQuery, NewUser, ObjectTerm,
-    SerializationFormat, SubjectTerm, Triple,
+    SerializationFormat, SubjectTerm, Triple, UserId,
 };
 use sbol_db_search::pagerank::pagerank;
 use sbol_db_search::ranked_text::IndexedPart;
@@ -641,6 +641,62 @@ pub async fn user_crud(app: &AppServices) {
         .expect("account still present");
     assert_eq!(reread.name, "Renamed User", "name update is durable");
     assert!(reread.is_admin, "membership-flag update is durable");
+
+    // Offline recovery can establish one exact administrator atomically. A
+    // second administrator proves that both promotion and demotion happen;
+    // an absent target must fail before changing the existing administrator.
+    let other_admin = users
+        .create_user(NewUser {
+            username: "other_admin".into(),
+            name: "Other Admin".into(),
+            email: "other_admin@example.org".into(),
+            affiliation: None,
+            password_hash: "$argon2id$placeholder".into(),
+            graph_uri: AuthService::graph_uri("other_admin"),
+            is_admin: true,
+            is_curator: true,
+            is_member: true,
+        })
+        .await
+        .expect("create second administrator");
+    users
+        .set_sole_admin(created.id)
+        .await
+        .expect("set sole administrator");
+    let admins = users
+        .list_users()
+        .await
+        .expect("list after sole-admin update")
+        .into_iter()
+        .filter(|user| user.is_admin)
+        .collect::<Vec<_>>();
+    assert_eq!(admins.len(), 1, "exactly one administrator remains");
+    assert_eq!(admins[0].id, created.id, "the requested account is admin");
+    assert!(
+        !users
+            .get_by_id(other_admin.id)
+            .await
+            .expect("read former administrator")
+            .expect("former administrator remains an account")
+            .is_admin,
+        "the other administrator was demoted"
+    );
+
+    let missing = UserId::new();
+    let error = users
+        .set_sole_admin(missing)
+        .await
+        .expect_err("a missing target is rejected");
+    assert!(matches!(error, DomainError::NotFound(_)));
+    let admins = users
+        .list_users()
+        .await
+        .expect("list after rejected update")
+        .into_iter()
+        .filter(|user| user.is_admin)
+        .collect::<Vec<_>>();
+    assert_eq!(admins.len(), 1, "rejected update preserves admin set");
+    assert_eq!(admins[0].id, created.id);
 }
 
 /// The admin user-management path end to end: the `AuthService.register` verb

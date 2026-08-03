@@ -129,6 +129,35 @@ impl UserStore for PgUserStore {
         row_to_user(row)
     }
 
+    async fn set_sole_admin(&self, id: UserId) -> Result<(), DomainError> {
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sbh_user WHERE id = $1)")
+                .bind(id.as_uuid())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db_err)?;
+        if !exists {
+            return Err(DomainError::NotFound(format!("user {id}")));
+        }
+        let now = Utc::now();
+        sqlx::query(
+            "UPDATE sbh_user \
+                SET updated_at = CASE \
+                        WHEN is_admin IS DISTINCT FROM (id = $1) THEN $2 \
+                        ELSE updated_at \
+                    END, \
+                    is_admin = (id = $1)",
+        )
+        .bind(id.as_uuid())
+        .bind(now)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(())
+    }
+
     async fn set_password_hash(&self, id: UserId, password_hash: &str) -> Result<(), DomainError> {
         sqlx::query("UPDATE sbh_user SET password_hash = $2, updated_at = $3 WHERE id = $1")
             .bind(id.as_uuid())

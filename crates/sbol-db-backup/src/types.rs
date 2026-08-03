@@ -14,6 +14,7 @@ pub struct CreatedBackup {
     pub payload_bytes: u64,
     pub files: u64,
     pub referenced_blobs: u64,
+    pub missing_referenced_blobs: Vec<String>,
     pub verified_at: DateTime<Utc>,
     /// True when an at-least-once job retry found and re-verified the artifact
     /// already published for this backup id.

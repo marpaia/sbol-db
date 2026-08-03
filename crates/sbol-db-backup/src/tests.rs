@@ -71,6 +71,11 @@ fn encryption() -> (BackupEncryption, x25519::Identity) {
 #[tokio::test]
 async fn creates_decrypts_and_semantically_verifies_complete_backup() {
     let (root, db, hash) = fixture(true).await;
+    fs::write(
+        root.path().join("blobs/uploads/logo_uploaded.svg"),
+        b"<svg>classic instance logo</svg>",
+    )
+    .unwrap();
     let (encryption, recovery) = encryption();
     let generation = Uuid::new_v4();
     let created = create_complete_backup(
@@ -91,6 +96,7 @@ async fn creates_decrypts_and_semantically_verifies_complete_backup() {
     assert!(created.path.is_file());
     assert!(!created.reused);
     assert_eq!(created.referenced_blobs, 1);
+    assert!(created.missing_referenced_blobs.is_empty());
     assert_eq!(created.artifact_sha256.len(), 64);
     let verified =
         verify_encrypted_backup(&created.path, &recovery, &root.path().join("backups")).unwrap();
@@ -100,6 +106,15 @@ async fn creates_decrypts_and_semantically_verifies_complete_backup() {
         .payload_root()
         .join(format!("blobs/uploads/{}/{}.gz", &hash[..2], &hash[2..]))
         .is_file());
+    assert_eq!(
+        fs::read(
+            verified
+                .payload_root()
+                .join("blobs/uploads/logo_uploaded.svg")
+        )
+        .unwrap(),
+        b"<svg>classic instance logo</svg>"
+    );
     assert!(verified.payload_root().join("search/meta.json").is_file());
     assert!(verified.payload_root().join("acme/account-key").is_file());
 
@@ -211,10 +226,10 @@ async fn refuses_backup_when_the_operational_disk_reserve_would_be_consumed() {
 }
 
 #[tokio::test]
-async fn refuses_to_publish_when_a_referenced_blob_is_missing() {
-    let (root, db, _hash) = fixture(false).await;
-    let (encryption, _recovery) = encryption();
-    let result = create_complete_backup(
+async fn authenticates_a_source_missing_reference_without_inventing_blob_bytes() {
+    let (root, db, hash) = fixture(false).await;
+    let (encryption, recovery) = encryption();
+    let created = create_complete_backup(
         CompleteBackupSource {
             db: &db,
             blobs_root: &root.path().join("blobs"),
@@ -226,16 +241,47 @@ async fn refuses_to_publish_when_a_referenced_blob_is_missing() {
         },
         &root.path().join("backups"),
         &encryption,
+    )
+    .unwrap();
+    assert_eq!(created.referenced_blobs, 1);
+    assert_eq!(created.missing_referenced_blobs, vec![hash.clone()]);
+    assert!(!root
+        .path()
+        .join(format!("blobs/uploads/{}/{}.gz", &hash[..2], &hash[2..]))
+        .exists());
+
+    let verified =
+        verify_encrypted_backup(&created.path, &recovery, &root.path().join("backups")).unwrap();
+    assert_eq!(verified.manifest().missing_referenced_blobs, vec![hash]);
+}
+
+#[tokio::test]
+async fn rejects_unknown_non_content_addressed_upload_files() {
+    let (root, db, _hash) = fixture(true).await;
+    fs::write(
+        root.path().join("blobs/uploads/unexpected.txt"),
+        b"not an application-managed legacy logo",
+    )
+    .unwrap();
+    let (encryption, _recovery) = encryption();
+    let error = create_complete_backup(
+        CompleteBackupSource {
+            db: &db,
+            blobs_root: &root.path().join("blobs"),
+            search_root: &root.path().join("search"),
+            acme_root: &root.path().join("acme"),
+            generation: Uuid::new_v4(),
+            layout_version: "1",
+            application_version: "test",
+        },
+        &root.path().join("backups"),
+        &encryption,
+    )
+    .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("unexpected file in content-addressed blob tree"),
+        "got: {error:#}"
     );
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("read-back verification"));
-    let published = fs::read_dir(root.path().join("backups"))
-        .unwrap()
-        .filter_map(Result::ok)
-        .any(|entry| entry.path().extension().is_some_and(|ext| ext == "age"));
-    assert!(!published);
 }
 
 #[test]

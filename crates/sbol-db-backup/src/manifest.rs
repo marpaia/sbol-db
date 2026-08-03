@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub const BACKUP_FORMAT: &str = "sbol-db-complete-backup";
-pub const BACKUP_VERSION: u32 = 1;
+pub const BACKUP_VERSION: u32 = 2;
 pub(crate) const MANIFEST_PATH: &str = "manifest.json";
 pub(crate) const PAYLOAD_PREFIX: &str = "payload";
 pub(crate) const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
@@ -82,6 +82,11 @@ pub struct BackupManifest {
     pub encryption: String,
     pub components: Vec<BackupComponentManifest>,
     pub files: Vec<BackupFileManifest>,
+    /// Sorted attachment hashes that the source database references but whose
+    /// content was already absent when this backup was created. Authenticating
+    /// the exact set preserves a legacy source inconsistency without allowing
+    /// additional blob loss during archive creation, transfer, or restore.
+    pub missing_referenced_blobs: Vec<String>,
     pub payload_bytes: u64,
 }
 

@@ -12,8 +12,8 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::payload::{
-    collect_payload_files, normalized_tar_path, portable_to_path, sha256_file, validate_blob_tree,
-    validate_referenced_blobs,
+    audit_referenced_blobs, collect_payload_files, normalized_tar_path, portable_to_path,
+    sha256_file, validate_blob_tree,
 };
 use crate::filesystem::{
     create_private_file, prepare_private_directory, set_file_mode, validate_portable_path,
@@ -38,6 +38,7 @@ pub struct VerifiedBackupReport {
     pub payload_bytes: u64,
     pub files: u64,
     pub referenced_blobs: u64,
+    pub missing_referenced_blobs: Vec<String>,
     pub components: Vec<BackupComponentManifest>,
 }
 
@@ -86,6 +87,7 @@ impl VerifiedBackup {
             payload_bytes: self.manifest.payload_bytes,
             files: self.manifest.files.len() as u64,
             referenced_blobs: self.referenced_blobs,
+            missing_referenced_blobs: self.manifest.missing_referenced_blobs.clone(),
             components: self.manifest.components.clone(),
         }
     }
@@ -260,7 +262,15 @@ pub fn verify_payload_directory(manifest: &BackupManifest, payload_root: &Path) 
     let db = Db::open_read_only(&payload_root.join(BackupComponent::Rocksdb.as_str()))
         .context("open materialized RocksDB checkpoint")?;
     let available_blobs = validate_blob_tree(manifest, payload_root)?;
-    validate_referenced_blobs(&db, &available_blobs)
+    let audit = audit_referenced_blobs(&db, &available_blobs)?;
+    if audit.missing != manifest.missing_referenced_blobs {
+        bail!(
+            "materialized backup missing-reference set does not match its authenticated manifest: manifest={}, actual={}",
+            manifest.missing_referenced_blobs.len(),
+            audit.missing.len()
+        );
+    }
+    Ok(audit.referenced)
 }
 
 pub(super) fn validate_manifest(manifest: &BackupManifest) -> Result<()> {
@@ -283,6 +293,23 @@ pub(super) fn validate_manifest(manifest: &BackupManifest) -> Result<()> {
     }
     if manifest.files.len() > MAX_FILE_COUNT {
         bail!("backup manifest exceeds the maximum file count {MAX_FILE_COUNT}");
+    }
+    if manifest.missing_referenced_blobs.len() > MAX_FILE_COUNT {
+        bail!("backup manifest exceeds the maximum missing-reference count {MAX_FILE_COUNT}");
+    }
+    let mut previous_missing: Option<&str> = None;
+    for hash in &manifest.missing_referenced_blobs {
+        if hash.len() != 40
+            || !hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            bail!("backup manifest contains an invalid missing attachment hash");
+        }
+        if previous_missing.is_some_and(|previous| previous >= hash.as_str()) {
+            bail!("backup manifest missing attachment hashes must be strictly sorted and unique");
+        }
+        previous_missing = Some(hash);
     }
     let component_names: Vec<_> = manifest
         .components

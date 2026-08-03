@@ -14,7 +14,7 @@ use super::filesystem::{
     require_directory, validate_layout_version,
 };
 
-pub(super) const LAYOUT_VERSION: &str = "2";
+pub(crate) const LAYOUT_VERSION: &str = "2";
 pub(super) const VERSION_FILE: &str = "LAYOUT_VERSION";
 pub(super) const CURRENT_FILE: &str = "CURRENT";
 pub(super) const PREVIOUS_FILE: &str = "PREVIOUS";

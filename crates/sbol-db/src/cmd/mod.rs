@@ -13,5 +13,6 @@ pub mod object;
 pub mod ontology;
 pub mod query;
 pub mod server;
+pub mod users;
 pub mod util;
 pub mod worker;

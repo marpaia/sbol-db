@@ -13,7 +13,8 @@ VERSION   := $(or $(GIT_TAG),$(GIT_HASH)$(GIT_DIRTY))
 
 IMAGE ?= $(REGISTRY):$(VERSION)
 
-.PHONY: psql container container/test-faiss container/test-sbol-test-suite model/bge-small
+.PHONY: psql container container/test-faiss container/test-sbol-test-suite model/bge-small \
+	fly/render fly/bootstrap fly/init-volume fly/build fly/predeploy-backup fly/deploy fly/verify fly/seed fly/set-sole-admin
 
 psql:
 	docker compose exec -e PGPASSWORD=sbol postgres psql -U sbol -d sbol
@@ -35,3 +36,30 @@ container/test-sbol-test-suite:
 model/bge-small:
 	bash docker/fetch-builtin-bge-small-model.sh $(BUILTIN_BGE_SMALL_DIR)
 	@echo "BGE-small bundle ready at $(BUILTIN_BGE_SMALL_DIR) (auto-discovered by source builds)"
+
+fly/render:
+	deploy/fly/render.sh
+
+fly/bootstrap:
+	deploy/fly/bootstrap.sh
+
+fly/init-volume:
+	deploy/fly/init-volume.sh
+
+fly/build:
+	deploy/fly/build.sh
+
+fly/predeploy-backup:
+	deploy/fly/predeploy-backup.sh $(FLY_IMAGE)
+
+fly/deploy:
+	deploy/fly/deploy.sh $(FLY_IMAGE)
+
+fly/verify:
+	deploy/fly/verify.sh
+
+fly/seed:
+	deploy/fly/seed.sh create
+
+fly/set-sole-admin:
+	deploy/fly/set-sole-admin.sh "$(FLY_IMAGE)" "$(SBOL_DB_ADMIN_USERNAME)" "$(SBOL_DB_ADMIN_EMAIL)"

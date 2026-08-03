@@ -78,6 +78,14 @@ pub fn load_or_create_encryption(
     ))
 }
 
+/// Create one owner-only recovery identity without replacing an existing key.
+///
+/// Returning only the public recipient keeps callers from accidentally
+/// serializing the private identity into command output or logs.
+pub fn generate_x25519_identity_file(path: &Path) -> Result<x25519::Recipient> {
+    Ok(create_private_identity(path)?.to_public())
+}
+
 fn read_private_identity(path: &Path) -> Result<x25519::Identity> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {

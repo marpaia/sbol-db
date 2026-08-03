@@ -16,7 +16,10 @@ pub use archive::{
     create_complete_backup, create_complete_backup_with_id, verify_encrypted_backup,
     verify_payload_directory, VerifiedBackup, VerifiedBackupReport,
 };
-pub use encryption::{load_or_create_encryption, parse_x25519_identity, BackupEncryption};
+pub use encryption::{
+    generate_x25519_identity_file, load_or_create_encryption, parse_x25519_identity,
+    BackupEncryption,
+};
 pub use manifest::{
     BackupComponent, BackupComponentManifest, BackupFileManifest, BackupManifest,
     CompleteBackupSource, BACKUP_FORMAT, BACKUP_VERSION,
