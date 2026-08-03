@@ -8,6 +8,7 @@ mod filesystem;
 mod layout;
 
 pub use configuration::{resolve_connection, ServerRuntime};
+pub(crate) use layout::LAYOUT_VERSION;
 #[allow(unused_imports)]
 pub use layout::{
     ManagedDataLayout, RecoveryEvent, RecoveryStatus, RestoreJournalStatus, RestoreOutcome,

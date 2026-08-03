@@ -1,7 +1,14 @@
 target/
 **/node_modules
 **/*.rs.bk
+.mypy_cache/
+clients/
+examples/
+tests/
 .env
+.sbol-db/
+deploy/fly/config.env
+deploy/fly/.state/
 .sqlx
 .git
 .github

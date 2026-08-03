@@ -476,6 +476,14 @@ pub trait UserStore: Send + Sync {
     /// membership flags) of `user`, returning the stored account.
     async fn update_user(&self, user: &User) -> Result<User, DomainError>;
 
+    /// Atomically make `id` the only administrator account.
+    ///
+    /// Implementations must first verify that the target exists, then promote
+    /// it and demote every other account as one transaction/batch. This keeps
+    /// offline recovery tooling from leaving an instance with no administrator
+    /// or a partially updated administrator set after a failure.
+    async fn set_sole_admin(&self, id: UserId) -> Result<(), DomainError>;
+
     /// Replace an account's stored password hash, e.g. transparent rehashing of
     /// a legacy digest to argon2 on a successful login.
     async fn set_password_hash(&self, id: UserId, password_hash: &str) -> Result<(), DomainError>;

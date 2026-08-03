@@ -270,6 +270,16 @@ pub enum Command {
         action: JobsAction,
     },
 
+    /// Account inspection and offline administrator recovery.
+    Users {
+        /// Existing managed production data directory. When set, the command
+        /// resolves and exclusively locks its active RocksDB generation.
+        #[arg(long, env = "SBOL_DB_DATA_DIR")]
+        data_dir: Option<PathBuf>,
+        #[command(subcommand)]
+        action: UsersAction,
+    },
+
     /// Database lifecycle: migrations, health check.
     Db {
         #[command(subcommand)]
@@ -411,6 +421,33 @@ pub enum Command {
 
 #[derive(Subcommand, Debug)]
 pub enum BackupAction {
+    /// Generate or reuse one private age X25519 recovery identity.
+    Keygen {
+        /// Private identity file to create with owner-only permissions.
+        #[arg(long, env = "SBOL_DB_BACKUP_IDENTITY_FILE")]
+        identity_file: PathBuf,
+    },
+    /// Create and read-back-verify a complete artifact from an offline RocksDB deployment.
+    Create {
+        /// Existing, offline RocksDB directory. Opening fails if another process owns its lock.
+        #[arg(long)]
+        database_root: PathBuf,
+        /// Existing blob directory to preserve in the artifact.
+        #[arg(long)]
+        blobs_root: PathBuf,
+        /// Existing search-state directory to preserve in the artifact.
+        #[arg(long)]
+        search_root: PathBuf,
+        /// Existing ACME-state directory. It may be empty for a pre-production seed.
+        #[arg(long)]
+        acme_root: PathBuf,
+        /// Private directory in which to publish the encrypted artifact.
+        #[arg(long)]
+        backup_root: PathBuf,
+        /// Private age X25519 recovery identity used to encrypt and verify the artifact.
+        #[arg(long, env = "SBOL_DB_BACKUP_IDENTITY_FILE")]
+        identity_file: PathBuf,
+    },
     /// Decrypt and fully verify a complete backup artifact offline.
     Verify {
         /// Encrypted `.sbolbackup.age` artifact to verify.
@@ -437,6 +474,13 @@ pub enum BackupAction {
         /// Exact destructive-operation confirmation printed by `backup verify`.
         #[arg(long)]
         confirmation: String,
+        /// Remove the encrypted artifact after a successful atomic restore.
+        #[arg(long)]
+        remove_artifact_on_success: bool,
+        /// Remove the recovery identity after a successful atomic restore.
+        /// Intended for short-lived migration keys staged on an encrypted server volume.
+        #[arg(long)]
+        remove_identity_on_success: bool,
     },
     /// Atomically return to the generation retained by the last restore.
     Rollback {
@@ -444,6 +488,28 @@ pub enum BackupAction {
         #[arg(long, env = "SBOL_DB_DATA_DIR")]
         data_dir: PathBuf,
         /// Exact confirmation returned by the restore operation.
+        #[arg(long)]
+        confirmation: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum UsersAction {
+    /// List safe account metadata without password hashes or reset links.
+    List {
+        /// Return administrator accounts only.
+        #[arg(long)]
+        admins_only: bool,
+    },
+    /// Atomically promote one existing account and demote every other administrator.
+    SetSoleAdmin {
+        /// Exact existing username.
+        #[arg(long)]
+        username: String,
+        /// Exact email that must belong to the same account.
+        #[arg(long)]
+        email: String,
+        /// Must equal `set-sole-admin:<username>:<email>`.
         #[arg(long)]
         confirmation: String,
     },

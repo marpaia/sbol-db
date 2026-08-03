@@ -66,8 +66,8 @@ export default function PublicObjectRoute() {
         <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] xl:gap-8">
           <div className="min-w-0 space-y-6">
             <ObjectIdentity object={data} />
-            <ObjectProvenance object={data} />
             <ObjectVisualFallback object={data} />
+            <ObjectProvenance object={data} />
             <ObjectBiology object={data} />
             <ObjectContext object={data} />
             <ObjectAttachments object={data} />

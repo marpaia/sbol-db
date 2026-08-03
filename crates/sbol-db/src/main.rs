@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use sbol_db_backend::Backend;
 
@@ -113,9 +113,41 @@ async fn main() -> Result<()> {
         )?),
         _ => None,
     };
-    let database_url = match server_runtime.as_ref() {
-        Some(runtime) => runtime.database_url().to_owned(),
-        None => resolve_connection(cli.backend, cli.database_url.as_deref())?,
+    let users_data_dir = match &cli.command {
+        Command::Users {
+            data_dir: Some(data_dir),
+            ..
+        } => Some(data_dir),
+        _ => None,
+    };
+    let users_runtime = match users_data_dir {
+        Some(data_dir) => {
+            if cli.database_url.is_some() || cli.backend.is_some() {
+                bail!(
+                    "users --data-dir resolves its managed RocksDB generation; remove \
+                     --database-url/DATABASE_URL and --backend/SBOL_DB_BACKEND"
+                );
+            }
+            if !data_dir.join("CURRENT").is_file() {
+                bail!(
+                    "users --data-dir requires an existing managed production layout at {}",
+                    data_dir.display()
+                );
+            }
+            Some(ServerRuntime::resolve(
+                crate::cli::RuntimeProfile::Production,
+                Some(data_dir),
+                None,
+                None,
+                None,
+            )?)
+        }
+        None => None,
+    };
+    let database_url = match (server_runtime.as_ref(), users_runtime.as_ref()) {
+        (Some(runtime), None) | (None, Some(runtime)) => runtime.database_url().to_owned(),
+        (None, None) => resolve_connection(cli.backend, cli.database_url.as_deref())?,
+        (Some(_), Some(_)) => unreachable!("one command cannot have two runtimes"),
     };
     let backend = open_backend(&database_url, &cli.command).await?;
 
@@ -143,6 +175,7 @@ async fn main() -> Result<()> {
         }
         Command::Ontology { action } => cmd::ontology::run(backend.store.clone(), action).await,
         Command::Jobs { action } => cmd::jobs::run(backend.jobs.clone(), action).await,
+        Command::Users { action, .. } => cmd::users::run(backend.users.clone(), action).await,
         Command::Db { action } => {
             let migrator = backend
                 .migrator

@@ -1,0 +1,51 @@
+name: fly-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Immutable container image reference (prefer tag@sha256 digest)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fly-sbol-db-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      SBOL_DB_ADMIN_TOKEN: ${{ secrets.SBOL_DB_ADMIN_TOKEN }}
+      FLY_ORG: ${{ vars.FLY_ORG }}
+      FLY_APP: ${{ vars.FLY_APP }}
+      FLY_PRIMARY_REGION: ${{ vars.FLY_PRIMARY_REGION }}
+      SBOL_DB_HOSTNAME: ${{ vars.SBOL_DB_HOSTNAME }}
+      SBOL_DB_ACME_CONTACT: ${{ vars.SBOL_DB_ACME_CONTACT }}
+      SBOL_DB_BACKUP_BUCKET: ${{ vars.SBOL_DB_BACKUP_BUCKET }}
+      SBOL_DB_BACKUP_PREFIX: ${{ vars.SBOL_DB_BACKUP_PREFIX }}
+      SBOL_DB_BACKUP_RECOVERY_RECIPIENT: ${{ vars.SBOL_DB_BACKUP_RECOVERY_RECIPIENT }}
+      SBOL_DB_SKIP_PREDEPLOY_BACKUP: ${{ vars.SBOL_DB_SKIP_PREDEPLOY_BACKUP }}
+      SBOL_DB_FLY_CONFIG: /dev/null
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: 0.4.71
+
+      - name: Render and validate Fly configuration
+        run: deploy/fly/render.sh && fly config validate --config deploy/fly/.state/fly.toml
+
+      - name: Deploy immutable image
+        run: |
+          deploy/fly/predeploy-backup.sh "${{ inputs.image }}"
+          deploy/fly/deploy.sh "${{ inputs.image }}"
+
+      - name: Verify Machine, volume, TLS, and discovery
+        run: deploy/fly/verify.sh "${{ inputs.image }}"

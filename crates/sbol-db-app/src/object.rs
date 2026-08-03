@@ -7,7 +7,7 @@
 //! once in the application layer so V2, compatibility adapters, and future
 //! clients can share the same biological and authorization semantics.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use sbol_db_core::{DomainError, IriString, ObjectTerm, SbolObjectRecord, SubjectTerm, Triple};
 use sbol_db_rdf::GRAPH_IRI_PREFIX;
@@ -59,7 +59,9 @@ const SBOL2_ENCODING: &str = "http://sbols.org/v2#encoding";
 const SBOL3_ENCODING: &str = "http://sbols.org/v3#encoding";
 const SBOL2_SEQUENCE_ANNOTATION: &str = "http://sbols.org/v2#sequenceAnnotation";
 const SBOL2_COMPONENT: &str = "http://sbols.org/v2#component";
+const SBOL2_DEFINITION: &str = "http://sbols.org/v2#definition";
 const SBOL3_FEATURE: &str = "http://sbols.org/v3#hasFeature";
+const SBOL3_INSTANCE_OF: &str = "http://sbols.org/v3#instanceOf";
 const SBOL2_LOCATION: &str = "http://sbols.org/v2#location";
 const SBOL3_LOCATION: &str = "http://sbols.org/v3#hasLocation";
 const SBOL2_START: &str = "http://sbols.org/v2#start";
@@ -270,9 +272,20 @@ struct ScopedSubject {
 
 #[derive(Default)]
 struct ObjectRelations {
-    collections: Vec<String>,
-    uses: Vec<String>,
-    twins: Vec<String>,
+    collections: BoundedIris,
+    uses: BoundedIris,
+    twins: BoundedIris,
+}
+
+#[derive(Default)]
+struct BoundedIris {
+    items: Vec<String>,
+    truncated: bool,
+}
+
+struct BoundedTriples {
+    items: Vec<Triple>,
+    truncated: bool,
 }
 
 impl AppServices {
@@ -331,10 +344,37 @@ impl AppServices {
 
         let (sequence_iris, sequence_partial) =
             referenced_iris(triples, &[SBOL2_SEQUENCE, SBOL3_SEQUENCE]);
-        let (feature_iris, feature_partial) = referenced_iris(
-            triples,
-            &[SBOL2_SEQUENCE_ANNOTATION, SBOL2_COMPONENT, SBOL3_FEATURE],
-        );
+        let (sequence_annotation_iris, sequence_annotation_partial) =
+            referenced_iris(triples, &[SBOL2_SEQUENCE_ANNOTATION]);
+        let (component_feature_iris, component_feature_partial) =
+            referenced_iris(triples, &[SBOL2_COMPONENT]);
+        let (sbol3_feature_iris, sbol3_feature_partial) =
+            referenced_iris(triples, &[SBOL3_FEATURE]);
+        let mut feature_iris = sequence_annotation_iris
+            .iter()
+            .chain(&component_feature_iris)
+            .chain(&sbol3_feature_iris)
+            .cloned()
+            .collect::<Vec<_>>();
+        feature_iris.sort();
+        feature_iris.dedup();
+        let feature_partial =
+            sequence_annotation_partial || component_feature_partial || sbol3_feature_partial;
+
+        // SBOL2 SequenceAnnotations carry locations and point to Component
+        // instances. When annotations exist, rendering both sets would draw
+        // the same biological feature twice. Components remain in the linked
+        // feature section, while the visual projection uses annotations plus
+        // native SBOL3 Features. Component instances are the best available
+        // fallback only when no annotations are asserted.
+        let mut visual_feature_iris = if sequence_annotation_iris.is_empty() {
+            component_feature_iris.clone()
+        } else {
+            sequence_annotation_iris.clone()
+        };
+        visual_feature_iris.extend(sbol3_feature_iris.iter().cloned());
+        visual_feature_iris.sort();
+        visual_feature_iris.dedup();
         let (interaction_iris, interaction_partial) =
             referenced_iris(triples, &[SBOL2_INTERACTION, SBOL3_INTERACTION]);
         let (member_iris, member_partial) = referenced_iris(triples, &[SBOL2_MEMBER, SBOL3_MEMBER]);
@@ -354,7 +394,7 @@ impl AppServices {
         let visualization = self
             .object_visualization(
                 component_like,
-                &feature_iris,
+                &visual_feature_iris,
                 feature_partial,
                 &sequence_iris,
                 scoped.physical_graph.as_deref(),
@@ -438,7 +478,7 @@ impl AppServices {
                 interaction_partial,
                 "Interaction structure applies to Component designs.",
             ),
-            collections: reference_section(relations.collections, true, false, ""),
+            collections: relation_reference_section(relations.collections, true, ""),
             members: reference_section(
                 member_iris,
                 collection_like,
@@ -458,11 +498,10 @@ impl AppServices {
                 }),
                 items: attachments,
             },
-            uses: reference_section(relations.uses, true, false, ""),
-            twins: reference_section(
+            uses: relation_reference_section(relations.uses, true, ""),
+            twins: relation_reference_section(
                 relations.twins,
                 component_like && has_asserted_sequence(triples),
-                false,
                 "Exact-sequence twins require a Component with an asserted sequence.",
             ),
             properties: object_properties(triples),
@@ -715,7 +754,66 @@ impl AppServices {
                 continue;
             }
 
-            let roles = iri_values(&feature, &[SBOL2_ROLE, SBOL3_ROLE]);
+            let direct_label = first_literal(
+                &feature,
+                &[
+                    DCTERMS_TITLE,
+                    SBOL3_NAME,
+                    SBOL2_DISPLAY_ID,
+                    SBOL3_DISPLAY_ID,
+                ],
+            );
+            let mut roles = iri_values(&feature, &[SBOL2_ROLE, SBOL3_ROLE]);
+            let mut linked_label = None;
+
+            // SBOL2 SequenceAnnotations obtain biological identity through a
+            // linked Component and its definition; SBOL3 SubComponents use
+            // instanceOf directly. Resolve those roles for glyph selection
+            // without guessing from a display name.
+            let linked_component_iri = first_iri(&feature, &[SBOL2_COMPONENT]);
+            let linked_component = if let Some(component_iri) = &linked_component_iri {
+                let triples = self.triples_in_graph(component_iri, physical_graph).await?;
+                if triples.is_empty() {
+                    partial = true;
+                }
+                linked_label = first_literal(
+                    &triples,
+                    &[
+                        DCTERMS_TITLE,
+                        SBOL3_NAME,
+                        SBOL2_DISPLAY_ID,
+                        SBOL3_DISPLAY_ID,
+                    ],
+                );
+                triples
+            } else {
+                Vec::new()
+            };
+            let definition_iri = first_iri(&feature, &[SBOL3_INSTANCE_OF])
+                .or_else(|| first_iri(&linked_component, &[SBOL2_DEFINITION]));
+            if let Some(definition_iri) = definition_iri {
+                let definition = self
+                    .triples_in_graph(&definition_iri, physical_graph)
+                    .await?;
+                if definition.is_empty() {
+                    partial = true;
+                } else {
+                    roles.extend(iri_values(&definition, &[SBOL2_ROLE, SBOL3_ROLE]));
+                    if linked_label.is_none() {
+                        linked_label = first_literal(
+                            &definition,
+                            &[
+                                DCTERMS_TITLE,
+                                SBOL3_NAME,
+                                SBOL2_DISPLAY_ID,
+                                SBOL3_DISPLAY_ID,
+                            ],
+                        );
+                    }
+                }
+            }
+            roles.sort();
+            roles.dedup();
             let (locations, locations_partial) =
                 referenced_iris(&feature, &[SBOL2_LOCATION, SBOL3_LOCATION]);
             partial |= locations_partial || locations.len() != 1;
@@ -736,16 +834,9 @@ impl AppServices {
             if let Some(end) = end {
                 sequence_length = Some(sequence_length.unwrap_or_default().max(end));
             }
-            let label = first_literal(
-                &feature,
-                &[
-                    DCTERMS_TITLE,
-                    SBOL3_NAME,
-                    SBOL2_DISPLAY_ID,
-                    SBOL3_DISPLAY_ID,
-                ],
-            )
-            .unwrap_or_else(|| iri_tail(feature_iri));
+            let label = direct_label
+                .or(linked_label)
+                .unwrap_or_else(|| iri_tail(feature_iri));
             features.push(ObjectVisualFeature {
                 uri: feature_iri.clone(),
                 label,
@@ -853,83 +944,124 @@ fn collect_object_relations(
     scope: &GraphScope,
 ) -> Result<ObjectRelations, DomainError> {
     let target_object = PatternObject::Iri(target.to_owned());
-    let incoming = scan_scoped(source, None, None, Some(&target_object), scope)?;
     let mut collections = BTreeSet::new();
-    let mut direct_uses = HashSet::new();
-    let mut middles = HashSet::new();
-    for triple in incoming {
-        if let SubjectTerm::Iri(subject) = &triple.subject {
-            if matches!(triple.predicate.as_str(), SBOL2_MEMBER | SBOL3_MEMBER) {
-                collections.insert(subject.as_str().to_owned());
+    let mut collections_truncated = false;
+    for predicate in [SBOL2_MEMBER, SBOL3_MEMBER] {
+        let matches = scan_scoped(source, None, Some(predicate), Some(&target_object), scope)?;
+        collections_truncated |= matches.truncated;
+        for triple in matches.items {
+            if let SubjectTerm::Iri(subject) = triple.subject {
+                insert_bounded(
+                    &mut collections,
+                    subject.into_inner(),
+                    &mut collections_truncated,
+                );
             }
-            if subject.as_str() != target {
-                direct_uses.insert(subject.as_str().to_owned());
-            }
-        }
-        if triple.predicate.as_str() != SBH_TOP_LEVEL {
-            middles.insert(triple.subject);
         }
     }
 
-    let mut indirect_uses = HashSet::new();
-    for middle in middles {
+    let incoming = scan_scoped(source, None, None, Some(&target_object), scope)?;
+    let mut uses_truncated = incoming.truncated;
+    let mut use_candidates = BTreeSet::new();
+    let mut middles = BTreeMap::new();
+    for triple in incoming.items {
+        // This denormalized containment marker can have tens of thousands of
+        // incoming edges for one top level. It is registry bookkeeping, not a
+        // biological reuse relationship, and the original query explicitly
+        // excluded it from the two-hop traversal.
+        if triple.predicate.as_str() == SBH_TOP_LEVEL {
+            continue;
+        }
+        if let SubjectTerm::Iri(subject) = &triple.subject {
+            if subject.as_str() != target {
+                insert_bounded(
+                    &mut use_candidates,
+                    subject.as_str().to_owned(),
+                    &mut uses_truncated,
+                );
+            }
+        }
+        middles.insert(subject_key(&triple.subject), triple.subject);
+    }
+
+    for middle in middles.into_values() {
         let middle_object = pattern_object_for_subject(&middle);
-        for triple in scan_scoped(source, None, None, Some(&middle_object), scope)? {
+        let matches = scan_scoped(source, None, None, Some(&middle_object), scope)?;
+        uses_truncated |= matches.truncated;
+        for triple in matches.items {
             if let SubjectTerm::Iri(subject) = triple.subject {
                 if subject.as_str() != target {
-                    indirect_uses.insert(subject.into_inner());
+                    insert_bounded(
+                        &mut use_candidates,
+                        subject.into_inner(),
+                        &mut uses_truncated,
+                    );
                 }
             }
         }
-        enforce_relation_bound(indirect_uses.len())?;
+        if uses_truncated && use_candidates.len() == OBJECT_RELATION_ROW_LIMIT {
+            break;
+        }
     }
 
-    direct_uses.extend(indirect_uses);
-    let mut uses = retain_typed_iris(source, direct_uses, scope)?;
-    uses.sort();
-    enforce_relation_bound(uses.len())?;
+    let uses = retain_typed_iris(source, use_candidates, scope, uses_truncated)?;
 
-    let mut twin_candidates = HashSet::new();
+    let mut twin_candidates = BTreeSet::new();
+    let mut twins_truncated = false;
     if !target_sequences.is_empty() {
-        let mut elements = HashSet::new();
+        let mut elements = BTreeMap::new();
         for sequence in target_sequences {
             let subject = PatternSubject::Iri(sequence.clone());
-            for triple in scan_scoped(source, Some(&subject), None, None, scope)? {
+            let matches = scan_scoped(source, Some(&subject), None, None, scope)?;
+            twins_truncated |= matches.truncated;
+            for triple in matches.items {
                 if matches!(triple.predicate.as_str(), SBOL2_ELEMENTS | SBOL3_ELEMENTS) {
-                    elements.insert(triple.object);
+                    elements.insert(object_key(&triple.object), triple.object);
                 }
             }
         }
 
-        let mut matching_sequences = HashSet::new();
-        for element in elements {
+        let mut matching_sequences = BTreeMap::new();
+        for element in elements.into_values() {
             let element = pattern_object_for_term(&element);
             for predicate in [SBOL2_ELEMENTS, SBOL3_ELEMENTS] {
-                for triple in scan_scoped(source, None, Some(predicate), Some(&element), scope)? {
-                    matching_sequences.insert(triple.subject);
+                let matches = scan_scoped(source, None, Some(predicate), Some(&element), scope)?;
+                twins_truncated |= matches.truncated;
+                for triple in matches.items {
+                    matching_sequences.insert(subject_key(&triple.subject), triple.subject);
                 }
             }
         }
 
-        for sequence in matching_sequences {
+        for sequence in matching_sequences.into_values() {
             let sequence = pattern_object_for_subject(&sequence);
             for predicate in [SBOL2_SEQUENCE, SBOL3_SEQUENCE] {
-                for triple in scan_scoped(source, None, Some(predicate), Some(&sequence), scope)? {
+                let matches = scan_scoped(source, None, Some(predicate), Some(&sequence), scope)?;
+                twins_truncated |= matches.truncated;
+                for triple in matches.items {
                     if let SubjectTerm::Iri(subject) = triple.subject {
                         if subject.as_str() != target {
-                            twin_candidates.insert(subject.into_inner());
+                            insert_bounded(
+                                &mut twin_candidates,
+                                subject.into_inner(),
+                                &mut twins_truncated,
+                            );
                         }
                     }
                 }
             }
+            if twins_truncated && twin_candidates.len() == OBJECT_RELATION_ROW_LIMIT {
+                break;
+            }
         }
     }
-    let mut twins = retain_typed_iris(source, twin_candidates, scope)?;
-    twins.sort();
-    enforce_relation_bound(twins.len())?;
+    let twins = retain_typed_iris(source, twin_candidates, scope, twins_truncated)?;
 
     Ok(ObjectRelations {
-        collections: collections.into_iter().collect(),
+        collections: BoundedIris {
+            items: collections.into_iter().collect(),
+            truncated: collections_truncated,
+        },
         uses,
         twins,
     })
@@ -937,17 +1069,23 @@ fn collect_object_relations(
 
 fn retain_typed_iris(
     source: &dyn TripleSource,
-    candidates: HashSet<String>,
+    candidates: BTreeSet<String>,
     scope: &GraphScope,
-) -> Result<Vec<String>, DomainError> {
+    mut truncated: bool,
+) -> Result<BoundedIris, DomainError> {
     let mut typed = Vec::with_capacity(candidates.len());
     for candidate in candidates {
         let subject = PatternSubject::Iri(candidate.clone());
-        if !scan_scoped(source, Some(&subject), Some(RDF_TYPE), None, scope)?.is_empty() {
+        let matches = scan_scoped(source, Some(&subject), Some(RDF_TYPE), None, scope)?;
+        truncated |= matches.truncated;
+        if !matches.items.is_empty() {
             typed.push(candidate);
         }
     }
-    Ok(typed)
+    Ok(BoundedIris {
+        items: typed,
+        truncated,
+    })
 }
 
 fn scan_scoped(
@@ -956,8 +1094,9 @@ fn scan_scoped(
     predicate: Option<&str>,
     object: Option<&PatternObject>,
     scope: &GraphScope,
-) -> Result<Vec<Triple>, DomainError> {
+) -> Result<BoundedTriples, DomainError> {
     let mut triples = Vec::new();
+    let mut truncated = false;
     match scope {
         GraphScope::Union => {
             triples = source.scan_pattern(
@@ -967,6 +1106,7 @@ fn scan_scoped(
                 None,
                 (OBJECT_RELATION_ROW_LIMIT + 1) as i64,
             )?;
+            truncated = triples.len() > OBJECT_RELATION_ROW_LIMIT;
         }
         GraphScope::Only(graphs) => {
             for graph in graphs {
@@ -981,21 +1121,37 @@ fn scan_scoped(
                     Some(&graph),
                     remaining as i64,
                 )?);
-                enforce_relation_bound(triples.len())?;
+                if triples.len() > OBJECT_RELATION_ROW_LIMIT {
+                    truncated = true;
+                    break;
+                }
             }
         }
     }
-    enforce_relation_bound(triples.len())?;
-    Ok(triples)
+    triples.truncate(OBJECT_RELATION_ROW_LIMIT);
+    Ok(BoundedTriples {
+        items: triples,
+        truncated,
+    })
 }
 
-fn enforce_relation_bound(len: usize) -> Result<(), DomainError> {
-    if len > OBJECT_RELATION_ROW_LIMIT {
-        return Err(DomainError::Unavailable(format!(
-            "object relationship result exceeded its {OBJECT_RELATION_ROW_LIMIT}-row safety bound"
-        )));
+fn insert_bounded(values: &mut BTreeSet<String>, value: String, truncated: &mut bool) {
+    values.insert(value);
+    if values.len() > OBJECT_RELATION_ROW_LIMIT {
+        values.pop_last();
+        *truncated = true;
     }
-    Ok(())
+}
+
+fn subject_key(subject: &SubjectTerm) -> String {
+    match subject {
+        SubjectTerm::Iri(value) => format!("i:{}", value.as_str()),
+        SubjectTerm::BlankNode(value) => format!("b:{value}"),
+    }
+}
+
+fn object_key(object: &ObjectTerm) -> ObjectPropertyValue {
+    property_value(object)
 }
 
 fn pattern_object_for_subject(subject: &SubjectTerm) -> PatternObject {
@@ -1058,21 +1214,30 @@ fn is_component_like(object_type: &str) -> bool {
 }
 
 fn visual_glyph(roles: &[String]) -> ObjectVisualGlyph {
-    if roles.iter().any(|role| role.ends_with("SO:0000167")) {
+    if roles.iter().any(|role| role_is(role, "0000167")) {
         ObjectVisualGlyph::Promoter
-    } else if roles.iter().any(|role| role.ends_with("SO:0000316")) {
+    } else if roles.iter().any(|role| role_is(role, "0000316")) {
         ObjectVisualGlyph::CodingSequence
-    } else if roles.iter().any(|role| role.ends_with("SO:0000139")) {
+    } else if roles.iter().any(|role| role_is(role, "0000139")) {
         ObjectVisualGlyph::RibosomeEntrySite
-    } else if roles.iter().any(|role| role.ends_with("SO:0000141")) {
+    } else if roles.iter().any(|role| role_is(role, "0000141")) {
         ObjectVisualGlyph::Terminator
-    } else if roles.iter().any(|role| role.ends_with("SO:0000057")) {
+    } else if roles.iter().any(|role| role_is(role, "0000057")) {
         ObjectVisualGlyph::Operator
-    } else if roles.iter().any(|role| role.ends_with("SO:0000296")) {
+    } else if roles.iter().any(|role| role_is(role, "0000296")) {
         ObjectVisualGlyph::OriginOfReplication
     } else {
         ObjectVisualGlyph::Unspecified
     }
+}
+
+fn role_is(role: &str, accession: &str) -> bool {
+    role.rsplit(['/', '#'])
+        .find(|segment| !segment.is_empty())
+        .is_some_and(|tail| {
+            tail.eq_ignore_ascii_case(&format!("SO:{accession}"))
+                || tail.eq_ignore_ascii_case(&format!("SO_{accession}"))
+        })
 }
 
 fn iri_tail(iri: &str) -> String {
@@ -1126,6 +1291,36 @@ fn reference_section(
     partial: bool,
     unsupported_note: &str,
 ) -> ObjectReferenceSection {
+    reference_section_with_note(
+        iris,
+        supported,
+        partial,
+        "One or more blank-node relationships cannot be addressed as object pages.",
+        unsupported_note,
+    )
+}
+
+fn relation_reference_section(
+    relation: BoundedIris,
+    supported: bool,
+    unsupported_note: &str,
+) -> ObjectReferenceSection {
+    reference_section_with_note(
+        relation.items,
+        supported,
+        relation.truncated,
+        "Relationship lookup reached its 10,000-row safety bound; visible results may be incomplete.",
+        unsupported_note,
+    )
+}
+
+fn reference_section_with_note(
+    iris: Vec<String>,
+    supported: bool,
+    partial: bool,
+    partial_note: &str,
+    unsupported_note: &str,
+) -> ObjectReferenceSection {
     if !supported {
         return ObjectReferenceSection {
             state: ObjectContentState::Unsupported,
@@ -1153,9 +1348,7 @@ fn reference_section(
     ObjectReferenceSection {
         state,
         items,
-        note: partial.then(|| {
-            "One or more blank-node relationships cannot be addressed as object pages.".to_owned()
-        }),
+        note: partial.then(|| partial_note.to_owned()),
     }
 }
 
@@ -1271,4 +1464,188 @@ fn last_literal(triples: &[Triple], predicates: &[&str]) -> Option<String> {
 
 fn first_term(triples: &[Triple], predicates: &[&str]) -> Option<String> {
     term_values(triples, predicates).into_iter().next()
+}
+
+#[cfg(test)]
+mod tests {
+    use sbol_db_storage::GraphFilter;
+
+    use super::*;
+
+    struct TestTripleSource {
+        triples: Vec<Triple>,
+    }
+
+    impl TripleSource for TestTripleSource {
+        fn scan_pattern(
+            &self,
+            subject: Option<&PatternSubject>,
+            predicate: Option<&str>,
+            object: Option<&PatternObject>,
+            graph: Option<&GraphFilter>,
+            limit: i64,
+        ) -> Result<Vec<Triple>, DomainError> {
+            let limit = if limit < 0 {
+                usize::MAX
+            } else {
+                limit as usize
+            };
+            Ok(self
+                .triples
+                .iter()
+                .filter(|triple| subject.is_none_or(|value| subject_matches(value, triple)))
+                .filter(|triple| predicate.is_none_or(|value| triple.predicate.as_str() == value))
+                .filter(|triple| object.is_none_or(|value| object_matches(value, triple)))
+                .filter(|triple| graph.is_none_or(|value| graph_matches(value, triple)))
+                .take(limit)
+                .cloned()
+                .collect())
+        }
+
+        fn distinct_named_graphs(&self) -> Result<Vec<String>, DomainError> {
+            Ok(Vec::new())
+        }
+
+        fn triples_for_graph(
+            &self,
+            graph: Option<&str>,
+            limit: i64,
+        ) -> Result<Vec<Triple>, DomainError> {
+            let limit = if limit < 0 {
+                usize::MAX
+            } else {
+                limit as usize
+            };
+            Ok(self
+                .triples
+                .iter()
+                .filter(|triple| triple.graph_iri.as_ref().map(IriString::as_str) == graph)
+                .take(limit)
+                .cloned()
+                .collect())
+        }
+
+        fn triples_for_subject(&self, subject_iri: &str) -> Result<Vec<Triple>, DomainError> {
+            Ok(self
+                .triples
+                .iter()
+                .filter(|triple| {
+                    matches!(
+                        &triple.subject,
+                        SubjectTerm::Iri(subject) if subject.as_str() == subject_iri
+                    )
+                })
+                .cloned()
+                .collect())
+        }
+    }
+
+    fn subject_matches(pattern: &PatternSubject, triple: &Triple) -> bool {
+        match (pattern, &triple.subject) {
+            (PatternSubject::Iri(expected), SubjectTerm::Iri(actual)) => {
+                actual.as_str() == expected
+            }
+            (PatternSubject::Blank(expected), SubjectTerm::BlankNode(actual)) => actual == expected,
+            _ => false,
+        }
+    }
+
+    fn object_matches(pattern: &PatternObject, triple: &Triple) -> bool {
+        match (pattern, &triple.object) {
+            (PatternObject::Iri(expected), ObjectTerm::Iri(actual)) => actual.as_str() == expected,
+            (PatternObject::Blank(expected), ObjectTerm::BlankNode(actual)) => actual == expected,
+            (
+                PatternObject::Literal {
+                    value: expected_value,
+                    datatype: expected_datatype,
+                    language: expected_language,
+                },
+                ObjectTerm::Literal {
+                    value,
+                    datatype,
+                    language,
+                },
+            ) => {
+                value == expected_value
+                    && datatype.as_str() == expected_datatype
+                    && language == expected_language
+            }
+            _ => false,
+        }
+    }
+
+    fn graph_matches(pattern: &GraphFilter, triple: &Triple) -> bool {
+        match pattern {
+            GraphFilter::AnyNamed => triple.graph_iri.is_some(),
+            GraphFilter::DefaultOnly => triple.graph_iri.is_none(),
+            GraphFilter::Iri(expected) => triple
+                .graph_iri
+                .as_ref()
+                .is_some_and(|actual| actual.as_str() == expected),
+        }
+    }
+
+    fn iri_triple(subject: &str, predicate: &str, object: &str) -> Triple {
+        Triple {
+            graph_iri: None,
+            subject: SubjectTerm::Iri(IriString::unchecked(subject)),
+            predicate: IriString::unchecked(predicate),
+            object: ObjectTerm::Iri(IriString::unchecked(object)),
+        }
+    }
+
+    #[test]
+    fn visual_glyph_accepts_common_sequence_ontology_iri_forms() {
+        assert_eq!(
+            visual_glyph(&["http://identifiers.org/so/SO:0000167".to_owned()]),
+            ObjectVisualGlyph::Promoter
+        );
+        assert_eq!(
+            visual_glyph(&["http://purl.obolibrary.org/obo/SO_0000316".to_owned()]),
+            ObjectVisualGlyph::CodingSequence
+        );
+        assert_eq!(
+            visual_glyph(&["http://example.org/SO:00003160".to_owned()]),
+            ObjectVisualGlyph::Unspecified
+        );
+    }
+
+    #[test]
+    fn large_top_level_fanout_marks_uses_partial_instead_of_failing_the_object() {
+        const TARGET: &str = "https://example.org/large-collection";
+        const PARENT: &str = "https://example.org/parent-collection";
+
+        let mut triples = (0..=OBJECT_RELATION_ROW_LIMIT)
+            .map(|index| {
+                iri_triple(
+                    &format!("https://example.org/child/{index:05}"),
+                    SBH_TOP_LEVEL,
+                    TARGET,
+                )
+            })
+            .collect::<Vec<_>>();
+        // Put the genuine inverse relationship after the generic scan's raw
+        // row bound. Its predicate-specific scan must still find it.
+        triples.push(iri_triple(PARENT, SBOL2_MEMBER, TARGET));
+
+        let relations = collect_object_relations(
+            &TestTripleSource { triples },
+            TARGET,
+            &[],
+            &GraphScope::Union,
+        )
+        .expect("large relationship fanout remains a readable object");
+
+        assert_eq!(relations.collections.items, vec![PARENT]);
+        assert!(!relations.collections.truncated);
+        assert!(relations.uses.items.is_empty());
+        assert!(relations.uses.truncated);
+
+        let uses = relation_reference_section(relations.uses, true, "");
+        assert_eq!(uses.state, ObjectContentState::Partial);
+        assert!(uses
+            .note
+            .as_deref()
+            .is_some_and(|note| note.contains("visible results may be incomplete")));
+    }
 }

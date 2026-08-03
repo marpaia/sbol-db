@@ -1,0 +1,71 @@
+app = "@@FLY_APP@@"
+primary_region = "@@FLY_PRIMARY_REGION@@"
+
+kill_signal = "SIGTERM"
+kill_timeout = 300
+
+[env]
+  SBOL_DB_PROFILE = "production"
+  SBOL_DB_DATA_DIR = "/var/lib/sbol-db"
+  SBOL_DB_BIND = "0.0.0.0:8080"
+  SBOL_DB_HOSTNAME = "@@SBOL_DB_HOSTNAME@@"
+  SBOL_DB_ACME_CONTACT = "@@SBOL_DB_ACME_CONTACT@@"
+  SBOL_DB_HTTP_BIND = "0.0.0.0:8081"
+  SBOL_DB_OPERATIONS_BIND = "127.0.0.1:9090"
+  SBOL_DB_BACKUP_REPOSITORY_URL = "s3://@@SBOL_DB_BACKUP_BUCKET@@/@@SBOL_DB_BACKUP_PREFIX@@"
+  SBOL_DB_BACKUP_RECOVERY_RECIPIENT = "@@SBOL_DB_BACKUP_RECOVERY_RECIPIENT@@"
+  SBOL_DB_BACKUP_INTERVAL_SECS = "@@SBOL_DB_BACKUP_INTERVAL_SECS@@"
+  SBOL_DB_BACKUP_LOCAL_RETENTION = "2"
+  SBOL_DB_MIN_FREE_BYTES = "@@SBOL_DB_MIN_FREE_BYTES@@"
+  SBOL_DB_SESSION_COOKIE_SECURE = "true"
+  LOG_FORMAT = "json"
+  RUST_LOG = "info"
+
+[deploy]
+  strategy = "rolling"
+  max_unavailable = 1
+  wait_timeout = "15m"
+
+[[mounts]]
+  source = "@@FLY_VOLUME_NAME@@"
+  destination = "/var/lib/sbol-db"
+  initial_size = "@@FLY_VOLUME_SIZE_GB@@GB"
+  snapshot_retention = @@FLY_VOLUME_SNAPSHOT_RETENTION_DAYS@@
+  scheduled_snapshots = true
+  auto_extend_size_threshold = @@FLY_VOLUME_AUTO_EXTEND_THRESHOLD@@
+  auto_extend_size_increment = "@@FLY_VOLUME_AUTO_EXTEND_INCREMENT_GB@@GB"
+  auto_extend_size_limit = "@@FLY_VOLUME_AUTO_EXTEND_LIMIT_GB@@GB"
+
+[[vm]]
+  size = "@@FLY_VM_SIZE@@"
+  memory = "@@FLY_VM_MEMORY@@"
+
+[[restart]]
+  policy = "on-failure"
+  retries = 10
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 8080
+  auto_stop_machines = "off"
+  auto_start_machines = false
+
+  [[services.ports]]
+    port = 443
+
+  # Native ACME cannot pass its TLS-ALPN-01 challenge until Fly routes TCP to
+  # the Machine. An HTTPS service check would deadlock first boot by requiring
+  # that certificate before admitting the challenge connection.
+  [[services.tcp_checks]]
+    grace_period = "1m"
+    interval = "15s"
+    timeout = "5s"
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 8081
+  auto_stop_machines = "off"
+  auto_start_machines = false
+
+  [[services.ports]]
+    port = 80

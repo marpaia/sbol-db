@@ -119,6 +119,13 @@ pub(super) fn validate_blob_tree(
         .iter()
         .filter(|file| file.component == BackupComponent::Blobs)
     {
+        if is_legacy_instance_logo(&file.path) {
+            // Classic SynBioHub stores the active instance logo directly at
+            // uploads/logo_uploaded.<extension>. It is not content-addressed,
+            // but the complete-backup manifest still authenticates its path,
+            // mode, length, and SHA-256 and restore preserves it byte-for-byte.
+            continue;
+        }
         let parts: Vec<_> = file.path.split('/').collect();
         if parts.len() != 4 || parts[0] != "blobs" || parts[1] != "uploads" {
             bail!(
@@ -150,7 +157,24 @@ pub(super) fn validate_blob_tree(
     Ok(hashes)
 }
 
-pub(super) fn validate_referenced_blobs(db: &Db, available: &BTreeSet<String>) -> Result<usize> {
+fn is_legacy_instance_logo(path: &str) -> bool {
+    let Some(extension) = path.strip_prefix("blobs/uploads/logo_uploaded.") else {
+        return false;
+    };
+    !extension.is_empty()
+        && extension.len() <= 16
+        && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+pub(super) struct ReferencedBlobAudit {
+    pub referenced: usize,
+    pub missing: Vec<String>,
+}
+
+pub(super) fn audit_referenced_blobs(
+    db: &Db,
+    available: &BTreeSet<String>,
+) -> Result<ReferencedBlobAudit> {
     let store = RocksdbStore::new(db.clone());
     let triples = store.triple_source();
     let mut referenced = BTreeSet::new();
@@ -166,13 +190,18 @@ pub(super) fn validate_referenced_blobs(db: &Db, available: &BTreeSet<String>) -
             if hash.len() != 40 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 bail!("RocksDB references an invalid attachment hash `{value}`");
             }
-            if !available.contains(&hash) {
-                bail!("RocksDB references missing attachment blob `{hash}`");
-            }
             referenced.insert(hash);
         }
     }
-    Ok(referenced.len())
+    let missing = referenced
+        .iter()
+        .filter(|hash| !available.contains(*hash))
+        .cloned()
+        .collect();
+    Ok(ReferencedBlobAudit {
+        referenced: referenced.len(),
+        missing,
+    })
 }
 
 fn sha1_gzip_payload(path: &Path) -> Result<String> {

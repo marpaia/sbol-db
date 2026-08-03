@@ -178,6 +178,36 @@ impl UserStore for RocksdbUserStore {
         .await
     }
 
+    async fn set_sole_admin(&self, id: UserId) -> Result<(), DomainError> {
+        let db = self.db.clone();
+        let writes = self.writes.clone();
+        blocking(move || {
+            let _guard = writes.lock().unwrap();
+            if get_user(&db, id)?.is_none() {
+                return Err(DomainError::NotFound(format!("user {id}")));
+            }
+
+            let now = Utc::now();
+            let mut users = Vec::new();
+            db.for_each(CF_USERS, |_, value| {
+                users.push(decode::<User>(value)?);
+                Ok(true)
+            })?;
+
+            let mut batch = WriteBatch::default();
+            for mut user in users {
+                let should_be_admin = user.id == id;
+                if user.is_admin != should_be_admin {
+                    user.is_admin = should_be_admin;
+                    user.updated_at = now;
+                    stage_user(&db, &mut batch, &user)?;
+                }
+            }
+            db.write(batch)
+        })
+        .await
+    }
+
     async fn set_password_hash(&self, id: UserId, password_hash: &str) -> Result<(), DomainError> {
         let db = self.db.clone();
         let writes = self.writes.clone();

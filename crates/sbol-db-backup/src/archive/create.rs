@@ -4,9 +4,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
+use sbol_db_rocksdb::Db;
 use uuid::Uuid;
 
-use super::payload::{collect_payload_files, copy_tree, portable_to_path};
+use super::payload::{
+    audit_referenced_blobs, collect_payload_files, copy_tree, portable_to_path, validate_blob_tree,
+};
 use super::verify::{validate_manifest, verify_encrypted_backup, VerifiedBackup};
 use crate::encryption::BackupEncryption;
 use crate::filesystem::{prepare_private_directory, sync_directory, validate_source_directory};
@@ -100,7 +103,7 @@ pub fn create_complete_backup_with_id(
                 .sum(),
         })
         .collect();
-    let manifest = BackupManifest {
+    let mut manifest = BackupManifest {
         format: BACKUP_FORMAT.to_owned(),
         version: BACKUP_VERSION,
         backup_id,
@@ -114,8 +117,15 @@ pub fn create_complete_backup_with_id(
         encryption: "age-x25519".to_owned(),
         components,
         files,
+        missing_referenced_blobs: Vec::new(),
         payload_bytes,
     };
+    let checkpoint = Db::open_read_only(&payload_root.join(BackupComponent::Rocksdb.as_str()))
+        .context("open staged RocksDB checkpoint for attachment audit")?;
+    let available_blobs = validate_blob_tree(&manifest, &payload_root)?;
+    let attachment_audit = audit_referenced_blobs(&checkpoint, &available_blobs)?;
+    manifest.missing_referenced_blobs = attachment_audit.missing;
+    drop(checkpoint);
     validate_manifest(&manifest)?;
 
     let mut partial = tempfile::Builder::new()
@@ -164,6 +174,7 @@ fn created_from_verified(path: PathBuf, verified: VerifiedBackup, reused: bool) 
         payload_bytes: verified.manifest.payload_bytes,
         files: verified.manifest.files.len() as u64,
         referenced_blobs: verified.referenced_blobs,
+        missing_referenced_blobs: verified.manifest.missing_referenced_blobs.clone(),
         verified_at: Utc::now(),
         reused,
     }

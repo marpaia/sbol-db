@@ -106,6 +106,107 @@ fn verify_and_restore_a_complete_artifact_through_the_cli() {
     );
 }
 
+#[test]
+fn create_and_restore_an_offline_seed_through_the_cli() {
+    let fixture = tempfile::tempdir().unwrap();
+    let source = fixture.path().join("source");
+    let backups = fixture.path().join("backups");
+    let restored = fixture.path().join("restored");
+    for component in ["blobs", "search", "acme"] {
+        fs::create_dir_all(source.join(component)).unwrap();
+    }
+    fs::create_dir_all(&backups).unwrap();
+    fs::write(source.join("search/index"), b"search-state").unwrap();
+    let db = Db::open(&source.join("rocksdb")).unwrap();
+    db.put_cf("meta", b"seed", b"exact-source").unwrap();
+    drop(db);
+
+    let identity_file = fixture.path().join("recovery.agekey");
+    let keygen = Command::cargo_bin("sbol-db")
+        .unwrap()
+        .arg("backup")
+        .arg("keygen")
+        .arg("--identity-file")
+        .arg(&identity_file)
+        .output()
+        .unwrap();
+    assert!(keygen.status.success());
+    let keygen_json: serde_json::Value = serde_json::from_slice(&keygen.stdout).unwrap();
+    assert!(keygen_json["recipient"]
+        .as_str()
+        .unwrap()
+        .starts_with("age1"));
+
+    let create = Command::cargo_bin("sbol-db")
+        .unwrap()
+        .arg("backup")
+        .arg("create")
+        .arg("--database-root")
+        .arg(source.join("rocksdb"))
+        .arg("--blobs-root")
+        .arg(source.join("blobs"))
+        .arg("--search-root")
+        .arg(source.join("search"))
+        .arg("--acme-root")
+        .arg(source.join("acme"))
+        .arg("--backup-root")
+        .arg(&backups)
+        .arg("--identity-file")
+        .arg(&identity_file)
+        .output()
+        .unwrap();
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let created: serde_json::Value = serde_json::from_slice(&create.stdout).unwrap();
+    let backup_id = created["backup_id"].as_str().unwrap();
+    let artifact = std::path::PathBuf::from(created["path"].as_str().unwrap());
+    assert!(artifact.is_file());
+
+    let restore = Command::cargo_bin("sbol-db")
+        .unwrap()
+        .arg("backup")
+        .arg("restore")
+        .arg("--artifact")
+        .arg(&artifact)
+        .arg("--identity-file")
+        .arg(&identity_file)
+        .arg("--data-dir")
+        .arg(&restored)
+        .arg("--confirmation")
+        .arg(format!("RESTORE {backup_id}"))
+        .arg("--remove-artifact-on-success")
+        .arg("--remove-identity-on-success")
+        .output()
+        .unwrap();
+    assert!(
+        restore.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restore.stderr)
+    );
+    assert!(!artifact.exists());
+    assert!(!identity_file.exists());
+
+    let restored_db =
+        Db::open_read_only(&restored.join("generations").join(backup_id).join("rocksdb")).unwrap();
+    assert_eq!(
+        restored_db.get_cf("meta", b"seed").unwrap(),
+        Some(b"exact-source".to_vec())
+    );
+    assert_eq!(
+        fs::read(
+            restored
+                .join("generations")
+                .join(backup_id)
+                .join("search/index")
+        )
+        .unwrap(),
+        b"search-state"
+    );
+}
+
 #[cfg(unix)]
 fn set_private_permissions(path: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;

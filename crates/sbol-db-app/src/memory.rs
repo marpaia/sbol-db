@@ -115,6 +115,22 @@ impl UserStore for InMemoryUserStore {
         Ok(existing.clone())
     }
 
+    async fn set_sole_admin(&self, id: UserId) -> Result<(), DomainError> {
+        let mut users = self.users.lock().unwrap();
+        if !users.contains_key(&id) {
+            return Err(DomainError::NotFound(format!("user {id}")));
+        }
+        let now = Utc::now();
+        for user in users.values_mut() {
+            let should_be_admin = user.id == id;
+            if user.is_admin != should_be_admin {
+                user.is_admin = should_be_admin;
+                user.updated_at = now;
+            }
+        }
+        Ok(())
+    }
+
     async fn set_password_hash(&self, id: UserId, password_hash: &str) -> Result<(), DomainError> {
         let mut users = self.users.lock().unwrap();
         let Some(user) = users.get_mut(&id) else {

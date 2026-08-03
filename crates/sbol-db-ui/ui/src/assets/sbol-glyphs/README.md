@@ -10,8 +10,12 @@ service for SBOL Visual 3.0. They use the service's glyph-only response
 | `ribosome-entry-site.svg` | `SO:0000139` | <https://vows.sbolstandard.org/glyph/SO:0000139/svg?version=3.0&specification=false> |
 | `cds.svg` | `SO:0000316` | <https://vows.sbolstandard.org/glyph/SO:0000316/svg?version=3.0&specification=false> |
 | `terminator.svg` | `SO:0000141` | <https://vows.sbolstandard.org/glyph/SO:0000141/svg?version=3.0&specification=false> |
+| `operator.svg` | `SO:0000057` | <https://vows.sbolstandard.org/glyph/SO:0000057/svg?version=3.0&specification=false> |
+| `origin-of-replication.svg` | `SO:0000296` | <https://vows.sbolstandard.org/glyph/SO:0000296/svg?version=3.0&specification=false> |
+| `no-glyph-assigned.svg` | no mapped role | <https://vows.sbolstandard.org/glyph/NoGlyphAssignedGlyph/svg?version=3.0&specification=false> |
 
-Downloaded 2026-08-01. Do not redraw or approximate standard glyphs. Add or
+Core glyphs were downloaded 2026-08-01; the operator, origin, and no-glyph
+assets were downloaded 2026-08-03. Do not redraw or approximate standard glyphs. Add or
 update assets only from an official SBOL Visual release or service endpoint.
 
 The top-navigation `BrandMark` and `public/favicon.svg` reuse the exact promoter
