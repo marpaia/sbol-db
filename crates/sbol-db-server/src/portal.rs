@@ -117,7 +117,6 @@ fn is_page_path(path: &str) -> bool {
         "/sequence-search",
         "/sparql",
         "/change-password",
-        "/connect",
         "/about",
         "/reset-password",
     ]
@@ -308,7 +307,6 @@ mod tests {
             "/search",
             "/search/objectType=ComponentDefinition",
             "/sequence-search",
-            "/connect",
             "/about",
             "/advanced-search",
             "/collections/featured",
@@ -341,5 +339,10 @@ mod tests {
         ] {
             assert!(!is_page_path(path), "must remain an API path: {path}");
         }
+    }
+
+    #[test]
+    fn removed_connect_route_is_not_a_page() {
+        assert!(!is_page_path("/connect"));
     }
 }
