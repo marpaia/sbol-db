@@ -4,8 +4,8 @@ import { Braces, Check, ChevronDown, Copy, TriangleAlert } from "lucide-react";
 import { ObjectSection } from "@/components/portal/ObjectSection";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
-import type { PortalObjectDetails } from "@/features/portal/api";
-import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import type { PortalObjectDetails } from "@/features/registry/objects/api";
+import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { cn } from "@/lib/utils";
 
 export function ObjectRawProjection({

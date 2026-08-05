@@ -9,9 +9,9 @@ import { Button } from "@/components/ui/button";
 import type {
   ObjectPropertyValue,
   PortalObjectDetails,
-} from "@/features/portal/api";
-import { shortIri } from "@/features/portal/format";
-import { propertyLabel } from "@/features/portal/object-presentation";
+} from "@/features/registry/objects/api";
+import { shortIri } from "@/features/registry/objects/format";
+import { propertyLabel } from "@/features/registry/objects/object-presentation";
 import { publicObjectPath } from "@/lib/routes";
 
 const INITIAL_PROPERTIES = 8;

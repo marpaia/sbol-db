@@ -19,7 +19,7 @@ import {
   Network,
 } from "lucide-react";
 
-import { useLabStore } from "@/lib/store";
+import { useWorkbenchStore } from "@/features/admin/workbench/store";
 import { adminPath } from "@/lib/routes";
 import { useNavigate } from "react-router-dom";
 
@@ -32,7 +32,7 @@ export interface IriContextMenuProps {
 
 export function IriContextMenu({ x, y, iri, onClose }: IriContextMenuProps) {
   const navigate = useNavigate();
-  const setBuffer = useLabStore((s) => s.setBuffer);
+  const setBuffer = useWorkbenchStore((s) => s.setBuffer);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

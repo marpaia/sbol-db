@@ -5,9 +5,9 @@ import { ObjectSection } from "@/components/portal/ObjectSection";
 import { ObjectStateBadge } from "@/components/portal/ObjectStateBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { PortalObjectDetails } from "@/features/portal/api";
-import { shortIri } from "@/features/portal/format";
-import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import type { PortalObjectDetails } from "@/features/registry/objects/api";
+import { shortIri } from "@/features/registry/objects/format";
+import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 
 export function ObjectBiology({ object }: { object: PortalObjectDetails }) {
   return (

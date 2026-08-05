@@ -2,7 +2,7 @@ import { Boxes, GitBranch, Library, Network } from "lucide-react";
 
 import { ObjectRelationGroup } from "@/components/portal/ObjectRelationGroup";
 import { ObjectSection } from "@/components/portal/ObjectSection";
-import type { PortalObjectDetails } from "@/features/portal/api";
+import type { PortalObjectDetails } from "@/features/registry/objects/api";
 
 export function ObjectContext({ object }: { object: PortalObjectDetails }) {
   return (

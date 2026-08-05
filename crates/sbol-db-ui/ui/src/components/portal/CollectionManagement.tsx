@@ -26,9 +26,11 @@ import {
   type PortalObjectDetails,
   publishPortalObject,
   removeCollectionMember,
-} from "@/features/portal/api";
-import { portalKeys, useSession } from "@/features/portal/queries";
-import { shortIri } from "@/features/portal/format";
+} from "@/features/registry/objects/api";
+import { discoveryKeys } from "@/features/registry/discovery/queries";
+import { registryObjectKeys } from "@/features/registry/objects/queries";
+import { useSession } from "@/features/session/queries";
+import { shortIri } from "@/features/registry/objects/format";
 import { publicObjectPath } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
@@ -112,9 +114,11 @@ function EditPanel({ object }: { object: PortalObjectDetails }) {
     mutationFn: () => editPortalObject(object.iri, { name, description }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({
-        queryKey: portalKeys.objectDetails(object.iri),
+        queryKey: registryObjectKeys.normalized(object.iri),
       });
-      await queryClient.invalidateQueries({ queryKey: ["portal", "search"] });
+      await queryClient.invalidateQueries({
+        queryKey: discoveryKeys.searches(),
+      });
     },
   });
   return (
@@ -170,9 +174,9 @@ function MembersPanel({ object }: { object: PortalObjectDetails }) {
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
   const refresh = async () => {
     await queryClient.invalidateQueries({
-      queryKey: portalKeys.objectDetails(object.iri),
+      queryKey: registryObjectKeys.normalized(object.iri),
     });
-    await queryClient.invalidateQueries({ queryKey: ["portal", "search"] });
+    await queryClient.invalidateQueries({ queryKey: discoveryKeys.searches() });
   };
   const add = useMutation({
     mutationFn: () => addCollectionMember(object.iri, member.trim()),

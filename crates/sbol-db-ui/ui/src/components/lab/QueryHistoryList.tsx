@@ -7,7 +7,10 @@
 
 import { History, Trash2 } from "lucide-react";
 
-import { type Dialect, useLabStore } from "@/lib/store";
+import {
+  type Dialect,
+  useWorkbenchStore,
+} from "@/features/admin/workbench/store";
 import { cn, compactQuery } from "@/lib/utils";
 
 export interface QueryHistoryListProps {
@@ -16,10 +19,10 @@ export interface QueryHistoryListProps {
 }
 
 export function QueryHistoryList({ dialect, onLoad }: QueryHistoryListProps) {
-  const history = useLabStore((s) =>
+  const history = useWorkbenchStore((s) =>
     s.history.filter((h) => h.dialect === dialect)
   );
-  const clearHistory = useLabStore((s) => s.clearHistory);
+  const clearHistory = useWorkbenchStore((s) => s.clearHistory);
 
   return (
     <div className="flex h-full w-full flex-col bg-background">

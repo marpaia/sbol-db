@@ -8,8 +8,8 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight, Database, Network } from "lucide-react";
 
-import { useSparqlSchema, useSqlSchema } from "@/hooks/useSchema";
-import type { Dialect } from "@/lib/store";
+import { useSparqlSchema, useSqlSchema } from "@/features/admin/schema/queries";
+import type { Dialect } from "@/features/admin/workbench/store";
 import { cn } from "@/lib/utils";
 
 export interface SchemaSidebarProps {

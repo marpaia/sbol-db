@@ -5,7 +5,7 @@ import { HowSearchWorks } from "@/components/portal/HowSearchWorks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { SearchMethod } from "@/features/portal/search-methods";
+import type { SearchMethod } from "@/features/registry/discovery/search-methods";
 import { cn } from "@/lib/utils";
 
 const SEQUENCE_EXAMPLES = ["GAATTC", "GGTACC", "AAGCTT"];

@@ -17,7 +17,7 @@ import {
   enqueueJob,
   type EnqueueJobRequest,
   type EnqueueJobResult,
-} from "@/lib/api";
+} from "@/features/admin/jobs/api";
 
 import { JOB_KINDS, findKind } from "./jobKinds/registry";
 

@@ -18,15 +18,16 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   decideObjectReview,
   requestObjectReview,
-  type PortalObjectDetails,
   type ReviewCase,
   type ReviewStatus,
-} from "@/features/portal/api";
+} from "@/features/registry/collaboration/api";
 import {
-  portalKeys,
+  collaborationKeys,
   useObjectReview,
-  useSession,
-} from "@/features/portal/queries";
+} from "@/features/registry/collaboration/queries";
+import { accountKeys } from "@/features/registry/account/queries";
+import type { PortalObjectDetails } from "@/features/registry/objects/api";
+import { useSession } from "@/features/session/queries";
 import { cn } from "@/lib/utils";
 
 export function ObjectReview({ object }: { object: PortalObjectDetails }) {
@@ -91,16 +92,16 @@ function ReviewCard({
   const refresh = async () => {
     await Promise.all([
       queryClient.invalidateQueries({
-        queryKey: portalKeys.objectReview(object.iri),
+        queryKey: collaborationKeys.review(object.iri),
       }),
-      queryClient.invalidateQueries({ queryKey: portalKeys.reviews }),
+      queryClient.invalidateQueries({ queryKey: collaborationKeys.reviews() }),
       queryClient.invalidateQueries({
-        queryKey: portalKeys.objectActivity(object.iri),
+        queryKey: collaborationKeys.activity(object.iri),
       }),
       queryClient.invalidateQueries({
-        queryKey: portalKeys.collaborators(object.iri),
+        queryKey: collaborationKeys.collaborators(object.iri),
       }),
-      queryClient.invalidateQueries({ queryKey: portalKeys.shared }),
+      queryClient.invalidateQueries({ queryKey: accountKeys.shared() }),
     ]);
   };
   const requestReview = useMutation({

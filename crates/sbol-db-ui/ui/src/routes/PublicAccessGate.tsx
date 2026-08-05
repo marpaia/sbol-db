@@ -1,7 +1,8 @@
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 
 import { Skeleton } from "@/components/ui/skeleton";
-import { useInstance, useSession } from "@/features/portal/queries";
+import { useInstance } from "@/features/instance/queries";
+import { useSession } from "@/features/session/queries";
 
 /** Honor the instance-wide `require_login` policy before discovery routes
  * issue their API queries. The V2 middleware enforces the same policy, so this

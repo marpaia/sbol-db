@@ -21,7 +21,7 @@ import {
   importFormatLabel,
   type ImportDocumentFormat,
   type ImportReport,
-} from "@/lib/api";
+} from "@/features/admin/imports/api";
 import { describeError } from "@/lib/utils";
 
 export interface ImportDialogProps {

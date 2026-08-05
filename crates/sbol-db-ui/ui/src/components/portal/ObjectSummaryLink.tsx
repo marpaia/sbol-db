@@ -3,8 +3,8 @@ import { Link } from "react-router-dom";
 
 import { ObjectTypeMark } from "@/components/portal/ObjectTypeMark";
 import { Badge } from "@/components/ui/badge";
-import type { PortalObjectSummary } from "@/features/portal/api";
-import { shortIri } from "@/features/portal/format";
+import type { PortalObjectSummary } from "@/features/registry/objects/api";
+import { shortIri } from "@/features/registry/objects/format";
 import { publicObjectPath } from "@/lib/routes";
 
 export function ObjectSummaryLink({

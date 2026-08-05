@@ -21,13 +21,16 @@ import {
   grantObjectShare,
   revokeObjectShare,
   transferObjectOwnership,
-  type PortalObjectDetails,
-} from "@/features/portal/api";
+} from "@/features/registry/collaboration/api";
 import {
-  portalKeys,
+  collaborationKeys,
   useCollaborators,
-  useSession,
-} from "@/features/portal/queries";
+} from "@/features/registry/collaboration/queries";
+import type { PortalObjectDetails } from "@/features/registry/objects/api";
+import { accountKeys } from "@/features/registry/account/queries";
+import { discoveryKeys } from "@/features/registry/discovery/queries";
+import { registryObjectKeys } from "@/features/registry/objects/queries";
+import { useSession } from "@/features/session/queries";
 
 export function ObjectCollaboration({
   object,
@@ -77,9 +80,9 @@ function CollaborationCard({
   const [transferOpen, setTransferOpen] = useState(false);
   const refresh = async () => {
     await queryClient.invalidateQueries({
-      queryKey: portalKeys.collaborators(object.iri),
+      queryKey: collaborationKeys.collaborators(object.iri),
     });
-    await queryClient.invalidateQueries({ queryKey: portalKeys.shared });
+    await queryClient.invalidateQueries({ queryKey: accountKeys.shared() });
   };
   const grant = useMutation({
     mutationFn: () => grantObjectShare(object.iri, recipient.trim()),
@@ -99,7 +102,12 @@ function CollaborationCard({
     mutationFn: () =>
       transferObjectOwnership(object.iri, transferTarget.trim()),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["portal"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: accountKeys.all }),
+        queryClient.invalidateQueries({ queryKey: collaborationKeys.all }),
+        queryClient.invalidateQueries({ queryKey: discoveryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: registryObjectKeys.all }),
+      ]);
       navigate("/workspace", { replace: true });
     },
   });

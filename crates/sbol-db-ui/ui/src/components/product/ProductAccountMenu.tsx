@@ -11,8 +11,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { deleteSession, type SessionUser } from "@/features/portal/api";
-import { portalKeys } from "@/features/portal/queries";
+import { deleteSession, type SessionUser } from "@/features/session/api";
+import { sessionKeys } from "@/features/session/queries";
 
 export function ProductAccountMenu({
   user,
@@ -30,7 +30,7 @@ export function ProductAccountMenu({
   const logout = useMutation({
     mutationFn: deleteSession,
     onSuccess: () => {
-      queryClient.setQueryData(portalKeys.session, {
+      queryClient.setQueryData(sessionKeys.detail(), {
         authenticated: false,
         user: null,
       });

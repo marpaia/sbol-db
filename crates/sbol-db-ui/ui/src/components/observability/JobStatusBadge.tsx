@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import type { JobStatus } from "@/lib/api";
+import type { JobStatus } from "@/features/admin/jobs/api";
 
 export function JobStatusBadge({ status }: { status: JobStatus }) {
   const tone =

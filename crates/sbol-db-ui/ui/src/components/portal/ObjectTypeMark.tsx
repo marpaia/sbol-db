@@ -9,7 +9,7 @@ import {
   Paperclip,
 } from "lucide-react";
 
-import { shortIri } from "@/features/portal/format";
+import { shortIri } from "@/features/registry/objects/format";
 import { cn } from "@/lib/utils";
 
 export function ObjectTypeMark({

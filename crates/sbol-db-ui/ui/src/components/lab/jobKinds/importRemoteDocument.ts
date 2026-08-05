@@ -1,4 +1,4 @@
-import type { ImportDocumentFormat } from "@/lib/api";
+import type { ImportDocumentFormat } from "@/features/admin/imports/api";
 
 export interface ImportRemoteDocumentValue {
   url: string;

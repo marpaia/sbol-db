@@ -2,8 +2,8 @@ import { Fingerprint } from "lucide-react";
 
 import { ObjectSection } from "@/components/portal/ObjectSection";
 import { Badge } from "@/components/ui/badge";
-import type { PortalObjectDetails } from "@/features/portal/api";
-import { shortIri } from "@/features/portal/format";
+import type { PortalObjectDetails } from "@/features/registry/objects/api";
+import { shortIri } from "@/features/registry/objects/format";
 
 export function ObjectIdentity({ object }: { object: PortalObjectDetails }) {
   return (

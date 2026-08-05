@@ -18,7 +18,7 @@ import {
   loadOntology,
   type OntologyLoadReport,
   type OntologyLoadRequest,
-} from "@/lib/api";
+} from "@/features/admin/ontologies/api";
 
 export interface OntologyLoaderDialogProps {
   open: boolean;

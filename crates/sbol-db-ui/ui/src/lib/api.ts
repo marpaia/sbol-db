@@ -1,3 +1,5 @@
+import { HttpError } from "@/shared/api/http";
+
 /**
  * Network surface for the data lab bench.
  *
@@ -7,13 +9,9 @@
  * support so the UI's Stop button cancels the in-flight request.
  */
 
-export class ApiError extends Error {
-  status: number;
-  body: string;
+export class ApiError extends HttpError {
   constructor(status: number, message: string, body: string) {
-    super(message);
-    this.status = status;
-    this.body = body;
+    super({ status, message, body });
   }
 }
 

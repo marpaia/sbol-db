@@ -13,7 +13,10 @@
 
 import type * as MonacoNS from "monaco-editor";
 
-import type { ValidateError, ValidateResponse } from "@/lib/api";
+import type {
+  ValidateError,
+  ValidateResponse,
+} from "@/features/admin/workbench/api";
 
 const MARKER_OWNER = "sbol-lab";
 const DEBOUNCE_MS = 250;
