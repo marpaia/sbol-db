@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "SBOL DB native API",
+    "title": "SBOL DB API",
     "version": "0.1.0",
-    "description": "The original SBOL DB REST API: graph and object management, SPARQL, sequence search, ontology, jobs, and administrator data-workspace endpoints.",
+    "description": "The SBOL DB API: graph and object management, SPARQL, sequence search, ontology, jobs, and administrator data-workspace endpoints.",
     "contact": {
       "name": "SBOL DB",
       "url": "https://github.com/marpaia/sbol-db"

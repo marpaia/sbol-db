@@ -39,9 +39,9 @@ offline atomic restore. See the [storage architecture](docs/storage.md) and
 - **Biology-aware discovery.** Ranked text and facets, ontology-aware roles,
   exact and aligned sequence search, graph neighborhoods, SPARQL 1.1, and
   pluggable structured search strategies.
-- **Interfaces for tools.** Native and V2 REST APIs, OpenAPI documentation, the
-  `sbol-db` CLI, RDF and common biological formats, plus compatibility surfaces
-  for existing SynBioHub clients.
+- **Interfaces for tools.** The SBOL DB API, the SynBioHub v1
+  compatibility API, the RESTful SynBioHub v2 API, OpenAPI documentation, the
+  `sbol-db` CLI, RDF, and common biological formats.
 - **An embedded control plane.** Inspect data, SPARQL, jobs, storage, search
   indexes, users, integrations, audit history, edge health, and complete
   backup evidence without deploying a separate admin application.

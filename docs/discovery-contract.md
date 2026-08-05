@@ -63,7 +63,7 @@ caller's graph scope.
 
 ## Public URL state
 
-The public route at `/search` uses the same parameter names as the native API,
+The public route at `/search` uses the same parameter names as the SynBioHub v2 API,
 with three presentation-only additions:
 
 - `view=grid|list` selects result density;
@@ -97,10 +97,10 @@ continue to reach the V1-compatible machine handler.
 | arbitrary predicate equality | none | Intentionally not applied; the canonical page displays the omitted predicate and warning. |
 | `sequence`, `globalsequence`, `exactsequence` | `/sequence-search?q=…&mode=…` | Redirected to the dedicated public nucleotide workflow. Other classic facets are named as ignored because the compatibility sequence handler also ignores them. |
 
-An unsupported classic facet is never silently discarded. The native page
+An unsupported classic facet is never silently discarded. The SBOL DB page
 states that the link was only partly translated, names every omitted filter,
 and says that it was not applied. This avoids showing a broad result set as if
-it satisfied a predicate the native contract does not implement.
+it satisfied a predicate the SynBioHub v2 contract does not implement.
 
 ## Ownership and maintenance
 

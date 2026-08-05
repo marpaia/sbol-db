@@ -45,8 +45,9 @@ The focused scope is:
   ontology-aware role expansion, and configured structured search strategies.
 - Present canonical records through the embedded registry, with validate-first
   contribution, collections, sharing, ownership transfer, and auditable review.
-- Surface the same domain services through native and V2 REST APIs, SynBioHub
-  compatibility adapters, OpenAPI documentation, and the CLI.
+- Surface the same domain services through the SBOL DB API, the
+  SynBioHub v1 compatibility API, the RESTful SynBioHub v2 API, OpenAPI
+  documentation, and the CLI.
 - Operate imports, index rebuilds, storage maintenance, users, integrations,
   audit, native TLS, and complete backup/recovery from one deployable server.
 
@@ -75,7 +76,7 @@ surface for "track the build state of this design".
 | `sbol-db-jobs`     | Durable background-job registry, queue, worker, and built-in operational handlers. |
 | `sbol-db-backup`   | Complete encrypted checkpoint creation, verification, restore, and rollback primitives. |
 | `sbol-db-ui`       | Embedded SBOL DB application at `/` with the data/operations workspace at `/admin` (React + Vite, baked in via `rust-embed`). |
-| `sbol-db-server`   | Axum presentation layer for native, V2, and compatibility APIs; embedded UI and OpenAPI delivery. |
+| `sbol-db-server`   | Axum presentation layer for the SBOL DB API and the SynBioHub v1 compatibility and v2 APIs; embedded UI and OpenAPI delivery. |
 | `sbol-db`          | CLI binary and runtime composition root for storage, server, worker, search, TLS, migration, and recovery. |
 
 The boundaries matter:

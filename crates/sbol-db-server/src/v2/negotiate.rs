@@ -4,7 +4,7 @@
 //! read handler should return: idiomatic JSON, or one of the RDF
 //! serializations the P3 serializers already produce. Absent or `*/*` yields
 //! JSON; an `Accept` that lists only unsupported media types is a `406 Not
-//! Acceptable`, reusing the same status the native SPARQL surface returns for
+//! Acceptable`, reusing the same status the original SBOL DB SPARQL surface returns for
 //! an unsupported result format.
 
 use axum::http::header::ACCEPT;

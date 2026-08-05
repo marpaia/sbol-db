@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "SBOL DB V2 API",
+    "title": "SynBioHub v2 API",
     "version": "0.1.2",
-    "description": "The native REST API for SBOL DB, mounted under `/api/v2`.\n\nV2 calls the same application services as the V1 SynBioHub compatibility adapter: both read and write the same dataset, while retaining separate wire contracts. V2 uses proper HTTP verbs (POST creates, PATCH edits, DELETE deletes, and no GET mutates), JSON request bodies, real pagination with a total, `Accept`-driven content negotiation, a single consistent error envelope, and bearer or same-origin browser-session authentication. V1 preserves classic SynBioHub behavior only where compatibility requires it.\n\nWhen public browsing is enabled, a missing or unrecognized resource credential is anonymous and scoped to the public graph. An instance with `requireLogin` rejects anonymous resource requests with `401` while retaining public bootstrap and session routes. A mutating verb attempted anonymously is `403`; invalid login credentials are `401`. Reads are ACL-scoped to the caller's authorized graphs, and an out-of-scope object is a non-disclosing `404`.",
+    "description": "The SynBioHub v2 API: SBOL DB's idiomatic, RESTful presentation of the SynBioHub product surface, mounted under `/api/v2`.\n\nSynBioHub v2 calls the same application services as the SynBioHub v1 compatibility adapter: both expose the same product domain and read and write the same dataset, while retaining separate wire contracts. V2 uses proper HTTP verbs (POST creates, PATCH edits, DELETE deletes, and no GET mutates), JSON request bodies, real pagination with a total, `Accept`-driven content negotiation, a single consistent error envelope, and bearer or same-origin browser-session authentication. V1 preserves classic SynBioHub behavior where compatibility requires it.\n\nWhen public browsing is enabled, a missing or unrecognized resource credential is anonymous and scoped to the public graph. An instance with `requireLogin` rejects anonymous resource requests with `401` while retaining public bootstrap and session routes. A mutating verb attempted anonymously is `403`; invalid login credentials are `401`. Reads are ACL-scoped to the caller's authorized graphs, and an out-of-scope object is a non-disclosing `404`.",
     "contact": {
       "name": "SBOL DB",
       "url": "https://github.com/marpaia/sbol-db"
@@ -15,7 +15,7 @@
   "servers": [
     {
       "url": "/api/v2",
-      "description": "The V2 surface on the current server"
+      "description": "The SynBioHub v2 surface on the current server"
     }
   ],
   "tags": [
@@ -448,7 +448,7 @@
             "type": "object",
             "required": ["code", "message", "status"],
             "properties": {
-              "code": { "type": "string", "description": "A stable machine-readable code, shared with the native surface." },
+              "code": { "type": "string", "description": "A stable machine-readable code, shared with the SBOL DB API." },
               "message": { "type": "string", "description": "A human-readable explanation." },
               "status": { "type": "integer", "description": "The HTTP status code, echoed for clients that only read the body." }
             }
@@ -1605,7 +1605,7 @@
       "get": {
         "tags": ["Administration"],
         "summary": "Discover administrator capabilities",
-        "description": "Returns the active backend capabilities, immutable search deployment, and the native admin sections. Requires an authenticated administrator.",
+        "description": "Returns the active backend capabilities, immutable search deployment, and the SynBioHub v2 admin sections. Requires an authenticated administrator.",
         "operationId": "v2AdminOverview",
         "responses": {
           "200": { "description": "Administrator capability map.", "content": { "application/json": { "schema": { "type": "object" } } } },

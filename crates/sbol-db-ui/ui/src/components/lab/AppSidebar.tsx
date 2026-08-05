@@ -19,7 +19,7 @@ import { useBackendInfo } from "@/features/admin/backend/queries";
 import { ProductModeSwitch } from "@/components/product/ProductModeSwitch";
 import { useInstance } from "@/features/instance/queries";
 import { deploymentName, PRODUCT_NAME } from "@/lib/product";
-import { adminPath } from "@/lib/routes";
+import { adminPath, API_DOCS_PATH } from "@/lib/routes";
 import {
   Collapsible,
   CollapsibleContent,
@@ -134,7 +134,7 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
               tooltip="API reference"
               className="rounded-[3px] text-xs"
             >
-              <a href="/api/v2/docs" target="_blank" rel="noopener noreferrer">
+              <a href={API_DOCS_PATH} target="_blank" rel="noopener noreferrer">
                 <BookOpen />
                 <span>API reference</span>
               </a>

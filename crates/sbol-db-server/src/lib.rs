@@ -556,9 +556,9 @@ fn application_router(state: AppState, config: ServerConfig, include_operations:
         .route("/jobs/:id/attempts", get(routes::list_job_attempts))
         .route("/jobs/:id/logs", get(routes::list_job_logs))
         .route("/jobs/:id/cancel", post(routes::cancel_job))
-        // The idiomatic V2 REST surface, a second presentation of the same
-        // facade under a versioned prefix. It carries its own bearer-token
-        // identity layer and inherits the metrics/body-limit/timeout layers.
+        // The idiomatic SynBioHub v2 REST surface: a second presentation of the
+        // SynBioHub product facade under a versioned prefix. It carries its own
+        // bearer-token identity layer and inherits the shared server layers.
         .nest("/api/v2", v2::router(state.clone()));
     if include_operations {
         api = api.merge(operations_routes());

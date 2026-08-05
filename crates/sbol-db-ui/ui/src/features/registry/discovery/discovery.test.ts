@@ -7,7 +7,7 @@ import {
   translateClassicSearchPath,
 } from "./discovery.ts";
 
-test("parses every native discovery parameter into typed URL state", () => {
+test("parses every SynBioHub v2 discovery parameter into typed URL state", () => {
   const params = new URLSearchParams({
     q: "promoter",
     type: "http://sbols.org/v3#Component",
@@ -61,7 +61,7 @@ test("normalizes invalid presentation state without sending malformed API values
   assert.equal(state.view, "list");
 });
 
-test("translates supported classic facets into a canonical native query", () => {
+test("translates supported classic facets into a canonical SynBioHub v2 query", () => {
   const translation = translateClassicSearchPath(
     "objectType=ComponentDefinition&sbol2:role=http://identifiers.org/so/SO:0000167&collection=https://example.org/c&createdAfter=2020-01-01&promoter"
   );

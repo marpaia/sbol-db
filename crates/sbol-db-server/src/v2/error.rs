@@ -2,8 +2,9 @@
 //!
 //! Every V2 handler returns [`V2Error`], which renders a single consistent
 //! JSON shape, `{ "error": { "code", "message", "status" } }`. The status and
-//! machine `code` come from the native [`ApiError`](crate::error::ApiError)
-//! mapping so the two surfaces never diverge on semantics; V2 only re-presents
+//! machine `code` come from the shared [`ApiError`](crate::error::ApiError)
+//! mapping so the original SBOL DB and SynBioHub v2 surfaces never diverge on
+//! semantics; v2 only re-presents
 //! them under a nested envelope.
 
 use axum::http::StatusCode;

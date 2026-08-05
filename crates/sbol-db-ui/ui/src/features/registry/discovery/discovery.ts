@@ -85,8 +85,8 @@ export function naturalDirection(sort: DiscoverySort): SortDirection {
 }
 
 /**
- * Translate the supported subset of the classic path grammar into the native
- * discovery URL. Unsupported predicates remain explicit warnings instead of
+ * Translate the supported subset of the classic path grammar into the
+ * SynBioHub v2 discovery URL. Unsupported predicates remain explicit warnings instead of
  * silently broadening the query and pretending the filter was applied.
  */
 export function translateClassicSearchPath(
@@ -181,13 +181,13 @@ export function translateClassicSearchPath(
       case "exactsequence":
         warn(
           params,
-          "Sequence-search links are not yet represented in native discovery."
+          "Sequence-search links are not yet represented in SynBioHub v2 discovery."
         );
         break;
       default:
         warn(
           params,
-          `The classic predicate “${key}” is not available as a native discovery filter.`
+          `The classic predicate “${key}” is not available as a SynBioHub v2 discovery filter.`
         );
     }
   });

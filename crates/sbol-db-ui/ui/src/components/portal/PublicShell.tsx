@@ -32,6 +32,7 @@ import { useInstance } from "@/features/instance/queries";
 import { useSession } from "@/features/session/queries";
 import { useCommandPaletteShortcut } from "@/shared/hooks/useCommandPaletteShortcut";
 import { deploymentName, PRODUCT_NAME, PRODUCT_TAGLINE } from "@/lib/product";
+import { API_DOCS_PATH } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 type NavItem = {
@@ -49,7 +50,7 @@ const workNavItems: NavItem[] = [
 const resourceNavItems: NavItem[] = [
   { to: "/about", label: "About", icon: Info },
   {
-    to: "/api/v2/docs",
+    to: API_DOCS_PATH,
     label: "API reference",
     icon: BookOpen,
     external: true,
@@ -162,7 +163,7 @@ export default function PublicShell() {
             <span className="flex gap-5">
               <a
                 className="text-muted-foreground hover:text-foreground"
-                href="/api/v2/docs"
+                href={API_DOCS_PATH}
               >
                 API reference
               </a>

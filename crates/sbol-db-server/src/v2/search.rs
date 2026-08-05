@@ -1,6 +1,6 @@
 //! The V2 search resource.
 //!
-//! `GET /api/v2/search` runs the normalized native discovery contract over the
+//! `GET /api/v2/search` runs the normalized SynBioHub v2 discovery contract over the
 //! caller's in-scope corpus. It supports text, biological facets, collection
 //! and ownership context, provenance/date narrowing, deterministic sorting,
 //! and stable offset paging without inheriting V1's path grammar.
@@ -104,7 +104,7 @@ pub async fn strategies(State(state): State<AppState>) -> Json<StrategiesRespons
     })
 }
 
-/// Run the normalized native discovery query behind both `/search` and the
+/// Run the normalized SynBioHub v2 discovery query behind both `/search` and the
 /// `/objects` list. The application facade owns filtering, ranking, sorting,
 /// exact totals, and paging; this adapter only parses the wire representation.
 pub(super) async fn run_search(

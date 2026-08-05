@@ -6,8 +6,8 @@
 //! The UI is rendered by [Scalar](https://github.com/scalar/scalar), pinned to
 //! a fixed CDN version. `Scalar.createApiReference` mounts a single reference
 //! carrying three same-origin documents, each a switcher entry: `/openapi.json`
-//! (the original SBOL DB API), `/synbiohub/openapi.json` (the SynBioHub
-//! v1-compatibility API), and `/api/v2/openapi.json` (the native V2 API). The
+//! (the SBOL DB API), `/synbiohub/openapi.json` (the SynBioHub v1
+//! compatibility API), and `/api/v2/openapi.json` (the SynBioHub v2 API). The
 //! multi-document `sources` configuration is driven through the explicit
 //! `createApiReference` call; the attribute-based auto-mount does not honor it.
 //! Both reference pages use the same Design Ledger product shell and map
@@ -135,7 +135,7 @@ const MOUNT_SCRIPT: &str = r#"
         },
         sources: [
           {
-            title: "SBOL DB native API",
+            title: "SBOL DB API",
             slug: "native",
             url: "/openapi.json",
             default: true
@@ -146,8 +146,8 @@ const MOUNT_SCRIPT: &str = r#"
             url: "/synbiohub/openapi.json"
           },
           {
-            title: "SBOL DB V2 API",
-            slug: "sbol-db-v2",
+            title: "SynBioHub v2 API",
+            slug: "synbiohub-v2",
             url: "/api/v2/openapi.json"
           }
         ]

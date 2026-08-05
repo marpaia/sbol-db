@@ -23,8 +23,8 @@ of domain truth.
 1. SBOL identities remain stable. A canonical `/public/*` or `/user/*` URL can
    render a browser page without changing the identity or its RDF and download
    subresources.
-2. Existing V1 SynBioHub, Virtuoso-compatible, native `sbol-db`, and V2 clients
-   must continue to reach machine handlers. A missing or wildcard `Accept`
+2. Existing SynBioHub v1, Virtuoso-compatible, original SBOL DB, and SynBioHub
+   v2 clients must continue to reach machine handlers. A missing or wildcard `Accept`
    header is never treated as SPA navigation.
 3. Presentation code does not reimplement identity, ACL, search, publishing, or
    storage rules. React consumes typed HTTP contracts; adapters delegate to
@@ -54,9 +54,9 @@ single sbol-db origin
         |     +-- known page + explicit HTML -> React index
         |     `-- everything else -> Axum router
         |
-        +-- /api/v2/*             native SBOL DB application API
-        +-- SynBioHub V1 paths    compatibility adapter
-        +-- native sbol-db paths  storage/query/worker API
+        +-- /api/v2/*             SynBioHub v2 product API
+        +-- SynBioHub v1 paths    compatibility adapter
+        +-- SBOL DB API paths     storage/query/worker API
         +-- /lab/api/*            protected admin-workspace API
         `-- /admin/*              lazy React admin application
 ```
@@ -113,7 +113,7 @@ password hash, reset token, or other authentication secret.
 
 ### Access policy
 
-When persisted instance configuration enables `requireLogin`, anonymous V2
+When persisted instance configuration enables `requireLogin`, anonymous SynBioHub v2
 resource requests return 401. Version, instance, session, OpenAPI, and docs
 remain available so the portal can bootstrap and offer sign-in.
 
@@ -125,7 +125,7 @@ remain available so the portal can bootstrap and offer sign-in.
    the same bearer/cookie identity and return 401 for an anonymous caller or
    403 for a non-admin caller.
 
-The native admin control plane now lives entirely under `/api/v2/admin/*` and
+The SynBioHub v2 admin control plane lives entirely under `/api/v2/admin/*` and
 uses one `require_admin` policy. Instance configuration, accounts,
 integrations, jobs, ontology loading, search maintenance, edge runtime status
 and settings, complete backup status and triggers, and the admin audit stream
@@ -136,7 +136,7 @@ or removing one remains an endpoint-by-endpoint compatibility decision.
 
 ### Compatibility discipline
 
-V1 compatibility and V2 product APIs are two presentations of the same
+The SynBioHub v1 compatibility and v2 product APIs are two presentations of the same
 application services. New portal behavior belongs in application/domain code
 when it changes semantics, and in the V2 adapter when it changes only the wire
 contract. The compatibility adapter should not call V2 handlers, and V2 should
@@ -217,7 +217,7 @@ decoration.
 
 - root-mounted, compatibility-aware portal serving;
 - exact asset handling and transitional `/lab/*` bookmarks;
-- public instance/session contracts and shared V1/V2 browser tokens;
+- public instance/session contracts and shared SynBioHub v1/v2 browser tokens;
 - setup, sign-in, registration, `requireLogin`, and admin-role gates;
 - public home, registry search, initial object detail/download view;
 - Data Lab relocation to `/admin` with protected `/lab/api` operations;
@@ -271,7 +271,7 @@ round-trip the sequence-bearing formats.
 - Add validate-first submission for SBOL 2, SBOL 3, GenBank, and FASTA with an
   explicit import report before commit.
 - Support collection creation, editing, membership, ownership, publishing, and
-  removal through application-service commands and V2 contracts.
+  removal through application-service commands and SynBioHub v2 contracts.
 - Keep raw graph import as a clearly labeled administrator workflow; ordinary
   contribution should use identity/ACL-aware application operations.
 
@@ -300,7 +300,7 @@ an anonymously parseable public download.
 Exit gate: anonymous, member, curator, and administrator journey tests cover
 both positive and forbidden cases.
 
-The native account surface is `/account`, backed by no-store V2 profile and
+The product account surface is `/account`, backed by a no-store SynBioHub v2 profile and
 current-password-gated password commands. Reset remains capability-disabled
 until mail delivery exists. `/workspace` separates owned, shared, and review
 queues. Read-only shares use `sbh:canView` without granting ownership; transfer
@@ -327,7 +327,7 @@ Exit gate: an unauthenticated or member account cannot call any control-plane
 operation directly, and all administrator actions have audit and failure-path
 evidence.
 
-The implementation is a native `/api/v2/admin/*` boundary with one
+The implementation is a SynBioHub v2 `/api/v2/admin/*` boundary with one
 administrator middleware and a typed frontend client. It separates read-only
 status from mutations; recursively redacts remote secrets; protects account
 administration against self-deletion, self-demotion, and removal of the final
@@ -360,7 +360,7 @@ suite, browser/API collision matrix, and synthetic classic-instance migration
 rehearsal run across SQLite, RocksDB, and Postgres. A clean live differential
 against classic SynBioHub covers the Elasticsearch-independent read surface on
 all three subjects. Legacy V1 SBOL downloads default to SBOL 2 as classic
-clients expect, while explicit `?version=sbol3` and native V2 downloads retain
+clients expect, while explicit `?version=sbol3` and SynBioHub v2 downloads retain
 the modern SBOL 3 path. The compatibility matrix classifies every supported,
 deprecated, intentionally different, and unsupported behavior. No route is
 removed and no retirement date is set by this slice.
@@ -374,7 +374,7 @@ journey through the production-shaped server:
 | --- | --- |
 | Domain/application | Backend-neutral unit or conformance tests for semantics and ACLs. |
 | V1 compatibility | Existing endpoint tests plus reference comparison where parity is claimed. |
-| V2 contract | Handler integration tests and OpenAPI response/schema assertions. |
+| SynBioHub v2 contract | Handler integration tests and OpenAPI response/schema assertions. |
 | Page dispatch | HTML-vs-machine `Accept`, `HEAD`, mutation bypass, canonical suffix, missing asset, and disabled-feature tests. |
 | Frontend | Typecheck, lint, production build, route-level loading/error/empty states, and keyboard/accessibility checks. |
 | Product journey | Browser test against assets embedded in the Rust binary, including direct deep links and legacy redirects. |

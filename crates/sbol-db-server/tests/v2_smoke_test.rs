@@ -1,4 +1,4 @@
-//! HTTP-level tests for the V2 REST surface over a SQLite backend, driving the
+//! HTTP-level tests for the SynBioHub v2 REST surface over a SQLite backend, driving the
 //! real axum router via `oneshot`. They exercise the slice-1 plumbing: the
 //! bearer-token identity layer (a valid token widens the caller's graph scope;
 //! a bad token is anonymous and public-only), the version probe, and the

@@ -20,7 +20,7 @@ import {
   ProductCommandPaletteGroup as PaletteGroup,
   ProductCommandPaletteItem as Item,
 } from "@/components/product/ProductCommandPalette";
-import { adminPath } from "@/lib/routes";
+import { adminPath, API_DOCS_PATH } from "@/lib/routes";
 
 export function RegistryCommandPalette({
   open,
@@ -50,7 +50,7 @@ export function RegistryCommandPalette({
   };
 
   const openReference = () => {
-    window.open("/api/v2/docs", "_blank", "noopener,noreferrer");
+    window.open(API_DOCS_PATH, "_blank", "noopener,noreferrer");
     onOpenChange(false);
   };
 

@@ -80,7 +80,7 @@ pub struct DownloadParams {
 
 /// Resolve `version` to whether the caller asked for SBOL2 output. The V1
 /// compatibility surface defaults to classic SynBioHub's SBOL2 representation;
-/// native V2 downloads remain SBOL3-first. Callers can still opt into SBOL3
+/// SynBioHub v2 downloads remain SBOL3-first. Callers can still opt into SBOL3
 /// explicitly on the compatibility route.
 fn wants_sbol2(version: Option<&str>) -> Result<bool, ApiError> {
     match version.unwrap_or("sbol2") {

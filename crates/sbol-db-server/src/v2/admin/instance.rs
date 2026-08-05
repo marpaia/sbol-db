@@ -1,4 +1,4 @@
-//! Typed instance configuration for the native administrator UI.
+//! Typed instance configuration for the SBOL DB administrator UI.
 
 use axum::body::Bytes;
 use axum::extract::State;

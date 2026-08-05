@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "SynBioHub v1 API",
+    "title": "SynBioHub v1 compatibility API",
     "version": "0.1.0",
     "description": "The SynBioHub v1-compatible REST API served by sbol-db as a drop-in replacement for classic SynBioHub.",
     "contact": {

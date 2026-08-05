@@ -65,7 +65,7 @@ pub(super) fn router() -> Router<AppState> {
         .route_layer(axum::middleware::from_fn(require_admin))
 }
 
-/// One authorization policy for the entire native admin surface. Identity is
+/// One authorization policy for the entire SynBioHub v2 admin surface. Identity is
 /// attached by the parent V2 middleware before this layer runs.
 async fn require_admin(
     Extension(identity): Extension<Identity>,

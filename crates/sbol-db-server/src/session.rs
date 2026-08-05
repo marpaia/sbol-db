@@ -1,8 +1,8 @@
 //! Shared browser-session wire helpers.
 //!
-//! V1 and V2 resolve the same opaque API tokens through the application
-//! facade. A browser carries that token in one `HttpOnly` cookie, while API
-//! clients continue to use their generation-specific authorization headers.
+//! SynBioHub v1 and v2 resolve the same opaque API tokens through the
+//! application facade. A browser carries that token in one `HttpOnly` cookie,
+//! while API clients continue to use their generation-specific authorization headers.
 //! Keeping cookie construction and parsing here prevents the two adapters from
 //! drifting on security attributes or cookie names.
 

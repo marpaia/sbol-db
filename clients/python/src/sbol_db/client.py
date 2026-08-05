@@ -1,6 +1,6 @@
 """The broad sbol-db client.
 
-:class:`SbolDbClient` wraps sbol-db's native typed REST API: objects, graphs,
+:class:`SbolDbClient` wraps the typed SBOL DB API: objects, graphs,
 text and sequence search, SPARQL, ontology, and jobs. SBOL documents cross the
 wire as RDF strings; structured records come back as the dataclasses in
 :mod:`sbol_db.models`. The :class:`~sbol_db.partshop.PartShop` facade is a thin

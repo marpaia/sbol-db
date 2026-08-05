@@ -1,8 +1,8 @@
 //! Portal bootstrap and browser-session contract tests.
 //!
-//! These exercise the real combined router over SQLite so the V2 contracts,
-//! V1 compatibility endpoints, cookie transport, and shared application facade
-//! are proven together rather than as isolated handler units.
+//! These exercise the real combined router over SQLite so the SynBioHub v2
+//! contracts, v1 compatibility endpoints, cookie transport, and shared
+//! application facade are proven together rather than as isolated handler units.
 
 use std::sync::Arc;
 

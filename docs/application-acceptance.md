@@ -54,7 +54,7 @@ Every vertical increment must satisfy all applicable gates below.
 
 ### API contract
 
-- Product workflows use a native V2 contract with idiomatic verbs and JSON.
+- Product workflows use the SynBioHub v2 contract with idiomatic verbs and JSON.
 - Handler, OpenAPI schema, typed frontend client, and response tests change
   together.
 - Paging has deterministic ordering and a stable tie-breaker. Totals describe
@@ -184,7 +184,7 @@ complete available corpus or endpoint inventory appropriate to the claim.
 - Users see import, identity, warning, and conflict consequences before commit;
   cancellation and failure write nothing.
 - Collection creation, editing, membership, ownership, publishing, and removal
-  use application commands and V2 contracts.
+  use application commands and SynBioHub v2 contracts.
 - A create, inspect, revise, publish, and download journey proves provenance and
   ACL behavior at every transition.
 
@@ -233,7 +233,7 @@ has been removed or assigned a retirement date.
 | 2 — objects | ACL-scoped details service, reusable identity/biology/provenance/relation/attachment/raw-property surfaces, explicit visual fallback states, canonical page routing, and parser/semantic checks for every advertised representation. |
 | 3 — contribution | Validate-first SBOL 2, SBOL 3, GenBank, and FASTA workflow; member workspace; collection lifecycle commands; and create/revise/publish/download ACL and provenance tests. |
 | 4 — collaboration | Self-scoped account management, password change, capability-gated reset, read-only shares and revocation, distinct ownership transfer, curator review, and append-only activity with the complete role matrix. |
-| 5 — administration | One native `/api/v2/admin/*` authorization boundary, typed admin UI, instance/user/integration/search/job/ontology/backup/audit sections, recursive secret redaction, exact confirmations, and checksum-verified atomic registry restore. |
+| 5 — administration | One SynBioHub v2 `/api/v2/admin/*` authorization boundary, typed admin UI, instance/user/integration/search/job/ontology/backup/audit sections, recursive secret redaction, exact confirmations, and checksum-verified atomic registry restore. |
 | 6 — cutover | Checked 109-path primary plus 61-alias V1 inventory and two protocol paths; bounded telemetry; three-backend V1, collision, and migration rehearsals; migration/rollback guide; and a clean live classic-reference read differential against Postgres, SQLite, and RocksDB. |
 
 The consolidated non-browser gate is reproducible with these commands (the

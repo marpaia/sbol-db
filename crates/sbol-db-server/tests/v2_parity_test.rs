@@ -1,7 +1,7 @@
 //! The defining cross-surface data-parity test.
 //!
-//! V1 (the SynBioHub-compat adapter) and V2 (the idiomatic REST adapter) are two
-//! presentations of the same `sbol-db-app` facade over one dataset. These tests
+//! SynBioHub v1 (the compatibility adapter) and v2 (the idiomatic REST adapter)
+//! are two presentations of the same `sbol-db-app` facade over one dataset. These tests
 //! prove there is no divergence between the two views: an object written through
 //! one surface reads back through the other, and the same query answered by both
 //! surfaces returns the same object set.
@@ -9,7 +9,7 @@
 //! Both adapters are mounted on one `AppState`, so they share a single
 //! `AppServices` (the same store, the same ranked index, the same identity). The
 //! tests drive the real axum router via `oneshot` over a SQLite backend and mix
-//! V1 and V2 calls against it.
+//! SynBioHub v1 and v2 calls against it.
 
 use std::sync::Arc;
 
@@ -31,7 +31,7 @@ const BODY_LIMIT: usize = 4 * 1024 * 1024;
 const BOUNDARY: &str = "sboldbparityboundary";
 const PUBLIC_GRAPH: &str = "http://synbiohub.org/public";
 
-/// The authoritative RDF half of the ranked-search parity fixture. Native V2
+/// The authoritative RDF half of the ranked-search parity fixture. SynBioHub v2
 /// discovery deliberately intersects ranked hits with visible top-level RDF so
 /// stale index rows cannot surface as registry objects; keeping both halves in
 /// this fixture mirrors the invariant maintained by production index rebuilds.
@@ -499,7 +499,7 @@ async fn same_query_returns_the_same_object_set_on_both_surfaces() {
 
     assert_eq!(
         via_v1, via_v2,
-        "V1 and V2 return the same object set for the same query"
+        "SynBioHub v1 and v2 return the same object set for the same query"
     );
     assert_eq!(
         via_v1,

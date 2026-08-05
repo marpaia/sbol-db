@@ -1,6 +1,6 @@
 """Pure-Python client for the sbol-db HTTP API.
 
-``SbolDbClient`` is the broad client over sbol-db's native REST API;
+``SbolDbClient`` is the broad client over the SBOL DB API;
 ``PartShop`` is a pysbol2-shaped facade for code migrating from SynBioHub.
 """
 

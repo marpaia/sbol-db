@@ -153,9 +153,9 @@ The application is fronted by these controls:
   compile-time strip. Removes the `sbol-db-ui` dependency entirely;
   the binary ships without the embedded assets.
 
-The native `/api/v2/admin/*` control plane is always administrator-gated; the
-legacy workbench override applies only to `/lab/api/*` and cannot weaken the
-native policy. The UI uses the native control plane for instance policy, users,
+The SynBioHub v2 `/api/v2/admin/*` control plane is always administrator-gated;
+the legacy workbench override applies only to `/lab/api/*` and cannot weaken
+that policy. The UI uses the v2 control plane for instance policy, users,
 integrations, search maintenance, jobs, ontologies, complete-backup operations,
 and audit.
 In the self-contained production profile, Edge runtime persists validated

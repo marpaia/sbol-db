@@ -5,8 +5,8 @@ import http from "node:http";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-// Backend-API proxy for the root-mounted portal. Some legacy/native API paths
-// overlap client-side page families (`/objects/view/*`, `/setup`, `/register`).
+// Backend-API proxy for the root-mounted portal. Some legacy/original SBOL DB
+// API paths overlap client-side page families (`/objects/view/*`, `/setup`, `/register`).
 // Mirror the Rust dispatch boundary: explicit browser navigation stays with
 // Vite, while API methods and machine requests go to the backend.
 const ROOT_API_PREFIXES = [

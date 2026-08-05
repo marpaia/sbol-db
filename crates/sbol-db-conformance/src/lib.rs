@@ -345,8 +345,8 @@ pub async fn wor_map_persisted(app: &AppServices) {
     }
 }
 
-/// V1 and V2 are two presentations of the one facade, so a single write is
-/// visible identically through the read verbs each surface uses.
+/// SynBioHub v1 and v2 are two presentations of the one product facade, so a
+/// single write is visible identically through the read verbs each surface uses.
 ///
 /// One object is written through the shared [`SubmissionService`] verb (the
 /// facade verb both the V1 `POST /submit` and the V2 `POST /api/v2/collections`

@@ -1,4 +1,5 @@
 export const ADMIN_ROOT = "/admin";
+export const API_DOCS_PATH = "/docs";
 
 export function adminPath(path = ""): string {
   if (!path || path === "/") return ADMIN_ROOT;

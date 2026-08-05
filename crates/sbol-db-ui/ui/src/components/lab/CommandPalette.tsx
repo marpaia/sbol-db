@@ -26,6 +26,7 @@ import {
   useWorkbenchStore,
 } from "@/features/admin/workbench/store";
 import { compactQuery, formatRelative } from "@/lib/utils";
+import { API_DOCS_PATH } from "@/lib/routes";
 
 export interface CommandPaletteProps {
   open: boolean;
@@ -58,7 +59,7 @@ export function CommandPalette({
   };
 
   const openReference = () => {
-    window.open("/api/v2/docs", "_blank", "noopener,noreferrer");
+    window.open(API_DOCS_PATH, "_blank", "noopener,noreferrer");
     onOpenChange(false);
   };
 

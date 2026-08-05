@@ -29,7 +29,7 @@ workflows through storage and production recovery.
 - **[Application and admin UI guide](ui.md)**: the current public registry,
   account and collaboration workflows, admin control plane, screenshot tour,
   configuration switches, and local development loop.
-- **[The v2 API](api-v2.md)**: the native contracts for instance bootstrap,
+- **[The SynBioHub v2 API](api-v2.md)**: the RESTful product contracts for instance bootstrap,
   sessions, accounts, objects, contribution, collections, collaboration,
   review, search, downloads, and administration.
 - **[Self-contained edge deployment](edge-deployment.md)**: the one-server

@@ -1,10 +1,10 @@
-# The v2 API
+# The SynBioHub v2 API
 
-The v2 API is SBOL DB's native REST surface, mounted under `/api/v2`. Every v2
-handler calls the same application facade verbs the SynBioHub-compatible v1
-adapter calls; the two surfaces read and write one dataset, one identity model,
-and one ACL scope. v2 holds no business logic of its own. It differs from v1
-only in wire shape.
+The SynBioHub v2 API is SBOL DB's idiomatic, RESTful presentation of the
+SynBioHub product surface, mounted under `/api/v2`. Every v2 handler calls the
+same application facade verbs as the SynBioHub v1 compatibility adapter; the
+two surfaces read and write one dataset, one identity model, and one ACL scope.
+V2 holds no business logic of its own. It differs from v1 only in wire shape.
 
 v1 exists to let an unmodified SynBioHub client talk to sbol-db, so it inherits
 SynBioHub's wire quirks: `GET` requests that mutate, the `/search/key=value`
@@ -115,7 +115,7 @@ Every error is one JSON shape:
 
 `status` is the HTTP status, repeated in the body. `code` is a stable machine
 string. `message` is human-readable. The status and code come from the same
-mapping the native API uses, so the two surfaces never diverge on the meaning
+mapping the SBOL DB API uses, so the two surfaces never diverge on the meaning
 of an error.
 
 Common codes: `invalid_input` (400), `forbidden` (403), `not_found` (404),
@@ -244,10 +244,10 @@ Curator review is append-only:
 - **`GET /api/v2/reviews`** returns cases requested by or assigned to the
   caller; administrators see the complete queue.
 - **`GET /api/v2/objects/{iri}/activity`** returns owner/admin audit evidence
-  for native shares, revocations, transfers, and review decisions.
+  for first-class shares, revocations, transfers, and review decisions.
 
-Audit events are immutable RDF resources stored in the object's graph. Native
-object mutations and their evidence are composed into one SPARQL Update, so a
+Audit events are immutable RDF resources stored in the object's graph.
+SynBioHub v2 object mutations and their evidence are composed into one SPARQL Update, so a
 successful state transition cannot be committed without its audit event.
 
 ### Objects
@@ -446,7 +446,7 @@ URI and metadata plus `percent_match`, `strand`, and `cigar`.
 
 ### Administration
 
-The native administrator control plane is rooted at
+The SynBioHub v2 administrator control plane is rooted at
 `/api/v2/admin`. Every route below is protected by the same policy: an
 anonymous caller receives 401, a signed-in non-administrator receives 403,
 and hiding a link in React is never the authorization boundary. Browser
@@ -455,10 +455,10 @@ use the same bearer token accepted elsewhere in V2.
 
 | Section | Routes | Contract |
 | --- | --- | --- |
-| Overview and instance | `GET /admin`, `GET/PATCH /admin/instance` | Safe capability/status projection and native instance policy. |
+| Overview and instance | `GET /admin`, `GET/PATCH /admin/instance` | Safe capability/status projection and typed instance policy. |
 | Accounts | `GET/POST /admin/users`, `PATCH/DELETE /admin/users/{username}` | Secret-free account projections; self-delete, self-demotion, and final-administrator removal are rejected. |
 | Integrations | `GET /admin/integrations`, federation sync/join, registry, remote, and plugin mutation routes | Secret-shaped remote fields are recursively redacted before serialization. |
-| Jobs and ontology | `/admin/jobs*`, `GET/POST /admin/ontologies` | Read/enqueue/cancel and ontology loading without using the unscoped native endpoints from the UI. |
+| Jobs and ontology | `/admin/jobs*`, `GET/POST /admin/ontologies` | Read/enqueue/cancel and ontology loading without using the unscoped SBOL DB API endpoints from the UI. |
 | Search | `GET /admin/search`, `POST /admin/search/rebuild` | Capability-aware strategy status and a coalesced rebuild command. |
 | Complete backup | `GET/POST /admin/backup` | Status/history and enqueueing for the same encrypted RocksDB, blob, search, and ACME checkpoint used by manual, scheduled, and pre-deploy triggers. Available in the self-contained production profile. |
 | Edge runtime | `GET/PATCH /admin/edge` | Active and pending production settings, restart-required state, TLS/ACME/disk health, and bounded offline recovery history. Secrets and recovery identities are not accepted. |
@@ -492,9 +492,9 @@ shape fails the build.
 The v2 surface covers the core read, write, search, download, collaboration,
 and administrator paths of the v1 compatibility surface under idiomatic verbs.
 Attachment upload and a few fine-grained classic field-edit shapes remain V1
-compatibility operations; native pages do not call them indirectly.
+compatibility operations; SBOL DB product pages do not call them indirectly.
 Legacy V1 `/sbol` and `/sbolnr` downloads default to SBOL 2 for classic client
-compatibility and accept `?version=sbol3` explicitly. Native V2 RDF downloads
+compatibility and accept `?version=sbol3` explicitly. SynBioHub v2 RDF downloads
 default to SBOL 3 and accept `?version=sbol2` when a legacy representation is
 required.
 The complete path inventory, parity classifications, deprecated aliases, and

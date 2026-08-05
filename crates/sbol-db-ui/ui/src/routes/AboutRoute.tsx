@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
+import { API_DOCS_PATH } from "@/lib/routes";
 
 const waysToWork: Array<{
   icon: LucideIcon;
@@ -80,12 +81,12 @@ const applicationAreas: Array<{
     description:
       "The browser is one client of the registry. The same data and authorization model is available through documented REST interfaces.",
     capabilities: [
-      "Use the V2 REST API and interactive OpenAPI reference",
+      "Switch among the SBOL DB API, the SynBioHub v1 compatibility API, and the SynBioHub v2 API",
       "Read normalized object, collection, and sequence representations",
       "Build integrations within the registry's authorization boundaries",
       "Automate documented searches, queries, and downloads",
     ],
-    to: "/api/v2/docs",
+    to: API_DOCS_PATH,
     action: "Open API reference",
     external: true,
   },
@@ -124,7 +125,7 @@ export default function AboutRoute() {
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Button asChild>
-                <a href="/api/v2/docs">
+                <a href={API_DOCS_PATH}>
                   API reference <ArrowRight />
                 </a>
               </Button>

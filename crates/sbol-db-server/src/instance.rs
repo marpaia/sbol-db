@@ -1,4 +1,4 @@
-//! Deployment identity and public policy shared by the V1 and V2 adapters.
+//! Deployment identity and public policy shared by the SynBioHub v1 and v2 adapters.
 //!
 //! Classic SynBioHub exposes this material as the broad `/admin/theme` JSON
 //! object. The native SBOL DB application needs a smaller, explicitly public

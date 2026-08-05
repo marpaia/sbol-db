@@ -53,7 +53,7 @@ cd crates/sbol-db-ui/ui && npm run dev
 ```
 
 The Vite dev server (port 5173) mirrors the production browser/API dispatch and
-forwards `/api`, `/lab/api`, and native API paths to the Rust server (port
+forwards `/api`, `/lab/api`, and SBOL DB API paths to the Rust server (port
 8888), while still providing React Refresh.
 
 For production-shape testing, build once and visit the embed:
