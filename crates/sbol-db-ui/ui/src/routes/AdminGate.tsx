@@ -3,7 +3,8 @@ import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useInstance, useSession } from "@/features/portal/queries";
+import { useInstance } from "@/features/instance/queries";
+import { useSession } from "@/features/session/queries";
 
 export default function AdminGate() {
   const location = useLocation();

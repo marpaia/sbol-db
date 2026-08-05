@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { useInstance } from "@/features/portal/queries";
+import { useInstance } from "@/features/instance/queries";
 import { productDocumentTitle } from "@/lib/product";
 
 /** Keep browser metadata aligned with the fixed SBOL DB product identity. */

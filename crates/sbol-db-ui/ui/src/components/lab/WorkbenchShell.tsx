@@ -16,7 +16,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { QueryHistoryList } from "./QueryHistoryList";
 import { SavedQueriesList } from "./SavedQueriesList";
 import { SchemaSidebar } from "./SchemaSidebar";
-import type { Dialect } from "@/lib/store";
+import type { Dialect } from "@/features/admin/workbench/store";
 
 export interface WorkbenchShellProps {
   dialect: Dialect;

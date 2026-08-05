@@ -28,8 +28,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useInstance, useSession } from "@/features/portal/queries";
-import { useCommandPaletteShortcut } from "@/hooks/useCommandPaletteShortcut";
+import { useInstance } from "@/features/instance/queries";
+import { useSession } from "@/features/session/queries";
+import { useCommandPaletteShortcut } from "@/shared/hooks/useCommandPaletteShortcut";
 import { deploymentName, PRODUCT_NAME, PRODUCT_TAGLINE } from "@/lib/product";
 import { cn } from "@/lib/utils";
 

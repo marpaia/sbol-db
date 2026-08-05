@@ -4,8 +4,8 @@ import { Link } from "react-router-dom";
 
 import { ObjectStateBadge } from "@/components/portal/ObjectStateBadge";
 import { Button } from "@/components/ui/button";
-import type { ObjectReferenceSection } from "@/features/portal/api";
-import { shortIri } from "@/features/portal/format";
+import type { ObjectReferenceSection } from "@/features/registry/objects/api";
+import { shortIri } from "@/features/registry/objects/format";
 import { publicObjectPath } from "@/lib/routes";
 
 const INITIAL_ITEMS = 5;

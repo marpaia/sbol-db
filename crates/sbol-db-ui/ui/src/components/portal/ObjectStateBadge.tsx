@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import type { ObjectContentState } from "@/features/portal/api";
+import type { ObjectContentState } from "@/features/registry/objects/api";
 import { cn } from "@/lib/utils";
 
 const labels: Record<ObjectContentState, string> = {

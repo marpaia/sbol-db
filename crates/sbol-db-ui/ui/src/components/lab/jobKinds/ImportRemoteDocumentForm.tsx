@@ -2,7 +2,7 @@ import {
   IMPORT_DOCUMENT_FORMATS,
   importFormatLabel,
   type ImportDocumentFormat,
-} from "@/lib/api";
+} from "@/features/admin/imports/api";
 
 import type { ImportRemoteDocumentValue } from "./importRemoteDocument";
 

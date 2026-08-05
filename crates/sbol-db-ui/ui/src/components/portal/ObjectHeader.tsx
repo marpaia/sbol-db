@@ -11,9 +11,9 @@ import { Link } from "react-router-dom";
 import { ObjectTypeMark } from "@/components/portal/ObjectTypeMark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { PortalObjectDetails } from "@/features/portal/api";
-import { shortIri } from "@/features/portal/format";
-import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import type { PortalObjectDetails } from "@/features/registry/objects/api";
+import { shortIri } from "@/features/registry/objects/format";
+import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 
 export function ObjectHeader({ object }: { object: PortalObjectDetails }) {
   const clipboard = useCopyToClipboard();

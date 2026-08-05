@@ -6,38 +6,18 @@
  * in from the left on mobile.
  */
 
-import {
-  Activity,
-  ArchiveRestore,
-  BookOpen,
-  Boxes,
-  Building2,
-  ChevronRight,
-  Command as CommandIcon,
-  Database,
-  Dna,
-  Gauge,
-  HardDrive,
-  Home,
-  Import,
-  Library,
-  ListChecks,
-  Network,
-  Plug,
-  ScrollText,
-  Search,
-  SearchCheck,
-  ServerCog,
-  Share2,
-  Table2,
-  Users,
-} from "lucide-react";
+import { BookOpen, ChevronRight, Command as CommandIcon } from "lucide-react";
 import { NavLink, useMatch } from "react-router-dom";
 
-import { useBackendInfo } from "@/hooks/useBackendInfo";
-import type { Capabilities } from "@/lib/api";
+import {
+  adminDestination,
+  adminSections,
+  availableAdminDestinations,
+  type AdminDestination,
+} from "@/app/routing/adminManifest";
+import { useBackendInfo } from "@/features/admin/backend/queries";
 import { ProductModeSwitch } from "@/components/product/ProductModeSwitch";
-import { useInstance } from "@/features/portal/queries";
+import { useInstance } from "@/features/instance/queries";
 import { deploymentName, PRODUCT_NAME } from "@/lib/product";
 import { adminPath } from "@/lib/routes";
 import {
@@ -65,128 +45,11 @@ export interface AppSidebarProps {
   onOpenPalette: () => void;
 }
 
-interface NavLeaf {
-  to: string;
-  end?: boolean;
-  icon: React.ReactNode;
-  label: string;
-}
-
-interface NavGroup {
-  label: string;
-  icon: React.ReactNode;
-  items: NavLeaf[];
-}
-
-function navGroups(capabilities?: Capabilities): NavGroup[] {
-  const queryItems: NavLeaf[] = [
-    { to: adminPath("/schema"), icon: <Table2 />, label: "Schema" },
-    { to: adminPath("/sparql"), icon: <Network />, label: "SPARQL" },
-  ];
-  if (capabilities?.sql_console) {
-    queryItems.push({
-      to: adminPath("/sql"),
-      icon: <Database />,
-      label: "SQL",
-    });
-  }
-
-  const operationsItems: NavLeaf[] = [
-    {
-      to: adminPath("/observability"),
-      end: true,
-      icon: <Gauge />,
-      label: "Metrics",
-    },
-    {
-      to: adminPath("/observability/jobs"),
-      end: true,
-      icon: <ListChecks />,
-      label: "Jobs",
-    },
-  ];
-  if (capabilities && capabilities.maintenance !== null) {
-    operationsItems.push({
-      to: adminPath("/observability/maintenance"),
-      icon: <HardDrive />,
-      label: "Maintenance",
-    });
-  }
-
-  return [
-    {
-      label: "Data model",
-      icon: <Boxes className="text-sbol-rbs" />,
-      items: [
-        { to: adminPath("/import"), icon: <Import />, label: "Import" },
-        { to: adminPath("/graphs"), icon: <Share2 />, label: "Graphs" },
-        { to: adminPath("/objects"), icon: <Boxes />, label: "Objects" },
-        { to: adminPath("/sequences"), icon: <Dna />, label: "Sequences" },
-        {
-          to: adminPath("/ontologies"),
-          icon: <Library />,
-          label: "Ontologies",
-        },
-      ],
-    },
-    {
-      label: "Query",
-      icon: <Search className="text-sidebar-primary" />,
-      items: queryItems,
-    },
-    {
-      label: "Operations",
-      icon: <Activity className="text-sbol-terminator" />,
-      items: operationsItems,
-    },
-    {
-      label: "Administration",
-      icon: <Building2 className="text-sidebar-primary" />,
-      items: [
-        {
-          to: adminPath("/settings/instance"),
-          icon: <Building2 />,
-          label: "Instance",
-        },
-        {
-          to: adminPath("/settings/users"),
-          icon: <Users />,
-          label: "Users",
-        },
-        {
-          to: adminPath("/settings/integrations"),
-          icon: <Plug />,
-          label: "Integrations",
-        },
-        {
-          to: adminPath("/settings/edge"),
-          icon: <ServerCog />,
-          label: "Edge runtime",
-        },
-        {
-          to: adminPath("/operations/search"),
-          icon: <SearchCheck />,
-          label: "Search indexes",
-        },
-        {
-          to: adminPath("/operations/backup"),
-          icon: <ArchiveRestore />,
-          label: "Backups & recovery",
-        },
-        {
-          to: adminPath("/operations/audit"),
-          icon: <ScrollText />,
-          label: "Activity",
-        },
-      ],
-    },
-  ];
-}
-
 export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
   const { data: info } = useBackendInfo();
   const instance = useInstance();
-  const groups = navGroups(info?.capabilities);
+  const destinations = availableAdminDestinations(info?.capabilities);
+  const overview = adminDestination("overview");
   const deployment = deploymentName(instance.data?.name);
   return (
     <Sidebar
@@ -228,14 +91,23 @@ export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
           <SidebarGroupContent>
             <SidebarMenu className="gap-0.5">
               <NavItem
-                to={adminPath()}
-                end
-                icon={<Home className="text-sidebar-foreground/55" />}
-                label="Overview"
+                destination={overview}
+                iconClassName="text-sidebar-foreground/55"
               />
-              {groups.map((group) => (
-                <CollapsibleNavGroup key={group.label} group={group} />
-              ))}
+              {adminSections.map((section) => {
+                const items = destinations.filter(
+                  (destination) =>
+                    destination.sidebar && destination.section === section.id
+                );
+                return items.length ? (
+                  <CollapsibleNavGroup
+                    key={section.id}
+                    label={section.label}
+                    icon={<section.icon className={section.iconClassName} />}
+                    items={items}
+                  />
+                ) : null;
+              })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -278,52 +150,60 @@ const ACTIVE_STRIPE =
   "rounded-[3px] before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:bg-sidebar-primary before:opacity-0 before:transition-opacity data-[active=true]:before:opacity-100";
 
 function NavItem({
-  to,
-  end,
-  icon,
-  label,
+  destination,
+  iconClassName,
 }: {
-  to: string;
-  end?: boolean;
-  icon: React.ReactNode;
-  label: string;
+  destination: AdminDestination;
+  iconClassName?: string;
 }) {
-  const match = useMatch({ path: to, end: end ?? false });
+  const match = useMatch({
+    path: destination.path,
+    end: destination.end ?? false,
+  });
+  const Icon = destination.icon;
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
         asChild
         isActive={!!match}
-        tooltip={label}
+        tooltip={destination.label}
         className={`${ACTIVE_STRIPE} text-xs text-sidebar-foreground/70 data-[active=true]:bg-sidebar-accent/40 data-[active=true]:font-normal`}
       >
-        <NavLink to={to} end={end}>
-          {icon}
-          <span>{label}</span>
+        <NavLink to={destination.path} end={destination.end}>
+          <Icon className={iconClassName} />
+          <span>{destination.label}</span>
         </NavLink>
       </SidebarMenuButton>
     </SidebarMenuItem>
   );
 }
 
-function CollapsibleNavGroup({ group }: { group: NavGroup }) {
+function CollapsibleNavGroup({
+  label,
+  icon,
+  items,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  items: AdminDestination[];
+}) {
   return (
     <Collapsible defaultOpen className="group/collapsible" asChild>
       <SidebarMenuItem>
         <CollapsibleTrigger asChild>
           <SidebarMenuButton
-            tooltip={group.label}
+            tooltip={label}
             className="rounded-[3px] font-mono text-[10px] uppercase tracking-[0.08em] text-sidebar-foreground/65 data-[state=open]:bg-sidebar-accent/35 data-[state=open]:text-sidebar-accent-foreground"
           >
-            {group.icon}
-            <span>{group.label}</span>
+            {icon}
+            <span>{label}</span>
             <ChevronRight className="ml-auto size-3.5 transition-transform duration-150 [transition-timing-function:cubic-bezier(0.23,1,0.32,1)] group-data-[state=open]/collapsible:rotate-90" />
           </SidebarMenuButton>
         </CollapsibleTrigger>
         <CollapsibleContent>
           <SidebarMenuSub className="mx-4 gap-0.5 border-sidebar-border/80 px-2 py-1">
-            {group.items.map((item) => (
-              <SubNavItem key={item.to} {...item} />
+            {items.map((item) => (
+              <SubNavItem key={item.id} destination={item} />
             ))}
           </SidebarMenuSub>
         </CollapsibleContent>
@@ -332,8 +212,12 @@ function CollapsibleNavGroup({ group }: { group: NavGroup }) {
   );
 }
 
-function SubNavItem({ to, end, icon, label }: NavLeaf) {
-  const match = useMatch({ path: to, end: end ?? false });
+function SubNavItem({ destination }: { destination: AdminDestination }) {
+  const match = useMatch({
+    path: destination.path,
+    end: destination.end ?? false,
+  });
+  const Icon = destination.icon;
   return (
     <SidebarMenuSubItem className="relative">
       <SidebarMenuSubButton
@@ -341,9 +225,9 @@ function SubNavItem({ to, end, icon, label }: NavLeaf) {
         isActive={!!match}
         className={`${ACTIVE_STRIPE} h-8 text-xs text-sidebar-foreground/70`}
       >
-        <NavLink to={to} end={end}>
-          {icon}
-          <span>{label}</span>
+        <NavLink to={destination.path} end={destination.end}>
+          <Icon />
+          <span>{destination.label}</span>
         </NavLink>
       </SidebarMenuSubButton>
     </SidebarMenuSubItem>

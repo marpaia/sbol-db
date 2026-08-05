@@ -18,9 +18,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   downloadPortalObject,
   type PortalObjectDetails,
-} from "@/features/portal/api";
-import { sequenceDownloadAvailability } from "@/features/portal/downloads";
-import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+} from "@/features/registry/objects/api";
+import { sequenceDownloadAvailability } from "@/features/registry/objects/downloads";
+import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 
 const formats = [
   {

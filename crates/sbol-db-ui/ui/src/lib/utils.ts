@@ -1,7 +1,7 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
-import { ApiError } from "./api";
+import { HttpError } from "@/shared/api/http";
 
 /**
  * Shadcn-style className combiner. Resolves Tailwind class conflicts
@@ -19,7 +19,7 @@ export function cn(...inputs: ClassValue[]): string {
  * stringify naively.
  */
 export function describeError(error: unknown): string {
-  if (error instanceof ApiError) {
+  if (error instanceof HttpError) {
     if (error.body) {
       try {
         const parsed = JSON.parse(error.body) as { detail?: unknown };

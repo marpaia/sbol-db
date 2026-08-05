@@ -10,7 +10,7 @@ import { Link } from "react-router-dom";
 
 import { ProductAccountMenu } from "@/components/product/ProductAccountMenu";
 import { Button } from "@/components/ui/button";
-import type { SessionUser } from "@/features/portal/api";
+import type { SessionUser } from "@/features/session/api";
 import { cn } from "@/lib/utils";
 
 export function ProductTopBar({

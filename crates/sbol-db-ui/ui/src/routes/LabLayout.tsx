@@ -14,6 +14,7 @@
 import { Fragment, useCallback } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 
+import { adminBreadcrumbs, type AdminCrumb } from "@/app/routing/adminManifest";
 import { AppSidebar } from "@/components/lab/AppSidebar";
 import { CommandPalette } from "@/components/lab/CommandPalette";
 import { ProductThemeMenu } from "@/components/product/ProductThemeMenu";
@@ -30,9 +31,12 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { useSession } from "@/features/portal/queries";
-import { useCommandPaletteShortcut } from "@/hooks/useCommandPaletteShortcut";
-import { type Dialect, useLabStore } from "@/lib/store";
+import { useSession } from "@/features/session/queries";
+import { useCommandPaletteShortcut } from "@/shared/hooks/useCommandPaletteShortcut";
+import {
+  type Dialect,
+  useWorkbenchStore,
+} from "@/features/admin/workbench/store";
 import { PRODUCT_NAME } from "@/lib/product";
 import { adminPath } from "@/lib/routes";
 
@@ -40,16 +44,7 @@ export default function LabLayout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const session = useSession();
-  const setBuffer = useLabStore((s) => s.setBuffer);
-
-  // The command palette acts on whichever dialect the user is in. On
-  // the dashboard (no active dialect), default to the last-used one.
-  const lastDialect = useLabStore((s) => s.lastDialect);
-  const activeDialect: Dialect = pathname.startsWith(adminPath("/sql"))
-    ? "sql"
-    : pathname.startsWith(adminPath("/sparql"))
-      ? "sparql"
-      : lastDialect;
+  const setBuffer = useWorkbenchStore((s) => s.setBuffer);
 
   const loadQueryFor = useCallback(
     (targetDialect: Dialect, query: string) => {
@@ -93,172 +88,8 @@ export default function LabLayout() {
         onLoadQuery={loadQueryFor}
         onSwitchDialect={(d) => navigate(adminPath(`/${d}`))}
       />
-      {/* Suppress lint warning: activeDialect is used by the palette in
-          future PRs (filter saved by dialect, etc). */}
-      <span data-active-dialect={activeDialect} hidden />
     </SidebarProvider>
   );
-}
-
-type Crumb = { label: string; to?: string; mono?: boolean };
-
-/**
- * Each top-level route belongs to a sidebar section. The breadcrumb
- * prepends the section as a non-clickable crumb so the user can see
- * at a glance which group of features the current page lives in,
- * matching how the sidebar is organized.
- */
-const TOP_LEVEL_SECTIONS: Array<{
-  prefix: string;
-  section: string;
-  page: string;
-}> = [
-  { prefix: adminPath("/import"), section: "Data model", page: "Import" },
-  { prefix: adminPath("/graphs"), section: "Data model", page: "Graphs" },
-  { prefix: adminPath("/objects"), section: "Data model", page: "Objects" },
-  {
-    prefix: adminPath("/sequences"),
-    section: "Data model",
-    page: "Sequences",
-  },
-  {
-    prefix: adminPath("/ontologies"),
-    section: "Data model",
-    page: "Ontologies",
-  },
-  {
-    prefix: adminPath("/neighborhood"),
-    section: "Data model",
-    page: "Neighborhood",
-  },
-  { prefix: adminPath("/schema"), section: "Query", page: "Schema" },
-  { prefix: adminPath("/sparql"), section: "Query", page: "SPARQL" },
-  { prefix: adminPath("/sql"), section: "Query", page: "SQL" },
-  {
-    prefix: adminPath("/settings/instance"),
-    section: "Administration",
-    page: "Instance",
-  },
-  {
-    prefix: adminPath("/settings/users"),
-    section: "Administration",
-    page: "Users",
-  },
-  {
-    prefix: adminPath("/settings/integrations"),
-    section: "Administration",
-    page: "Integrations",
-  },
-  {
-    prefix: adminPath("/settings/edge"),
-    section: "Administration",
-    page: "Edge runtime",
-  },
-  {
-    prefix: adminPath("/operations/search"),
-    section: "Administration",
-    page: "Search indexes",
-  },
-  {
-    prefix: adminPath("/operations/backup"),
-    section: "Administration",
-    page: "Backups & recovery",
-  },
-  {
-    prefix: adminPath("/operations/audit"),
-    section: "Administration",
-    page: "Activity",
-  },
-  {
-    prefix: adminPath("/observability/maintenance"),
-    section: "Operations",
-    page: "Maintenance",
-  },
-  {
-    prefix: adminPath("/observability/jobs"),
-    section: "Operations",
-    page: "Jobs",
-  },
-  {
-    prefix: adminPath("/observability"),
-    section: "Operations",
-    page: "Metrics",
-  },
-];
-
-function topLevelFor(
-  pathname: string
-): { section: string; page: string; root: string } | null {
-  for (const entry of TOP_LEVEL_SECTIONS) {
-    if (pathname === entry.prefix || pathname.startsWith(`${entry.prefix}/`)) {
-      return { section: entry.section, page: entry.page, root: entry.prefix };
-    }
-  }
-  return null;
-}
-
-function buildTrail(pathname: string): Crumb[] {
-  const top = topLevelFor(pathname);
-  if (!top) return [{ label: "Overview" }];
-
-  const trail: Crumb[] = [
-    { label: top.section },
-    { label: top.page, to: top.root },
-  ];
-
-  const ontologyMatch = pathname.match(/^\/admin\/ontologies\/([^/]+)\/?$/);
-  if (ontologyMatch) {
-    trail.push({
-      label: decodeURIComponent(ontologyMatch[1]).toLowerCase(),
-      mono: true,
-    });
-    return trail;
-  }
-  const tableMatch = pathname.match(/^\/admin\/schema\/tables\/([^/]+)\/?$/);
-  if (tableMatch) {
-    trail.push({ label: decodeURIComponent(tableMatch[1]), mono: true });
-    return trail;
-  }
-  const graphMatch = pathname.match(/^\/admin\/graphs\/([^/]+)\/?$/);
-  if (graphMatch) {
-    trail.push({
-      label: shortId(decodeURIComponent(graphMatch[1])),
-      mono: true,
-    });
-    return trail;
-  }
-  const jobMatch = pathname.match(/^\/admin\/observability\/jobs\/([^/]+)\/?$/);
-  if (jobMatch) {
-    trail.push({
-      label: shortId(decodeURIComponent(jobMatch[1])),
-      mono: true,
-    });
-    return trail;
-  }
-  if (pathname === adminPath("/objects/lookup")) {
-    trail.push({ label: "Bulk lookup" });
-    return trail;
-  }
-  const objectMatch = pathname.match(/^\/admin\/objects\/([^/]+)\/?$/);
-  if (objectMatch) {
-    trail.push({
-      label: shortLabel(decodeURIComponent(objectMatch[1])),
-      mono: true,
-    });
-    return trail;
-  }
-
-  return trail;
-}
-
-function shortId(id: string): string {
-  if (id.length <= 12) return id;
-  return `${id.slice(0, 8)}…`;
-}
-
-function shortLabel(iri: string): string {
-  const m = iri.match(/[#/]([^#/]+)$/);
-  return m ? m[1] : iri.length > 32 ? `${iri.slice(0, 32)}…` : iri;
 }
 
 function Breadcrumb({
@@ -268,7 +99,7 @@ function Breadcrumb({
   pathname: string;
   rootLabel: string;
 }) {
-  const trail = buildTrail(pathname);
+  const trail: AdminCrumb[] = adminBreadcrumbs(pathname);
   return (
     <nav
       aria-label="Breadcrumb"

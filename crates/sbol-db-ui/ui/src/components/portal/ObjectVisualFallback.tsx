@@ -17,7 +17,7 @@ import type {
   ObjectVisualFeature,
   ObjectVisualGlyph,
   PortalObjectDetails,
-} from "@/features/portal/api";
+} from "@/features/registry/objects/api";
 import {
   compactRole,
   featureSequenceWindow,
@@ -31,9 +31,9 @@ import {
   visualGlyphForRoles,
   visualGlyphLabels,
   visualSpan,
-} from "@/features/portal/visualization";
-import { shortIri } from "@/features/portal/format";
-import { usePortalObjectDetails } from "@/features/portal/queries";
+} from "@/features/registry/objects/visualization";
+import { shortIri } from "@/features/registry/objects/format";
+import { usePortalObjectDetails } from "@/features/registry/objects/queries";
 import { publicObjectPath } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 

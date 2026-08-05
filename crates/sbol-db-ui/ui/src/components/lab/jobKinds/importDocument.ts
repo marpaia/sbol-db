@@ -7,7 +7,7 @@
  * own non-JSX module so the component file can be HMR-friendly.
  */
 
-import type { ImportDocumentFormat } from "@/lib/api";
+import type { ImportDocumentFormat } from "@/features/admin/imports/api";
 
 export interface ImportDocumentValue {
   body: string;

@@ -13,8 +13,8 @@ import type {
   DiscoveryFacets,
   DiscoveryFacetValue,
   PortalSearchQuery,
-} from "@/features/portal/api";
-import { shortIri } from "@/features/portal/format";
+} from "@/features/registry/discovery/api";
+import { shortIri } from "@/features/registry/objects/format";
 
 export type DiscoveryFilterKey =
   | "q"

@@ -11,25 +11,7 @@
  */
 
 import { useEffect, useState } from "react";
-import {
-  BookOpen,
-  Boxes,
-  Clock,
-  Database,
-  Dna,
-  Gauge,
-  GitBranch,
-  Globe2,
-  HardDrive,
-  History,
-  Home,
-  Import,
-  Library,
-  Network,
-  Share2,
-  Star,
-  Table2,
-} from "lucide-react";
+import { BookOpen, Clock, Globe2, History, Star } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import {
@@ -37,9 +19,12 @@ import {
   ProductCommandPaletteGroup as PaletteGroup,
   ProductCommandPaletteItem as Item,
 } from "@/components/product/ProductCommandPalette";
-import { useBackendInfo } from "@/hooks/useBackendInfo";
-import { type Dialect, useLabStore } from "@/lib/store";
-import { adminPath } from "@/lib/routes";
+import { availableAdminDestinations } from "@/app/routing/adminManifest";
+import { useBackendInfo } from "@/features/admin/backend/queries";
+import {
+  type Dialect,
+  useWorkbenchStore,
+} from "@/features/admin/workbench/store";
 import { compactQuery, formatRelative } from "@/lib/utils";
 
 export interface CommandPaletteProps {
@@ -55,12 +40,17 @@ export function CommandPalette({
   onLoadQuery,
   onSwitchDialect,
 }: CommandPaletteProps) {
-  const saved = useLabStore((s) => s.saved);
-  const history = useLabStore((s) => s.history);
+  const saved = useWorkbenchStore((s) => s.saved);
+  const history = useWorkbenchStore((s) => s.history);
   const navigate = useNavigate();
   const { data: info } = useBackendInfo();
-  const sqlConsole = info?.capabilities.sql_console ?? false;
-  const hasMaintenance = (info?.capabilities.maintenance ?? null) !== null;
+  const destinations = availableAdminDestinations(info?.capabilities);
+  const queryDestinations = destinations.filter(
+    (destination) => destination.palette === "query"
+  );
+  const goToDestinations = destinations.filter(
+    (destination) => destination.palette === "go-to"
+  );
 
   const goTo = (path: string) => {
     navigate(path);
@@ -90,84 +80,35 @@ export function CommandPalette({
       emptyDescription="Try a tool name, destination, or saved query."
     >
       <PaletteGroup heading="Query" tone="promoter">
-        <Item
-          icon={<Network size={14} />}
-          label="SPARQL"
-          onSelect={() => {
-            onSwitchDialect("sparql");
-            onOpenChange(false);
-          }}
-        />
-        {sqlConsole && (
-          <Item
-            icon={<Database size={14} />}
-            label="SQL"
-            onSelect={() => {
-              onSwitchDialect("sql");
-              onOpenChange(false);
-            }}
-          />
-        )}
+        {queryDestinations.map((destination) => {
+          const Icon = destination.icon;
+          const dialect = destination.id === "sql" ? "sql" : "sparql";
+          return (
+            <Item
+              key={destination.id}
+              icon={<Icon size={14} />}
+              label={destination.paletteLabel ?? destination.label}
+              onSelect={() => {
+                onSwitchDialect(dialect);
+                onOpenChange(false);
+              }}
+            />
+          );
+        })}
       </PaletteGroup>
 
       <PaletteGroup heading="Go to" tone="rbs">
-        <Item
-          icon={<Home size={14} />}
-          label="Overview"
-          onSelect={() => goTo(adminPath())}
-        />
-        <Item
-          icon={<Share2 size={14} />}
-          label="Graphs"
-          onSelect={() => goTo(adminPath("/graphs"))}
-        />
-        <Item
-          icon={<Import size={14} />}
-          label="Import"
-          onSelect={() => goTo(adminPath("/import"))}
-        />
-        <Item
-          icon={<Boxes size={14} />}
-          label="Objects"
-          onSelect={() => goTo(adminPath("/objects"))}
-        />
-        <Item
-          icon={<Boxes size={14} />}
-          label="Bulk object lookup"
-          onSelect={() => goTo(adminPath("/objects/lookup"))}
-        />
-        <Item
-          icon={<GitBranch size={14} />}
-          label="Walk neighborhood"
-          onSelect={() => goTo(adminPath("/neighborhood"))}
-        />
-        <Item
-          icon={<Dna size={14} />}
-          label="Sequence search"
-          onSelect={() => goTo(adminPath("/sequences"))}
-        />
-        <Item
-          icon={<Library size={14} />}
-          label="Ontologies"
-          onSelect={() => goTo(adminPath("/ontologies"))}
-        />
-        <Item
-          icon={<Table2 size={14} />}
-          label="Schema"
-          onSelect={() => goTo(adminPath("/schema"))}
-        />
-        <Item
-          icon={<Gauge size={14} />}
-          label="Metrics"
-          onSelect={() => goTo(adminPath("/observability"))}
-        />
-        {hasMaintenance && (
-          <Item
-            icon={<HardDrive size={14} />}
-            label="Maintenance"
-            onSelect={() => goTo(adminPath("/observability/maintenance"))}
-          />
-        )}
+        {goToDestinations.map((destination) => {
+          const Icon = destination.icon;
+          return (
+            <Item
+              key={destination.id}
+              icon={<Icon size={14} />}
+              label={destination.paletteLabel ?? destination.label}
+              onSelect={() => goTo(destination.path)}
+            />
+          );
+        })}
       </PaletteGroup>
 
       <PaletteGroup heading="Product" tone="cds">

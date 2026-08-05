@@ -89,4 +89,49 @@ export default [
       ],
     },
   },
+  {
+    files: ["src/shared/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@/app/*", "@/features/*", "@/routes/*"],
+              message:
+                "Shared code must remain independent of app, feature, and route layers.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: [
+      "src/components/**/*.{ts,tsx}",
+      "src/features/**/*.tsx",
+      "src/routes/**/*.{ts,tsx}",
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@/features/admin/api",
+              message: "Import the owning admin feature API instead.",
+            },
+            {
+              name: "@/features/registry/api",
+              message: "Import the owning registry feature API instead.",
+            },
+            {
+              name: "@/lib/api",
+              message: "Import the owning feature API instead.",
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];

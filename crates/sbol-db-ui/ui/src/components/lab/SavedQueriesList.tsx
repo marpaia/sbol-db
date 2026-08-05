@@ -7,7 +7,10 @@
 import { useState } from "react";
 import { Star, Trash2 } from "lucide-react";
 
-import { type Dialect, useLabStore } from "@/lib/store";
+import {
+  type Dialect,
+  useWorkbenchStore,
+} from "@/features/admin/workbench/store";
 
 export interface SavedQueriesListProps {
   dialect: Dialect;
@@ -20,11 +23,11 @@ export function SavedQueriesList({
   currentQuery,
   onLoad,
 }: SavedQueriesListProps) {
-  const saved = useLabStore((s) =>
+  const saved = useWorkbenchStore((s) =>
     s.saved.filter((q) => q.dialect === dialect)
   );
-  const saveQuery = useLabStore((s) => s.saveQuery);
-  const deleteSaved = useLabStore((s) => s.deleteSaved);
+  const saveQuery = useWorkbenchStore((s) => s.saveQuery);
+  const deleteSaved = useWorkbenchStore((s) => s.deleteSaved);
   const [name, setName] = useState("");
 
   return (

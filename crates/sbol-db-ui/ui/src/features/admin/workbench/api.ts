@@ -1,0 +1,18 @@
+export {
+  executeSparql,
+  executeSql,
+  isSparqlAsk,
+  isSparqlSelect,
+  validateSparql,
+  validateSql,
+  type SparqlAskResult,
+  type SparqlBinding,
+  type SparqlOutcome,
+  type SparqlSelectResults,
+  type SqlCell,
+  type SqlColumn,
+  type SqlExecuteRequest,
+  type SqlExecuteResponse,
+  type ValidateError,
+  type ValidateResponse,
+} from "@/lib/api";

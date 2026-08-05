@@ -6,7 +6,7 @@ import { ObjectSummaryLink } from "@/components/portal/ObjectSummaryLink";
 import { SurfaceState } from "@/components/portal/SurfaceState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useSimilarObjects } from "@/features/portal/queries";
+import { useSimilarObjects } from "@/features/registry/objects/queries";
 
 const INITIAL_VISIBLE = 6;
 

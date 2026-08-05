@@ -1,15 +1,16 @@
-import type { Capabilities, RecentJob } from "@/lib/api";
+import type { Capabilities } from "@/features/admin/backend/api";
+import type { RecentJob } from "@/features/admin/jobs/api";
+import {
+  HttpError,
+  parseStructuredErrorBody,
+  requestJson,
+} from "@/shared/api/http";
 
 const ADMIN_API = "/api/v2/admin";
 
-export class AdminApiError extends Error {
-  status: number;
-  code?: string;
-
+export class AdminApiError extends HttpError {
   constructor(status: number, message: string, code?: string) {
-    super(message);
-    this.status = status;
-    this.code = code;
+    super({ status, message, code });
   }
 }
 
@@ -340,10 +341,7 @@ export function updateEdgeAdmin(payload: EdgeSettingsPatch) {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${ADMIN_API}${path}`, init);
-  if (!res.ok) throw await responseError(res);
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  return requestJson<T>(`${ADMIN_API}${path}`, init, responseError);
 }
 
 function jsonRequest(method: string, body: unknown): RequestInit {
@@ -355,12 +353,11 @@ function jsonRequest(method: string, body: unknown): RequestInit {
 }
 
 async function responseError(res: Response): Promise<AdminApiError> {
-  const value = (await res.json().catch(() => null)) as {
-    error?: { message?: string; code?: string };
-  } | null;
+  const body = await res.text().catch(() => "");
+  const value = parseStructuredErrorBody(body);
   return new AdminApiError(
     res.status,
-    value?.error?.message || `Request failed with HTTP ${res.status}`,
-    value?.error?.code
+    value?.message || `Request failed with HTTP ${res.status}`,
+    value?.code
   );
 }

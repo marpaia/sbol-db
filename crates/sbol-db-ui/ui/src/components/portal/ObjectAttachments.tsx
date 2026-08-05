@@ -6,8 +6,8 @@ import { ObjectStateBadge } from "@/components/portal/ObjectStateBadge";
 import { SurfaceState } from "@/components/portal/SurfaceState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { PortalObjectDetails } from "@/features/portal/api";
-import { shortIri } from "@/features/portal/format";
+import type { PortalObjectDetails } from "@/features/registry/objects/api";
+import { shortIri } from "@/features/registry/objects/format";
 import { publicObjectPath } from "@/lib/routes";
 
 export function ObjectAttachments({ object }: { object: PortalObjectDetails }) {
