@@ -1,43 +1,69 @@
-# sbol-db
+# SBOL DB
 
-`sbol-db` is a database for synthetic biology data. It stores your
-[SBOL](https://sbolstandard.org/) designs and lets you query them by
-IRI, across the design graph, with SPARQL, or by DNA sequence.
-
-It ingests SBOL 3 RDF, upgrades SBOL 2 RDF, and imports GenBank or
-FASTA into SBOL 3, projecting every design into both a typed
-relational schema and an RDF triplestore. The query surface is five
-composable primitives: typed lookup by IRI, bounded graph neighborhood
-traversal, read-only SPARQL 1.1, nucleotide substring +
-reverse-complement search, and ontology-aware role expansion.
-
-The persistence layer sits behind a backend-neutral storage contract
-(the `sbol-db-storage` crate), so the same query surface runs on
-Postgres, SQLite, or an embedded RocksDB engine. The connection-string
-scheme picks the backend; a repo-local RocksDB runtime is the default. See
-[**docs/storage.md**](docs/storage.md).
+SBOL DB is open infrastructure for biological design data: a self-hosted
+registry, an interoperable database, and an operator-ready server built around
+the [Synthetic Biology Open Language](https://sbolstandard.org/). It gives
+people one place to find, inspect, contribute, share, review, and reuse designs,
+while giving software stable APIs and provenance-preserving representations of
+the same records.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/marpaia/sbol-db/master/docs/images/overview.png" alt="SBOL Data Lab overview dashboard showing corpus stats, top SBOL classes, and recent graphs" width="900">
+  <img src="https://raw.githubusercontent.com/marpaia/sbol-db/master/docs/images/homepage.png" alt="SBOL DB registry homepage for finding, sharing, and reusing biological designs" width="900">
 </p>
 
-New to the codebase? Start with the [**crate guide**](docs/crate-guide.md).
-Want to see how a design flows through the tables? See the
-[**domain model**](docs/domain-model.md). Deploying it? See
-[**docs/deployment.md**](docs/deployment.md). Curious how it compares with
-Virtuoso? See [**docs/benchmarks.md**](docs/benchmarks.md) and the
-[`bench/`](bench/) harness.
+The browser application and the machine interfaces are two views of one
+system. SBOL DB accepts SBOL 3, upgrades SBOL 2, and converts GenBank and FASTA
+into SBOL 3. It preserves stable identities, graph structure, biological
+meaning, and provenance while projecting each design into RDF and typed data
+models. Users can discover records by metadata and biological facets, DNA
+sequence, or configured semantic and related-design strategies; software can
+reach the same corpus through REST, SPARQL, and the CLI.
+
+One `sbol-db server` process can host the public registry, account and
+collaboration workflows, administrator workspace, APIs, and background worker.
+The default local runtime uses embedded RocksDB; SQLite and Postgres implement
+the same storage contract for other deployment shapes. The self-contained
+production profile adds native HTTPS, ACME certificate lifecycle, durable
+configuration, scheduled encrypted backups, remote readback verification, and
+offline atomic restore. See the [storage architecture](docs/storage.md) and
+[deployment guide](docs/deployment.md).
+
+## What it includes
+
+- **A biological design registry.** Search, canonical object pages, typed
+  relationships, provenance, attachments, collections, and truthful downloads
+  live under one origin.
+- **Contribution and collaboration.** Validate before committing, preview
+  minted identities and conversion warnings, publish collections, share
+  designs, transfer ownership, and run auditable curator reviews.
+- **Biology-aware discovery.** Ranked text and facets, ontology-aware roles,
+  exact and aligned sequence search, graph neighborhoods, SPARQL 1.1, and
+  pluggable structured search strategies.
+- **Interfaces for tools.** Native and V2 REST APIs, OpenAPI documentation, the
+  `sbol-db` CLI, RDF and common biological formats, plus compatibility surfaces
+  for existing SynBioHub clients.
+- **An embedded control plane.** Inspect data, SPARQL, jobs, storage, search
+  indexes, users, integrations, audit history, edge health, and complete
+  backup evidence without deploying a separate admin application.
+- **Compatibility and migration.** Run classic SynBioHub against SBOL DB's
+  compatibility endpoints, measure behavior with the differential suite, and
+  use the preflighted, reconciled migration path for the persistence surfaces
+  covered by the [migration guide](docs/synbiohub-migration.md).
 
 ## Scope
 
-`sbol-db` is deliberately narrow: a *best-in-class SBOL query
-database*. It is not a DBTL workflow tracker, lab orchestration system,
-or model registry. Designs are first-class; experiments, builds,
-predictive model runs, and decision records are out of scope. The
-focus is on sophisticated ways to query SBOL objects, not broader
-project state.
+SBOL DB follows the lifecycle of a _biological design record_: ingest,
+validation, identity, discovery, contribution, publication, collaboration,
+exchange, and operations. It is not a DBTL workflow tracker, lab orchestration
+system, ELN, or model registry. Experiments, builds, samples, measurements,
+predictive model runs, and decision records remain out of scope.
 
-Built on:
+New to the codebase? Start with the [crate guide](docs/crate-guide.md) and
+[domain model](docs/domain-model.md). Running a registry? Start with the
+[application guide](docs/ui.md) and [deployment guide](docs/deployment.md).
+For the full documentation map, see [docs/README.md](docs/README.md).
+
+Core foundations:
 
 - [`sbol-rs`](https://github.com/marpaia/sbol-rs) for SBOL parsing,
   validation, and RDF I/O.
@@ -51,6 +77,34 @@ Built on:
   vector-search index whose verified weights ship in the production image. See
   [search-plugins.md](docs/search-plugins.md) and
   [builtin-bge-small-model.md](docs/builtin-bge-small-model.md).
+
+## Registry application and admin workspace
+
+`sbol-db server` serves the public registry at
+[http://127.0.0.1:8888/](http://127.0.0.1:8888/) and the administrator workspace
+at `/admin`. Registry search, canonical records, contribution, collections,
+accounts, collaboration, APIs, and operations share one origin and one domain
+model. The compiled React assets are baked into the Rust binary, so the
+application ships wherever the server does. SynBioHub is a compatibility and
+migration boundary, not the product brand. See the [application guide](docs/ui.md)
+and [application architecture](docs/portal-architecture.md).
+
+Read-only SPARQL 1.1, with a prefix and class sidebar, saved queries,
+and history:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/marpaia/sbol-db/master/docs/images/sparql.png" alt="SBOL DB administrator SPARQL workspace with prefixes, saved queries, history, and results" width="900">
+</p>
+
+The same workspace exposes background jobs, search-index lifecycle, storage
+maintenance, instance policy, users, integrations, audit events, production
+edge health, and verified backup and recovery evidence. The
+[application guide](docs/ui.md#a-tour-of-the-product) includes the complete
+screenshot tour.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/marpaia/sbol-db/master/docs/images/backups.png" alt="SBOL DB complete backup and recovery workspace with service health, remote verification, and active policy" width="900">
+</p>
 
 ## Installation
 
@@ -68,19 +122,6 @@ To install the CLI, run:
 ```sh
 cargo install --path crates/sbol-db
 ```
-
-Postgres remains available for multi-process and production testing. Start the
-Compose service and select it explicitly:
-
-```sh
-docker compose up -d postgres
-./target/debug/sbol-db \
-  --database-url postgres://sbol:sbol@localhost:5432/sbol \
-  server
-```
-
-Explicit BGE-small source deployments first run `make model/bge-small`; the
-installed production image already carries the verified ONNX bundle.
 
 ## Quickstart — CLI
 
@@ -135,10 +176,9 @@ sbol-db server
 
 ## Quickstart — Library
 
-The CLI wraps the `sbol-db-storage` contract: `SbolObjectService`
-(the Postgres implementation of `SbolStore`) and
-`sbol-db-sparql::SparqlEngine` (which evaluates over any `TripleSource`).
-Both are usable as library types:
+The storage and SPARQL layers are also public Rust APIs. This narrow example
+uses the Postgres `SbolObjectService` implementation of `SbolStore` with
+`sbol-db-sparql::SparqlEngine`, which evaluates over any `TripleSource`:
 
 ```rust
 use sbol_db_core::SerializationFormat;
@@ -178,67 +218,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## SBOL DB application and admin workspace
-
-`sbol-db server` serves the SBOL DB application at
-[http://127.0.0.1:8888/](http://127.0.0.1:8888/). Registry search,
-canonical object pages, setup, and account sessions share one origin with the
-APIs. The original **SBOL Data Lab** is preserved as the administrator workspace
-at `/admin`, with `/lab/*` retained as a transitional bookmark redirect. The
-compiled assets are baked into the binary, so the UI ships wherever the server
-does. SynBioHub remains a compatibility and migration target, not the product
-brand. See [`docs/ui.md`](docs/ui.md) and the
-[application architecture and roadmap](docs/portal-architecture.md).
-
-Read-only SPARQL 1.1, with a prefix and class sidebar, saved queries,
-and history:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/marpaia/sbol-db/master/docs/images/sparql.png" alt="SBOL Data Lab SPARQL editor with query results" width="900">
-</p>
-
-Or query the relational projection directly in SQL, with a browsable
-table list:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/marpaia/sbol-db/master/docs/images/sql.png" alt="SBOL Data Lab SQL editor with query results" width="900">
-</p>
-
-## REST surface
-
-`sbol-db server` starts an axum server. Routes mirror the CLI:
-
-| Method | Path                              | Purpose                                |
-| ------ | --------------------------------- | -------------------------------------- |
-| `POST` | `/graphs`                         | Import SBOL RDF, GenBank, or FASTA     |
-| `POST` | `/graphs/bulk`                    | Atomic bulk import (≤ 100, one txn)    |
-| `GET`  | `/graphs/{id}`                    | Graph metadata                         |
-| `GET`  | `/objects?iri=...`                | Resolve a stored object by IRI         |
-| `GET`  | `/objects/list`                   | Paginated corpus listing (keyset cursor) |
-| `POST` | `/objects/lookup`                 | Bulk IRI → object resolution (≤ 1000)  |
-| `GET`  | `/objects/{id}/rdf`               | Re-emit object subgraph as RDF         |
-| `GET`  | `/objects/neighborhood`           | Bounded graph traversal (JSON)         |
-| `GET`  | `/objects/neighborhood.rdf`       | Bounded graph traversal (RDF subgraph) |
-| `GET`/`POST` | `/sparql`                   | Read-only SPARQL 1.1 endpoint          |
-| `GET`/`POST` | `/sparql-auth`              | SPARQL 1.1 Update (Basic auth)         |
-| `*`    | `/sparql-graph-crud-auth/`        | Graph Store HTTP Protocol (Basic auth) |
-| `GET`  | `/sequences/search`               | Nucleotide substring + RC search       |
-| `POST` | `/sequences/search`               | Bulk pattern search (≤ 256 patterns)   |
-| `GET`/`POST` | `/ontology`                 | List / load ontologies                 |
-| `GET`  | `/ontology/term`                  | Term metadata (resolves IRI aliases)   |
-| `GET`  | `/ontology/descendants`           | Transitive closure for a term          |
-| `POST` | `/jobs`                           | Enqueue an async job (returns id)      |
-| `GET`  | `/jobs`                           | List recent jobs (filterable)          |
-| `GET`  | `/jobs/{id}`                      | One job (status, result, error)        |
-| `POST` | `/jobs/{id}/cancel`               | Cancel a queued or running job         |
-| `GET`  | `/healthz`                        | Static liveness probe                  |
-| `GET`  | `/readyz`                         | Postgres `SELECT 1` readiness probe    |
-| `GET`  | `/metrics`                        | Prometheus metrics exposition          |
-| `GET`  | `/docs`                           | Interactive API docs (Scalar UI)       |
-| `GET`  | `/openapi.json`                   | OpenAPI 3.1 schema                     |
-| `POST` | `/api/v2/search`                  | Structured pluggable search strategy   |
-| `GET`  | `/api/v2/search/strategies`       | Search strategy capability discovery   |
-
 See [`docs/sparql.md`](docs/sparql.md) for the SPARQL Protocol shape,
 [`docs/neighborhood.md`](docs/neighborhood.md) for traversal parameters,
 [`docs/search-plugins.md`](docs/search-plugins.md) for pluggable search,
@@ -253,11 +232,12 @@ surface SynBioHub expects, storing RDF verbatim. See
 
 ## Async batch processing
 
-For corpus-scale imports and background work, `sbol-db` ships a
-Postgres-backed async job runtime that distributes work across every
-node in the cluster — no sidecar broker, no leader election, no extra
-infra. Each `sbol-db server` pod embeds a worker by default; multiple
-pods share the database safely via `FOR UPDATE SKIP LOCKED`.
+For corpus-scale imports and background work, `sbol-db` ships a durable async
+job runtime over the selected storage backend. Each `sbol-db server` process
+embeds a worker by default. Embedded SQLite and RocksDB deployments own their
+queue in the single server; Postgres deployments can distribute work across
+multiple API and worker nodes with `FOR UPDATE SKIP LOCKED`, without a sidecar
+broker or leader election.
 
 - **`POST /jobs`** and `sbol-db jobs enqueue` for fire-and-poll bulk
   imports, including worker-side public HTTPS imports for remote SBOL,
@@ -284,29 +264,3 @@ sbol-db jobs status <uuid>
 See [`docs/deployment.md#async-job-runtime`](docs/deployment.md#async-job-runtime)
 for deployment shapes (single-node, two-node HA, dedicated worker fleet)
 and operator-surface details.
-
-## Workspace layout
-
-| Crate              | Purpose                                                                                |
-| ------------------ | -------------------------------------------------------------------------------------- |
-| `sbol-db-core`     | Domain types shared across the workspace. No I/O dependencies.                          |
-| `sbol-db-storage`  | Backend-neutral storage contract: the `SbolStore` / `TripleSource` traits and their request/response types. Names no concrete database. |
-| `sbol-db-rdf`      | `sbol::Document` ↔ triples projection, RDF export, content hashing.                       |
-| `sbol-db-derive`   | Pure import plan builder: parse, derive triples and object summaries, validate. No database. |
-| `sbol-db-postgres` | Postgres implementation of the storage contract: sqlx repositories, embedded migrations, the `SbolObjectService` entry point. |
-| `sbol-db-sqlite`   | SQLite implementation of the storage contract: a single-file, embedded SQL engine. |
-| `sbol-db-rocksdb`  | RocksDB implementation: an embedded, dictionary-encoded, permuted-index triplestore. |
-| `sbol-db-backend`  | Backend factory: `Backend::open` routes a connection string to the engine its scheme selects. |
-| `sbol-db-conformance` | Backend-neutral conformance suite every engine passes through the trait surface. |
-| `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over any `TripleSource`).        |
-| `sbol-db-jobs`     | Async job runtime — `JobHandler` trait, registry, worker, built-in handlers.            |
-| `sbol-db-ui`       | Embedded SBOL DB application at `/` with the data/operations workspace at `/admin` (React + Vite, baked in via `rust-embed`). |
-| `sbol-db-server`   | axum HTTP API.                                                                          |
-| `sbol-db`          | CLI binary.                                                                             |
-
-The boundary between the storage backends and `sbol-db-sparql` is the
-`TripleSource` trait in `sbol-db-storage`: SPARQL evaluation never
-touches a concrete database, only the trait's pattern-scan method. That
-seam is what lets SQLite and RocksDB serve the same query surface as
-Postgres. See the [crate guide](docs/crate-guide.md) and
-[storage.md](docs/storage.md) for details.

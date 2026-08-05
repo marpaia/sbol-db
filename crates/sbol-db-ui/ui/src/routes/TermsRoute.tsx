@@ -10,7 +10,7 @@ const sections: LegalSection[] = [
     id: "agreement",
     title: "Agreement and operator",
     paragraphs: [
-      "These Terms govern use of the SBOL DB website, registry, account workspace, APIs, command-line connections, MCP server, and related services provided by the person or organization operating this deployment (the Operator). By creating an account or using a non-public service feature, you agree to these Terms and any deployment-specific terms presented by the Operator.",
+      "These Terms govern use of the SBOL DB website, registry, account workspace, APIs, and related services provided by the person or organization operating this deployment (the Operator). By creating an account or using a non-public service feature, you agree to these Terms and any deployment-specific terms presented by the Operator.",
       "SBOL DB is open-source software used by independent operators. Upstream contributors are not parties to these Terms merely because they wrote or maintain the software. The Operator must identify the legal entity or person providing this service before enabling public registration.",
     ],
   },
@@ -42,7 +42,7 @@ const sections: LegalSection[] = [
     id: "publication",
     title: "Publication and persistent identity",
     paragraphs: [
-      "Publishing a design makes the selected content and metadata available to the public. SBOL identities, versions, provenance, citations, and content fingerprints are intended to support durable scientific references. Publication may therefore be difficult to reverse after other people or systems have downloaded, cited, cached, or synchronized the record.",
+      "Publishing a design makes the selected content and metadata available to the public. Persistent design identifiers, versions, provenance, citations, and content fingerprints are intended to support durable scientific references. Publication may therefore be difficult to reverse after other people or systems have downloaded, cited, cached, or synchronized the record.",
       "Publication does not automatically grant a separate intellectual-property license unless the interface or associated metadata expressly identifies one. You are responsible for choosing and recording an appropriate license and for confirming that publication does not violate confidentiality, contractual, export-control, biosafety, or other obligations.",
     ],
   },
@@ -79,7 +79,7 @@ const sections: LegalSection[] = [
     id: "third-party",
     title: "Third-party services and software",
     paragraphs: [
-      "The service may interoperate with external identity providers, ontologies, repositories, command-line tools, agents, hosting providers, or other services. Their terms and privacy practices may apply separately, and the Operator is not responsible for a third party outside its control.",
+      "The service may interoperate with external identity providers, ontologies, repositories, applications, agents, hosting providers, or other services. Their terms and privacy practices may apply separately, and the Operator is not responsible for a third party outside its control.",
       "The SBOL DB source code and bundled open-source components remain governed by their respective software licenses. These service Terms do not replace or restrict rights granted under those licenses.",
     ],
   },

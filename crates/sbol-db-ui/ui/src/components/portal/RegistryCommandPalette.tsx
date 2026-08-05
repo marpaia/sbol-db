@@ -1,6 +1,5 @@
 import {
   BookOpen,
-  Cable,
   Dna,
   FilePlus2,
   FolderKanban,
@@ -65,7 +64,7 @@ export function RegistryCommandPalette({
       description="Navigate pages and run registry actions"
       placeholder="Jump to a page or action…"
       indexLabel="Command index"
-      emptyDescription="Try workspace, contribute, connect, or account."
+      emptyDescription="Try workspace, contribute, search, or account."
     >
       <PaletteGroup heading="Discover" tone="promoter">
         <Item
@@ -146,12 +145,7 @@ export function RegistryCommandPalette({
         </PaletteGroup>
       )}
 
-      <PaletteGroup heading="Connect" tone="rbs">
-        <Item
-          icon={<Cable size={14} />}
-          label="Connect tools to this registry"
-          onSelect={() => goTo("/connect")}
-        />
+      <PaletteGroup heading="Resources" tone="rbs">
         <Item
           icon={<BookOpen size={14} />}
           label="Open API reference"

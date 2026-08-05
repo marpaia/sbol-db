@@ -53,54 +53,82 @@ the application layer. Direct SBOL 2, SBOL 3, non-recursive SBOL, GenBank,
 FASTA, GFF3, and OMEX links remain ordinary machine requests and are never
 claimed by the page dispatcher.
 
-## A tour of the admin workspace
+## A tour of the product
 
-The UI opens on an Overview and fans out into registry data, query,
-operations, and administration views from the left nav. The Administration
-group contains Instance, Users, Integrations, Edge runtime, Search indexes,
-Backups & recovery, and Activity. These pages share `AdminPage`, `AdminSection`,
-form, feedback,
-and deliberate-confirmation compositions built from the same ShadCN/Radix and
+The public registry leads with the thing SBOL DB exists to enable: finding,
+sharing, and reusing biological designs. Search spans names, descriptions,
+types, identifiers, biological meaning, sequence, and configured related-design
+strategies. Canonical record pages preserve the identity, composition,
+function, and provenance needed to evaluate and exchange a result.
+
+<p align="center">
+  <img src="images/homepage.png" alt="SBOL DB public registry homepage for finding, sharing, and reusing biological designs" width="900">
+</p>
+
+The administrator workspace fans out into data-model, query, operations, and
+administration sections. Its SPARQL editor pairs a prefix and class sidebar with
+saved queries, history, and a results grid:
+
+<p align="center">
+  <img src="images/sparql.png" alt="SBOL DB administrator SPARQL editor with prefixes, saved queries, history, and results" width="900">
+</p>
+
+Durable background work is visible rather than hidden behind the API. The Jobs
+view filters recent work by queue and status, while each detail page exposes
+payload, attempts, timing, result, and safe cancellation controls:
+
+<p align="center">
+  <img src="images/jobs.png" alt="SBOL DB background jobs workspace with queue, status, duration, and attempt information" width="900">
+</p>
+
+Embedded RocksDB deployments expose store size, key estimates, column-family
+layout, compaction state, and a deliberate compaction action in the Maintenance
+view:
+
+<p align="center">
+  <img src="images/rocksdb%20maintenance.png" alt="SBOL DB RocksDB maintenance workspace with store size, key estimates, column families, and compaction state" width="900">
+</p>
+
+Search indexes are treated as derived, inspectable infrastructure. Operators
+can see the immutable strategy deployment and schedule one tracked rebuild of
+text, topology, and configured vector indexes:
+
+<p align="center">
+  <img src="images/indexes.png" alt="SBOL DB search index administration showing configured strategies and recent rebuilds" width="900">
+</p>
+
+Instance settings control registry identity, the public origin, newly minted
+object identifiers, front-page context, and access policy without allowing
+deployment branding to replace the SBOL DB product identity:
+
+<p align="center">
+  <img src="images/instance%20settings.png" alt="SBOL DB instance settings for registry identity, public URL, object URI prefix, and access policy" width="900">
+</p>
+
+The self-contained production profile adds a managed edge runtime. Its admin
+view reports the active generation, native TLS and ACME lifecycle, disk reserve,
+and pending settings that take effect together after restart:
+
+<p align="center">
+  <img src="images/edge.png" alt="SBOL DB production edge runtime showing TLS, ACME, disk health, and active appliance generation" width="900">
+</p>
+
+Backups & recovery closes the operational loop. Manual, scheduled, and
+pre-deployment requests all create the same encrypted complete artifact;
+success requires local verification, object-store upload, remote readback, and
+semantic verification of the downloaded copy. Restore and rollback remain
+offline operations so recovery credentials never enter the browser or running
+server.
+
+<p align="center">
+  <img src="images/backups.png" alt="SBOL DB complete backup and recovery workspace with service health, remote verification, artifact status, and active policy" width="900">
+</p>
+
+These pages share `AdminPage`, `AdminSection`, form, feedback, and
+deliberate-confirmation compositions built from the same ShadCN/Radix and
 Tailwind primitives as the public application; route code orchestrates typed
-queries rather than inventing a second component system.
-
-The Overview lands on corpus totals, the most common SBOL classes,
-loaded ontologies, and your most recent graphs:
-
-<p align="center">
-  <img src="images/overview.png" alt="SBOL Data Lab overview dashboard" width="900">
-</p>
-
-The SPARQL editor pairs a prefix and class sidebar with a results grid,
-saved queries, and history:
-
-<p align="center">
-  <img src="images/sparql.png" alt="SBOL Data Lab SPARQL editor with query results" width="900">
-</p>
-
-The SQL editor runs against the relational projection, with the full
-table list one click away:
-
-<p align="center">
-  <img src="images/sql.png" alt="SBOL Data Lab SQL editor with query results" width="900">
-</p>
-
-Operations > Metrics is a live observability view: request rate, p95
-latency, connection pools, and the job runner, sampled every few seconds. In
-the self-contained production profile it also surfaces TLS expiration, ACME
-lifecycle, disk reserve, complete-backup freshness, remote readback
-verification, and pending-restart state:
-
-<p align="center">
-  <img src="images/metrics.png" alt="SBOL Data Lab observability metrics view" width="900">
-</p>
-
-The API docs link opens the Scalar-rendered OpenAPI reference served at
-`/docs`, with ready-to-run client snippets:
-
-<p align="center">
-  <img src="images/api-docs.png" alt="Scalar-rendered OpenAPI reference at /docs" width="900">
-</p>
+queries rather than inventing a second component system. The command palette
+and API reference remain available from every admin route.
 
 The application is fronted by these controls:
 

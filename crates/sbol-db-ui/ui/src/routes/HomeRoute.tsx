@@ -1,11 +1,11 @@
 import {
   ArrowRight,
   Boxes,
-  Cable,
   DatabaseZap,
   Dna,
   FilePlus2,
   FolderKanban,
+  Info,
   Search,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
@@ -62,7 +62,7 @@ export default function HomeRoute() {
                 term="Formats"
                 detail="SBOL2, SBOL3, GenBank, FASTA"
               />
-              <RegistryFact term="Interfaces" detail="REST API, CLI, MCP" />
+              <RegistryFact term="Interfaces" detail="Browser, REST API" />
               <RegistryFact
                 term="Discovery"
                 detail="Keyword, semantic, sequence"
@@ -116,14 +116,14 @@ export default function HomeRoute() {
             />
             <EntryPoint
               number="03"
-              icon={user ? <FolderKanban /> : <Cable />}
-              title={user ? "Open your workspace" : "Connect your tools"}
+              icon={user ? <FolderKanban /> : <Info />}
+              title={user ? "Open your workspace" : "Learn about SBOL DB"}
               description={
                 user
                   ? "Review your designs, collections, drafts, and recent contribution activity."
-                  : "Use the sbol CLI, connect an AI agent over MCP, or build on the V2 REST API."
+                  : "See how the registry brings biological designs, collaboration, API access, and operations together."
               }
-              to={user ? "/workspace" : "/connect"}
+              to={user ? "/workspace" : "/about"}
               tone="cds"
             />
             <EntryPoint

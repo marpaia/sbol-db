@@ -26,10 +26,10 @@ const waysToWork: Array<{
   },
   {
     icon: Cable,
-    eyebrow: "Machine access",
-    title: "Connect tools and agents",
+    eyebrow: "API access",
+    title: "Build on the registry",
     description:
-      "Use the REST API, CLI, or MCP server through the same identity and permission boundaries as the browser application.",
+      "Use the REST API through the same identity and permission boundaries as the browser application.",
   },
 ];
 
@@ -41,6 +41,7 @@ const applicationAreas: Array<{
   capabilities: string[];
   to: string;
   action: string;
+  external?: boolean;
 }> = [
   {
     number: "01",
@@ -74,18 +75,19 @@ const applicationAreas: Array<{
   },
   {
     number: "03",
-    eyebrow: "Machine access",
-    title: "Integrate applications, scripts, and agents",
+    eyebrow: "API access",
+    title: "Integrate applications and scripts",
     description:
-      "The browser is one client of the registry. The same data and authorization model is available to tools through documented machine interfaces.",
+      "The browser is one client of the registry. The same data and authorization model is available through documented REST interfaces.",
     capabilities: [
       "Use the V2 REST API and interactive OpenAPI reference",
-      "Work locally and synchronize collections with the sbol CLI",
-      "Connect MCP-capable agents to search, inspect, prepare, and review designs",
-      "Use SBOL Identity and delegated OAuth scopes across compatible tools",
+      "Read normalized object, collection, and sequence representations",
+      "Build integrations within the registry's authorization boundaries",
+      "Automate documented searches, queries, and downloads",
     ],
-    to: "/connect",
-    action: "See connection options",
+    to: "/api/v2/docs",
+    action: "Open API reference",
+    external: true,
   },
   {
     number: "04",
@@ -122,9 +124,9 @@ export default function AboutRoute() {
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Button asChild>
-                <Link to="/connect">
-                  Connect your tools <ArrowRight />
-                </Link>
+                <a href="/api/v2/docs">
+                  API reference <ArrowRight />
+                </a>
               </Button>
               <Button asChild variant="outline">
                 <Link to="/search">Search designs</Link>
@@ -142,10 +144,7 @@ export default function AboutRoute() {
                 term="Discovery"
                 detail="Identity, metadata, meaning, graph, and sequence"
               />
-              <AboutFact
-                term="Interfaces"
-                detail="Browser, REST API, CLI, and MCP"
-              />
+              <AboutFact term="Interfaces" detail="Browser and REST API" />
               <AboutFact term="Storage" detail="RocksDB, Postres, SQLite" />
             </dl>
           </div>
@@ -193,7 +192,7 @@ export default function AboutRoute() {
             </p>
             <p>
               SBOL DB treats the design identity and its structured record as
-              the durable center of the workflow. The browser, API, CLI, and
+              the durable center of the workflow. The browser, API, and
               connected applications all work from the same underlying data and
               permission model.
             </p>
@@ -282,9 +281,15 @@ export default function AboutRoute() {
                     ))}
                   </ul>
                   <Button asChild variant="link" className="mt-5 h-auto p-0">
-                    <Link to={area.to}>
-                      {area.action} <ArrowRight />
-                    </Link>
+                    {area.external ? (
+                      <a href={area.to}>
+                        {area.action} <ArrowRight />
+                      </a>
+                    ) : (
+                      <Link to={area.to}>
+                        {area.action} <ArrowRight />
+                      </Link>
+                    )}
                   </Button>
                 </div>
               </article>

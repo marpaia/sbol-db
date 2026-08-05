@@ -10,7 +10,7 @@ const sections: LegalSection[] = [
     id: "scope",
     title: "Scope and operator",
     paragraphs: [
-      "This policy applies to the SBOL DB website, registry, account workspace, APIs, command-line connections, MCP server, and related services made available by the person or organization operating this deployment (the Operator). The Operator determines why and how personal data is processed for this instance.",
+      "This policy applies to the SBOL DB website, registry, account workspace, APIs, and related services made available by the person or organization operating this deployment (the Operator). The Operator determines why and how personal data is processed for this instance.",
       "SBOL DB is also open-source software that can be deployed by independent organizations. Upstream contributors do not automatically receive or control data held by this instance. The Operator must identify itself and provide a privacy contact before enabling public account registration.",
     ],
   },

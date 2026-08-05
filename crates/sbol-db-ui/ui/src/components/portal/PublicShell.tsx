@@ -1,6 +1,5 @@
 import {
   BookOpen,
-  Cable,
   ChevronDown,
   FilePlus2,
   FolderKanban,
@@ -48,7 +47,6 @@ const workNavItems: NavItem[] = [
 
 const resourceNavItems: NavItem[] = [
   { to: "/about", label: "About", icon: Info },
-  { to: "/connect", label: "Connect", icon: Cable },
   {
     to: "/api/v2/docs",
     label: "API reference",
@@ -161,12 +159,6 @@ export default function PublicShell() {
             className="flex flex-wrap content-start gap-x-5 gap-y-3 sm:justify-end"
           >
             <span className="flex gap-5">
-              <Link
-                className="text-muted-foreground hover:text-foreground"
-                to="/connect"
-              >
-                Connect tools
-              </Link>
               <a
                 className="text-muted-foreground hover:text-foreground"
                 href="/api/v2/docs"

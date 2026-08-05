@@ -16,13 +16,20 @@ particular surface.
 
 ## Scope
 
-`sbol-db` is a database for synthetic biology data. Its query surface
-runs over a pluggable storage engine — Postgres, SQLite, or RocksDB,
-selected by the connection-string scheme (see [`storage.md`](storage.md)).
-It is **not** a DBTL workflow tracker. Projects, cycles, predictive model runs,
-builds, samples, measurements, and decision records are
-intentionally **out of scope** -- the goal is a best-in-class
-query surface for SBOL itself, not the surrounding lab pipeline.
+SBOL DB is open infrastructure for biological design data. The codebase now
+spans a public registry, account and collaboration workflows, native and
+compatibility APIs, biology-aware search, an administrator control plane,
+durable background work, and production recovery. Those product surfaces share
+one application layer and a pluggable storage contract over Postgres, SQLite,
+or RocksDB, selected by the connection-string scheme (see
+[`storage.md`](storage.md)).
+
+The boundary remains the biological design record. SBOL DB is **not** a DBTL
+workflow tracker: projects, cycles, predictive model runs, builds, samples,
+measurements, and decision records are intentionally **out of scope**. It owns
+the ingest, identity, discovery, contribution, publication, collaboration,
+exchange, and operational lifecycle of SBOL designs, not the surrounding lab
+pipeline.
 
 The focused scope is:
 
@@ -33,16 +40,21 @@ The focused scope is:
 - Project the design into typed relational tables for SQL-shaped
   queries.
 - Project the design into RDF triples for graph-shaped queries.
-- Expose five composable query primitives: typed IRI lookup,
-  bounded graph neighborhood, read-only SPARQL, nucleotide
-  sequence search, and ontology-aware role expansion.
-- Surface the same operations via a thin REST API and a CLI.
+- Expose typed IRI lookup, faceted and ranked discovery, bounded graph
+  neighborhoods, read-only SPARQL, nucleotide sequence search,
+  ontology-aware role expansion, and configured structured search strategies.
+- Present canonical records through the embedded registry, with validate-first
+  contribution, collections, sharing, ownership transfer, and auditable review.
+- Surface the same domain services through native and V2 REST APIs, SynBioHub
+  compatibility adapters, OpenAPI documentation, and the CLI.
+- Operate imports, index rebuilds, storage maintenance, users, integrations,
+  audit, native TLS, and complete backup/recovery from one deployable server.
 
-This is enough surface for "show me every component of role `X`",
-"walk the structural decomposition from this design", "find every
-design that references this part", "run an arbitrary SPARQL query
-against the dataset". It's deliberately not enough surface for "track
-the build state of this design".
+This is enough surface for "find a reusable promoter with this role",
+"walk the structural decomposition from this design", "share this private
+record with a reviewer", "publish this validated collection", or "run an
+arbitrary SPARQL query against the dataset". It is deliberately not enough
+surface for "track the build state of this design".
 
 ## Workspace layout
 
@@ -52,15 +64,19 @@ the build state of this design".
 | `sbol-db-storage`  | Backend-neutral storage contract: the `SbolStore` / `TripleSource` / `JobQueue` traits and their request/response types. Names no concrete database. |
 | `sbol-db-rdf`      | `sbol::Document` ↔ triples projection, RDF (re-)serialization, content hashing.           |
 | `sbol-db-derive`   | Pure import plan builder: parse a document, derive its triples and object summaries, validate. No database; every backend commits the same plan. |
+| `sbol-db-app`      | Backend-neutral application services for identity, ACLs, objects, discovery, contribution, collaboration, review, administration, and downloads. |
 | `sbol-db-postgres` | Postgres implementation of the storage contract: sqlx repositories, embedded migrations, the `SbolObjectService` entry point. Hosts the typed projections, validation audit, and engine introspection. |
 | `sbol-db-sqlite`   | SQLite implementation: the same contract over a single-file, embedded SQL engine. |
 | `sbol-db-rocksdb`  | RocksDB implementation: a dictionary-encoded, permuted-index triplestore over an embedded key/value store. |
 | `sbol-db-backend`  | Backend factory: `Backend::open` routes a connection string to the engine its scheme selects and returns the neutral trait-object bundle. |
 | `sbol-db-conformance` | Backend-neutral conformance scenarios every engine passes through the trait surface alone. |
 | `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over any `TripleSource`).        |
+| `sbol-db-search*`  | Search contracts, built-in ranked/vector strategies, embedding and vector adapters, evaluation, and conformance tooling. |
+| `sbol-db-jobs`     | Durable background-job registry, queue, worker, and built-in operational handlers. |
+| `sbol-db-backup`   | Complete encrypted checkpoint creation, verification, restore, and rollback primitives. |
 | `sbol-db-ui`       | Embedded SBOL DB application at `/` with the data/operations workspace at `/admin` (React + Vite, baked in via `rust-embed`). |
-| `sbol-db-server`   | axum HTTP API. Thin layer over the storage + sparql crates.                             |
-| `sbol-db`          | CLI binary. Wires the backend factory + server + sparql crates into clap subcommands.    |
+| `sbol-db-server`   | Axum presentation layer for native, V2, and compatibility APIs; embedded UI and OpenAPI delivery. |
+| `sbol-db`          | CLI binary and runtime composition root for storage, server, worker, search, TLS, migration, and recovery. |
 
 The boundaries matter:
 
@@ -355,10 +371,6 @@ gate; it's clean on `main`.
 
 ## What's intentionally not here
 
-- **Background workers.** The `sbol_rdf_projection_events` table is
-  written but no consumer processes it. A future async projection
-  worker (Oxigraph sidecar, materialized view refresh, search index)
-  would tail this log, but the v1 query surface is fully synchronous.
 - **DBTL / lab / workflow tables.** See [Scope](#scope).
 - **Embeddings on the v1 surface.** Out of scope for the compatibility
   routes. Exact-match sequence search with reverse-complement awareness ships
@@ -368,7 +380,7 @@ gate; it's clean on `main`.
 - **SBOL 1 ingest.** SBOL 2 RDF, GenBank, and FASTA enter through the
   normal document import path. SBOL 1 remains deferred until there is
   an explicit converter and test corpus.
-- **Multi-tenancy / auth.** No `organization_id` columns, no auth
-  middleware. Repositories should still avoid global mutable state
-  so a tenancy layer can be added without rewriting the data access
-  path.
+- **A replicated embedded-store cluster.** The managed RocksDB production
+  profile is a fail-closed single-node appliance recovered from verified
+  complete backups. Multi-process deployments use the Postgres topology; they
+  do not pretend a local RocksDB directory is shared storage.

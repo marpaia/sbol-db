@@ -1,6 +1,9 @@
 # sbol-db documentation
 
-Entry points to the project's documentation, organized by topic.
+SBOL DB is open biological design infrastructure: a public and account-aware
+registry, an interoperable SBOL database, a machine-facing API and CLI, and an
+embedded operations plane. These entry points cover the product from browser
+workflows through storage and production recovery.
 
 ## Getting oriented
 
@@ -15,15 +18,30 @@ Entry points to the project's documentation, organized by topic.
 - **[Application acceptance contract](application-acceptance.md)**: autonomous
   delivery boundaries, hard semantic/API/security/design gates, evidence tiers,
   and measurable exit criteria for every application phase.
-- **[Application and admin UI guide](ui.md)**: current routes, screenshots,
-  configuration switches, local development, and production-shaped testing.
+- **[Domain model](domain-model.md)**: how SBOL documents, graphs, objects,
+  identities, triples, sequences, and typed projections relate.
 - **[SBOL DB Design Ledger](design-ledger.md)**: the product-owned visual
   identity, semantic SBOL palette, cross-surface rules, and UI acceptance
   checklist for the registry, administrator control plane, and API reference.
 
+## Product workflows
+
+- **[Application and admin UI guide](ui.md)**: the current public registry,
+  account and collaboration workflows, admin control plane, screenshot tour,
+  configuration switches, and local development loop.
+- **[The v2 API](api-v2.md)**: the native contracts for instance bootstrap,
+  sessions, accounts, objects, contribution, collections, collaboration,
+  review, search, downloads, and administration.
+- **[Self-contained edge deployment](edge-deployment.md)**: the one-server
+  RocksDB production profile with native HTTPS, ACME, a managed data layout,
+  encrypted complete backups, remote verification, and atomic offline restore.
+- **[Migrating a classic instance](synbiohub-migration.md)**: preflight,
+  import, reconciliation, and cutover from a deployed classic SynBioHub.
+
 ## Query primitives
 
-`sbol-db` exposes five composable ways to read what you've imported:
+The registry and collaboration workflows sit on biology-aware ways to read and
+discover what has been imported:
 
 - **[Registry discovery contract](discovery-contract.md)**: normalized text
   and biological facets, exact totals, deterministic paging, public URL state,
@@ -60,7 +78,7 @@ Entry points to the project's documentation, organized by topic.
   across engines versus specific to one, the capability matrix, and the
   conformance suite. **Start here for the storage layer.**
 - **[Postgres schema](schema-postgres.md)**: table-by-table reference for
-  the default backend. Documents, objects, the triplestore, set
+  the server-oriented SQL backend. Documents, objects, the triplestore, set
   semantics, typed projections, validation, the accelerator, index
   choices.
 - **[SQLite schema](schema-sqlite.md)**: table-by-table reference for the
@@ -102,7 +120,8 @@ Entry points to the project's documentation, organized by topic.
 
 ## Scope
 
-`sbol-db` deliberately stays narrow on SBOL query capabilities and
-does not expand into broader DBTL / workflow orchestration concerns.
-The [crate guide](crate-guide.md#scope) spells out what's in and
-what's out, with rationale.
+SBOL DB covers the lifecycle of biological design records: ingest, validation,
+identity, discovery, contribution, publication, collaboration, exchange, and
+operations. It deliberately does not expand into experiments, builds, samples,
+measurements, predictive model runs, or broader DBTL workflow orchestration.
+The [crate guide](crate-guide.md#scope) spells out the boundary and rationale.
