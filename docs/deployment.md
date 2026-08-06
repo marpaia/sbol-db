@@ -26,8 +26,9 @@ you're deploying; reach for the later sections to do the actual work.
 
 ### Topology
 
-Storage sits behind a pluggable backend; Postgres is the default
-engine, and the shapes below describe a Postgres deployment.
+Storage sits behind a pluggable backend. RocksDB is the default engine for the
+consolidated single-server topology; the shapes below describe the optional
+shared Postgres deployment.
 
 `sbol-db server` is a single stateless binary that talks to one
 storage backend. Each pod runs both an HTTP listener **and** an

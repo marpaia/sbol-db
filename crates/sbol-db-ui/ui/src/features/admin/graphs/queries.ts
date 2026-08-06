@@ -11,12 +11,12 @@ export const graphKeys = {
     [
       ...graphKeys.lists(),
       query.limit ?? null,
-      query.offset ?? 0,
-      query.kind ?? null,
+      query.after ?? "",
+      query.q ?? "",
     ] as const,
   detail: (id: string) => [...graphKeys.all, "detail", id] as const,
-  triples: (id: string, offset: number) =>
-    [...graphKeys.detail(id), "triples", offset] as const,
+  triples: (id: string, after?: string) =>
+    [...graphKeys.detail(id), "triples", after ?? ""] as const,
 };
 
 const FRESH_MS = 30_000;

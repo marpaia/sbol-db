@@ -8,13 +8,13 @@
  *    in one call and returns one match group per pattern, preserving
  *    input order.
  *
- * Patterns shorter than 8 bp fall off the k-mer seed index onto an
- * `ILIKE` candidate scan, which can be much slower. The form surfaces
+ * Patterns shorter than 8 bp fall off the k-mer seed index onto a full
+ * candidate scan, which can be much slower. The form surfaces
  * a hint when that happens so the user knows what they're paying for.
  */
 
 import { useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { Download, Loader2, Search, TriangleAlert } from "lucide-react";
 
@@ -22,9 +22,11 @@ import { AdminPage } from "@/components/admin/AdminPage";
 import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import {
+  fetchCatalogSequences,
   sequenceSearch,
   sequenceSearchBatch,
   type BatchSequenceMatch,
+  type CatalogSequence,
   type SequenceMatch,
 } from "@/features/admin/sequences/api";
 import { useWorkbenchStore } from "@/features/admin/workbench/store";
@@ -34,6 +36,7 @@ import { describeError } from "@/lib/utils";
 const KMER_SEED_BP = 8;
 const SINGLE_MAX_HITS_DEFAULT = 1024;
 const BATCH_MAX_PATTERNS = 256;
+const CATALOG_PAGE_SIZE = 100;
 
 type Mode = "single" | "batch";
 
@@ -95,13 +98,14 @@ export default function SequencesRoute() {
 
   const onOpenObject = (iri: string) =>
     navigate(adminPath(`/objects/${encodeURIComponent(iri)}`));
-
   return (
     <AdminPage
       title="Sequence index"
-      description={`Exact-match nucleotide search across every indexed sbol:Sequence. Patterns at least ${KMER_SEED_BP} bp use the k-mer seed index; shorter patterns use an ILIKE candidate scan.`}
+      description={`Browse every RDF Sequence resource, then run exact-match nucleotide searches with a ${KMER_SEED_BP}-base k-mer seed when sequence content is available.`}
       eyebrow="Data model"
     >
+      <SequenceCatalog onOpenObject={onOpenObject} />
+
       <div className="flex items-center gap-1 border-b">
         <ModeTab active={mode === "single"} onClick={() => setMode("single")}>
           Single
@@ -222,8 +226,8 @@ export default function SequencesRoute() {
             />
             <span className="text-foreground">
               Patterns shorter than {KMER_SEED_BP} bp can't use the k-mer seed
-              index and will scan via <code className="font-mono">ILIKE</code>.
-              Expect slower results on large corpora.
+              index and must scan the nucleotide candidate set. Expect slower
+              results on large corpora.
             </span>
           </div>
         )}
@@ -245,6 +249,177 @@ export default function SequencesRoute() {
         />
       )}
     </AdminPage>
+  );
+}
+
+function SequenceCatalog({
+  onOpenObject,
+}: {
+  onOpenObject: (iri: string) => void;
+}) {
+  const [cursors, setCursors] = useState<string[]>([""]);
+  const [searchDraft, setSearchDraft] = useState("");
+  const [search, setSearch] = useState("");
+  const after = cursors.at(-1) || undefined;
+  const page = cursors.length - 1;
+  const { data, error, isLoading } = useQuery({
+    queryKey: ["admin", "sequences", search, after ?? "", CATALOG_PAGE_SIZE],
+    queryFn: ({ signal }) =>
+      fetchCatalogSequences(
+        { after, limit: CATALOG_PAGE_SIZE, q: search || undefined },
+        signal
+      ),
+    staleTime: 30_000,
+    placeholderData: (previous) => previous,
+  });
+  const records = data?.items ?? [];
+  const columns: DataTableColumn<CatalogSequence>[] = [
+    {
+      id: "sequence",
+      header: "Sequence resource",
+      width: 480,
+      cell: (record) => (
+        <div className="min-w-0">
+          <div className="truncate font-mono text-[11px] text-muted-foreground">
+            {record.iri}
+          </div>
+        </div>
+      ),
+      sortValue: (record) => record.iri,
+      filterValue: (record) => record.iri,
+    },
+    {
+      id: "length",
+      header: "Length",
+      width: 100,
+      align: "right",
+      cell: (record) =>
+        record.elements?.length.toLocaleString() ?? (
+          <span className="text-muted-foreground/60">—</span>
+        ),
+      sortValue: (record) => record.elements?.length ?? -1,
+    },
+    {
+      id: "encoding",
+      header: "Encoding",
+      width: 220,
+      cell: (record) => (
+        <span className="font-mono text-[11px] text-muted-foreground">
+          {shortIri(record.encoding_iri)}
+        </span>
+      ),
+      sortValue: (record) => record.encoding_iri ?? "",
+      filterValue: (record) => record.encoding_iri ?? "",
+    },
+    {
+      id: "graphs",
+      header: "Graphs",
+      width: 80,
+      align: "right",
+      cell: (record) => record.graph_count.toLocaleString(),
+      sortValue: (record) => record.graph_count,
+    },
+  ];
+
+  return (
+    <section className="space-y-3">
+      <div>
+        <div className="text-xs font-medium text-foreground">
+          Sequence resources
+        </div>
+        <div className="mt-0.5 text-xs text-muted-foreground">
+          Canonical SBOL 2 and SBOL 3 Sequence resources, independent of the
+          storage backend.
+        </div>
+      </div>
+      <form
+        className="flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setSearch(searchDraft.trim());
+          setCursors([""]);
+        }}
+      >
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={searchDraft}
+            onChange={(event) => setSearchDraft(event.target.value)}
+            className="w-full rounded-md border bg-background py-2 pl-9 pr-3 text-sm outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+            placeholder="Search sequence IRI or metadata"
+            aria-label="Search sequences"
+          />
+        </div>
+        <button
+          type="submit"
+          className="rounded-md border bg-background px-3 py-2 text-sm font-medium transition-colors hover:bg-accent"
+        >
+          Search
+        </button>
+        {(search || searchDraft) && (
+          <button
+            type="button"
+            onClick={() => {
+              setSearchDraft("");
+              setSearch("");
+              setCursors([""]);
+            }}
+            className="rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent"
+          >
+            Clear
+          </button>
+        )}
+      </form>
+      {error ? (
+        <ErrorBanner
+          title="Couldn't list sequences"
+          body={(error as Error).message}
+        />
+      ) : isLoading && !data ? (
+        <div className="h-32 animate-pulse rounded-lg border bg-muted/40" />
+      ) : records.length === 0 ? (
+        <div className="rounded-lg border bg-card px-4 py-6 text-sm text-muted-foreground">
+          {search
+            ? "No sequence resources match that search."
+            : "No sequence resources are present in the RDF catalog."}
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-lg border bg-card">
+          <DataTable
+            columns={columns}
+            rows={records}
+            rowKey={(record) => record.iri}
+            onRowClick={(record) => onOpenObject(record.iri)}
+          />
+        </div>
+      )}
+      {records.length > 0 && (
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-muted-foreground">Page {page + 1}</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCursors((values) => values.slice(0, -1))}
+              disabled={page === 0}
+              className="rounded-md border px-2.5 py-1 font-medium transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                data?.next_cursor &&
+                setCursors((values) => [...values, data.next_cursor!])
+              }
+              disabled={!data?.next_cursor}
+              className="rounded-md border px-2.5 py-1 font-medium transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -503,4 +678,10 @@ function downloadJson(data: unknown, name: string) {
   a.download = name;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function shortIri(iri: string | null | undefined): string {
+  if (!iri) return "—";
+  const match = iri.match(/[#/]([^#/]+)$/);
+  return match ? match[1] : iri;
 }

@@ -259,52 +259,6 @@ export async function fetchSparqlSchema(
   return (await res.json()) as SparqlSchema;
 }
 
-// ---------- Dashboard overview ----------
-
-export interface OverviewCounts {
-  objects: number;
-  graphs: number;
-  triples: number;
-  sequences: number;
-  validation_runs: number;
-  ontologies: number;
-}
-
-export interface RecentGraph {
-  id: string;
-  iri: string;
-  kind: "sbol3" | "verbatim";
-  name: string | null;
-  source_uri: string | null;
-  serialization_format: string | null;
-  created_at: string;
-  object_count: number;
-}
-
-export interface OverviewTopClass {
-  iri: string;
-  count: number;
-}
-
-export interface OverviewOntology {
-  prefix: string;
-  name: string;
-  term_count: number;
-}
-
-export interface Overview {
-  counts: OverviewCounts;
-  recent_graphs: RecentGraph[];
-  top_classes: OverviewTopClass[];
-  loaded_ontologies: OverviewOntology[];
-}
-
-export async function fetchOverview(signal?: AbortSignal): Promise<Overview> {
-  const res = await fetch("/lab/api/overview", { signal });
-  if (!res.ok) throw await asApiError(res);
-  return (await res.json()) as Overview;
-}
-
 // ---------- Ontology loader ----------
 
 export interface OntologyLoadRequest {
@@ -436,7 +390,7 @@ export interface PoolStat {
 }
 
 export interface PoolSnapshot {
-  api: PoolStat;
+  api: PoolStat | null;
   worker: PoolStat | null;
 }
 
@@ -921,108 +875,6 @@ export async function cancelJob(
   return (await res.json()) as CancelJobResponse;
 }
 
-// ---------- Graphs (graph-native browser) ----------
-
-/** A named graph. `kind = 'sbol3'` is an imported SBOL document with a derived
- *  object view; `kind = 'verbatim'` is raw RDF written through the
- *  SynBioHub-compatible Graph Store / SPARQL Update endpoints. */
-export interface GraphSummary {
-  id: string;
-  iri: string;
-  kind: "sbol3" | "verbatim";
-  name: string | null;
-  serialization_format: string | null;
-  source_uri: string | null;
-  created_at: string;
-  object_count: number;
-  triple_count: number;
-}
-
-export interface GraphsPage {
-  total: number;
-  limit: number;
-  offset: number;
-  graphs: GraphSummary[];
-}
-
-export interface GraphsListQuery {
-  limit?: number;
-  offset?: number;
-  kind?: "sbol3" | "verbatim";
-}
-
-export async function listGraphs(
-  query: GraphsListQuery = {},
-  signal?: AbortSignal
-): Promise<GraphsPage> {
-  const qs = new URLSearchParams();
-  if (typeof query.limit === "number") qs.set("limit", String(query.limit));
-  if (typeof query.offset === "number") qs.set("offset", String(query.offset));
-  if (query.kind) qs.set("kind", query.kind);
-  const tail = qs.toString();
-  const res = await fetch(`/lab/api/graphs${tail ? `?${tail}` : ""}`, {
-    signal,
-  });
-  if (!res.ok) throw await asApiError(res);
-  return (await res.json()) as GraphsPage;
-}
-
-export async function getGraph(
-  id: string,
-  signal?: AbortSignal
-): Promise<GraphSummary> {
-  const res = await fetch(`/lab/api/graphs/${encodeURIComponent(id)}`, {
-    signal,
-  });
-  if (!res.ok) throw await asApiError(res);
-  return (await res.json()) as GraphSummary;
-}
-
-/** One RDF term, shaped like a SPARQL-results binding. */
-export interface GraphTerm {
-  type: "uri" | "bnode" | "literal";
-  value: string;
-  datatype?: string;
-  language?: string;
-}
-
-export interface GraphTriple {
-  subject: GraphTerm;
-  predicate: GraphTerm;
-  object: GraphTerm;
-}
-
-export interface GraphTriplesPage {
-  total: number;
-  limit: number;
-  offset: number;
-  triples: GraphTriple[];
-}
-
-export interface GraphTriplesQuery {
-  limit?: number;
-  offset?: number;
-}
-
-/** Fetch a graph's raw triples, paginated. Used to browse `verbatim` graphs,
- *  which have no derived object view. */
-export async function listGraphTriples(
-  id: string,
-  query: GraphTriplesQuery = {},
-  signal?: AbortSignal
-): Promise<GraphTriplesPage> {
-  const qs = new URLSearchParams();
-  if (typeof query.limit === "number") qs.set("limit", String(query.limit));
-  if (typeof query.offset === "number") qs.set("offset", String(query.offset));
-  const tail = qs.toString();
-  const res = await fetch(
-    `/lab/api/graphs/${encodeURIComponent(id)}/triples${tail ? `?${tail}` : ""}`,
-    { signal }
-  );
-  if (!res.ok) throw await asApiError(res);
-  return (await res.json()) as GraphTriplesPage;
-}
-
 export type SerializationFormat = "turtle" | "jsonld" | "rdfxml" | "ntriples";
 export type ImportDocumentFormat = SerializationFormat | "genbank" | "fasta";
 
@@ -1124,94 +976,6 @@ export async function importDocument(
   });
   if (!res.ok) throw await asApiError(res);
   return (await res.json()) as ImportReport;
-}
-
-// ---------- Objects ----------
-
-export interface SbolObjectRecord {
-  id: string;
-  iri: string;
-  sbol_class?: string | null;
-  display_id?: string | null;
-  name?: string | null;
-  persistent_identity?: string | null;
-  version?: string | null;
-  types?: string[] | null;
-  roles?: string[] | null;
-  data?: Record<string, unknown> | null;
-  created_at?: string | null;
-}
-
-export interface ListObjectsQuery {
-  sbol_class?: string;
-  role?: string;
-  graph_id?: string;
-  after?: string;
-  limit?: number;
-}
-
-export interface ListObjectsResponse {
-  objects: SbolObjectRecord[];
-  next_cursor: string | null;
-}
-
-export async function listObjects(
-  query: ListObjectsQuery = {},
-  signal?: AbortSignal
-): Promise<ListObjectsResponse> {
-  const qs = new URLSearchParams();
-  if (query.sbol_class) qs.set("sbol_class", query.sbol_class);
-  if (query.role) qs.set("role", query.role);
-  if (query.graph_id) qs.set("graph_id", query.graph_id);
-  if (query.after) qs.set("after", query.after);
-  if (typeof query.limit === "number") qs.set("limit", String(query.limit));
-  const tail = qs.toString();
-  const res = await fetch(`/objects/list${tail ? `?${tail}` : ""}`, { signal });
-  if (!res.ok) throw await asApiError(res);
-  return (await res.json()) as ListObjectsResponse;
-}
-
-export async function getObjectByIri(
-  iri: string,
-  signal?: AbortSignal
-): Promise<SbolObjectRecord> {
-  const res = await fetch(`/objects?iri=${encodeURIComponent(iri)}`, {
-    signal,
-  });
-  if (!res.ok) throw await asApiError(res);
-  return (await res.json()) as SbolObjectRecord;
-}
-
-export interface LookupObjectsResponse {
-  found: SbolObjectRecord[];
-  missing: string[];
-}
-
-export async function lookupObjects(
-  iris: string[],
-  signal?: AbortSignal
-): Promise<LookupObjectsResponse> {
-  const res = await fetch("/objects/lookup", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ iris }),
-    signal,
-  });
-  if (!res.ok) throw await asApiError(res);
-  return (await res.json()) as LookupObjectsResponse;
-}
-
-export async function exportObjectRdf(
-  id: string,
-  format: SerializationFormat,
-  signal?: AbortSignal
-): Promise<string> {
-  const res = await fetch(
-    `/objects/${encodeURIComponent(id)}/rdf?format=${format}`,
-    { signal }
-  );
-  if (!res.ok) throw await asApiError(res);
-  return await res.text();
 }
 
 // ---------- Neighborhood ----------

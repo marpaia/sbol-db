@@ -1,12 +1,9 @@
 export {
-  getGraph,
-  listGraphs,
-  listGraphTriples,
-  type GraphSummary,
-  type GraphTerm,
-  type GraphTriple,
-  type GraphTriplesPage,
-  type GraphTriplesQuery,
-  type GraphsListQuery,
-  type GraphsPage,
-} from "@/lib/api";
+  fetchCatalogGraph as getGraph,
+  fetchCatalogGraphs as listGraphs,
+  fetchCatalogGraphTriples as listGraphTriples,
+  type CatalogGraph as GraphSummary,
+  type CatalogTerm as GraphTerm,
+  type CatalogTriple as GraphTriple,
+  type CatalogPageQuery as GraphsListQuery,
+} from "@/features/admin/api";

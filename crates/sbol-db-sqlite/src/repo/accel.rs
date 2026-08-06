@@ -13,12 +13,14 @@
 //! SQLite's default `BINARY` text collation is byte order, matching the other
 //! backends' enumeration order, so no explicit collation is needed.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use sbol_db_core::DomainError;
 use sbol_db_storage::{
-    build_accel_index, generate_metadata_rows, generate_rows, integer, AccelSolutions,
-    AcceleratedQuery, FacetKind, Field, MetaRecord, Scope, TermValue,
+    build_catalog_projection, generate_metadata_rows, generate_rows, integer,
+    merge_resource_occurrences, AccelSolutions, AcceleratedQuery, CatalogSequenceRecord,
+    CursorPage, FacetKind, Field, MetaRecord, ResourceOccurrence, ResourceQuery, ResourceRecord,
+    Scope, SequenceQuery, TermValue,
 };
 use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection, SqlitePool};
 
@@ -99,6 +101,290 @@ impl AccelRepository {
         }
     }
 
+    pub async fn resource_occurrences(
+        &self,
+        iri: &str,
+    ) -> Result<Vec<ResourceOccurrence>, DomainError> {
+        let rows = sqlx::query(
+            "SELECT graph_iri, meta FROM accel_object WHERE iri = ? ORDER BY graph_iri",
+        )
+        .bind(iri)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        rows.into_iter()
+            .map(|row| {
+                let graph_iri: String = row.try_get("graph_iri").map_err(db_err)?;
+                let meta: String = row.try_get("meta").map_err(db_err)?;
+                Ok(ResourceOccurrence {
+                    graph_iri,
+                    resource_iri: iri.to_owned(),
+                    meta: serde_json::from_str(&meta).map_err(db_err)?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn resource(&self, iri: &str) -> Result<Option<ResourceRecord>, DomainError> {
+        let occurrences = self.resource_occurrences(iri).await?;
+        Ok(merge_resource_occurrences(iri, &occurrences))
+    }
+
+    pub async fn resources(
+        &self,
+        query: &ResourceQuery,
+    ) -> Result<CursorPage<ResourceRecord>, DomainError> {
+        let limit = query.limit.clamp(1, 500) as i64;
+        let mut qb: QueryBuilder<Sqlite> =
+            QueryBuilder::new("SELECT DISTINCT o.iri FROM accel_object o WHERE TRUE");
+        if let Some(after) = &query.after {
+            qb.push(" AND o.iri > ").push_bind(after.clone());
+        }
+        if let Some(graph) = &query.graph_iri {
+            qb.push(" AND o.graph_iri = ").push_bind(graph.clone());
+        }
+        if let Some(class) = &query.class {
+            qb.push(
+                " AND EXISTS (SELECT 1 FROM accel_type ty \
+                 WHERE ty.graph_iri = o.graph_iri AND ty.iri = o.iri AND ty.type_iri = ",
+            )
+            .push_bind(class.clone())
+            .push(")");
+        }
+        if let Some(role) = &query.role {
+            qb.push(
+                " AND EXISTS (SELECT 1 FROM accel_role r \
+                 WHERE r.graph_iri = o.graph_iri AND r.iri = o.iri AND r.role_iri = ",
+            )
+            .push_bind(role.clone())
+            .push(")");
+        }
+        if let Some(text) = query.text.as_deref().filter(|text| !text.is_empty()) {
+            let needle = format!("%{}%", text.to_lowercase());
+            qb.push(" AND (lower(o.iri) LIKE ")
+                .push_bind(needle.clone())
+                .push(" OR lower(o.meta) LIKE ")
+                .push_bind(needle)
+                .push(")");
+        }
+        qb.push(" ORDER BY o.iri LIMIT ").push_bind(limit + 1);
+        let mut iris: Vec<String> = qb
+            .build_query_scalar()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db_err)?;
+        let has_more = iris.len() > limit as usize;
+        iris.truncate(limit as usize);
+        let next_cursor = has_more.then(|| iris.last().cloned()).flatten();
+        let items = self.resources_for_iris(&iris).await?;
+        Ok(CursorPage { items, next_cursor })
+    }
+
+    pub async fn resources_for_iris(
+        &self,
+        iris: &[String],
+    ) -> Result<Vec<ResourceRecord>, DomainError> {
+        if iris.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut qb: QueryBuilder<Sqlite> =
+            QueryBuilder::new("SELECT iri, graph_iri, meta FROM accel_object WHERE iri IN (");
+        {
+            let mut values = qb.separated(", ");
+            for iri in iris {
+                values.push_bind(iri);
+            }
+        }
+        qb.push(") ORDER BY iri, graph_iri");
+        let rows = qb.build().fetch_all(&self.pool).await.map_err(db_err)?;
+        let mut by_iri: BTreeMap<String, Vec<ResourceOccurrence>> = BTreeMap::new();
+        for row in rows {
+            let iri: String = row.try_get("iri").map_err(db_err)?;
+            let graph_iri: String = row.try_get("graph_iri").map_err(db_err)?;
+            let meta: String = row.try_get("meta").map_err(db_err)?;
+            by_iri
+                .entry(iri.clone())
+                .or_default()
+                .push(ResourceOccurrence {
+                    graph_iri,
+                    resource_iri: iri,
+                    meta: serde_json::from_str(&meta).map_err(db_err)?,
+                });
+        }
+        Ok(iris
+            .iter()
+            .filter_map(|iri| {
+                by_iri
+                    .get(iri)
+                    .and_then(|occurrences| merge_resource_occurrences(iri, occurrences))
+            })
+            .collect())
+    }
+
+    pub async fn sequence(&self, iri: &str) -> Result<Option<CatalogSequenceRecord>, DomainError> {
+        let graph_count: i64 = sqlx::query_scalar(
+            "SELECT count(DISTINCT graph_iri) FROM accel_type WHERE iri = ? \
+             AND type_iri IN ('http://sbols.org/v2#Sequence', 'http://sbols.org/v3#Sequence')",
+        )
+        .bind(iri)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db_err)?;
+        if graph_count == 0 {
+            return Ok(None);
+        }
+        let rows = sqlx::query(
+            r#"
+            SELECT predicate_iri, object_iri, object_literal
+            FROM sbol_triples
+            WHERE subject_iri = ?
+              AND predicate_iri IN (
+                'http://sbols.org/v2#elements', 'http://sbols.org/v3#elements',
+                'http://sbols.org/v2#encoding', 'http://sbols.org/v3#encoding'
+              )
+            ORDER BY graph_iri, id
+            "#,
+        )
+        .bind(iri)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        let mut elements = None;
+        let mut encoding_iri = None;
+        for row in rows {
+            let predicate: String = row.try_get("predicate_iri").map_err(db_err)?;
+            if predicate.ends_with("#elements") && elements.is_none() {
+                elements = row.try_get("object_literal").map_err(db_err)?;
+            } else if predicate.ends_with("#encoding") && encoding_iri.is_none() {
+                encoding_iri = row.try_get("object_iri").map_err(db_err)?;
+            }
+        }
+        Ok(Some(CatalogSequenceRecord {
+            iri: iri.to_owned(),
+            graph_count: graph_count as u64,
+            alphabet: catalog_alphabet(encoding_iri.as_deref()),
+            encoding_iri,
+            elements,
+        }))
+    }
+
+    pub async fn sequences(
+        &self,
+        query: &SequenceQuery,
+    ) -> Result<CursorPage<CatalogSequenceRecord>, DomainError> {
+        let limit = query.limit.clamp(1, 500) as i64;
+        let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
+            "SELECT DISTINCT ty.iri FROM accel_type ty WHERE ty.type_iri IN \
+             ('http://sbols.org/v2#Sequence', 'http://sbols.org/v3#Sequence')",
+        );
+        if let Some(after) = &query.after {
+            qb.push(" AND ty.iri > ").push_bind(after.clone());
+        }
+        if let Some(text) = query.text.as_deref().filter(|value| !value.is_empty()) {
+            let needle = format!("%{}%", text.to_lowercase());
+            qb.push(
+                " AND EXISTS (SELECT 1 FROM accel_object o WHERE o.iri = ty.iri \
+                     AND (lower(o.iri) LIKE ",
+            )
+            .push_bind(needle.clone())
+            .push(" OR lower(o.meta) LIKE ")
+            .push_bind(needle)
+            .push("))");
+        }
+        qb.push(" ORDER BY ty.iri LIMIT ").push_bind(limit + 1);
+        let mut iris: Vec<String> = qb
+            .build_query_scalar()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db_err)?;
+        let has_more = iris.len() > limit as usize;
+        iris.truncate(limit as usize);
+        let next_cursor = has_more.then(|| iris.last().cloned()).flatten();
+        let items = self.sequences_for_iris(&iris).await?;
+        Ok(CursorPage { items, next_cursor })
+    }
+
+    async fn sequences_for_iris(
+        &self,
+        iris: &[String],
+    ) -> Result<Vec<CatalogSequenceRecord>, DomainError> {
+        if iris.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut count_qb: QueryBuilder<Sqlite> = QueryBuilder::new(
+            "SELECT iri, count(DISTINCT graph_iri) AS graph_count FROM accel_type \
+             WHERE type_iri IN ('http://sbols.org/v2#Sequence', 'http://sbols.org/v3#Sequence') \
+             AND iri IN (",
+        );
+        {
+            let mut values = count_qb.separated(", ");
+            for iri in iris {
+                values.push_bind(iri);
+            }
+        }
+        count_qb.push(") GROUP BY iri");
+        let count_rows = count_qb
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db_err)?;
+        let mut records: HashMap<String, (u64, Option<String>, Option<String>)> = HashMap::new();
+        for row in count_rows {
+            let iri: String = row.try_get("iri").map_err(db_err)?;
+            let graph_count: i64 = row.try_get("graph_count").map_err(db_err)?;
+            records.insert(iri, (graph_count as u64, None, None));
+        }
+
+        let mut value_qb: QueryBuilder<Sqlite> = QueryBuilder::new(
+            "SELECT subject_iri, predicate_iri, object_iri, object_literal \
+             FROM sbol_triples WHERE predicate_iri IN (\
+               'http://sbols.org/v2#elements', 'http://sbols.org/v3#elements', \
+               'http://sbols.org/v2#encoding', 'http://sbols.org/v3#encoding'\
+             ) AND subject_iri IN (",
+        );
+        {
+            let mut values = value_qb.separated(", ");
+            for iri in iris {
+                values.push_bind(iri);
+            }
+        }
+        value_qb.push(") ORDER BY subject_iri, graph_iri, id");
+        let value_rows = value_qb
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db_err)?;
+        for row in value_rows {
+            let iri: String = row.try_get("subject_iri").map_err(db_err)?;
+            let predicate: String = row.try_get("predicate_iri").map_err(db_err)?;
+            let Some((_, elements, encoding)) = records.get_mut(&iri) else {
+                continue;
+            };
+            if predicate.ends_with("#elements") && elements.is_none() {
+                *elements = row.try_get("object_literal").map_err(db_err)?;
+            } else if predicate.ends_with("#encoding") && encoding.is_none() {
+                *encoding = row.try_get("object_iri").map_err(db_err)?;
+            }
+        }
+
+        Ok(iris
+            .iter()
+            .filter_map(|iri| {
+                records
+                    .remove(iri)
+                    .map(
+                        |(graph_count, elements, encoding_iri)| CatalogSequenceRecord {
+                            iri: iri.clone(),
+                            graph_count,
+                            alphabet: catalog_alphabet(encoding_iri.as_deref()),
+                            encoding_iri,
+                            elements,
+                        },
+                    )
+            })
+            .collect())
+    }
+
     /// Rebuild a graph's accelerator indexes from its triples, inside the
     /// caller's write transaction (atomic with the triple write). The triple
     /// scan runs through `conn`, so it sees the triples the same transaction
@@ -111,7 +397,7 @@ impl AccelRepository {
         graph: &str,
     ) -> Result<(), DomainError> {
         let triples = self.triples.scan_graph_in_conn(conn, graph).await?;
-        let index = build_accel_index(&triples);
+        let index = build_catalog_projection(&triples);
 
         let sort_of: HashMap<&str, &str> = index
             .objects
@@ -682,4 +968,23 @@ fn push_prefix_filter(qb: &mut QueryBuilder<Sqlite>, column: &str, prefix: Optio
         qb.push(")) = ");
         qb.push_bind(p.to_owned());
     }
+}
+
+fn catalog_alphabet(encoding: Option<&str>) -> Option<String> {
+    let encoding = encoding?.to_ascii_lowercase();
+    Some(
+        if encoding.contains("protein") || encoding.contains("amino") {
+            "PROTEIN"
+        } else if encoding.contains("rna") {
+            "RNA"
+        } else if encoding.contains("dna")
+            || encoding.contains("naseq")
+            || encoding.contains("1207")
+        {
+            "DNA"
+        } else {
+            "OTHER"
+        }
+        .to_owned(),
+    )
 }

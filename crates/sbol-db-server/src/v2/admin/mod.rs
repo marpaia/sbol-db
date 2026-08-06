@@ -5,6 +5,7 @@
 //! infer authority from navigation visibility or duplicate policy per route.
 
 mod backup;
+mod catalog;
 mod edge;
 mod instance;
 mod integrations;
@@ -28,6 +29,16 @@ pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(overview))
         .route("/instance", get(instance::get).patch(instance::patch))
+        .route("/dashboard", get(catalog::dashboard))
+        .route("/graphs", get(catalog::list_graphs))
+        .route("/graphs/:id", get(catalog::get_graph))
+        .route("/graphs/:id/triples", get(catalog::graph_triples))
+        .route("/resources", get(catalog::list_resources))
+        .route(
+            "/resources/lookup",
+            get(catalog::get_resource).post(catalog::lookup_resources),
+        )
+        .route("/sequences", get(catalog::list_sequences))
         .route("/users", get(users::list).post(users::create))
         .route(
             "/users/:username",

@@ -7,8 +7,9 @@ use sbol_db_core::{ApiToken, UserId};
 use sbol_db_postgres::{PgConfigStore, PgPool, PgUserStore, TripleRepository};
 use sbol_db_rocksdb::{
     AccelCountImport, AccelCountKind, AccelFacetImport, AccelMemberImport, AccelObjectImport,
-    RocksdbBulkLoader, RocksdbConfigStore, RocksdbTokenStore, RocksdbUserStore, SketchBandImport,
-    SketchImport,
+    GraphCatalogImport, OntologyAliasImport, OntologyClosureImport, OntologyImport,
+    OntologyTermImport, RocksdbBulkLoader, RocksdbConfigStore, RocksdbTokenStore, RocksdbUserStore,
+    SequenceProjectionImport, SketchBandImport, SketchImport,
 };
 use sbol_db_storage::{ClusterId, ConfigStore, FacetKind, MetaRecord, RankRow, UserStore};
 use serde::Serialize;
@@ -30,6 +31,7 @@ struct SourceCounts {
     graphs: u64,
     triples: u64,
     accelerator_objects: u64,
+    objects: u64,
     accelerator_members: u64,
     accelerator_facets: u64,
     users: u64,
@@ -38,7 +40,12 @@ struct SourceCounts {
     pageranks: u64,
     clusters: u64,
     sketches: u64,
+    sequence_projections: u64,
     sketch_bands: u64,
+    ontologies: u64,
+    ontology_terms: u64,
+    ontology_aliases: u64,
+    ontology_closure: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -92,11 +99,14 @@ pub async fn run(inputs: CopyInputs) -> Result<()> {
         .context("preparing the RocksDB destination")?;
 
     copy_identity_and_config(&pool, &db).await?;
+    copy_graph_catalog(&pool, &loader, inputs.chunk_size).await?;
     copy_triples(&pool, &loader, inputs.chunk_size, source.counts.triples).await?;
     copy_accelerators(&pool, &loader, inputs.chunk_size).await?;
+    copy_sequence_projections(&pool, &loader, inputs.chunk_size).await?;
     copy_search_state(&pool, &loader, inputs.chunk_size).await?;
+    copy_ontologies(&pool, &loader, inputs.chunk_size).await?;
 
-    let source_after = source_counts(&pool, source.run_id).await?;
+    let source_after = source_counts(&pool).await?;
     if source_after != source.counts {
         bail!(
             "Postgres source changed during the copy: before={:?}, after={:?}",
@@ -176,36 +186,21 @@ async fn inspect_source(pool: &PgPool, omit_completed_jobs: bool) -> Result<Read
         );
     }
 
-    let unsupported: i64 = sqlx::query_scalar(
-        "SELECT \
-           (SELECT count(*) FROM sbol_graphs WHERE kind='sbol3') + \
-           (SELECT count(*) FROM sbol_objects) + \
-           (SELECT count(*) FROM sbol_sequences) + \
-           (SELECT count(*) FROM sbol_ontologies)",
-    )
-    .fetch_one(pool)
-    .await?;
-    if unsupported != 0 {
-        bail!(
-            "source contains {unsupported} typed document/object/sequence/ontology rows; \
-             this production converter refuses to omit them"
-        );
-    }
-
     Ok(ReadySource {
         run_id,
         bundle,
-        counts: source_counts(pool, run_id).await?,
+        counts: source_counts(pool).await?,
         historical_jobs: u64::try_from(historical_jobs)?,
     })
 }
 
-async fn source_counts(pool: &PgPool, run_id: Uuid) -> Result<SourceCounts> {
+async fn source_counts(pool: &PgPool) -> Result<SourceCounts> {
     let row = sqlx::query(
         "SELECT \
-           (SELECT count(*) FROM sbh_migration_graph WHERE run_id=$1 AND status='verified') graphs, \
-           (SELECT coalesce(sum(loaded_quads),0)::bigint FROM sbh_migration_graph WHERE run_id=$1 AND status='verified') triples, \
+           (SELECT count(*) FROM sbol_graphs) graphs, \
+           (SELECT count(*) FROM sbol_triples) triples, \
            (SELECT count(*) FROM accel_object) accelerator_objects, \
+           (SELECT count(DISTINCT iri) FROM accel_object) objects, \
            (SELECT count(*) FROM accel_member) accelerator_members, \
            (SELECT count(*) FROM accel_facet) accelerator_facets, \
            (SELECT count(*) FROM sbh_user) users, \
@@ -214,15 +209,23 @@ async fn source_counts(pool: &PgPool, run_id: Uuid) -> Result<SourceCounts> {
            (SELECT count(*) FROM object_pagerank) pageranks, \
            (SELECT count(*) FROM sbol_sequence_cluster) clusters, \
            (SELECT count(*) FROM sbol_sequence_sketch) sketches, \
-           (SELECT count(*) FROM sbol_sequence_lsh_band) sketch_bands",
+           (SELECT count(*) FROM sbol_sequence_sketch s WHERE EXISTS ( \
+              SELECT 1 FROM sbol_triples t WHERE t.subject_iri=s.sequence_iri \
+              AND t.predicate_iri IN ('http://sbols.org/v2#elements','http://sbols.org/v3#elements') \
+              AND t.object_literal IS NOT NULL)) sequence_projections, \
+           (SELECT count(*) FROM sbol_sequence_lsh_band) sketch_bands, \
+           (SELECT count(*) FROM sbol_ontologies) ontologies, \
+           (SELECT count(*) FROM sbol_ontology_terms) ontology_terms, \
+           (SELECT count(*) FROM sbol_ontology_term_aliases) ontology_aliases, \
+           (SELECT count(*) FROM sbol_ontology_closure) ontology_closure",
     )
-    .bind(run_id)
     .fetch_one(pool)
     .await?;
     Ok(SourceCounts {
         graphs: row_u64(&row, "graphs")?,
         triples: row_u64(&row, "triples")?,
         accelerator_objects: row_u64(&row, "accelerator_objects")?,
+        objects: row_u64(&row, "objects")?,
         accelerator_members: row_u64(&row, "accelerator_members")?,
         accelerator_facets: row_u64(&row, "accelerator_facets")?,
         users: row_u64(&row, "users")?,
@@ -231,8 +234,58 @@ async fn source_counts(pool: &PgPool, run_id: Uuid) -> Result<SourceCounts> {
         pageranks: row_u64(&row, "pageranks")?,
         clusters: row_u64(&row, "clusters")?,
         sketches: row_u64(&row, "sketches")?,
+        sequence_projections: row_u64(&row, "sequence_projections")?,
         sketch_bands: row_u64(&row, "sketch_bands")?,
+        ontologies: row_u64(&row, "ontologies")?,
+        ontology_terms: row_u64(&row, "ontology_terms")?,
+        ontology_aliases: row_u64(&row, "ontology_aliases")?,
+        ontology_closure: row_u64(&row, "ontology_closure")?,
     })
+}
+
+async fn copy_graph_catalog(
+    pool: &PgPool,
+    loader: &RocksdbBulkLoader,
+    chunk_size: usize,
+) -> Result<()> {
+    let mut iri = loader
+        .checkpoint("graph_catalog")
+        .await?
+        .unwrap_or_default();
+    loop {
+        let rows = sqlx::query(
+            "SELECT g.id, g.iri::text iri, g.kind, g.name, g.source_uri, \
+                    g.serialization_format, g.created_at, g.triple_count \
+             FROM sbol_graphs g WHERE g.iri::text>$1 \
+             ORDER BY g.iri::text LIMIT $2",
+        )
+        .bind(&iri)
+        .bind(i64::try_from(chunk_size)?)
+        .fetch_all(pool)
+        .await?;
+        if rows.is_empty() {
+            break;
+        }
+        iri = rows.last().expect("page").try_get("iri")?;
+        let page = rows
+            .into_iter()
+            .map(|row| {
+                Ok(GraphCatalogImport {
+                    id: sbol_db_core::GraphId(row.try_get("id")?),
+                    iri: row.try_get("iri")?,
+                    kind: row.try_get("kind")?,
+                    name: row.try_get("name")?,
+                    source_uri: row.try_get("source_uri")?,
+                    serialization_format: row.try_get("serialization_format")?,
+                    created_at: row.try_get("created_at")?,
+                    triple_count: row_u64(&row, "triple_count")?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        loader.write_graph_catalog(page, iri.clone()).await?;
+    }
+    tracing::info!("named-graph catalog copy complete");
+    Ok(())
 }
 
 async fn copy_identity_and_config(pool: &PgPool, db: &sbol_db_rocksdb::Db) -> Result<()> {
@@ -264,6 +317,156 @@ async fn copy_identity_and_config(pool: &PgPool, db: &sbol_db_rocksdb::Db) -> Re
         .import_exact(tokens)
         .await
         .context("copying exact API-token records")?;
+    Ok(())
+}
+
+async fn copy_ontologies(
+    pool: &PgPool,
+    loader: &RocksdbBulkLoader,
+    chunk_size: usize,
+) -> Result<()> {
+    let page_limit = i64::try_from(chunk_size)?;
+    let mut prefix = loader.checkpoint("ontologies").await?.unwrap_or_default();
+    loop {
+        let rows = sqlx::query(
+            "SELECT prefix, name, source_url, version, term_count, imported_at \
+             FROM sbol_ontologies WHERE prefix>$1 ORDER BY prefix LIMIT $2",
+        )
+        .bind(&prefix)
+        .bind(page_limit)
+        .fetch_all(pool)
+        .await?;
+        if rows.is_empty() {
+            break;
+        }
+        prefix = rows.last().expect("page").try_get("prefix")?;
+        let page = rows
+            .into_iter()
+            .map(|row| {
+                Ok(OntologyImport {
+                    prefix: row.try_get("prefix")?,
+                    name: row.try_get("name")?,
+                    source_url: row.try_get("source_url")?,
+                    version: row.try_get("version")?,
+                    term_count: row.try_get("term_count")?,
+                    imported_at: row.try_get("imported_at")?,
+                })
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+        loader.write_ontologies(page, prefix.clone()).await?;
+    }
+
+    let mut iri = loader
+        .checkpoint("ontology_terms")
+        .await?
+        .unwrap_or_default();
+    loop {
+        let rows = sqlx::query(
+            "SELECT iri::text iri, prefix, curie, name, definition, is_obsolete, synonyms \
+             FROM sbol_ontology_terms WHERE iri::text>$1 ORDER BY iri::text LIMIT $2",
+        )
+        .bind(&iri)
+        .bind(page_limit)
+        .fetch_all(pool)
+        .await?;
+        if rows.is_empty() {
+            break;
+        }
+        iri = rows.last().expect("page").try_get("iri")?;
+        let page = rows
+            .into_iter()
+            .map(|row| {
+                Ok(OntologyTermImport {
+                    iri: row.try_get("iri")?,
+                    prefix: row.try_get("prefix")?,
+                    curie: row.try_get("curie")?,
+                    name: row.try_get("name")?,
+                    definition: row.try_get("definition")?,
+                    is_obsolete: row.try_get("is_obsolete")?,
+                    synonyms: row.try_get("synonyms")?,
+                })
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+        loader.write_ontology_terms(page, iri.clone()).await?;
+    }
+
+    let mut alias = loader
+        .checkpoint("ontology_aliases")
+        .await?
+        .unwrap_or_default();
+    loop {
+        let rows = sqlx::query(
+            "SELECT a.alias_iri::text alias_iri, a.canonical_iri::text canonical_iri, t.prefix \
+             FROM sbol_ontology_term_aliases a \
+             JOIN sbol_ontology_terms t ON t.iri=a.canonical_iri \
+             WHERE a.alias_iri::text>$1 ORDER BY a.alias_iri::text LIMIT $2",
+        )
+        .bind(&alias)
+        .bind(page_limit)
+        .fetch_all(pool)
+        .await?;
+        if rows.is_empty() {
+            break;
+        }
+        alias = rows.last().expect("page").try_get("alias_iri")?;
+        let page = rows
+            .into_iter()
+            .map(|row| {
+                Ok(OntologyAliasImport {
+                    prefix: row.try_get("prefix")?,
+                    alias_iri: row.try_get("alias_iri")?,
+                    canonical_iri: row.try_get("canonical_iri")?,
+                })
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+        loader.write_ontology_aliases(page, alias.clone()).await?;
+    }
+
+    let (mut ancestor, mut descendant) = loader
+        .checkpoint("ontology_closure")
+        .await?
+        .map(|value| serde_json::from_str::<(String, String)>(&value))
+        .transpose()?
+        .unwrap_or_default();
+    loop {
+        let rows = sqlx::query(
+            "SELECT c.ancestor_iri::text ancestor_iri, \
+                    c.descendant_iri::text descendant_iri, c.depth, t.prefix \
+             FROM sbol_ontology_closure c \
+             JOIN sbol_ontology_terms t ON t.iri=c.ancestor_iri \
+             WHERE (c.ancestor_iri::text, c.descendant_iri::text)>($1,$2) \
+             ORDER BY c.ancestor_iri::text, c.descendant_iri::text LIMIT $3",
+        )
+        .bind(&ancestor)
+        .bind(&descendant)
+        .bind(page_limit)
+        .fetch_all(pool)
+        .await?;
+        if rows.is_empty() {
+            break;
+        }
+        let last = rows.last().expect("page");
+        ancestor = last.try_get("ancestor_iri")?;
+        descendant = last.try_get("descendant_iri")?;
+        let page = rows
+            .into_iter()
+            .map(|row| {
+                Ok(OntologyClosureImport {
+                    prefix: row.try_get("prefix")?,
+                    ancestor_iri: row.try_get("ancestor_iri")?,
+                    descendant_iri: row.try_get("descendant_iri")?,
+                    depth: row.try_get("depth")?,
+                })
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+        loader
+            .write_ontology_closure(
+                page,
+                serde_json::to_string(&(ancestor.clone(), descendant.clone()))?,
+            )
+            .await?;
+    }
+    tracing::info!("ontology copy complete");
     Ok(())
 }
 
@@ -306,7 +509,7 @@ async fn copy_accelerators(
     chunk_size: usize,
 ) -> Result<()> {
     let (mut graph, mut iri) = loader
-        .checkpoint("accel_objects_v2")
+        .checkpoint("accel_objects_v4")
         .await?
         .map(|value| serde_json::from_str::<(String, String)>(&value))
         .transpose()?
@@ -346,6 +549,7 @@ async fn copy_accelerators(
             .write_accel_objects(page, serde_json::to_string(&(graph.clone(), iri.clone()))?)
             .await?;
     }
+    loader.mark_resource_index_ready().await?;
 
     let (mut graph, mut collection, mut member) = loader
         .checkpoint("accel_members")
@@ -544,6 +748,64 @@ fn count_row(row: &sqlx::postgres::PgRow, kind: AccelCountKind) -> Result<AccelC
     })
 }
 
+async fn copy_sequence_projections(
+    pool: &PgPool,
+    loader: &RocksdbBulkLoader,
+    chunk_size: usize,
+) -> Result<()> {
+    let mut iri = loader
+        .checkpoint("sequence_projections")
+        .await?
+        .unwrap_or_default();
+    loop {
+        let rows = sqlx::query(
+            "SELECT s.sequence_iri, \
+                (SELECT t.object_literal FROM sbol_triples t \
+                 WHERE t.subject_iri=s.sequence_iri \
+                   AND t.predicate_iri IN ('http://sbols.org/v2#elements','http://sbols.org/v3#elements') \
+                   AND t.object_literal IS NOT NULL ORDER BY t.id LIMIT 1) elements, \
+                (SELECT t.object_iri::text FROM sbol_triples t \
+                 WHERE t.subject_iri=s.sequence_iri \
+                   AND t.predicate_iri IN ('http://sbols.org/v2#encoding','http://sbols.org/v3#encoding') \
+                   AND t.object_iri IS NOT NULL ORDER BY t.id LIMIT 1) encoding_iri \
+             FROM sbol_sequence_sketch s WHERE s.sequence_iri>$1 \
+             ORDER BY s.sequence_iri LIMIT $2",
+        )
+        .bind(&iri)
+        .bind(i64::try_from(chunk_size)?)
+        .fetch_all(pool)
+        .await?;
+        if rows.is_empty() {
+            break;
+        }
+        iri = rows.last().expect("page").try_get("sequence_iri")?;
+        let page = rows
+            .into_iter()
+            .filter_map(|row| {
+                let sequence_iri: Result<String, _> = row.try_get("sequence_iri");
+                let elements: Result<Option<String>, _> = row.try_get("elements");
+                let encoding_iri: Result<Option<String>, _> = row.try_get("encoding_iri");
+                match (sequence_iri, elements, encoding_iri) {
+                    (Ok(iri), Ok(Some(elements)), Ok(encoding_iri)) => {
+                        Some(Ok(SequenceProjectionImport {
+                            iri,
+                            encoding_iri,
+                            elements,
+                        }))
+                    }
+                    (Ok(_), Ok(None), Ok(_)) => None,
+                    (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+                        Some(Err(error))
+                    }
+                }
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+        loader.write_sequence_projections(page, iri.clone()).await?;
+    }
+    tracing::info!("sequence projection copy complete");
+    Ok(())
+}
+
 async fn copy_search_state(
     pool: &PgPool,
     loader: &RocksdbBulkLoader,
@@ -672,9 +934,13 @@ async fn copy_search_state(
 
 async fn reconcile_destination(loader: &RocksdbBulkLoader, expected: &SourceCounts) -> Result<()> {
     let actual = SourceCounts {
-        graphs: expected.graphs,
-        triples: loader.count("gspo").await?,
+        graphs: loader.count("verbatim_graph_meta").await?,
+        triples: loader
+            .count("gspo")
+            .await?
+            .saturating_add(loader.count("dspo").await?),
         accelerator_objects: loader.count("acc_meta").await?,
+        objects: loader.count("objects").await?,
         accelerator_members: loader.count("acc_member").await?,
         accelerator_facets: loader.count("acc_facet").await?,
         users: loader.count("users").await?,
@@ -683,10 +949,22 @@ async fn reconcile_destination(loader: &RocksdbBulkLoader, expected: &SourceCoun
         pageranks: loader.count("object_pagerank").await?,
         clusters: loader.count("sequence_cluster").await?,
         sketches: loader.count("seq_sketch").await?,
+        sequence_projections: loader.count("seq").await?,
         sketch_bands: loader.count("seq_lsh_band").await?,
+        ontologies: loader.count("ont").await?,
+        ontology_terms: loader.count("ont_term").await?,
+        ontology_aliases: loader.count("ont_alias").await?,
+        ontology_closure: loader.count("ont_closure").await?,
     };
     if &actual != expected {
         bail!("RocksDB reconciliation failed: expected={expected:?}, actual={actual:?}");
+    }
+    let indexed_resources = loader.count("acc_meta_by_iri").await?;
+    if indexed_resources != actual.accelerator_objects {
+        bail!(
+            "RocksDB resource-index reconciliation failed: accelerator_objects={}, indexed_resources={indexed_resources}",
+            actual.accelerator_objects
+        );
     }
     tracing::info!(?actual, "RocksDB cardinality reconciliation passed");
     Ok(())

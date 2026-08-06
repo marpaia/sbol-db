@@ -18,12 +18,13 @@ use sbol_db_search::{ClusterId, Signature};
 use serde_json::Value;
 
 use crate::{
-    AccelSolutions, AcceleratedQuery, BatchSequenceMatch, EnqueueOutcome, GraphFilter,
-    GraphWriteMode, IdGraphFilter, IdQuad, ImportInput, JobAttempt, JobLogRecord, JobStatus,
-    ListGraphsFilter, ListJobsFilter, ListObjectsFilter, NewJob, OldestQueuedAge,
-    OntologyLoadReport, OntologyRecord, OntologyTermRecord, PatternObject, PatternSubject,
-    QueueDepthRow, RankRow, SbolJob, SequenceMatch, SequenceSearchOptions, TermId, TermKey,
-    TermValue, TextSearchQuery, TripleChange, TripleScanPage, UpdateOutcome,
+    AccelSolutions, AcceleratedQuery, BatchSequenceMatch, CorpusStatsStore, EnqueueOutcome,
+    GraphFilter, GraphWriteMode, IdGraphFilter, IdQuad, ImportInput, JobAttempt, JobLogRecord,
+    JobStatus, ListGraphsFilter, ListJobsFilter, ListObjectsFilter, NamedGraphCatalogStore, NewJob,
+    OldestQueuedAge, OntologyLoadReport, OntologyRecord, OntologyTermRecord, PatternObject,
+    PatternSubject, QueueDepthRow, RankRow, ResourceCatalogStore, SbolJob, SequenceCatalogStore,
+    SequenceMatch, SequenceSearchOptions, TermId, TermKey, TermValue, TextSearchQuery,
+    TripleChange, TripleScanPage, UpdateOutcome,
 };
 
 /// Synchronous triple-pattern reads, as required by the SPARQL evaluator.
@@ -472,8 +473,30 @@ pub trait UserStore: Send + Sync {
     /// instead of backend-specific SQL or column-family scans.
     async fn list_users(&self) -> Result<Vec<User>, DomainError>;
 
-    /// Persist the mutable profile fields (`name`, `affiliation`, and the
-    /// membership flags) of `user`, returning the stored account.
+    /// Filter and page accounts inside the backend. Implementations should not
+    /// materialize the complete account table merely to serve one Admin page.
+    async fn page_users(&self, query: &UserListQuery) -> Result<UserPage, DomainError> {
+        let needle = query
+            .text
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_lowercase);
+        let mut users = self.list_users().await?;
+        if let Some(needle) = needle {
+            users.retain(|user| user_matches(user, &needle));
+        }
+        let total = users.len() as u64;
+        let items = users
+            .into_iter()
+            .skip(query.offset as usize)
+            .take(query.limit as usize)
+            .collect();
+        Ok(UserPage { total, items })
+    }
+
+    /// Persist the mutable profile fields (`name`, `email`, `affiliation`, and
+    /// the membership flags) of `user`, returning the stored account.
     async fn update_user(&self, user: &User) -> Result<User, DomainError>;
 
     /// Atomically make `id` the only administrator account.
@@ -505,6 +528,29 @@ pub trait UserStore: Send + Sync {
     async fn any_admin(&self) -> Result<bool, DomainError>;
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct UserListQuery {
+    pub text: Option<String>,
+    pub limit: u32,
+    pub offset: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct UserPage {
+    pub total: u64,
+    pub items: Vec<User>,
+}
+
+pub fn user_matches(user: &User, needle: &str) -> bool {
+    user.username.to_lowercase().contains(needle)
+        || user.name.to_lowercase().contains(needle)
+        || user.email.to_lowercase().contains(needle)
+        || user
+            .affiliation
+            .as_deref()
+            .is_some_and(|value| value.to_lowercase().contains(needle))
+}
+
 /// API-token persistence for the identity layer.
 ///
 /// Tokens are stored only as their hash; the application layer computes the
@@ -528,7 +574,16 @@ pub trait TokenStore: Send + Sync {
 /// The full SBOL-aware store: ingest plus every derived-view read surface.
 #[async_trait]
 pub trait SbolStore:
-    ObjectStore + GraphStore + OntologyStore + NeighborhoodStore + SequenceSearchStore + TextSearchStore
+    ObjectStore
+    + GraphStore
+    + ResourceCatalogStore
+    + NamedGraphCatalogStore
+    + CorpusStatsStore
+    + SequenceCatalogStore
+    + OntologyStore
+    + NeighborhoodStore
+    + SequenceSearchStore
+    + TextSearchStore
 {
     async fn import_document(&self, input: ImportInput) -> Result<ImportReport, DomainError>;
     async fn import_documents(

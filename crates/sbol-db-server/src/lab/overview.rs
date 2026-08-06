@@ -44,12 +44,11 @@ pub struct Counts {
 pub struct RecentGraph {
     pub id: uuid::Uuid,
     pub iri: String,
-    pub kind: String,
     pub name: Option<String>,
     pub source_uri: Option<String>,
     pub serialization_format: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub object_count: i64,
+    pub created_at: Option<DateTime<Utc>>,
+    pub triple_count: Option<i64>,
 }
 
 #[derive(Serialize, Clone)]
@@ -71,7 +70,12 @@ pub async fn handler(State(state): State<AppState>) -> Result<Json<Arc<Overview>
     }
     let started = Instant::now();
 
-    let c = state.lab.corpus_counts().await?;
+    let (c, recent_graphs, top_classes, loaded_ontologies) = tokio::try_join!(
+        state.lab.corpus_counts(),
+        state.lab.recent_graphs(5),
+        state.lab.top_classes(10),
+        state.service.list_ontologies(),
+    )?;
     let counts = Counts {
         objects: c.objects,
         graphs: c.graphs,
@@ -81,27 +85,20 @@ pub async fn handler(State(state): State<AppState>) -> Result<Json<Arc<Overview>
         ontologies: c.ontologies,
     };
 
-    let recent_graphs = state
-        .lab
-        .recent_graphs(5)
-        .await?
+    let recent_graphs = recent_graphs
         .into_iter()
         .map(|g| RecentGraph {
             id: g.id.0,
             iri: g.iri,
-            kind: g.kind,
             name: g.name,
             source_uri: g.source_uri,
             serialization_format: g.serialization_format,
             created_at: g.created_at,
-            object_count: g.object_count,
+            triple_count: g.triple_count,
         })
         .collect();
 
-    let top_classes = state
-        .lab
-        .top_classes(10)
-        .await?
+    let top_classes = top_classes
         .into_iter()
         .map(|c| TopClass {
             iri: c.iri,
@@ -109,10 +106,7 @@ pub async fn handler(State(state): State<AppState>) -> Result<Json<Arc<Overview>
         })
         .collect();
 
-    let loaded_ontologies = state
-        .service
-        .list_ontologies()
-        .await?
+    let loaded_ontologies = loaded_ontologies
         .into_iter()
         .map(|o| LoadedOntology {
             prefix: o.prefix,

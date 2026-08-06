@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use rocksdb::WriteBatch;
 use sbol_db_core::{DomainError, NewUser, User, UserId};
-use sbol_db_storage::UserStore;
+use sbol_db_storage::{user_matches, UserListQuery, UserPage, UserStore};
 use uuid::Uuid;
 
 use crate::db::{Db, SEP};
@@ -153,11 +153,50 @@ impl UserStore for RocksdbUserStore {
         .await
     }
 
+    async fn page_users(&self, query: &UserListQuery) -> Result<UserPage, DomainError> {
+        let db = self.db.clone();
+        let query = query.clone();
+        blocking(move || {
+            let needle = query
+                .text
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_lowercase);
+            let mut users = Vec::new();
+            db.for_each(CF_USERS, |_, value| {
+                let user = decode::<User>(value)?;
+                if needle
+                    .as_deref()
+                    .is_none_or(|needle| user_matches(&user, needle))
+                {
+                    users.push(user);
+                }
+                Ok(true)
+            })?;
+            users.sort_by(|left, right| {
+                left.username
+                    .to_lowercase()
+                    .cmp(&right.username.to_lowercase())
+                    .then_with(|| left.username.cmp(&right.username))
+            });
+            let total = users.len() as u64;
+            let items = users
+                .into_iter()
+                .skip(query.offset as usize)
+                .take(query.limit as usize)
+                .collect();
+            Ok(UserPage { total, items })
+        })
+        .await
+    }
+
     async fn update_user(&self, user: &User) -> Result<User, DomainError> {
         let db = self.db.clone();
         let writes = self.writes.clone();
         let id = user.id;
         let name = user.name.clone();
+        let email = user.email.clone();
         let affiliation = user.affiliation.clone();
         let is_admin = user.is_admin;
         let is_curator = user.is_curator;
@@ -166,13 +205,20 @@ impl UserStore for RocksdbUserStore {
             let _guard = writes.lock().unwrap();
             let mut stored =
                 get_user(&db, id)?.ok_or_else(|| DomainError::NotFound(format!("user {id}")))?;
+            let old_email = stored.email.clone();
             stored.name = name;
+            stored.email = email;
             stored.affiliation = affiliation;
             stored.is_admin = is_admin;
             stored.is_curator = is_curator;
             stored.is_member = is_member;
             stored.updated_at = Utc::now();
-            put_user(&db, &stored)?;
+            let mut batch = WriteBatch::default();
+            if old_email != stored.email {
+                batch.delete_cf(&db.cf(CF_BY_EMAIL), email_key(&old_email, stored.id));
+            }
+            stage_user(&db, &mut batch, &stored)?;
+            db.write(batch)?;
             Ok(stored)
         })
         .await

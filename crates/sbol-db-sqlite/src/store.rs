@@ -15,11 +15,14 @@ use sbol_db_derive::{build_import_plan, compose_merged_input, to_rdf_format};
 use sbol_db_rdf::{rdf_graph_to_triples, GRAPH_IRI_PREFIX};
 use sbol_db_storage::{
     distinct_graph_iris, distinct_object_iris, AccelSolutions, AcceleratedQuery, AclStore,
-    BatchSequenceMatch, ClassCount, CorpusCounts, GraphFilter, GraphOverview, GraphStore,
-    GraphTriplesPage, GraphWriteMode, ImportInput, ImportOverwrite, LabStore, ListGraphsFilter,
-    ListObjectsFilter, NeighborhoodStore, ObjectStore, OntologyLoadReport, OntologyRecord,
-    OntologyStore, OntologyTermRecord, PatternObject, PatternSubject, SbolStore, SequenceMatch,
-    SequenceSearchOptions, SequenceSearchStore, TextSearchQuery, TextSearchStore, TripleChange,
+    BatchSequenceMatch, CatalogSequenceRecord, ClassCount, CorpusCounts, CorpusStats,
+    CorpusStatsStore, CursorPage, GraphFilter, GraphOverview, GraphStore, GraphTriplesPage,
+    GraphWriteMode, ImportInput, ImportOverwrite, LabStore, ListGraphsFilter, ListObjectsFilter,
+    NamedGraphCatalogStore, NamedGraphQuery, NamedGraphRecord, NeighborhoodStore, ObjectStore,
+    OntologyLoadReport, OntologyRecord, OntologyStore, OntologyTermRecord, PatternObject,
+    PatternSubject, ResourceCatalogStore, ResourceOccurrence, ResourceQuery, ResourceRecord,
+    SbolStore, SequenceCatalogStore, SequenceMatch, SequenceQuery, SequenceSearchOptions,
+    SequenceSearchStore, TextSearchQuery, TextSearchStore, TripleChange, TriplePageQuery,
     TripleScanPage, TripleSource, TripleWriter, UpdateOutcome, SBH_CAN_VIEW, SBH_OWNED_BY,
 };
 use tokio::runtime::Handle;
@@ -620,6 +623,108 @@ impl LabStore for SqliteStore {
         offset: i64,
     ) -> Result<Option<GraphTriplesPage>, DomainError> {
         self.lab.graph_triples(id, limit, offset).await
+    }
+}
+
+#[async_trait]
+impl ResourceCatalogStore for SqliteStore {
+    async fn catalog_resource(&self, iri: &str) -> Result<Option<ResourceRecord>, DomainError> {
+        self.accel.resource(iri).await
+    }
+
+    async fn catalog_resource_occurrences(
+        &self,
+        iri: &str,
+    ) -> Result<Vec<ResourceOccurrence>, DomainError> {
+        self.accel.resource_occurrences(iri).await
+    }
+
+    async fn catalog_resources(
+        &self,
+        query: &ResourceQuery,
+    ) -> Result<CursorPage<ResourceRecord>, DomainError> {
+        self.accel.resources(query).await
+    }
+
+    async fn catalog_resources_by_iris(
+        &self,
+        iris: &[String],
+    ) -> Result<Vec<ResourceRecord>, DomainError> {
+        self.accel.resources_for_iris(iris).await
+    }
+
+    async fn catalog_top_classes(&self, limit: u32) -> Result<Vec<ClassCount>, DomainError> {
+        self.lab.top_classes(i64::from(limit.clamp(1, 500))).await
+    }
+}
+
+#[async_trait]
+impl SequenceCatalogStore for SqliteStore {
+    async fn catalog_sequence(
+        &self,
+        iri: &str,
+    ) -> Result<Option<CatalogSequenceRecord>, DomainError> {
+        self.accel.sequence(iri).await
+    }
+
+    async fn catalog_sequences(
+        &self,
+        query: &SequenceQuery,
+    ) -> Result<CursorPage<CatalogSequenceRecord>, DomainError> {
+        self.accel.sequences(query).await
+    }
+}
+
+#[async_trait]
+impl CorpusStatsStore for SqliteStore {
+    async fn catalog_stats(&self) -> Result<CorpusStats, DomainError> {
+        Ok(self.lab.corpus_counts().await?.into())
+    }
+}
+
+#[async_trait]
+impl NamedGraphCatalogStore for SqliteStore {
+    async fn catalog_graph(&self, id: GraphId) -> Result<Option<NamedGraphRecord>, DomainError> {
+        Ok(self.lab.get_graph_overview(id).await?.map(Into::into))
+    }
+
+    async fn catalog_graphs(
+        &self,
+        query: &NamedGraphQuery,
+    ) -> Result<CursorPage<NamedGraphRecord>, DomainError> {
+        let limit = query.limit.clamp(1, 500) as i64;
+        let mut rows = self
+            .lab
+            .catalog_graphs(query.after.as_deref(), query.text.as_deref(), limit + 1)
+            .await?;
+        let has_more = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor = has_more.then(|| rows.last().expect("non-empty graph page").iri.clone());
+        Ok(CursorPage {
+            items: rows.into_iter().map(Into::into).collect(),
+            next_cursor,
+        })
+    }
+
+    async fn catalog_graph_triples(
+        &self,
+        id: GraphId,
+        query: &TriplePageQuery,
+    ) -> Result<Option<CursorPage<Triple>>, DomainError> {
+        let Some(graph) = self.lab.get_graph_overview(id).await? else {
+            return Ok(None);
+        };
+        let page = SqliteStore::graph_store_read_page(
+            self,
+            &graph.iri,
+            query.after.as_deref(),
+            query.limit.clamp(1, 5_000) as usize,
+        )
+        .await?;
+        Ok(Some(CursorPage {
+            items: page.items,
+            next_cursor: page.next_cursor,
+        }))
     }
 }
 

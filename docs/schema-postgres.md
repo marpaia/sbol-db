@@ -1,9 +1,10 @@
 # Postgres schema
 
-This is the on-disk layout of the Postgres backend, the default of three engines
-that satisfy the backend-neutral `sbol-db-storage` contract. For the contract
-itself and how a backend is selected, see [storage.md](storage.md); for the
-SQLite and RocksDB layouts, see [schema-sqlite.md](schema-sqlite.md) and
+This is the on-disk layout of the Postgres backend, one of three engines that
+satisfy the backend-neutral `sbol-db-storage` contract. RocksDB is the primary
+default runtime; Postgres remains the shared-database option. For the contract
+and backend selection, see [storage.md](storage.md); for the SQLite and RocksDB
+layouts, see [schema-sqlite.md](schema-sqlite.md) and
 [schema-rocksdb.md](schema-rocksdb.md).
 
 Postgres carries surfaces the other two engines do not: the validation-findings
@@ -58,13 +59,17 @@ graph's import and are null for `verbatim` graphs.
 | `created_by`           | `text`              | Free-form actor identifier.                              |
 | `created_at`           | `timestamptz`       | Row-insertion timestamp.                                 |
 | `updated_at`           | `timestamptz`       | Last-modification timestamp.                             |
+| `triple_count`         | `bigint`            | Exact maintained count of canonical triples in the graph. |
+| `resource_count`       | `bigint`            | Exact maintained count of RDF resource occurrences in the graph. |
 
 Indexed: `iri` primary key, `id` unique, `document_iri` unique.
 
 ## `sbol_objects`
 
-One row per top-level SBOL object, keyed by IRI. This is the
-canonical KV store for "give me the object at this IRI".
+One row per top-level object produced by the normalized SBOL import path, keyed
+by IRI. This is a typed/native compatibility cache. The universal resource
+catalog is derived from canonical RDF and also includes verbatim resources that
+have no row here.
 
 | Column                | Type                   | Notes                                                              |
 | --------------------- | ---------------------- | ------------------------------------------------------------------ |
@@ -290,9 +295,8 @@ can tail the log deterministically. The partial index
 `20260628000002_accelerator.sql` adds per-graph derived indexes that answer
 SynBioHub's fixed query templates with point lookups and range scans instead of
 full graph-pattern evaluation. The indexes derive from a graph's triples (the
-same derivation every backend shares); a write marks the graph dirty in
-`accel_dirty`, and the next read that needs the indexes rebuilds them in one
-pass.
+same derivation every backend shares) and refresh in the same transaction as
+graph writes.
 
 | Table | Key | What it holds |
 | --- | --- | --- |
@@ -308,6 +312,24 @@ Supporting indexes: `accel_object_toplevel_idx` on
 `(graph_iri, collection_iri, sort_key, member_iri)`. The SQLite and RocksDB
 backends carry the same accelerator in their own idioms. See
 [`synbiohub.md`](synbiohub.md) for the query surface this serves.
+
+## Universal RDF catalog
+
+`20260805000001_catalog_stats.sql` promotes accelerator metadata into the
+backend-independent Admin catalog. `accel_object (iri, graph_iri)` supports
+global resource keyset pages; `accel_type (type_iri, iri, graph_iri)` supports
+sequence and top-class pages. Page expansion uses set queries, so a 100-row
+Admin page does not issue 100 point reads.
+
+`sbol_catalog_stats` is a singleton row containing exact resource, named-graph,
+triple, sequence, and ontology counts. Transactional triggers maintain it and
+the per-graph counts on ordinary inserts/deletes. AFTER TRUNCATE triggers
+reconcile the same state for administrative resets, since PostgreSQL does not
+fire row-level DELETE triggers for `TRUNCATE`.
+
+These tables are projections. Canonical RDF in `sbol_triples`, not
+`sbol_objects` or the typed tables, determines which resources the universal
+catalog exposes.
 
 ## Conventions
 

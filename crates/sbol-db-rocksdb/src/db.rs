@@ -41,6 +41,13 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     // Document-graph registry.
     "graph_meta",
     "graph_hash",
+    // Named-graph catalog copied from a reconciled verbatim SynBioHub corpus.
+    // The canonical triples remain in the ordinary gspo/gpos/gosp families.
+    "verbatim_graph_meta",
+    // Universal named-graph catalog. The two legacy graph metadata families
+    // above remain readable during migration but product/Admin reads use this.
+    "catalog_graph",        // graph id -> NamedGraphRecord JSON
+    "catalog_graph_by_iri", // graph IRI -> graph id
     // Derived object view.
     "objects",
     "obj_by_id",
@@ -78,16 +85,23 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     "api_tokens",        // token hash -> user id
     // SynBioHub query accelerator: derived per-graph indexes (rebuilt lazily
     // when a graph is marked dirty). See `repo::accel`.
-    "acc_meta",       // graph + SEP + iri -> MetaRecord JSON
-    "acc_toplevel",   // graph + SEP + displayId + SEP + iri -> () (top-levels in sort order)
-    "acc_bytype",     // graph + SEP + type + SEP + displayId + SEP + iri -> ()
-    "acc_byrole",     // graph + SEP + role + SEP + displayId + SEP + iri -> ()
-    "acc_member",     // graph + SEP + collection + SEP + displayId + SEP + iri -> ()
+    "acc_meta",        // graph + SEP + iri -> MetaRecord JSON
+    "acc_meta_by_iri", // iri + SEP + graph -> MetaRecord JSON (global resource pagination)
+    // Global occurrence reference counts make universal corpus counts exact
+    // without scanning the per-graph metadata families.
+    "catalog_resource_refcount", // resource IRI -> u64 LE occurrence count
+    "catalog_sequence_refcount", // sequence IRI -> u64 LE occurrence count
+    "catalog_class_resource_refcount", // resource IRI + SEP + class IRI -> u64 LE
+    "catalog_class_count",       // class IRI -> u64 LE distinct resource count
+    "acc_toplevel", // graph + SEP + displayId + SEP + iri -> () (top-levels in sort order)
+    "acc_bytype",   // graph + SEP + type + SEP + displayId + SEP + iri -> ()
+    "acc_byrole",   // graph + SEP + role + SEP + displayId + SEP + iri -> ()
+    "acc_member",   // graph + SEP + collection + SEP + displayId + SEP + iri -> ()
     "acc_rootmember", // graph + SEP + collection + SEP + displayId + SEP + iri -> () (anti-join)
-    "acc_member_of",  // graph + SEP + member iri -> () (reverse-membership existence)
-    "acc_facet",      // graph + SEP + kind + SEP + value -> ()
-    "acc_count",      // graph + SEP + scope -> u64 LE (precomputed counts)
-    "acc_dirty",      // graph -> () (presence = indexes stale, rebuild on next read)
+    "acc_member_of", // graph + SEP + member iri -> () (reverse-membership existence)
+    "acc_facet",    // graph + SEP + kind + SEP + value -> ()
+    "acc_count",    // graph + SEP + scope -> u64 LE (precomputed counts)
+    "acc_dirty",    // graph -> () (presence = indexes stale, rebuild on next read)
     // Object PageRank scores backing the native ranked search: iri -> f64 LE.
     "object_pagerank",
     // Sequence cluster assignments backing /similar. `sequence_cluster` maps
@@ -105,6 +119,11 @@ pub const COLUMN_FAMILIES: &[&str] = &[
 /// separator) cannot occur in an IRI or a CURIE, so concatenated key parts
 /// never collide.
 pub const SEP: u8 = 0x1F;
+
+/// Presence means `acc_meta_by_iri` contains a complete reverse projection of
+/// `acc_meta`, rather than only rows written since this column family was
+/// introduced. Legacy databases acquire the marker after a background rebuild.
+pub(crate) const ACC_META_BY_IRI_READY: &[u8] = b"derived:acc_meta_by_iri:v1:ready";
 
 /// An open RocksDB database with the sbol-db column families. Cheaply cloneable
 /// (shares one underlying handle); clones move into `spawn_blocking` closures.
@@ -375,6 +394,52 @@ impl Db {
         }
         Ok(())
     }
+
+    /// Visit each distinct fixed-width leading key component without walking
+    /// every key in the component's range. The iterator seeks directly to the
+    /// successor prefix, so enumerating named graphs from `gspo` is O(graphs)
+    /// rather than O(triples).
+    pub fn for_each_distinct_fixed_prefix(
+        &self,
+        cf: &str,
+        prefix_len: usize,
+        mut f: impl FnMut(&[u8]) -> Result<bool, DomainError>,
+    ) -> Result<(), DomainError> {
+        let handle = self.cf(cf);
+        let mut iterator = self.inner.raw_iterator_cf(&handle);
+        iterator.seek_to_first();
+        while iterator.valid() {
+            let key = iterator
+                .key()
+                .ok_or_else(|| DomainError::Database("RocksDB iterator lost its key".into()))?;
+            if key.len() < prefix_len {
+                return Err(DomainError::Database(format!(
+                    "RocksDB key in `{cf}` is shorter than its {prefix_len}-byte prefix"
+                )));
+            }
+            let prefix = &key[..prefix_len];
+            if !f(prefix)? {
+                break;
+            }
+            let Some(successor) = prefix_successor(prefix) else {
+                break;
+            };
+            iterator.seek(successor);
+        }
+        iterator.status().map_err(db_err)
+    }
+}
+
+fn prefix_successor(prefix: &[u8]) -> Option<Vec<u8>> {
+    let mut next = prefix.to_vec();
+    for byte in next.iter_mut().rev() {
+        if *byte != u8::MAX {
+            *byte += 1;
+            return Some(next);
+        }
+        *byte = 0;
+    }
+    None
 }
 
 pub fn db_err(e: rocksdb::Error) -> DomainError {

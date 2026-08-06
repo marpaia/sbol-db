@@ -1,4 +1,4 @@
-import { Plus, ShieldCheck, Trash2, UserRound } from "lucide-react";
+import { Plus, Search, ShieldCheck, Trash2, UserRound } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import {
@@ -35,13 +35,31 @@ const EMPTY_USER: CreateAdminUser = {
   is_member: true,
 };
 
+const PAGE_SIZE = 25;
+
 export default function AdminUsersRoute() {
-  const query = useAdminUsers();
+  const [searchDraft, setSearchDraft] = useState("");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const query = useAdminUsers({
+    q: search || undefined,
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
+  });
   const create = useCreateAdminUser();
   const update = useUpdateAdminUser();
   const remove = useDeleteAdminUser();
   const session = useSession();
   const [draft, setDraft] = useState<CreateAdminUser>(EMPTY_USER);
+
+  // A deletion or narrower search can invalidate the current page. The API
+  // returns its clamped offset, so converge on that page instead of leaving an
+  // empty directory view with stale pagination controls.
+  useEffect(() => {
+    if (!query.data) return;
+    const resolvedPage = Math.floor(query.data.offset / PAGE_SIZE);
+    if (resolvedPage !== page) setPage(resolvedPage);
+  }, [page, query.data]);
 
   return (
     <AdminPage
@@ -161,39 +179,129 @@ export default function AdminUsersRoute() {
         title="Accounts"
         description={
           query.data
-            ? `${query.data.total.toLocaleString()} local account${query.data.total === 1 ? "" : "s"}`
+            ? `${query.data.total.toLocaleString()} ${search ? "matching " : ""}local account${query.data.total === 1 ? "" : "s"}`
             : "Local account directory"
         }
       >
-        {query.error ? (
-          <SurfaceState
-            variant="error"
-            title="Accounts unavailable"
-            description={(query.error as Error).message}
-          />
-        ) : query.isLoading || !query.data ? (
-          <div className="space-y-3">
-            <Skeleton className="h-48 rounded-lg" />
-            <Skeleton className="h-48 rounded-lg" />
+        <div className="space-y-4">
+          <div className="rounded-lg border bg-muted/20 px-4 py-3 text-xs leading-5 text-muted-foreground">
+            <strong className="font-medium text-foreground">
+              Member is a role, not an import marker.
+            </strong>{" "}
+            SynBioHub&apos;s source <code className="font-mono">isMember</code>{" "}
+            value is preserved. An unchecked account was imported successfully
+            but did not carry that explicit role in the source system.
           </div>
-        ) : query.data.items.length === 0 ? (
-          <SurfaceState
-            title="No accounts"
-            description="Create the first local account above."
-          />
-        ) : (
-          <div className="space-y-3">
-            {query.data.items.map((user) => (
-              <UserCard
-                key={user.id}
-                user={user}
-                current={session.data?.user?.id === user.id}
-                update={update}
-                remove={remove}
+
+          <form
+            className="flex flex-col gap-2 sm:flex-row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setSearch(searchDraft.trim());
+              setPage(0);
+            }}
+          >
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={searchDraft}
+                onChange={(event) => setSearchDraft(event.target.value)}
+                className="pl-9"
+                placeholder="Search username, name, email, or affiliation"
+                aria-label="Search accounts"
               />
-            ))}
-          </div>
-        )}
+            </div>
+            <Button type="submit" variant="outline">
+              Search
+            </Button>
+            {(search || searchDraft) && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setSearchDraft("");
+                  setSearch("");
+                  setPage(0);
+                }}
+              >
+                Clear
+              </Button>
+            )}
+          </form>
+
+          {query.error ? (
+            <SurfaceState
+              variant="error"
+              title="Accounts unavailable"
+              description={(query.error as Error).message}
+            />
+          ) : query.isLoading || !query.data ? (
+            <div className="space-y-3">
+              <Skeleton className="h-48 rounded-lg" />
+              <Skeleton className="h-48 rounded-lg" />
+            </div>
+          ) : query.data.items.length === 0 ? (
+            <SurfaceState
+              title={search ? "No matching accounts" : "No accounts"}
+              description={
+                search
+                  ? "Try a different username, name, email, or affiliation."
+                  : "Create the first local account above."
+              }
+            />
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span>
+                  Showing {query.data.offset + 1}–
+                  {Math.min(
+                    query.data.offset + query.data.items.length,
+                    query.data.total
+                  )}{" "}
+                  of {query.data.total.toLocaleString()}
+                </span>
+                {query.isFetching && <span>Refreshing…</span>}
+              </div>
+              <div className="space-y-3">
+                {query.data.items.map((user) => (
+                  <UserCard
+                    key={user.id}
+                    user={user}
+                    current={session.data?.user?.id === user.id}
+                    update={update}
+                    remove={remove}
+                  />
+                ))}
+              </div>
+              <div className="flex items-center justify-between gap-3 border-t pt-4 text-xs text-muted-foreground">
+                <span>
+                  Page {page + 1} of{" "}
+                  {Math.max(1, Math.ceil(query.data.total / PAGE_SIZE))}
+                </span>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={page === 0}
+                    onClick={() => setPage((value) => Math.max(0, value - 1))}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={(page + 1) * PAGE_SIZE >= query.data.total}
+                    onClick={() => setPage((value) => value + 1)}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </AdminSection>
     </AdminPage>
   );

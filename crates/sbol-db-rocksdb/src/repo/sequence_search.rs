@@ -6,23 +6,27 @@
 //! the k-mer width) fall back to a full scan. A per-IRI mirror family
 //! (`seq_kmer_by_iri`) lets a re-index drop a sequence's old seeds.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 
 use rocksdb::WriteBatch;
 use sbol_db_core::kmer::{
     canonical, canonical_kmers, encode_kmer, reverse_complement_string, KMER_K,
 };
-use sbol_db_core::{DomainError, SequenceProjection};
+use sbol_db_core::{DomainError, ObjectTerm, SequenceProjection, SubjectTerm};
 use sbol_db_storage::{BatchSequenceMatch, SequenceMatch, SequenceSearchOptions};
 use serde::{Deserialize, Serialize};
 
 use crate::db::{Db, SEP};
+use crate::repo::triple::TripleRepository;
 
 const DEFAULT_MAX_HITS: usize = 1024;
 
 #[derive(Clone)]
 pub struct SequenceSearchRepository {
     db: Db,
+    triples: TripleRepository,
+    rdf_sequences: Arc<RwLock<Option<Vec<(String, String)>>>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -35,7 +39,11 @@ struct SeqRec {
 
 impl SequenceSearchRepository {
     pub fn new(db: Db) -> Self {
-        Self { db }
+        Self {
+            triples: TripleRepository::new(db.clone()),
+            rdf_sequences: Arc::new(RwLock::new(None)),
+            db,
+        }
     }
 
     pub fn stage_upsert(
@@ -119,7 +127,9 @@ impl SequenceSearchRepository {
         let q_rc = reverse_complement_string(&q_upper).to_uppercase();
         let include_rc = !matches!(options.forward_only, Some(true));
 
-        let candidates = if q_upper.len() < KMER_K {
+        let candidates = if !self.has_materialized_sequences()? {
+            self.rdf_sequences()?
+        } else if q_upper.len() < KMER_K {
             self.candidates_short(&q_upper, &q_rc, include_rc)?
         } else {
             self.candidates_seeded(&q_upper, &q_rc, include_rc)?
@@ -182,6 +192,21 @@ impl SequenceSearchRepository {
         if normalised.is_empty() {
             return Ok(Vec::new());
         }
+        if !self.has_materialized_sequences()? {
+            let query_seeds: HashSet<u32> = canonical_kmers(&normalised)
+                .map(|hit| hit.canonical)
+                .collect();
+            if query_seeds.is_empty() {
+                return self.rdf_sequences();
+            }
+            return Ok(self
+                .rdf_sequences()?
+                .into_iter()
+                .filter(|(_, elements)| {
+                    canonical_kmers(elements).any(|hit| query_seeds.contains(&hit.canonical))
+                })
+                .collect());
+        }
         if normalised.len() < KMER_K {
             return self.all_nucleotide_sequences();
         }
@@ -212,6 +237,14 @@ impl SequenceSearchRepository {
     /// that is absent or non-nucleotide. Materializes the sketch candidate set's
     /// elements for the banded aligner.
     pub fn sequences_by_iris(&self, iris: &[String]) -> Result<Vec<(String, String)>, DomainError> {
+        if !self.has_materialized_sequences()? {
+            let requested: HashSet<&str> = iris.iter().map(String::as_str).collect();
+            return Ok(self
+                .rdf_sequences()?
+                .into_iter()
+                .filter(|(iri, _)| requested.contains(iri.as_str()))
+                .collect());
+        }
         let mut out = Vec::new();
         for iri in iris {
             let Some(blob) = self.db.get_cf("seq", iri.as_bytes())? else {
@@ -233,6 +266,9 @@ impl SequenceSearchRepository {
     /// Every indexed DNA/RNA sequence, the short-query candidate set (no seed)
     /// and the full set the search-index rebuild sketches.
     pub fn all_nucleotide_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
+        if !self.has_materialized_sequences()? {
+            return self.rdf_sequences();
+        }
         let mut out = Vec::new();
         self.db.for_each("seq", |key, blob| {
             let rec: SeqRec = serde_json::from_slice(blob)
@@ -330,6 +366,93 @@ impl SequenceSearchRepository {
             }
         }
         Ok(out)
+    }
+
+    fn has_materialized_sequences(&self) -> Result<bool, DomainError> {
+        let mut found = false;
+        self.db.for_each("seq", |_, _| {
+            found = true;
+            Ok(false)
+        })?;
+        Ok(found)
+    }
+
+    /// Read-through sequence view for a verbatim RDF corpus. The raw elements
+    /// triples are canonical; `seq` and its k-mer families are disposable
+    /// accelerators. Existing production copies already carry `seq_sketch`, so
+    /// it supplies the exact nucleotide IRI set while elements are projected
+    /// from RDF once per process.
+    fn rdf_sequences(&self) -> Result<Vec<(String, String)>, DomainError> {
+        if let Some(rows) = self.rdf_sequences.read().unwrap().as_ref() {
+            return Ok(rows.clone());
+        }
+
+        const ELEMENTS: [&str; 2] = [
+            "http://sbols.org/v2#elements",
+            "http://sbols.org/v3#elements",
+        ];
+        const ENCODING: [&str; 2] = [
+            "http://sbols.org/v2#encoding",
+            "http://sbols.org/v3#encoding",
+        ];
+
+        let mut sketched = HashSet::new();
+        self.db.for_each("seq_sketch", |key, _| {
+            sketched.insert(
+                std::str::from_utf8(key)
+                    .map_err(|_| DomainError::Database("non-utf8 sequence sketch IRI".into()))?
+                    .to_owned(),
+            );
+            Ok(true)
+        })?;
+
+        let mut encodings = HashMap::new();
+        for predicate in ENCODING {
+            for triple in self
+                .triples
+                .scan_pattern(None, Some(predicate), None, None, i64::MAX)?
+            {
+                if let (SubjectTerm::Iri(subject), ObjectTerm::Iri(encoding)) =
+                    (triple.subject, triple.object)
+                {
+                    encodings
+                        .entry(subject.into_inner())
+                        .or_insert_with(|| encoding.into_inner());
+                }
+            }
+        }
+
+        let mut by_iri = HashMap::new();
+        for predicate in ELEMENTS {
+            for triple in self
+                .triples
+                .scan_pattern(None, Some(predicate), None, None, i64::MAX)?
+            {
+                let (SubjectTerm::Iri(subject), ObjectTerm::Literal { value, .. }) =
+                    (triple.subject, triple.object)
+                else {
+                    continue;
+                };
+                let iri = subject.into_inner();
+                let nucleotide = if sketched.is_empty() {
+                    encodings.get(&iri).is_some_and(|encoding| {
+                        let encoding = encoding.to_ascii_lowercase();
+                        encoding.contains("dna")
+                            || encoding.contains("rna")
+                            || encoding.contains("naseq")
+                    })
+                } else {
+                    sketched.contains(&iri)
+                };
+                if nucleotide {
+                    by_iri.entry(iri).or_insert(value);
+                }
+            }
+        }
+        let mut rows: Vec<_> = by_iri.into_iter().collect();
+        rows.sort_by(|left, right| left.0.cmp(&right.0));
+        *self.rdf_sequences.write().unwrap() = Some(rows.clone());
+        Ok(rows)
     }
 }
 

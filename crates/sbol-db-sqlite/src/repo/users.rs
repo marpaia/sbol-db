@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use sbol_db_core::{DomainError, NewUser, User, UserId};
-use sbol_db_storage::UserStore;
+use sbol_db_storage::{UserListQuery, UserPage, UserStore};
 use sqlx::Row;
 
 use crate::pool::db_err;
@@ -108,15 +108,51 @@ impl UserStore for SqliteUserStore {
         rows.into_iter().map(row_to_user).collect()
     }
 
+    async fn page_users(&self, query: &UserListQuery) -> Result<UserPage, DomainError> {
+        let needle = query
+            .text
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_lowercase);
+        let predicate = "(?1 IS NULL OR instr(lower(username), ?1) > 0 OR \
+            instr(lower(name), ?1) > 0 OR instr(lower(email), ?1) > 0 OR \
+            instr(lower(coalesce(affiliation, '')), ?1) > 0)";
+        let total: i64 =
+            sqlx::query_scalar(&format!("SELECT count(*) FROM sbh_user WHERE {predicate}"))
+                .bind(needle.as_deref())
+                .fetch_one(&self.pool)
+                .await
+                .map_err(db_err)?;
+        let rows = sqlx::query(&format!(
+            "SELECT {USER_COLS} FROM sbh_user WHERE {predicate} \
+             ORDER BY lower(username), username LIMIT ?2 OFFSET ?3"
+        ))
+        .bind(needle.as_deref())
+        .bind(i64::from(query.limit))
+        .bind(i64::try_from(query.offset).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(UserPage {
+            total: total.max(0) as u64,
+            items: rows
+                .into_iter()
+                .map(row_to_user)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+
     async fn update_user(&self, user: &User) -> Result<User, DomainError> {
         let row = sqlx::query(&format!(
             "UPDATE sbh_user \
-                SET name = ?, affiliation = ?, \
+                SET name = ?, email = ?, affiliation = ?, \
                     is_admin = ?, is_curator = ?, is_member = ?, updated_at = ? \
               WHERE id = ? \
              RETURNING {USER_COLS}"
         ))
         .bind(&user.name)
+        .bind(&user.email)
         .bind(user.affiliation.as_deref())
         .bind(user.is_admin as i64)
         .bind(user.is_curator as i64)
