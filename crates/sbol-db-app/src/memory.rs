@@ -107,6 +107,7 @@ impl UserStore for InMemoryUserStore {
             return Err(DomainError::NotFound(format!("user {}", user.id)));
         };
         existing.name = user.name.clone();
+        existing.email = user.email.clone();
         existing.affiliation = user.affiliation.clone();
         existing.is_admin = user.is_admin;
         existing.is_curator = user.is_curator;

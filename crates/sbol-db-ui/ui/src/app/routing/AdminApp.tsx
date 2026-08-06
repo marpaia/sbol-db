@@ -1,8 +1,13 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 
 import { Skeleton } from "@/components/ui/skeleton";
-import { adminRouteSegment } from "@/app/routing/adminManifest";
+import {
+  adminRouteSegment,
+  isAdminDestinationAvailable,
+  type AdminDestinationId,
+} from "@/app/routing/adminManifest";
+import { useBackendInfo } from "@/features/admin/backend/queries";
 import { adminPath } from "@/lib/routes";
 
 const AdminGate = lazy(() => import("@/routes/AdminGate"));
@@ -87,14 +92,29 @@ export default function AdminApp() {
               path={adminRouteSegment("sparql")}
               element={<SparqlRoute />}
             />
-            <Route path={adminRouteSegment("sql")} element={<SqlRoute />} />
+            <Route
+              path={adminRouteSegment("sql")}
+              element={
+                <AvailableRoute id="sql">
+                  <SqlRoute />
+                </AvailableRoute>
+              }
+            />
             <Route
               path={adminRouteSegment("schema")}
-              element={<SchemaRoute />}
+              element={
+                <AvailableRoute id="schema">
+                  <SchemaRoute />
+                </AvailableRoute>
+              }
             />
             <Route
               path={`${adminRouteSegment("schema")}/tables/:name`}
-              element={<TableDetailRoute />}
+              element={
+                <AvailableRoute id="schema">
+                  <TableDetailRoute />
+                </AvailableRoute>
+              }
             />
             <Route
               path={`${adminRouteSegment("schema")}/tables/:schema/:name`}
@@ -151,7 +171,11 @@ export default function AdminApp() {
             />
             <Route
               path={adminRouteSegment("maintenance")}
-              element={<MaintenanceRoute />}
+              element={
+                <AvailableRoute id="maintenance">
+                  <MaintenanceRoute />
+                </AvailableRoute>
+              }
             />
             <Route
               path="observability/postgres"
@@ -200,6 +224,21 @@ export default function AdminApp() {
       </Routes>
     </Suspense>
   );
+}
+
+function AvailableRoute({
+  id,
+  children,
+}: {
+  id: AdminDestinationId;
+  children: ReactNode;
+}) {
+  const info = useBackendInfo();
+  if (info.isLoading) return <AdminEntryLoading />;
+  if (!isAdminDestinationAvailable(id, info.data)) {
+    return <Navigate to={adminPath()} replace />;
+  }
+  return children;
 }
 
 function RedirectToSchemaTable() {

@@ -44,13 +44,17 @@ collapses the repeated `id2term` lookups a nested-loop join would otherwise make
 | `id2term` | Term dictionary: 16-byte term id to reversible term encoding. |
 | `dspo`, `dpos`, `dosp` | Default-graph permuted triple indexes (3-id keys). |
 | `spog`, `posg`, `ospg`, `gspo`, `gpos`, `gosp` | Named-graph permuted triple indexes (4-id keys). |
-| `graph_meta`, `graph_hash` | Document-graph registry. |
+| `graph_meta`, `graph_hash` | Native document metadata and content-hash deduplication. Named-graph existence itself comes from `gspo`. |
+| `verbatim_graph_meta` | Optional provenance/count overlay for a copied verbatim graph; not the graph inventory. |
+| `catalog_graph`, `catalog_graph_by_iri` | Universal named-graph records and their IRI-ordered keyset index. |
+| `catalog_resource_refcount`, `catalog_sequence_refcount` | Exact graph-occurrence counts per RDF resource and sequence IRI. |
+| `catalog_class_resource_refcount`, `catalog_class_count` | Exact distinct-resource counts for each RDF class. |
 | `objects`, `obj_by_id`, `obj_by_graph` | Derived object view. |
 | `ont`, `ont_term`, `ont_term_idx`, `ont_alias`, `ont_alias_idx`, `ont_closure`, `ont_closure_idx` | Ontology, terms, aliases, and transitive closure with per-prefix secondary indexes. |
 | `seq`, `seq_kmer`, `seq_kmer_by_iri` | Sequences and the k-mer seed index. |
 | `job`, `job_idem`, `job_attempt`, `job_log`, `job_ready` | Async job queue. |
-| `acc_meta`, `acc_toplevel`, `acc_bytype`, `acc_member`, `acc_rootmember`, `acc_facet`, `acc_count`, `acc_dirty` | SynBioHub query accelerator. |
-| `meta` | Schema version and counters. |
+| `acc_meta`, `acc_meta_by_iri`, `acc_toplevel`, `acc_bytype`, `acc_member`, `acc_rootmember`, `acc_facet`, `acc_count`, `acc_dirty` | SynBioHub query accelerator and global Admin resource catalog. |
+| `meta` | Schema version, exact catalog stats, generation readiness, and other counters. |
 
 Composite secondary-index keys join their parts with a unit-separator byte
 (`SEP = 0x1F`). That byte cannot occur in an IRI or a CURIE, so concatenated key
@@ -103,7 +107,15 @@ binds P, so it scans `dpos`; `(s ?p ?o)` binds S and scans `dspo`; a pattern
 that binds the graph scans one of the `g*` indexes. Keeping all nine permutations
 means every triple pattern has an index whose prefix covers its bound positions.
 
-## Document-graph registry
+## Universal named-graph catalog
+
+Canonical named triples are authoritative graph contents. `catalog_graph`
+provides the one graph inventory used by product and Admin APIs, whether the
+graph came from a native document import, Graph Store/SPARQL writes, or a
+reconciled backend conversion. `catalog_graph_by_iri` makes filtering and
+keyset pagination proportional to the returned graphs. `graph_meta` and
+`verbatim_graph_meta` are compatibility/provenance inputs used when rebuilding
+that universal catalog; they are not alternate Admin inventories.
 
 | Column family | Key | Value |
 | --- | --- | --- |
@@ -111,6 +123,14 @@ means every triple pattern has an index whose prefix covers its bound positions.
 | `graph_hash` | content hash bytes | the graph id, for content-hash dedup |
 
 ## Derived object view
+
+These rows are a rebuildable native-object cache, not the definition of which
+RDF resources exist. The universal resource catalog pages the globally
+IRI-ordered `acc_meta_by_iri` projection, so verbatim and native-import
+resources have one representation. A database containing RDF but lacking that
+projection is not served as an empty corpus: startup fails closed until the
+versioned migration rebuilds it. Native imports continue to maintain the rows
+below for compatibility object APIs.
 
 | Column family | Key | Value |
 | --- | --- | --- |
@@ -129,6 +149,13 @@ exist so a reload can find and delete every row belonging to one prefix by
 prefix scan, then re-insert; reloading an ontology never touches another's rows.
 
 ## Sequences
+
+The sequence families are an optimized substring-search projection. The Admin
+sequence catalog is broader: sequence identity comes from the universal RDF
+type projection, and elements/encoding are read from canonical triples. Missing
+`seq` rows therefore do not make the Admin corpus appear empty. For a converted
+verbatim corpus, sequence search can also take the exact nucleotide IRI set
+from `seq_sketch` and project `sbol:elements` from the predicate index.
 
 `seq` holds one record per nucleotide sequence, keyed by sequence IRI. The k-mer
 seed index that backs substring + reverse-complement search is stored two ways:
@@ -162,14 +189,20 @@ first ready job. A per-job log id counter lives in `meta` as a big-endian u64.
 
 Per-graph derived indexes that answer SynBioHub's fixed query templates with
 point lookups and range scans. They derive from a graph's triples (the same
-derivation every backend shares); a write marks the graph dirty and the next read
-that needs them rebuilds in one pass. All keys are SEP-joined and start with the
-graph IRI.
+derivation every backend shares); graph writes refresh them in the same atomic
+batch as the canonical triples. Composite keys are SEP-joined. Query indexes
+start with the graph IRI; the Admin catalog's reverse projection starts with the
+resource IRI so a page is one global range scan.
 
 | Column family | Key shape | Holds |
 | --- | --- | --- |
 | `acc_dirty` | graph | presence means the graph's indexes are stale |
 | `acc_meta` | graph ++ iri | the object's projected metadata as a JSON `MetaRecord` |
+| `acc_meta_by_iri` | iri ++ graph | the same metadata, ordered for distinct global resource pagination |
+| `catalog_resource_refcount` | resource iri | exact number of graph occurrences |
+| `catalog_sequence_refcount` | sequence iri | exact number of graph occurrences |
+| `catalog_class_resource_refcount` | resource iri ++ class iri | per-resource class occurrence count |
+| `catalog_class_count` | class iri | exact number of distinct resources with the class |
 | `acc_toplevel` | graph ++ displayId ++ iri | top-level objects in sort order |
 | `acc_bytype` | graph ++ type ++ displayId ++ iri | objects by `rdf:type`, in sort order |
 | `acc_member` | graph ++ collection ++ displayId ++ iri | collection memberships |
@@ -179,16 +212,20 @@ graph IRI.
 
 ## Migrations
 
-RocksDB is schemaless: every column family is created when the database is
-opened, so there is nothing to apply. The migrator writes a `schema_version`
-marker into the `meta` column family so the CLI's `db migrate` and `db status`
-commands have something to report. The current schema version is 1.
+Opening RocksDB creates missing column families, but logical projections are
+versioned migrations. Schema version 2 rebuilds the reverse resource index,
+graph catalog, resource/sequence/class reference counts, and exact stats from
+canonical RDF plus durable compatibility metadata. The rebuild is deterministic
+and resumable: its generation marker is deleted first and written only after
+all projection pages and counters commit. Until that marker exists, a database
+with source RDF returns an explicit unavailable error instructing the operator
+to run `sbol-db db migrate`; it never renders a misleading empty corpus.
 
 ## Not yet on RocksDB
 
 A few Postgres surfaces are not part of the RocksDB layout, and are not part of
-the neutral contract either: the validation-findings audit trail, the typed
-projection tables (`sbol_components` and siblings), and engine introspection.
+the neutral contract either: the validation-findings audit trail and the typed
+projection tables (`sbol_components` and siblings). RocksDB exposes LSM engine
+introspection rather than relational tables, SQL sessions, locks, or pools.
 Validation still runs during import and its status is returned in the
-`ImportReport`; RocksDB reports a validation-run count of zero because it keeps
-no findings family. See the [capability matrix](storage.md#capability-matrix).
+`ImportReport`. See the [capability matrix](storage.md#capability-matrix).

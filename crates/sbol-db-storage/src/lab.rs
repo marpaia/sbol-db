@@ -20,7 +20,9 @@ pub struct CorpusCounts {
     pub ontologies: i64,
 }
 
-/// One graph row for the browser: any kind, with its object and triple counts.
+/// One graph row for the browser. The graph IRI is canonical; the remaining
+/// fields are catalog metadata and may be absent for a graph discovered
+/// directly from a verbatim RDF quad store.
 #[derive(Clone, Debug, Serialize)]
 pub struct GraphOverview {
     pub id: GraphId,
@@ -29,9 +31,9 @@ pub struct GraphOverview {
     pub name: Option<String>,
     pub source_uri: Option<String>,
     pub serialization_format: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub object_count: i64,
-    pub triple_count: i64,
+    pub created_at: Option<DateTime<Utc>>,
+    pub object_count: Option<i64>,
+    pub triple_count: Option<i64>,
 }
 
 /// One `(sbol_class, count)` bucket for the top-classes breakdown.
@@ -43,7 +45,10 @@ pub struct ClassCount {
 
 /// A page of a graph's triples plus the total count for pagination.
 pub struct GraphTriplesPage {
-    pub total: i64,
+    /// Exact when the backend has a maintained graph catalog. A graph
+    /// discovered directly from its quad index can still be paged without
+    /// forcing an O(graph-size) count first.
+    pub total: Option<i64>,
     pub triples: Vec<Triple>,
 }
 

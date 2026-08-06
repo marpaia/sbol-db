@@ -1,20 +1,14 @@
 /**
- * Typed object detail. Resolves an IRI via `GET /objects` and surfaces
- * the typed record: class, display id, name, types, roles, version, and
- * the raw `data` JSON. Action buttons let the user re-emit the object
- * subgraph as RDF (Turtle / JSON-LD / RDF/XML / N-Triples) or jump to
- * the neighborhood traversal viewer pre-filled with this IRI.
+ * Backend-neutral RDF resource detail. Metadata is projected from canonical
+ * triples and every named-graph occurrence remains visible.
  */
 
-import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
   Copy,
-  Download,
   ExternalLink,
   GitBranch,
-  Loader2,
   TriangleAlert,
 } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -23,43 +17,32 @@ import { AdminPage } from "@/components/admin/AdminPage";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { Button } from "@/components/ui/button";
 import { useObjectByIri } from "@/features/admin/objects/queries";
-import {
-  exportObjectRdf,
-  type SbolObjectRecord,
-} from "@/features/admin/objects/api";
-import {
-  SERIALIZATION_FORMATS,
-  serializationLabel,
-  type SerializationFormat,
-} from "@/features/admin/imports/api";
+import type { SbolObjectRecord } from "@/features/admin/objects/api";
+import type { CatalogResourceOccurrence } from "@/features/admin/api";
 import { HttpError } from "@/shared/api/http";
-import { describeError } from "@/lib/utils";
 import { adminPath, publicObjectPath } from "@/lib/routes";
-
-const FORMAT_EXTENSION: Record<SerializationFormat, string> = {
-  turtle: "ttl",
-  jsonld: "jsonld",
-  rdfxml: "rdf",
-  ntriples: "nt",
-};
 
 export default function ObjectDetailRoute() {
   const params = useParams<{ iri: string }>();
   const iri = decodeURIComponent(params.iri ?? "");
   const navigate = useNavigate();
   const { data, error, isLoading } = useObjectByIri(iri);
-  const title = data?.name ?? data?.display_id ?? "Technical object inspector";
+  const object = data?.resource;
+  const title =
+    firstValue(object?.meta.name) ||
+    firstValue(object?.meta.display_id) ||
+    "Technical resource inspector";
 
   return (
     <AdminPage
       title={title}
-      description="Storage-level object projection, typed properties, raw data, graph traversal, and serialization controls."
+      description="Canonical RDF resource properties and every named graph in which they occur."
       eyebrow="Data model · Technical inspector"
       maxWidth="5xl"
       action={
-        data ? (
+        object ? (
           <Button asChild variant="outline" size="sm">
-            <Link to={publicObjectPath(data.iri)}>
+            <Link to={publicObjectPath(object.iri)}>
               <ExternalLink />
               Open registry view
             </Link>
@@ -72,31 +55,32 @@ export default function ObjectDetailRoute() {
         className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
       >
         <ChevronLeft size={12} />
-        Object browser
+        Resource browser
       </Link>
 
       {error instanceof HttpError && error.status === 404 ? (
         <NotFound iri={iri} />
       ) : error ? (
         <ErrorBanner
-          title="Couldn't load object"
+          title="Couldn't load resource"
           body={(error as Error).message}
         />
-      ) : isLoading || !data ? (
+      ) : isLoading || !object || !data ? (
         <Skeleton />
       ) : (
         <>
-          <Header object={data} />
+          <Header object={object} />
           <Actions
-            object={data}
+            object={object}
             onNeighborhood={() =>
               navigate(
-                adminPath(`/neighborhood?iri=${encodeURIComponent(data.iri)}`)
+                adminPath(`/neighborhood?iri=${encodeURIComponent(object.iri)}`)
               )
             }
           />
-          <Properties object={data} />
-          <RawData object={data} />
+          <Properties object={object} />
+          <Occurrences occurrences={data.occurrences} />
+          <RawData object={object} />
         </>
       )}
     </AdminPage>
@@ -124,9 +108,9 @@ function Header({ object }: { object: SbolObjectRecord }) {
           <Copy size={14} />
         </button>
       </div>
-      {object.sbol_class && (
+      {(object.meta.types?.length ?? 0) > 0 && (
         <div className="mt-1 font-mono text-[11px] text-muted-foreground">
-          a <span className="text-foreground">{object.sbol_class}</span>
+          a <span className="text-foreground">{object.meta.types?.[0]}</span>
         </div>
       )}
     </section>
@@ -140,29 +124,6 @@ function Actions({
   object: SbolObjectRecord;
   onNeighborhood: () => void;
 }) {
-  const [format, setFormat] = useState<SerializationFormat>("turtle");
-  const [phase, setPhase] = useState<
-    "idle" | "loading" | { kind: "error"; msg: string }
-  >("idle");
-
-  const onDownload = async () => {
-    setPhase("loading");
-    try {
-      const text = await exportObjectRdf(object.id, format);
-      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const base = (object.display_id ?? object.id).replace(/\s+/g, "-");
-      a.download = `${base}.${FORMAT_EXTENSION[format]}`;
-      a.click();
-      URL.revokeObjectURL(url);
-      setPhase("idle");
-    } catch (err) {
-      setPhase({ kind: "error", msg: describeError(err) });
-    }
-  };
-
   const isHttp = /^https?:\/\//i.test(object.iri);
 
   return (
@@ -176,36 +137,6 @@ function Actions({
         Walk neighborhood
       </button>
 
-      <div className="ml-2 flex items-center gap-1.5">
-        <label className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-          Export
-        </label>
-        <select
-          value={format}
-          onChange={(e) => setFormat(e.target.value as SerializationFormat)}
-          className="rounded-md border bg-background px-2 py-1 text-xs text-foreground outline-none focus:ring-1 focus:ring-ring"
-        >
-          {SERIALIZATION_FORMATS.map((f) => (
-            <option key={f} value={f}>
-              {serializationLabel(f)}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          onClick={onDownload}
-          disabled={phase === "loading"}
-          className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1 text-xs font-medium transition-colors hover:bg-accent/40 disabled:opacity-50"
-        >
-          {phase === "loading" ? (
-            <Loader2 size={12} className="animate-spin" />
-          ) : (
-            <Download size={12} />
-          )}
-          Download
-        </button>
-      </div>
-
       {isHttp && (
         <a
           href={object.iri}
@@ -218,9 +149,6 @@ function Actions({
         </a>
       )}
 
-      {typeof phase === "object" && phase.kind === "error" && (
-        <div className="w-full text-xs text-destructive">{phase.msg}</div>
-      )}
     </section>
   );
 }
@@ -229,16 +157,14 @@ function Properties({ object }: { object: SbolObjectRecord }) {
   return (
     <section className="rounded-lg border bg-card px-4 py-3">
       <dl className="grid gap-3 text-sm sm:grid-cols-2">
-        <Pair label="Display ID" value={object.display_id} />
-        <Pair label="Version" value={object.version} />
-        <Pair
-          label="Persistent identity"
-          value={object.persistent_identity}
-          mono
-        />
-        <Pair label="Created" value={object.created_at ?? null} />
-        <PairList label="Types" values={object.types ?? []} />
-        <PairList label="Roles" values={object.roles ?? []} />
+        <Pair label="Display ID" value={firstValue(object.meta.display_id)} />
+        <Pair label="Name" value={firstValue(object.meta.name)} />
+        <Pair label="Version" value={firstValue(object.meta.version)} />
+        <Pair label="Named graphs" value={object.graph_count.toLocaleString()} />
+        <PairList label="RDF classes" values={object.meta.types ?? []} />
+        <PairList label="SBOL types" values={object.meta.sbol_types ?? []} />
+        <PairList label="Roles" values={object.meta.roles ?? []} />
+        <PairList label="Creators" values={object.meta.creators ?? []} />
       </dl>
     </section>
   );
@@ -295,14 +221,35 @@ function PairList({ label, values }: { label: string; values: string[] }) {
 }
 
 function RawData({ object }: { object: SbolObjectRecord }) {
-  if (!object.data) return null;
-  const json = JSON.stringify(object.data, null, 2);
+  const json = JSON.stringify(object.meta, null, 2);
   return (
     <section>
       <SectionLabel>Raw projection</SectionLabel>
       <pre className="max-h-96 overflow-auto rounded-lg border bg-card px-4 py-3 font-mono text-[11px] text-foreground">
         {json}
       </pre>
+    </section>
+  );
+}
+
+function Occurrences({
+  occurrences,
+}: {
+  occurrences: CatalogResourceOccurrence[];
+}) {
+  return (
+    <section>
+      <SectionLabel>Named graph occurrences ({occurrences.length})</SectionLabel>
+      <ul className="divide-y rounded-lg border bg-card px-4">
+        {occurrences.map((occurrence) => (
+          <li
+            key={occurrence.graph_iri}
+            className="py-2 font-mono text-[11px] text-foreground"
+          >
+            {occurrence.graph_iri}
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -316,9 +263,9 @@ function NotFound({ iri }: { iri: string }) {
         aria-hidden
       />
       <div>
-        <div className="font-medium text-foreground">Object not found</div>
+        <div className="font-medium text-foreground">Resource not found</div>
         <div className="mt-0.5 text-muted-foreground">
-          No object at <code className="font-mono">{iri}</code>.
+          No typed RDF resource at <code className="font-mono">{iri}</code>.
         </div>
       </div>
     </div>
@@ -346,4 +293,8 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function shortIri(iri: string): string {
   const m = iri.match(/[#/]([^#/]+)$/);
   return m ? m[1] : iri;
+}
+
+function firstValue(values?: Array<{ value: string }>): string {
+  return values?.[0]?.value ?? "";
 }

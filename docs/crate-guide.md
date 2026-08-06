@@ -103,9 +103,9 @@ The boundaries matter:
 
 ## Storage model
 
-This section describes the default Postgres backend's layout; the
-contract it satisfies is the `sbol-db-storage` traits, and the SQLite
-and RocksDB backends lay the same data out differently. See
+This section uses the Postgres backend's relational layout as a concrete
+example; the contract it satisfies is the `sbol-db-storage` traits, and the
+primary RocksDB runtime and SQLite backend lay the same data out differently. See
 [`storage.md`](storage.md) for the contract and the per-backend layout
 references.
 

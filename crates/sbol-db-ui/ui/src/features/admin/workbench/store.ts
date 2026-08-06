@@ -57,21 +57,17 @@ interface WorkbenchState {
 const HISTORY_CAP = 50;
 const SEQ_PATTERN_CAP = 20;
 
-const DEFAULT_SPARQL = `PREFIX sbol: <http://sbols.org/v3#>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-
-SELECT ?component ?name WHERE {
-  ?component a sbol:Component .
-  OPTIONAL { ?component sbol:name ?name }
+const DEFAULT_SPARQL = `SELECT ?resource ?class WHERE {
+  ?resource a ?class .
 }
 LIMIT 25
 `;
 
-const DEFAULT_SQL = `-- Top SBOL classes by row count.
-SELECT sbol_class, count(*) AS objects
+const DEFAULT_SQL = `-- RDF resources by class.
+SELECT sbol_class, count(*) AS resources
 FROM sbol_objects
 GROUP BY sbol_class
-ORDER BY objects DESC
+ORDER BY resources DESC
 LIMIT 25;
 `;
 

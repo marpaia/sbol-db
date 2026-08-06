@@ -480,7 +480,7 @@ function Status({ phase, onDone }: { phase: Phase; onDone: () => void }) {
         </button>
       </div>
       <dl className="mt-3 grid grid-cols-3 gap-2">
-        <Stat label="Objects" value={r.object_count} />
+        <Stat label="Resources" value={r.object_count} />
         <Stat label="Triples" value={r.triple_count} />
         <Stat
           label="Validation"

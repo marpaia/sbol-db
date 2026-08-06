@@ -1,10 +1,10 @@
 /**
- * Landing page for the lab. Pulls everything from /lab/api/overview
+ * Admin dashboard backed by the universal RDF catalog.
  * and lays it out as a one-screen data dashboard:
  *
  *  - Corpus counts (objects, graphs, triples, sequences, …)
- *  - Top SBOL classes by row count
- *  - Recent graphs
+ *  - Top RDF classes by resource count
+ *  - Named graphs
  *  - Loaded ontologies
  *  - Quick-start query templates for SPARQL and SQL
  *
@@ -24,7 +24,6 @@ import {
   Network,
   Play,
   Plus,
-  ShieldCheck,
   Share2,
 } from "lucide-react";
 
@@ -38,6 +37,7 @@ import {
   ProductSurfaceHeader,
 } from "@/components/product/ProductSurface";
 import { overviewKeys, useOverview } from "@/features/admin/overview/queries";
+import { useBackendInfo } from "@/features/admin/backend/queries";
 import { schemaKeys } from "@/features/admin/schema/queries";
 import {
   type Dialect,
@@ -47,6 +47,7 @@ import { adminPath } from "@/lib/routes";
 
 export default function DashboardRoute() {
   const { data, isLoading, error } = useOverview();
+  const { data: backend } = useBackendInfo();
   const navigate = useNavigate();
   const setBuffer = useWorkbenchStore((s) => s.setBuffer);
   const queryClient = useQueryClient();
@@ -80,7 +81,6 @@ export default function DashboardRoute() {
   }
 
   const c = data?.counts;
-
   return (
     <>
       <AdminPage
@@ -91,17 +91,17 @@ export default function DashboardRoute() {
       >
         <section>
           <SectionLabel>Corpus</SectionLabel>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
             <KpiTile
               icon={Boxes}
-              label="Objects"
-              value={c?.objects}
+              label="Resources"
+              value={c?.resources}
               loading={isLoading}
             />
             <KpiTile
               icon={Share2}
               label="Graphs"
-              value={c?.graphs}
+              value={c?.named_graphs}
               loading={isLoading}
             />
             <KpiTile
@@ -117,14 +117,8 @@ export default function DashboardRoute() {
               loading={isLoading}
             />
             <KpiTile
-              icon={ShieldCheck}
-              label="Validation runs"
-              value={c?.validation_runs}
-              loading={isLoading}
-            />
-            <KpiTile
               icon={Library}
-              label="Ontologies"
+              label="Loaded ontologies"
               value={c?.ontologies}
               loading={isLoading}
             />
@@ -133,7 +127,7 @@ export default function DashboardRoute() {
 
         <div className="grid lg:grid-cols-2 gap-6">
           <Panel
-            title="Top SBOL classes"
+            title="Top RDF classes"
             subtitle={
               data && data.top_classes.length > 0
                 ? `${data.top_classes.length} classes in use`
@@ -143,7 +137,7 @@ export default function DashboardRoute() {
             {isLoading ? (
               <Skeleton lines={4} />
             ) : data?.top_classes.length === 0 ? (
-              <Empty>No SBOL objects in the database yet.</Empty>
+              <Empty>No typed RDF resource classes are available yet.</Empty>
             ) : (
               <ul className="divide-y">
                 {data?.top_classes.map((cls) => (
@@ -153,12 +147,7 @@ export default function DashboardRoute() {
                   >
                     <button
                       type="button"
-                      onClick={() =>
-                        launch(
-                          "sparql",
-                          `PREFIX sbol: <http://sbols.org/v3#>\nSELECT ?s ?name WHERE {\n  ?s a <${cls.iri}> .\n  OPTIONAL { ?s sbol:name ?name }\n}\nLIMIT 25\n`
-                        )
-                      }
+                      onClick={() => launch("sparql", classQuery(cls.iri))}
                       className="flex-1 truncate text-left font-mono text-foreground hover:underline"
                       title={`Query for ${cls.iri}`}
                     >
@@ -229,16 +218,16 @@ export default function DashboardRoute() {
         </div>
 
         <Panel
-          title="Recent graphs"
-          subtitle={data ? `last ${data.recent_graphs.length}` : undefined}
+          title="Named graphs"
+          subtitle={data ? `${data.graphs.length} shown` : undefined}
         >
           {isLoading ? (
             <Skeleton lines={3} />
-          ) : data?.recent_graphs.length === 0 ? (
+          ) : data?.graphs.length === 0 ? (
             <Empty>No graphs yet.</Empty>
           ) : (
             <ul className="divide-y">
-              {data?.recent_graphs.map((d) => (
+              {data?.graphs.map((d) => (
                 <li key={d.id}>
                   <Link
                     to={adminPath(`/graphs/${d.id}`)}
@@ -249,10 +238,14 @@ export default function DashboardRoute() {
                         {displayName(d)}
                       </span>
                       <span className="text-xs tabular-nums text-muted-foreground">
-                        {d.object_count.toLocaleString()} objects
+                        {d.triple_count === null
+                          ? "RDF graph"
+                          : `${d.triple_count.toLocaleString()} triples`}
                       </span>
                       <span className="w-28 shrink-0 text-right text-xs text-muted-foreground">
-                        {formatRelative(d.created_at)}
+                        {d.created_at
+                          ? formatRelative(d.created_at)
+                          : "Not catalogued"}
                       </span>
                     </div>
                     {d.source_uri && (
@@ -273,51 +266,55 @@ export default function DashboardRoute() {
             <Template
               dialect="sparql"
               icon={<Network className="size-3.5" />}
-              title="All components"
-              description="SELECT every sbol:Component along with its name."
+              title="Typed RDF resources"
+              description="SELECT resources, their RDF classes, and any available label."
               onClick={() =>
                 launch(
                   "sparql",
-                  `PREFIX sbol: <http://sbols.org/v3#>\nSELECT ?component ?name WHERE {\n  ?component a sbol:Component .\n  OPTIONAL { ?component sbol:name ?name }\n}\nLIMIT 50\n`
+                  `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\nPREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\nPREFIX dcterms: <http://purl.org/dc/terms/>\nPREFIX sbol2: <http://sbols.org/v2#>\nPREFIX sbol3: <http://sbols.org/v3#>\nSELECT ?resource ?class ?name WHERE {\n  ?resource rdf:type ?class .\n  OPTIONAL {\n    VALUES ?labelPredicate { rdfs:label dcterms:title sbol2:name sbol3:name }\n    ?resource ?labelPredicate ?name .\n  }\n}\nLIMIT 50\n`
                 )
               }
             />
             <Template
               dialect="sparql"
               icon={<Network className="size-3.5" />}
-              title="Component roles, counted"
-              description="Group every component by its role IRI."
+              title="Resources by RDF class"
+              description="Count distinct resources for every RDF class."
               onClick={() =>
                 launch(
                   "sparql",
-                  `PREFIX sbol: <http://sbols.org/v3#>\nSELECT ?role (count(?c) AS ?n) WHERE {\n  ?c a sbol:Component ;\n     sbol:hasRole ?role .\n}\nGROUP BY ?role\nORDER BY DESC(?n)\n`
+                  `SELECT ?class (COUNT(DISTINCT ?resource) AS ?resources) WHERE {\n  ?resource a ?class .\n}\nGROUP BY ?class\nORDER BY DESC(?resources)\n`
                 )
               }
             />
-            <Template
-              dialect="sql"
-              icon={<Database className="size-3.5" />}
-              title="Objects per SBOL class"
-              description="Distribution of sbol_class across the projection table."
-              onClick={() =>
-                launch(
-                  "sql",
-                  `SELECT sbol_class, count(*) AS objects\nFROM sbol_objects\nGROUP BY sbol_class\nORDER BY objects DESC;\n`
-                )
-              }
-            />
-            <Template
-              dialect="sql"
-              icon={<Database className="size-3.5" />}
-              title="Nucleotide sequences with length"
-              description="Length and alphabet for every stored sequence."
-              onClick={() =>
-                launch(
-                  "sql",
-                  `SELECT s.object_id, o.iri, s.alphabet, s.length_bp\nFROM sbol_sequences s\nJOIN sbol_objects o ON o.id = s.object_id\nORDER BY s.length_bp DESC NULLS LAST\nLIMIT 50;\n`
-                )
-              }
-            />
+            {backend?.capabilities.sql_console && (
+              <>
+                <Template
+                  dialect="sql"
+                  icon={<Database className="size-3.5" />}
+                  title="Resources per RDF class"
+                  description="Distribution of RDF class across the resource projection."
+                  onClick={() =>
+                    launch(
+                      "sql",
+                      `SELECT sbol_class, count(*) AS resources\nFROM sbol_objects\nGROUP BY sbol_class\nORDER BY resources DESC;\n`
+                    )
+                  }
+                />
+                <Template
+                  dialect="sql"
+                  icon={<Database className="size-3.5" />}
+                  title="Nucleotide sequences with length"
+                  description="Length and alphabet for every stored sequence."
+                  onClick={() =>
+                    launch(
+                      "sql",
+                      `SELECT s.object_id, o.iri, s.alphabet, s.length_bp\nFROM sbol_sequences s\nJOIN sbol_objects o ON o.id = s.object_id\nORDER BY s.length_bp DESC NULLS LAST\nLIMIT 50;\n`
+                    )
+                  }
+                />
+              </>
+            )}
           </div>
         </section>
       </AdminPage>
@@ -416,6 +413,10 @@ function Empty({ children }: { children: React.ReactNode }) {
 function shortIri(iri: string): string {
   const m = iri.match(/[#/]([^#/]+)$/);
   return m ? m[1] : iri;
+}
+
+function classQuery(iri: string): string {
+  return `PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\nPREFIX dcterms: <http://purl.org/dc/terms/>\nPREFIX sbol2: <http://sbols.org/v2#>\nPREFIX sbol3: <http://sbols.org/v3#>\nSELECT ?resource ?name WHERE {\n  ?resource a <${iri}> .\n  OPTIONAL {\n    VALUES ?labelPredicate { rdfs:label dcterms:title sbol2:name sbol3:name }\n    ?resource ?labelPredicate ?name .\n  }\n}\nLIMIT 25\n`;
 }
 
 function displayName(d: {

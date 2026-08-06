@@ -4,6 +4,7 @@ export {
   fetchAdminUsers,
   updateAdminUser,
   type AdminUser,
+  type AdminUsersQuery,
   type AdminUsersResponse,
   type CreateAdminUser,
   type UpdateAdminUser,

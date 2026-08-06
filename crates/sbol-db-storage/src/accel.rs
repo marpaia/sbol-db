@@ -1,4 +1,4 @@
-//! The SynBioHub query accelerator contract.
+//! The canonical RDF catalog projection and SynBioHub query accelerator.
 //!
 //! SynBioHub issues a fixed set of SPARQL templates whose results are, in
 //! effect, "enumerate a set of top-level objects and return a metadata bundle
@@ -30,6 +30,12 @@ const TITLE: &str = "http://purl.org/dc/terms/title";
 const DESCRIPTION: &str = "http://purl.org/dc/terms/description";
 const CREATOR: &str = "http://purl.org/dc/elements/1.1/creator";
 const MEMBER: &str = "http://sbols.org/v2#member";
+const SBOL2_SEQUENCE: &str = "http://sbols.org/v2#Sequence";
+const SBOL3_SEQUENCE: &str = "http://sbols.org/v3#Sequence";
+const SBOL2_ELEMENTS: &str = "http://sbols.org/v2#elements";
+const SBOL3_ELEMENTS: &str = "http://sbols.org/v3#elements";
+const SBOL2_ENCODING: &str = "http://sbols.org/v2#encoding";
+const SBOL3_ENCODING: &str = "http://sbols.org/v3#encoding";
 
 /// BioPAX prefix `sbol2:type` values are filtered to (for the `?sbolType` column).
 pub const BIOPAX_PREFIX: &str = "http://www.biopax.org/release/biopax-level3.owl";
@@ -38,7 +44,7 @@ pub const SO_PREFIX: &str = "http://identifiers.org/so/";
 
 /// A literal value with its datatype/language, preserved so accelerated results
 /// are byte-identical to what the generic engine would emit.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LitVal {
     pub value: String,
     pub datatype: String,
@@ -49,7 +55,7 @@ pub struct LitVal {
 /// Per-object metadata the SynBioHub queries project. Literal fields are
 /// multi-valued: SPARQL `OPTIONAL` yields one row per value, so a faithful
 /// accelerator preserves every value (most objects have exactly one).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MetaRecord {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub display_id: Vec<LitVal>,
@@ -96,6 +102,26 @@ pub struct AccelIndex {
     pub members: Vec<(String, String)>,
     /// (collection, member) for members not referenced by another member.
     pub root_members: Vec<(String, String)>,
+    /// SBOL2 and SBOL3 sequences projected directly from the graph's RDF.
+    pub sequences: Vec<CatalogSequenceProjection>,
+}
+
+/// Sequence fields needed by the universal catalog and sequence-search index.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogSequenceProjection {
+    pub iri: String,
+    pub encoding_iri: Option<String>,
+    pub elements: Option<String>,
+}
+
+/// Catalog terminology for the existing accelerator projection. Kept as an
+/// alias so SynBioHub query acceleration and product catalog reads cannot drift
+/// into separate RDF derivation implementations.
+pub type CatalogProjection = AccelIndex;
+
+/// Derive the complete backend-neutral catalog projection for one named graph.
+pub fn build_catalog_projection(triples: &[Triple]) -> CatalogProjection {
+    build_accel_index(triples)
 }
 
 /// Compute the accelerator index for a graph from its triples. Pure and
@@ -106,6 +132,7 @@ pub struct AccelIndex {
 /// references it directly or via a child).
 pub fn build_accel_index(triples: &[Triple]) -> AccelIndex {
     let mut metas: HashMap<String, MetaRecord> = HashMap::new();
+    let mut sequence_values: HashMap<String, CatalogSequenceProjection> = HashMap::new();
     let mut members_of: HashMap<String, Vec<String>> = HashMap::new();
     // The blank-node-spanning reference adjacency, shared with the PageRank link
     // graph so the traversal has a single implementation.
@@ -159,6 +186,28 @@ pub fn build_accel_index(triples: &[Triple]) -> AccelIndex {
                     m.creators.push(v);
                 }
             }
+            SBOL2_ELEMENTS | SBOL3_ELEMENTS => {
+                if let ObjectTerm::Literal { value, .. } = &t.object {
+                    sequence_values
+                        .entry(subject.to_owned())
+                        .or_insert_with(|| CatalogSequenceProjection {
+                            iri: subject.to_owned(),
+                            ..Default::default()
+                        })
+                        .elements = Some(value.clone());
+                }
+            }
+            SBOL2_ENCODING | SBOL3_ENCODING => {
+                if let ObjectTerm::Iri(encoding) = &t.object {
+                    sequence_values
+                        .entry(subject.to_owned())
+                        .or_insert_with(|| CatalogSequenceProjection {
+                            iri: subject.to_owned(),
+                            ..Default::default()
+                        })
+                        .encoding_iri = Some(encoding.as_str().to_owned());
+                }
+            }
             _ => {}
         }
     }
@@ -193,14 +242,41 @@ pub fn build_accel_index(triples: &[Triple]) -> AccelIndex {
         }
     }
 
+    // A sequence is identified by its RDF type. A partial sequence carrying an
+    // elements/encoding predicate is retained only when that type assertion is
+    // present, avoiding accidental catalog entries for unrelated vocabularies.
+    sequence_values.retain(|iri, _| {
+        metas.get(iri).is_some_and(|meta| {
+            meta.types
+                .iter()
+                .any(|ty| ty == SBOL2_SEQUENCE || ty == SBOL3_SEQUENCE)
+        })
+    });
+    for (iri, meta) in &metas {
+        if meta
+            .types
+            .iter()
+            .any(|ty| ty == SBOL2_SEQUENCE || ty == SBOL3_SEQUENCE)
+        {
+            sequence_values
+                .entry(iri.clone())
+                .or_insert_with(|| CatalogSequenceProjection {
+                    iri: iri.clone(),
+                    ..CatalogSequenceProjection::default()
+                });
+        }
+    }
+
     let objects = metas
         .into_iter()
         .map(|(iri, meta)| AccelObject { iri, meta })
         .collect();
+    let sequences = sequence_values.into_values().collect();
     AccelIndex {
         objects,
         members,
         root_members,
+        sequences,
     }
 }
 

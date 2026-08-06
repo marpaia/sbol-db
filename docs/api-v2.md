@@ -456,8 +456,9 @@ use the same bearer token accepted elsewhere in V2.
 | Section | Routes | Contract |
 | --- | --- | --- |
 | Overview and instance | `GET /admin`, `GET/PATCH /admin/instance` | Safe capability/status projection and typed instance policy. |
-| Accounts | `GET/POST /admin/users`, `PATCH/DELETE /admin/users/{username}` | Secret-free account projections; self-delete, self-demotion, and final-administrator removal are rejected. |
-| Integrations | `GET /admin/integrations`, federation sync/join, registry, remote, and plugin mutation routes | Secret-shaped remote fields are recursively redacted before serialization. |
+| RDF catalog | `GET /admin/dashboard`, `/admin/graphs*`, `/admin/resources*`, `/admin/sequences` | One backend-independent, cursor-paged view over canonical RDF. Graph/resource/sequence counts and rows do not depend on optional typed-import tables. |
+| Accounts | `GET/POST /admin/users`, `PATCH/DELETE /admin/users/{username}` | Storage-side `q`, `limit`, and `offset` pagination; secret-free account projections; self-delete, self-demotion, and final-administrator removal are rejected. `is_member` is an explicit source role, not a migration marker. |
+| Integrations | `GET /admin/integrations`, federation sync/join, registry, remote, and plugin mutation routes | Backend-neutral durable configuration. Secret-shaped remote fields are recursively redacted before serialization; federation join/sync and runtime plugin calls are the external network operations. |
 | Jobs and ontology | `/admin/jobs*`, `GET/POST /admin/ontologies` | Read/enqueue/cancel and ontology loading without using the unscoped SBOL DB API endpoints from the UI. |
 | Search | `GET /admin/search`, `POST /admin/search/rebuild` | Capability-aware strategy status and a coalesced rebuild command. |
 | Complete backup | `GET/POST /admin/backup` | Status/history and enqueueing for the same encrypted RocksDB, blob, search, and ACME checkpoint used by manual, scheduled, and pre-deploy triggers. Available in the self-contained production profile. |

@@ -51,8 +51,8 @@ export default function ObservabilityRoute() {
             Observability
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Live process health, request traffic, connection pools, and the job
-            runner. Sampled every 5 seconds.
+            Live process health, request traffic, the job runner, and connection
+            pools when the active backend uses them. Sampled every 5 seconds.
           </p>
         </header>
 
@@ -284,9 +284,12 @@ function Kpis({ summary }: { summary: ObservabilitySummary }) {
     const p95 = lastWithSamples?.p95_ms ?? 0;
     const errorRate = totalCount > 0 ? (totalErrors / totalCount) * 100 : 0;
 
-    const { in_use, size } = summary.pool.api;
-    const dbUtil = size > 0 ? (in_use / size) * 100 : 0;
-    const dbUtilHint = `${in_use} / ${size} connections in use`;
+    const pool = summary.pool.api;
+    const dbUtil =
+      pool && pool.size > 0 ? (pool.in_use / pool.size) * 100 : null;
+    const dbUtilHint = pool
+      ? `${pool.in_use} / ${pool.size} connections in use`
+      : null;
     return { rps, p95, errorRate, dbUtil, dbUtilHint };
   }, [summary]);
 
@@ -306,12 +309,14 @@ function Kpis({ summary }: { summary: ObservabilitySummary }) {
         value={formatMs(p95)}
         hint="last active bucket"
       />
-      <KpiTile
-        label="db pool"
-        value={`${Math.round(dbUtil)}%`}
-        hint={dbUtilHint}
-        tone={dbUtil >= 80 ? "warn" : "default"}
-      />
+      {dbUtil !== null && dbUtilHint !== null && (
+        <KpiTile
+          label="db pool"
+          value={`${Math.round(dbUtil)}%`}
+          hint={dbUtilHint}
+          tone={dbUtil >= 80 ? "warn" : "default"}
+        />
+      )}
       <KpiTile
         label="errors (5xx)"
         value={`${errorRate.toFixed(1)}%`}
@@ -404,9 +409,12 @@ function ChartPanel({
 }
 
 function Pools({ summary }: { summary: ObservabilitySummary }) {
+  if (!summary.pool.api && !summary.pool.worker) return null;
   return (
     <section className="grid gap-3 sm:grid-cols-2">
-      <PoolCard label="API pool" stat={summary.pool.api} />
+      {summary.pool.api && (
+        <PoolCard label="API pool" stat={summary.pool.api} />
+      )}
       {summary.pool.worker && (
         <PoolCard label="Worker pool" stat={summary.pool.worker} />
       )}
@@ -434,10 +442,10 @@ function PoolCard({
         <div
           className={cn(
             "h-full transition-[width,background-color] duration-200 [transition-timing-function:cubic-bezier(0.23,1,0.32,1)]",
-            utilization >= 80
-              ? "bg-amber-500"
-              : utilization >= 95
-                ? "bg-destructive"
+            utilization >= 95
+              ? "bg-destructive"
+              : utilization >= 80
+                ? "bg-amber-500"
                 : "bg-primary"
           )}
           style={{ width: `${Math.min(100, Math.max(2, utilization))}%` }}
