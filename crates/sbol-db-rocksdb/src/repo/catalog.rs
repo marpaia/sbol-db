@@ -9,6 +9,7 @@ use sbol_db_storage::{ClassCount, CorpusStats, CursorPage, NamedGraphQuery, Name
 
 use crate::codec::Term;
 use crate::db::{Db, SEP};
+use crate::repo::accel::GraphProjectionDelta;
 
 const STATS_KEY: &[u8] = b"catalog:stats:v1";
 const GENERATION_KEY: &[u8] = b"catalog:generation:v1";
@@ -292,30 +293,29 @@ impl CatalogRepository {
     pub fn stage_projection_delta(
         &self,
         mutation: &mut CatalogMutation,
-        old_resources: &HashSet<String>,
-        new_resources: &HashSet<String>,
-        old_sequences: &HashSet<String>,
-        new_sequences: &HashSet<String>,
-        old_types: &HashMap<String, HashSet<String>>,
-        new_types: &HashMap<String, HashSet<String>>,
+        delta: &GraphProjectionDelta,
     ) -> Result<(), DomainError> {
-        for iri in new_resources.difference(old_resources) {
+        for iri in delta.new_resources.difference(&delta.old_resources) {
             self.adjust_resource(mutation, iri, 1)?;
         }
-        for iri in old_resources.difference(new_resources) {
+        for iri in delta.old_resources.difference(&delta.new_resources) {
             self.adjust_resource(mutation, iri, -1)?;
         }
-        for iri in new_sequences.difference(old_sequences) {
+        for iri in delta.new_sequences.difference(&delta.old_sequences) {
             self.adjust_sequence(mutation, iri, 1)?;
         }
-        for iri in old_sequences.difference(new_sequences) {
+        for iri in delta.old_sequences.difference(&delta.new_sequences) {
             self.adjust_sequence(mutation, iri, -1)?;
         }
-        let resources: HashSet<&String> = old_types.keys().chain(new_types.keys()).collect();
+        let resources: HashSet<&String> = delta
+            .old_types
+            .keys()
+            .chain(delta.new_types.keys())
+            .collect();
         for iri in resources {
             let empty = HashSet::new();
-            let old = old_types.get(iri).unwrap_or(&empty);
-            let new = new_types.get(iri).unwrap_or(&empty);
+            let old = delta.old_types.get(iri).unwrap_or(&empty);
+            let new = delta.new_types.get(iri).unwrap_or(&empty);
             for class in new.difference(old) {
                 self.adjust_class(mutation, iri, class, 1)?;
             }

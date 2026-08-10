@@ -681,6 +681,16 @@ fn ser_err(error: serde_json::Error) -> DomainError {
     DomainError::Serialization(error.to_string())
 }
 
+async fn blocking<T, F>(f: F) -> Result<T, DomainError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, DomainError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| DomainError::Database(format!("rocksdb task panicked: {e}")))?
+}
+
 #[cfg(test)]
 mod tests {
     use sbol_db_core::{ObjectTerm, SubjectTerm};
@@ -906,14 +916,4 @@ mod tests {
             .unwrap();
         assert_eq!(hits.len(), 1);
     }
-}
-
-async fn blocking<T, F>(f: F) -> Result<T, DomainError>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T, DomainError> + Send + 'static,
-{
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| DomainError::Database(format!("rocksdb task panicked: {e}")))?
 }

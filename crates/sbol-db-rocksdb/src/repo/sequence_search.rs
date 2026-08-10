@@ -22,11 +22,13 @@ use crate::repo::triple::TripleRepository;
 
 const DEFAULT_MAX_HITS: usize = 1024;
 
+type RdfSequenceCache = Arc<RwLock<Option<Vec<(String, String)>>>>;
+
 #[derive(Clone)]
 pub struct SequenceSearchRepository {
     db: Db,
     triples: TripleRepository,
-    rdf_sequences: Arc<RwLock<Option<Vec<(String, String)>>>>,
+    rdf_sequences: RdfSequenceCache,
 }
 
 #[derive(Serialize, Deserialize)]

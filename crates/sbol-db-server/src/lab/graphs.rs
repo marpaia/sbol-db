@@ -23,16 +23,20 @@ pub struct ListQuery {
     pub limit: Option<i64>,
     #[serde(default)]
     pub offset: Option<i64>,
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct GraphSummary {
     pub id: Uuid,
     pub iri: String,
+    pub kind: String,
     pub name: Option<String>,
     pub serialization_format: Option<String>,
     pub source_uri: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
+    pub object_count: Option<i64>,
     pub triple_count: Option<i64>,
 }
 
@@ -118,10 +122,11 @@ pub async fn list_graphs(
 ) -> Result<Json<ListResponse>, ApiError> {
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
-    let total = state.lab.count_graphs(None).await?;
+    let kind = q.kind.as_deref();
+    let total = state.lab.count_graphs(kind).await?;
     let graphs = state
         .lab
-        .list_graph_overviews(None, limit, offset)
+        .list_graph_overviews(kind, limit, offset)
         .await?
         .into_iter()
         .map(overview_to_summary)
@@ -175,10 +180,12 @@ fn overview_to_summary(g: sbol_db_storage::GraphOverview) -> GraphSummary {
     GraphSummary {
         id: g.id.0,
         iri: g.iri,
+        kind: g.kind,
         name: g.name,
         serialization_format: g.serialization_format,
         source_uri: g.source_uri,
         created_at: g.created_at,
+        object_count: g.object_count,
         triple_count: g.triple_count,
     }
 }

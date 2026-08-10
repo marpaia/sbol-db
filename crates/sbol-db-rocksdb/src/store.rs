@@ -105,15 +105,7 @@ impl RocksdbStore {
         self.catalog.stage_triple_delta(mutation, -(deleted as i64));
         self.objects.stage_delete_for_graph(batch, id)?;
         let delta = self.accel.stage_refresh(batch, &iri, &[])?;
-        self.catalog.stage_projection_delta(
-            mutation,
-            &delta.old_resources,
-            &delta.new_resources,
-            &delta.old_sequences,
-            &delta.new_sequences,
-            &delta.old_types,
-            &delta.new_types,
-        )?;
+        self.catalog.stage_projection_delta(mutation, &delta)?;
         self.catalog.stage_delete_graph(batch, mutation, &iri)?;
         Ok(())
     }
@@ -177,15 +169,7 @@ impl RocksdbStore {
         let delta = self
             .accel
             .stage_refresh(batch, plan.graph_iri.as_str(), &plan.triples)?;
-        self.catalog.stage_projection_delta(
-            mutation,
-            &delta.old_resources,
-            &delta.new_resources,
-            &delta.old_sequences,
-            &delta.new_sequences,
-            &delta.old_types,
-            &delta.new_types,
-        )?;
+        self.catalog.stage_projection_delta(mutation, &delta)?;
         self.catalog.stage_ensure_graph(
             batch,
             mutation,
@@ -450,15 +434,7 @@ impl RocksdbStore {
                 existing
             };
             let delta = this.accel.stage_refresh(&mut batch, &graph, &post)?;
-            this.catalog.stage_projection_delta(
-                &mut mutation,
-                &delta.old_resources,
-                &delta.new_resources,
-                &delta.old_sequences,
-                &delta.new_sequences,
-                &delta.old_types,
-                &delta.new_types,
-            )?;
+            this.catalog.stage_projection_delta(&mut mutation, &delta)?;
             this.catalog
                 .stage_triple_delta(&mut mutation, post.len() as i64 - old_count as i64);
             this.catalog.stage_graph_counts(
@@ -484,15 +460,7 @@ impl RocksdbStore {
             let deleted = this.triples.stage_clear_graph(&mut batch, Some(&graph))?;
             // The graph is now empty, so its accelerator indexes are dropped.
             let delta = this.accel.stage_refresh(&mut batch, &graph, &[])?;
-            this.catalog.stage_projection_delta(
-                &mut mutation,
-                &delta.old_resources,
-                &delta.new_resources,
-                &delta.old_sequences,
-                &delta.new_sequences,
-                &delta.old_types,
-                &delta.new_types,
-            )?;
+            this.catalog.stage_projection_delta(&mut mutation, &delta)?;
             this.catalog
                 .stage_triple_delta(&mut mutation, -(deleted as i64));
             this.catalog
@@ -685,15 +653,7 @@ impl TripleWriter for RocksdbTripleWriter {
                     post.extend(ins.iter().cloned());
                 }
                 let delta = accel.stage_refresh(&mut batch, graph, &post)?;
-                catalog.stage_projection_delta(
-                    &mut mutation,
-                    &delta.old_resources,
-                    &delta.new_resources,
-                    &delta.old_sequences,
-                    &delta.new_sequences,
-                    &delta.old_types,
-                    &delta.new_types,
-                )?;
+                catalog.stage_projection_delta(&mut mutation, &delta)?;
                 catalog.stage_graph_counts(
                     &mut batch,
                     &mut mutation,
