@@ -14,8 +14,9 @@ use std::collections::{HashMap, HashSet};
 use rocksdb::WriteBatch;
 use sbol_db_core::{DomainError, Triple};
 use sbol_db_storage::{
-    build_accel_index, generate_metadata_rows, generate_rows, integer, AccelSolutions,
-    AcceleratedQuery, FacetKind, Field, MetaRecord, Scope, TermValue,
+    build_catalog_projection, generate_metadata_rows, generate_rows, integer,
+    merge_resource_occurrences, AccelSolutions, AcceleratedQuery, CursorPage, FacetKind, Field,
+    MetaRecord, ResourceOccurrence, ResourceQuery, ResourceRecord, Scope, TermValue,
 };
 
 use crate::db::{compose, Db, SEP};
@@ -30,6 +31,15 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 #[derive(Clone)]
 pub struct AccelRepository {
     db: Db,
+}
+
+pub struct GraphProjectionDelta {
+    pub old_resources: HashSet<String>,
+    pub new_resources: HashSet<String>,
+    pub old_sequences: HashSet<String>,
+    pub new_sequences: HashSet<String>,
+    pub old_types: HashMap<String, HashSet<String>>,
+    pub new_types: HashMap<String, HashSet<String>>,
 }
 
 impl AccelRepository {
@@ -49,6 +59,11 @@ impl AccelRepository {
         batch.put_cf(
             &self.db.cf("acc_meta"),
             key(&[graph.as_bytes(), iri.as_bytes()]),
+            &encoded,
+        );
+        batch.put_cf(
+            &self.db.cf("acc_meta_by_iri"),
+            key(&[iri.as_bytes(), graph.as_bytes()]),
             &encoded,
         );
         for ty in &meta.types {
@@ -184,6 +199,91 @@ impl AccelRepository {
         }
     }
 
+    pub fn resource_occurrences(&self, iri: &str) -> Result<Vec<ResourceOccurrence>, DomainError> {
+        let scan_prefix = prefix(&[iri.as_bytes()]);
+        let mut occurrences = Vec::new();
+        self.db
+            .for_each_prefix("acc_meta_by_iri", &scan_prefix, |key, value| {
+                let graph = std::str::from_utf8(&key[scan_prefix.len()..])
+                    .map_err(|_| DomainError::Database("non-utf8 catalog graph IRI".into()))?;
+                occurrences.push(ResourceOccurrence {
+                    graph_iri: graph.to_owned(),
+                    resource_iri: iri.to_owned(),
+                    meta: serde_json::from_slice(value).map_err(ser_err)?,
+                });
+                Ok(true)
+            })?;
+        Ok(occurrences)
+    }
+
+    pub fn resource(&self, iri: &str) -> Result<Option<ResourceRecord>, DomainError> {
+        let occurrences = self.resource_occurrences(iri)?;
+        Ok(merge_resource_occurrences(iri, &occurrences))
+    }
+
+    pub fn resources(
+        &self,
+        query: &ResourceQuery,
+    ) -> Result<CursorPage<ResourceRecord>, DomainError> {
+        let limit = query.limit.clamp(1, 500) as usize;
+        let after = query.after.as_deref();
+        let needle = query.text.as_ref().map(|text| text.to_lowercase());
+        let mut iris: Vec<String> = Vec::with_capacity(limit + 1);
+        let mut last_seen: Option<String> = None;
+        self.db.for_each_prefix_after(
+            "acc_meta_by_iri",
+            b"",
+            after.map(str::as_bytes),
+            |key, value| {
+                let Some(separator) = key.iter().position(|byte| *byte == SEP) else {
+                    return Err(DomainError::Database(
+                        "catalog resource key has no IRI/graph separator".into(),
+                    ));
+                };
+                let iri = std::str::from_utf8(&key[..separator])
+                    .map_err(|_| DomainError::Database("non-utf8 catalog resource IRI".into()))?;
+                let graph = std::str::from_utf8(&key[separator + 1..])
+                    .map_err(|_| DomainError::Database("non-utf8 catalog graph IRI".into()))?;
+                if after.is_some_and(|cursor| iri <= cursor) || last_seen.as_deref() == Some(iri) {
+                    return Ok(true);
+                }
+                let meta: MetaRecord = serde_json::from_slice(value).map_err(ser_err)?;
+                let text_matches = needle.as_ref().is_none_or(|needle| {
+                    iri.to_lowercase().contains(needle)
+                        || serde_json::to_string(&meta)
+                            .is_ok_and(|json| json.to_lowercase().contains(needle))
+                });
+                let class_matches = query
+                    .class
+                    .as_ref()
+                    .is_none_or(|class| meta.types.contains(class));
+                let role_matches = query
+                    .role
+                    .as_ref()
+                    .is_none_or(|role| meta.roles.contains(role));
+                let graph_matches = query
+                    .graph_iri
+                    .as_ref()
+                    .is_none_or(|wanted| wanted == graph);
+                if text_matches && class_matches && role_matches && graph_matches {
+                    last_seen = Some(iri.to_owned());
+                    iris.push(iri.to_owned());
+                }
+                Ok(iris.len() < limit + 1)
+            },
+        )?;
+        let has_more = iris.len() > limit;
+        iris.truncate(limit);
+        let next_cursor = has_more.then(|| iris.last().cloned()).flatten();
+        let mut items = Vec::with_capacity(iris.len());
+        for iri in iris {
+            if let Some(resource) = self.resource(&iri)? {
+                items.push(resource);
+            }
+        }
+        Ok(CursorPage { items, next_cursor })
+    }
+
     /// Rebuild a graph's accelerator indexes from `triples` (the graph's
     /// post-write triple set), staging the work into the caller's write batch so
     /// it commits atomically with the triple write. Old per-graph index keys are
@@ -194,8 +294,28 @@ impl AccelRepository {
         batch: &mut WriteBatch,
         graph: &str,
         triples: &[Triple],
-    ) -> Result<(), DomainError> {
+    ) -> Result<GraphProjectionDelta, DomainError> {
         let gp = prefix(&[graph.as_bytes()]);
+        let mut old_resources = HashSet::new();
+        let mut old_sequences = HashSet::new();
+        let mut old_types = HashMap::new();
+        // `acc_meta_by_iri` is ordered by IRI rather than graph, so clear its
+        // old rows by projecting the graph's current primary metadata keys.
+        // The fresh rows below are then committed in this same batch.
+        let reverse_meta_cf = self.db.cf("acc_meta_by_iri");
+        self.db.for_each_prefix("acc_meta", &gp, |old_key, value| {
+            let iri = &old_key[gp.len()..];
+            let iri_text = std::str::from_utf8(iri)
+                .map_err(|_| DomainError::Database("non-utf8 accelerator IRI".into()))?;
+            let meta: MetaRecord = serde_json::from_slice(value).map_err(ser_err)?;
+            old_resources.insert(iri_text.to_owned());
+            old_types.insert(iri_text.to_owned(), meta.types.iter().cloned().collect());
+            if is_sequence_meta(&meta) {
+                old_sequences.insert(iri_text.to_owned());
+            }
+            batch.delete_cf(&reverse_meta_cf, key(&[iri, graph.as_bytes()]));
+            Ok(true)
+        })?;
         for cf in [
             "acc_meta",
             "acc_toplevel",
@@ -223,9 +343,30 @@ impl AccelRepository {
             .filter(|t| seen.insert(*t))
             .cloned()
             .collect();
-        let index = build_accel_index(&deduped);
+        let index = build_catalog_projection(&deduped);
+        let new_resources: HashSet<String> = index
+            .objects
+            .iter()
+            .map(|object| object.iri.clone())
+            .collect();
+        let new_sequences: HashSet<String> = index
+            .sequences
+            .iter()
+            .map(|sequence| sequence.iri.clone())
+            .collect();
+        let new_types: HashMap<String, HashSet<String>> = index
+            .objects
+            .iter()
+            .map(|object| {
+                (
+                    object.iri.clone(),
+                    object.meta.types.iter().cloned().collect(),
+                )
+            })
+            .collect();
 
         let meta_cf = self.db.cf("acc_meta");
+        let reverse_meta_cf = self.db.cf("acc_meta_by_iri");
         let tl_cf = self.db.cf("acc_toplevel");
         let bt_cf = self.db.cf("acc_bytype");
         let br_cf = self.db.cf("acc_byrole");
@@ -254,6 +395,11 @@ impl AccelRepository {
             let encoded = serde_json::to_vec(m).map_err(ser_err)?;
             sort_of.insert(iri, sort);
             batch.put_cf(&meta_cf, key(&[graph.as_bytes(), iri.as_bytes()]), &encoded);
+            batch.put_cf(
+                &reverse_meta_cf,
+                key(&[iri.as_bytes(), graph.as_bytes()]),
+                &encoded,
+            );
             for ty in &m.types {
                 batch.put_cf(
                     &bt_cf,
@@ -407,7 +553,14 @@ impl AccelRepository {
                 root.to_le_bytes(),
             );
         }
-        Ok(())
+        Ok(GraphProjectionDelta {
+            old_resources,
+            new_resources,
+            old_sequences,
+            new_sequences,
+            old_types,
+            new_types,
+        })
     }
 
     fn object_list(
@@ -783,6 +936,12 @@ fn last_component(key: &[u8]) -> &[u8] {
         Some(pos) => &key[pos + 1..],
         None => key,
     }
+}
+
+fn is_sequence_meta(meta: &MetaRecord) -> bool {
+    meta.types
+        .iter()
+        .any(|ty| ty == "http://sbols.org/v2#Sequence" || ty == "http://sbols.org/v3#Sequence")
 }
 
 fn ser_err(e: serde_json::Error) -> DomainError {

@@ -1,6 +1,7 @@
 //! Per-surface repositories over the shared RocksDB handle.
 
 pub mod accel;
+pub mod catalog;
 pub mod cluster;
 pub mod config;
 pub mod graph;

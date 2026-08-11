@@ -1,13 +1,14 @@
 //! Administrator account lifecycle with safe projections and role invariants.
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
 use chrono::{DateTime, Utc};
 use sbol_db_app::{AdminAuditOutcome, Registration};
 use sbol_db_core::{User, UserId};
+use sbol_db_storage::UserListQuery;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -86,13 +87,44 @@ fn default_true() -> bool {
     true
 }
 
+const DEFAULT_PAGE_SIZE: usize = 25;
+const MAX_PAGE_SIZE: usize = 100;
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct ListUsersQuery {
+    q: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+}
+
 pub(super) async fn list(
     State(state): State<AppState>,
+    Query(query): Query<ListUsersQuery>,
 ) -> Result<Json<serde_json::Value>, V2Error> {
-    let mut users = state.app.users.list_users().await?;
-    users.sort_by(|left, right| left.username.cmp(&right.username));
-    let items: Vec<UserResponse> = users.into_iter().map(Into::into).collect();
-    Ok(Json(json!({ "total": items.len(), "items": items })))
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_PAGE_SIZE)
+        .clamp(1, MAX_PAGE_SIZE);
+    let requested_offset = query.offset.unwrap_or(0);
+    let page = state
+        .app
+        .users
+        .page_users(&UserListQuery {
+            text: query.q,
+            limit: limit as u32,
+            offset: requested_offset as u64,
+        })
+        .await?;
+    let total = page.total as usize;
+    let offset = requested_offset.min(total);
+    let items: Vec<UserResponse> = page.items.into_iter().map(Into::into).collect();
+    Ok(Json(json!({
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "items": items,
+    })))
 }
 
 pub(super) async fn create(

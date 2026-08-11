@@ -1,11 +1,10 @@
 /**
- * Typed object browser. Paginated listing over `GET /objects/list`,
- * with optional `sbol_class`, `role`, and `graph_id` filters surfaced
- * as collapsible form inputs. The list uses the server's keyset cursor
- * so the table stays cheap regardless of corpus size.
+ * RDF resource browser. The universal catalog applies text/class/role filters
+ * before a bounded keyset page, so the route stays cheap regardless of corpus
+ * size or storage backend.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Boxes, ChevronDown, ChevronUp, Filter, Search } from "lucide-react";
 
@@ -13,7 +12,6 @@ import { AdminPage } from "@/components/admin/AdminPage";
 import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { ProductEmptyState } from "@/components/product/ProductEmptyState";
-import { Button } from "@/components/ui/button";
 import { useObjectsList } from "@/features/admin/objects/queries";
 import type { SbolObjectRecord } from "@/features/admin/objects/api";
 import { adminPath } from "@/lib/routes";
@@ -26,24 +24,30 @@ export default function ObjectsRoute() {
 
   const classFilter = searchParams.get("class") ?? "";
   const roleFilter = searchParams.get("role") ?? "";
-  const graphFilter = searchParams.get("graph") ?? "";
+  const textFilter = searchParams.get("q") ?? "";
 
   const [cursors, setCursors] = useState<string[]>([""]);
   const after = cursors[cursors.length - 1] || undefined;
   const page = cursors.length - 1;
 
   const { data, isLoading, error } = useObjectsList({
-    sbol_class: classFilter || undefined,
+    class: classFilter || undefined,
     role: roleFilter || undefined,
-    graph_id: graphFilter || undefined,
+    q: textFilter || undefined,
     after,
     limit: PAGE_SIZE,
   });
 
-  const updateFilter = (key: "class" | "role" | "graph", value: string) => {
+  const updateFilters = (filters: {
+    q: string;
+    class: string;
+    role: string;
+  }) => {
     const next = new URLSearchParams(searchParams);
-    if (value) next.set(key, value);
-    else next.delete(key);
+    for (const [key, value] of Object.entries(filters)) {
+      if (value.trim()) next.set(key, value.trim());
+      else next.delete(key);
+    }
     setSearchParams(next, { replace: true });
     setCursors([""]);
   };
@@ -55,8 +59,10 @@ export default function ObjectsRoute() {
       width: 360,
       cell: (o) => (
         <div className="min-w-0">
-          {o.display_id && (
-            <div className="truncate text-foreground">{o.display_id}</div>
+          {firstValue(o.meta.display_id) && (
+            <div className="truncate text-foreground">
+              {firstValue(o.meta.display_id)}
+            </div>
           )}
           <div className="truncate font-mono text-[11px] text-muted-foreground">
             {o.iri}
@@ -65,15 +71,17 @@ export default function ObjectsRoute() {
       ),
       sortValue: (o) => o.iri,
       filterValue: (o) =>
-        `${o.display_id ?? ""} ${o.iri} ${o.name ?? ""}`.trim(),
+        `${firstValue(o.meta.display_id)} ${o.iri} ${firstValue(o.meta.name)}`.trim(),
     },
     {
       id: "name",
       header: "Name",
       width: 180,
       cell: (o) =>
-        o.name ?? <span className="text-muted-foreground/60">—</span>,
-      sortValue: (o) => o.name?.toLowerCase() ?? "",
+        firstValue(o.meta.name) || (
+          <span className="text-muted-foreground/60">—</span>
+        ),
+      sortValue: (o) => firstValue(o.meta.name).toLowerCase(),
     },
     {
       id: "class",
@@ -81,55 +89,54 @@ export default function ObjectsRoute() {
       width: 200,
       cell: (o) => (
         <span className="font-mono text-[11px] text-muted-foreground">
-          {shortIri(o.sbol_class)}
+          {shortIri(o.meta.types?.[0])}
         </span>
       ),
-      sortValue: (o) => o.sbol_class ?? "",
-      filterValue: (o) => o.sbol_class ?? "",
+      sortValue: (o) => o.meta.types?.[0] ?? "",
+      filterValue: (o) => o.meta.types?.join(" ") ?? "",
     },
     {
       id: "version",
       header: "Version",
       width: 90,
       cell: (o) =>
-        o.version ?? <span className="text-muted-foreground/60">—</span>,
-      sortValue: (o) => o.version ?? "",
+        firstValue(o.meta.version) || (
+          <span className="text-muted-foreground/60">—</span>
+        ),
+      sortValue: (o) => firstValue(o.meta.version),
+    },
+    {
+      id: "graphs",
+      header: "Graphs",
+      width: 80,
+      align: "right",
+      cell: (o) => o.graph_count.toLocaleString(),
+      sortValue: (o) => o.graph_count,
     },
   ];
 
   return (
     <AdminPage
-      title="Objects"
-      description="Every typed SBOL object in the data model. Filter by class, role, or named graph, or resolve many IRIs at once."
+      title="Resources"
+      description="RDF subject resources in the canonical corpus. Search by identity or metadata, filter by class or role, and inspect graph-scoped occurrences."
       eyebrow="Data model"
-      action={
-        <Button
-          variant="outline"
-          size="sm"
-          type="button"
-          onClick={() => navigate(adminPath("/objects/lookup"))}
-        >
-          <Search />
-          Bulk lookup
-        </Button>
-      }
     >
       <Filters
         classFilter={classFilter}
         roleFilter={roleFilter}
-        graphFilter={graphFilter}
-        onChange={updateFilter}
+        textFilter={textFilter}
+        onApply={updateFilters}
       />
 
       {error ? (
         <ErrorBanner
-          title="Couldn't list objects"
+          title="Couldn't list resources"
           body={(error as Error).message}
         />
       ) : isLoading && !data ? (
         <TableSkeleton />
-      ) : !data || data.objects.length === 0 ? (
-        <Empty hasFilters={!!(classFilter || roleFilter || graphFilter)} />
+      ) : !data || data.items.length === 0 ? (
+        <Empty hasFilters={!!(textFilter || classFilter || roleFilter)} />
       ) : (
         <>
           <div className="text-xs text-muted-foreground">
@@ -137,17 +144,16 @@ export default function ObjectsRoute() {
             <span className="tabular-nums text-foreground">{page + 1}</span>
             {" · "}
             <span className="tabular-nums text-foreground">
-              {data.objects.length.toLocaleString()}
+              {data.items.length.toLocaleString()}
             </span>{" "}
-            objects
+            resources
             {!data.next_cursor && " · end of corpus"}
           </div>
           <div className="overflow-hidden rounded-lg border bg-card">
             <DataTable
               columns={columns}
-              rows={data.objects}
-              rowKey={(o) => o.id}
-              filterable
+              rows={data.items}
+              rowKey={(o) => o.iri}
               onRowClick={(o) =>
                 navigate(adminPath(`/objects/${encodeURIComponent(o.iri)}`))
               }
@@ -188,18 +194,26 @@ export default function ObjectsRoute() {
 function Filters({
   classFilter,
   roleFilter,
-  graphFilter,
-  onChange,
+  textFilter,
+  onApply,
 }: {
   classFilter: string;
   roleFilter: string;
-  graphFilter: string;
-  onChange: (key: "class" | "role" | "graph", value: string) => void;
+  textFilter: string;
+  onApply: (filters: { q: string; class: string; role: string }) => void;
 }) {
-  const [open, setOpen] = useState(
-    !!(classFilter || roleFilter || graphFilter)
-  );
-  const active = [classFilter, roleFilter, graphFilter].filter(Boolean).length;
+  const [open, setOpen] = useState(!!(textFilter || classFilter || roleFilter));
+  const [draft, setDraft] = useState({
+    q: textFilter,
+    class: classFilter,
+    role: roleFilter,
+  });
+  const active = [textFilter, classFilter, roleFilter].filter(Boolean).length;
+
+  useEffect(() => {
+    setDraft({ q: textFilter, class: classFilter, role: roleFilter });
+  }, [classFilter, roleFilter, textFilter]);
+
   return (
     <section className="rounded-lg border bg-card">
       <button
@@ -221,26 +235,55 @@ function Filters({
         )}
       </button>
       {open && (
-        <div className="grid gap-3 border-t px-4 py-3 sm:grid-cols-3">
+        <form
+          className="grid gap-3 border-t px-4 py-3 sm:grid-cols-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onApply(draft);
+          }}
+        >
           <FilterField
-            label="sbol:class IRI"
-            value={classFilter}
-            placeholder="http://sbols.org/v3#Component"
-            onChange={(v) => onChange("class", v)}
+            label="Text or resource IRI"
+            value={draft.q}
+            placeholder="sequence, promoter, or https://…"
+            onChange={(q) => setDraft((value) => ({ ...value, q }))}
+            icon="search"
+          />
+          <FilterField
+            label="RDF class IRI"
+            value={draft.class}
+            placeholder="http://sbols.org/v2#ComponentDefinition"
+            onChange={(value) =>
+              setDraft((filters) => ({ ...filters, class: value }))
+            }
           />
           <FilterField
             label="Role IRI"
-            value={roleFilter}
+            value={draft.role}
             placeholder="http://identifiers.org/so/SO:0000167"
-            onChange={(v) => onChange("role", v)}
+            onChange={(role) => setDraft((value) => ({ ...value, role }))}
           />
-          <FilterField
-            label="Graph ID"
-            value={graphFilter}
-            placeholder="UUID"
-            onChange={(v) => onChange("graph", v)}
-          />
-        </div>
+          <div className="flex items-end justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const empty = { q: "", class: "", role: "" };
+                setDraft(empty);
+                onApply(empty);
+              }}
+              disabled={active === 0 && !Object.values(draft).some(Boolean)}
+              className="rounded-md px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
+            >
+              Clear
+            </button>
+            <button
+              type="submit"
+              className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              Apply filters
+            </button>
+          </div>
+        </form>
       )}
     </section>
   );
@@ -251,24 +294,31 @@ function FilterField({
   value,
   placeholder,
   onChange,
+  icon,
 }: {
   label: string;
   value: string;
   placeholder: string;
   onChange: (v: string) => void;
+  icon?: "search";
 }) {
   return (
     <label className="block">
       <span className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
         {label}
       </span>
-      <input
-        type="text"
-        value={value}
-        placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md border bg-background px-3 py-1.5 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-1 focus:ring-ring"
-      />
+      <span className="relative block">
+        {icon === "search" && (
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        )}
+        <input
+          type="text"
+          value={value}
+          placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)}
+          className={`w-full rounded-md border bg-background py-1.5 pr-3 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-1 focus:ring-ring ${icon ? "pl-8" : "pl-3"}`}
+        />
+      </span>
     </label>
   );
 }
@@ -280,13 +330,13 @@ function Empty({ hasFilters }: { hasFilters: boolean }) {
       icon={Boxes}
       title={
         hasFilters
-          ? "No objects match the current filters"
-          : "No objects in the database yet"
+          ? "No resources match the current filters"
+          : "No typed resources in the database yet"
       }
       description={
         hasFilters
           ? "Try clearing one of the filter fields."
-          : "Import a document to populate the corpus."
+          : "Import RDF to populate the corpus."
       }
     />
   );
@@ -306,4 +356,8 @@ function shortIri(iri: string | null | undefined): string {
   if (!iri) return "";
   const m = iri.match(/[#/]([^#/]+)$/);
   return m ? m[1] : iri;
+}
+
+function firstValue(values?: Array<{ value: string }>): string {
+  return values?.[0]?.value ?? "";
 }

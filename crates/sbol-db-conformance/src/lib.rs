@@ -39,8 +39,8 @@ use sbol_db_server::{export_subject_rdf, serialize_closure, serialize_gff3, seri
 use sbol_db_sparql::{GraphScope, SparqlOptions};
 use sbol_db_storage::{
     BlobStore, EnqueueOutcome, GraphWriteMode, ImportInput, ImportOverwrite, JobQueue, JobStatus,
-    ListJobsFilter, ListObjectsFilter, NewJob, RankRow, SbolStore, SequenceSearchOptions,
-    DEFAULT_QUEUE, SBH_OWNED_BY,
+    ListJobsFilter, ListObjectsFilter, NamedGraphQuery, NewJob, RankRow, ResourceQuery, SbolStore,
+    SequenceQuery, SequenceSearchOptions, UserListQuery, DEFAULT_QUEUE, SBH_OWNED_BY,
 };
 use sha1::{Digest, Sha1};
 
@@ -110,6 +110,7 @@ pub async fn run_all(app: &AppServices) {
     let jobs = app.jobs.as_ref();
     import_and_read_back(store).await;
     graph_set_semantics(store).await;
+    rdf_catalog_semantics(store).await;
     neighborhood_walk(store).await;
     sequence_search(store).await;
     sequence_align(app).await;
@@ -136,6 +137,168 @@ pub async fn run_all(app: &AppServices) {
     admin_user_crud(app).await;
     wor_map_persisted(app).await;
     v1_v2_data_parity(app).await;
+}
+
+/// Catalog projections are derived from canonical RDF regardless of ingestion
+/// path, and preserve occurrence ownership when one IRI appears in two graphs.
+pub async fn rdf_catalog_semantics(store: &dyn SbolStore) {
+    const FIRST_GRAPH: &str = "urn:sbol-db:conformance:catalog:first";
+    const SECOND_GRAPH: &str = "urn:sbol-db:conformance:catalog:second";
+    const RESOURCE: &str = "urn:sbol-db:conformance:catalog:shared-sequence";
+    const SEQUENCE: &str = "http://sbols.org/v3#Sequence";
+    let first = format!(
+        "<{RESOURCE}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{SEQUENCE}> .\n\
+         <{RESOURCE}> <http://sbols.org/v3#elements> \"ACGT\" .\n"
+    );
+    let second = format!(
+        "<{RESOURCE}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{SEQUENCE}> .\n\
+         <{RESOURCE}> <http://purl.org/dc/terms/title> \"other occurrence\" .\n"
+    );
+
+    store
+        .graph_store_write(
+            FIRST_GRAPH,
+            &first,
+            SerializationFormat::NTriples,
+            GraphWriteMode::Replace,
+        )
+        .await
+        .expect("write first catalog graph");
+    store
+        .graph_store_write(
+            SECOND_GRAPH,
+            &second,
+            SerializationFormat::NTriples,
+            GraphWriteMode::Replace,
+        )
+        .await
+        .expect("write second catalog graph");
+
+    let resource = store
+        .catalog_resource(RESOURCE)
+        .await
+        .expect("catalog resource")
+        .expect("resource is cataloged from RDF");
+    assert_eq!(
+        resource.graph_count, 2,
+        "one global resource, two occurrences"
+    );
+    assert!(resource.meta.types.iter().any(|value| value == SEQUENCE));
+
+    let occurrences = store
+        .catalog_resource_occurrences(RESOURCE)
+        .await
+        .expect("catalog occurrences");
+    assert_eq!(occurrences.len(), 2);
+    assert!(occurrences.iter().any(|row| row.graph_iri == FIRST_GRAPH));
+    assert!(occurrences.iter().any(|row| row.graph_iri == SECOND_GRAPH));
+
+    let page = store
+        .catalog_resources(&ResourceQuery {
+            class: Some(SEQUENCE.to_owned()),
+            after: Some("urn:sbol-db:conformance:catalog:".to_owned()),
+            limit: 10,
+            ..ResourceQuery::default()
+        })
+        .await
+        .expect("catalog page");
+    assert!(page.items.iter().any(|row| row.iri == RESOURCE));
+    let searched_resources = store
+        .catalog_resources(&ResourceQuery {
+            text: Some("SHARED-SEQUENCE".to_owned()),
+            limit: 10,
+            ..ResourceQuery::default()
+        })
+        .await
+        .expect("search resource catalog");
+    assert!(searched_resources
+        .items
+        .iter()
+        .any(|row| row.iri == RESOURCE));
+    let resolved = store
+        .catalog_resources_by_iris(&[
+            RESOURCE.to_owned(),
+            "urn:sbol-db:conformance:catalog:missing".to_owned(),
+        ])
+        .await
+        .expect("batch resource catalog lookup");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].iri, RESOURCE);
+
+    let stats = store.catalog_stats().await.expect("catalog stats");
+    assert!(stats.resources > 0);
+    assert!(stats.named_graphs >= 2);
+    assert!(stats.sequences > 0);
+    let sequence = store
+        .catalog_sequence(RESOURCE)
+        .await
+        .expect("catalog sequence")
+        .expect("RDF-derived sequence is cataloged");
+    assert_eq!(sequence.graph_count, 2);
+    assert_eq!(sequence.elements.as_deref(), Some("ACGT"));
+    let sequence_page = store
+        .catalog_sequences(&SequenceQuery {
+            after: Some("urn:sbol-db:conformance:catalog:".to_owned()),
+            limit: 10,
+            ..SequenceQuery::default()
+        })
+        .await
+        .expect("sequence catalog page");
+    assert!(sequence_page.items.iter().any(|row| row.iri == RESOURCE));
+
+    let graph_page = store
+        .catalog_graphs(&NamedGraphQuery {
+            after: Some("urn:sbol-db:conformance:catalog:".to_owned()),
+            limit: 1,
+            ..NamedGraphQuery::default()
+        })
+        .await
+        .expect("first graph catalog page");
+    assert_eq!(graph_page.items.len(), 1);
+    let cursor = graph_page.next_cursor.expect("a second graph page exists");
+    let second_graph_page = store
+        .catalog_graphs(&NamedGraphQuery {
+            after: Some(cursor),
+            limit: 1,
+            ..NamedGraphQuery::default()
+        })
+        .await
+        .expect("second graph catalog page");
+    assert_eq!(second_graph_page.items.len(), 1);
+    assert_ne!(graph_page.items[0].iri, second_graph_page.items[0].iri);
+    let searched_graphs = store
+        .catalog_graphs(&NamedGraphQuery {
+            text: Some("SECOND".to_owned()),
+            limit: 10,
+            ..NamedGraphQuery::default()
+        })
+        .await
+        .expect("search graph catalog");
+    assert!(searched_graphs
+        .items
+        .iter()
+        .any(|row| row.iri == SECOND_GRAPH));
+
+    store
+        .graph_store_clear(FIRST_GRAPH)
+        .await
+        .expect("clear first occurrence");
+    let remaining = store
+        .catalog_resource(RESOURCE)
+        .await
+        .expect("remaining catalog resource")
+        .expect("second occurrence preserves global resource");
+    assert_eq!(remaining.graph_count, 1);
+
+    store
+        .graph_store_clear(SECOND_GRAPH)
+        .await
+        .expect("clear final occurrence");
+    assert!(store
+        .catalog_resource(RESOURCE)
+        .await
+        .expect("catalog after final clear")
+        .is_none());
 }
 
 /// The durable configuration store's contract: an unset key reads back absent,
@@ -620,6 +783,18 @@ pub async fn user_crud(app: &AppServices) {
         .count();
     assert_eq!(matches, 1, "list_users returns the created account once");
 
+    let page = users
+        .page_users(&UserListQuery {
+            text: Some("CRUD_USER@EXAMPLE".into()),
+            limit: 1,
+            offset: 0,
+        })
+        .await
+        .expect("page_users");
+    assert_eq!(page.total, 1, "search reports the exact filtered total");
+    assert_eq!(page.items.len(), 1, "the requested page is bounded");
+    assert_eq!(page.items[0].id, created.id);
+
     // Fetch by id round-trips the stored fields.
     let by_id = users
         .get_by_id(created.id)
@@ -632,6 +807,7 @@ pub async fn user_crud(app: &AppServices) {
     // A profile update is durable across a re-read.
     let mut updated = by_id;
     updated.name = "Renamed User".into();
+    updated.email = "renamed_user@example.org".into();
     updated.is_admin = true;
     users.update_user(&updated).await.expect("update_user");
     let reread = users
@@ -640,6 +816,10 @@ pub async fn user_crud(app: &AppServices) {
         .expect("get_by_id after update")
         .expect("account still present");
     assert_eq!(reread.name, "Renamed User", "name update is durable");
+    assert_eq!(
+        reread.email, "renamed_user@example.org",
+        "email update is durable"
+    );
     assert!(reread.is_admin, "membership-flag update is durable");
 
     // Offline recovery can establish one exact administrator atomically. A

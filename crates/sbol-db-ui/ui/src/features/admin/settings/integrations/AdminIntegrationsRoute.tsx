@@ -40,7 +40,7 @@ export default function AdminIntegrationsRoute() {
   return (
     <AdminPage
       title="Integrations"
-      description="Connect registry discovery, external data sources, and extension services. Stored credentials are accepted on writes but redacted from every read response."
+      description="Backend-neutral instance configuration for registry discovery, remote service descriptors, and extension endpoints. These settings work with RocksDB; federation join and sync are the operations here that contact an external service. Stored credentials are accepted on writes but redacted from every read response."
     >
       {query.error ? (
         <SurfaceState

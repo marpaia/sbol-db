@@ -17,6 +17,7 @@ use crate::error::ApiError;
 use crate::AppState;
 
 /// Paging for `GET /admin/graphs`.
+#[cfg(feature = "lab")]
 #[derive(Debug, Default, Deserialize)]
 pub struct GraphsQuery {
     pub limit: Option<i64>,
@@ -25,7 +26,9 @@ pub struct GraphsQuery {
     pub kind: Option<String>,
 }
 
+#[cfg(feature = "lab")]
 const DEFAULT_LIMIT: i64 = 50;
+#[cfg(feature = "lab")]
 const MAX_LIMIT: i64 = 500;
 
 /// `GET /admin/graphs` — every named graph, paginated, with its kind, triple

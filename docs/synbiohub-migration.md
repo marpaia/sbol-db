@@ -267,21 +267,30 @@ sbol-db \
 
 The command refuses an active job, an unverified graph or accelerator ledger,
 a dirty accelerator graph, a source without exactly one ready production run,
-or a non-empty RocksDB destination belonging to another source. It also refuses
-typed SBOL documents, objects, sequences, or ontologies because this conversion
-path currently targets the verbatim classic SynBioHub corpus; accepting those
-rows would silently omit native SBOL DB state.
+or a non-empty RocksDB destination belonging to another source. It does not
+branch on graph kind or require optional typed-object tables: every row in
+`sbol_graphs` and every canonical RDF triple is copied, then the universal
+resource, graph, class, and sequence projections are rebuilt from that data.
 
 Users, duplicate-email identity semantics, timestamps, password hashes, roles,
-API-token hashes, configuration, verbatim graph IRIs and triples, query
-accelerators, PageRank, sequence clusters, sketches, and LSH bands are copied
-exactly. Completed job history is operational history rather than registry
-state, so omitting it requires the explicit flag shown above. Blobs and the
-ranked text index remain in their durable filesystem paths and are reused at
-runtime.
+API-token hashes, configuration, named-graph IRIs and canonical triples, query
+accelerators, PageRank, sequence clusters, sketches, LSH bands, and all
+ontology/term/alias/closure rows are copied exactly. The copy also materializes
+the Admin graph catalog, resource browser,
+globally IRI-ordered resource index, and exact nucleotide-sequence view from the
+reconciled graph ledger, accelerator metadata, and sequence-element triples.
+These are compatibility projections over the unchanged SBOL 2 RDF, not a
+second SBOL 2-to-3 conversion or a duplicate triple corpus. Completed job
+history is operational history rather than registry state, so omitting it
+requires the explicit flag shown above. Blobs and the ranked text index remain
+in their durable filesystem paths and are reused at runtime.
 
 Every page commits its source keyset checkpoint in the same RocksDB batch as
 its data. Rerun the identical command after an interruption; it resumes safely.
+The same stopped-server rerun also upgrades a destination completed by an older
+converter: versioned projection stages replay while already-reconciled triples,
+identities, and search indexes are skipped.
+
 The target is marked `ready` only after the source is re-counted to prove that
 it stayed quiescent and every destination column-family cardinality matches.
 

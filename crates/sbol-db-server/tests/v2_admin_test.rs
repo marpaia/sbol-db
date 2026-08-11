@@ -7,19 +7,55 @@ use axum::http::{Request, Response, StatusCode};
 use axum::Router;
 use sbol_db_app::{AppServices, Registration};
 use sbol_db_backend::Backend;
-use sbol_db_core::User;
+use sbol_db_core::{IriString, SerializationFormat, User};
 use sbol_db_server::{
     router, write_edge_settings, AppState, EdgeAdminService, EdgeRecoverySnapshot,
     EdgeRuntimeIdentity, EdgeSettings, Metrics, SchemaCache, ServerConfig,
 };
 use sbol_db_sparql::{SparqlEngine, SparqlUpdateEngine};
+use sbol_db_storage::{ImportInput, ImportOverwrite};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
 const BODY_LIMIT: usize = 4 * 1024 * 1024;
+const CATALOG_GRAPH: &str = "https://example.org/catalog";
+const CATALOG_SEQUENCE: &str = "https://example.org/catalog/sequence-a";
+const CATALOG_TURTLE: &str = r#"
+@prefix sbol2: <http://sbols.org/v2#> .
+
+<https://example.org/catalog/sequence-a>
+    a sbol2:Sequence ;
+    sbol2:displayId "sequenceA" ;
+    sbol2:elements "ATGC" ;
+    sbol2:encoding sbol2:IUPACDNA .
+
+<https://example.org/catalog/component-a>
+    a sbol2:ComponentDefinition ;
+    sbol2:displayId "componentA" ;
+    sbol2:sequence <https://example.org/catalog/sequence-a> .
+"#;
+
 async fn app() -> (Router, Arc<AppServices>, TempDir) {
     app_with_backups(false).await
+}
+
+async fn seed_catalog(services: &AppServices) {
+    services
+        .store
+        .import_document(ImportInput {
+            body: CATALOG_TURTLE.to_owned(),
+            format: SerializationFormat::Turtle,
+            namespace: None,
+            source_uri: Some("https://example.org/source.ttl".to_owned()),
+            document_iri: Some(IriString::new(CATALOG_GRAPH.to_owned()).expect("graph IRI")),
+            created_by: None,
+            name: Some("Catalog fixture".to_owned()),
+            description: None,
+            overwrite: ImportOverwrite::Fail,
+        })
+        .await
+        .expect("seed catalog");
 }
 
 async fn app_with_backups(complete_backups_enabled: bool) -> (Router, Arc<AppServices>, TempDir) {
@@ -258,7 +294,39 @@ async fn one_admin_policy_gates_safe_instance_and_user_management() {
     )
     .await;
     assert_eq!(users["total"], 3);
+    assert_eq!(users["limit"], 25);
+    assert_eq!(users["offset"], 0);
     assert!(!users.to_string().contains("password_hash"));
+
+    let searched = body(
+        send(
+            &app,
+            "GET",
+            "/api/v2/admin/users?q=CUR&limit=1&offset=0",
+            Some(&admin_token),
+            json!({}),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(searched["total"], 1);
+    assert_eq!(searched["limit"], 1);
+    assert_eq!(searched["items"][0]["username"], "curator");
+
+    let second_page = body(
+        send(
+            &app,
+            "GET",
+            "/api/v2/admin/users?limit=1&offset=1",
+            Some(&admin_token),
+            json!({}),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(second_page["total"], 3);
+    assert_eq!(second_page["offset"], 1);
+    assert_eq!(second_page["items"].as_array().unwrap().len(), 1);
 
     let self_delete = send(
         &app,
@@ -289,6 +357,128 @@ async fn one_admin_policy_gates_safe_instance_and_user_management() {
         .collect::<Vec<_>>();
     assert!(actions.contains(&"instance.update"));
     assert!(actions.contains(&"user.create"));
+}
+
+#[tokio::test]
+async fn universal_catalog_endpoints_page_the_same_rdf_projection() {
+    let (app, services, _dir) = app().await;
+    let (_admin, token) = register(&services, "admin", true).await;
+    seed_catalog(&services).await;
+
+    let dashboard = body(
+        send(
+            &app,
+            "GET",
+            "/api/v2/admin/dashboard",
+            Some(&token),
+            json!({}),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(dashboard["counts"]["named_graphs"], 1);
+    assert_eq!(dashboard["counts"]["resources"], 2);
+    assert_eq!(dashboard["counts"]["sequences"], 1);
+    assert!(dashboard["counts"]["triples"].as_u64().unwrap() >= 7);
+    assert_eq!(dashboard["graphs"].as_array().unwrap().len(), 1);
+    assert!(
+        dashboard["top_classes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["iri"] == "http://sbols.org/v3#Sequence"),
+        "{dashboard:#}"
+    );
+
+    let graphs = body(
+        send(
+            &app,
+            "GET",
+            "/api/v2/admin/graphs?limit=1&q=CATALOG",
+            Some(&token),
+            json!({}),
+        )
+        .await,
+    )
+    .await;
+    let graph = &graphs["items"][0];
+    assert_eq!(graph["name"], "Catalog fixture");
+    assert!(graph["iri"]
+        .as_str()
+        .is_some_and(|iri| iri.starts_with("graph:document:")));
+    let graph_id = graph["id"].as_str().expect("graph id");
+    let triples = body(
+        send(
+            &app,
+            "GET",
+            &format!("/api/v2/admin/graphs/{graph_id}/triples?limit=1"),
+            Some(&token),
+            json!({}),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(triples["items"].as_array().unwrap().len(), 1);
+    assert!(triples["next_cursor"].is_string());
+
+    let resources = body(
+        send(
+            &app,
+            "GET",
+            "/api/v2/admin/resources?limit=1&q=SEQUENCE",
+            Some(&token),
+            json!({}),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        resources["items"][0]["iri"], CATALOG_SEQUENCE,
+        "{resources:#}"
+    );
+
+    let detail = body(
+        send(
+            &app,
+            "GET",
+            "/api/v2/admin/resources/lookup?iri=https%3A%2F%2Fexample.org%2Fcatalog%2Fsequence-a",
+            Some(&token),
+            json!({}),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(detail["resource"]["iri"], CATALOG_SEQUENCE);
+    assert_eq!(detail["occurrences"].as_array().unwrap().len(), 1);
+
+    let lookup = body(
+        send(
+            &app,
+            "POST",
+            "/api/v2/admin/resources/lookup",
+            Some(&token),
+            json!({ "iris": [CATALOG_SEQUENCE, "https://example.org/missing"] }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(lookup["found"].as_array().unwrap().len(), 1);
+    assert_eq!(lookup["missing"][0], "https://example.org/missing");
+
+    let sequences = body(
+        send(
+            &app,
+            "GET",
+            "/api/v2/admin/sequences?q=SEQUENCE",
+            Some(&token),
+            json!({}),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(sequences["items"][0]["iri"], CATALOG_SEQUENCE);
+    assert_eq!(sequences["items"][0]["elements"], "ATGC");
+    assert_eq!(sequences["items"][0]["alphabet"], "DNA");
 }
 
 #[tokio::test]

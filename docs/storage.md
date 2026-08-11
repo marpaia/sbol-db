@@ -1,11 +1,11 @@
 # Storage architecture
 
 `sbol-db` keeps its persistence layer behind a backend-neutral contract.
-Everything above the contract — the import pipeline, the five query primitives,
-the SPARQL engine, the REST API, the CLI, the lab UI — depends only on a set of
-traits, never on a concrete database. Three engines implement those traits
-today: Postgres, SQLite, and RocksDB. You pick one with a connection string;
-nothing else in the system changes.
+Everything above the contract — the import pipeline, query primitives, SPARQL
+engine, REST API, CLI, and Admin UI — depends only on focused traits, never on
+a concrete database. Three engines implement those traits today: RocksDB,
+SQLite, and Postgres. RocksDB is the primary and default local/edge runtime;
+the SQL engines remain conforming alternatives.
 
 This document covers the contract, how a backend is selected at runtime, what is
 shared across engines versus specific to one, and which engine to choose. For
@@ -26,6 +26,10 @@ They split persistence into focused surfaces:
 | `TripleWriter` | Atomic batch application of SPARQL-update changes. |
 | `ObjectStore` | Derived-view object reads (by IRI, by id, listing). |
 | `GraphStore` | Named-graph reads, deletion, and content-hash existence checks. |
+| `CorpusStatsStore` | Constant-time exact counts over the canonical RDF catalog. |
+| `NamedGraphCatalogStore` | Backend-independent graph and graph-triple keyset pages. |
+| `ResourceCatalogStore` | Global RDF-resource identity, occurrences, filtering, and class counts. |
+| `SequenceCatalogStore` | RDF-derived sequence metadata and keyset pages. |
 | `OntologyStore` | Ontology loading, canonicalization, and closure queries. |
 | `NeighborhoodStore` | Bounded graph-neighborhood traversal. |
 | `SequenceSearchStore` | Nucleotide substring + reverse-complement search. |
@@ -39,8 +43,39 @@ runs each scan to completion behind the sync method; an engine that is already
 synchronous (RocksDB) serves it directly. The rest of the traits are
 `#[async_trait]` and are held as `Arc<dyn ...>`.
 
-The trait names a database nowhere. `sbol-db-storage` depends on
+The catalog traits are deliberately separate from `ObjectStore`. An SBOL-native
+import can additionally materialize a typed object record, but a resource exists
+because it occurs as a subject in canonical RDF. A verbatim SynBioHub graph and
+a newly imported SBOL document therefore appear through the same Admin API.
+
+The traits name a database nowhere. `sbol-db-storage` depends on
 `sbol-db-core` for domain types and on nothing else.
+
+## Canonical RDF and rebuildable projections
+
+All three engines use the same structural model:
+
+1. Canonical RDF triples grouped into named graphs are the source of truth.
+2. `build_catalog_projection` derives occurrence-scoped resource metadata,
+   class membership, collection membership, and sequence identity from those
+   triples.
+3. Each backend stores indexes suited to its engine. These indexes are
+   rebuildable and commit atomically with ordinary graph writes.
+4. Product and Admin list APIs page the universal catalog. They do not infer
+   corpus contents from optional typed-object, typed-sequence, or import-history
+   tables.
+
+Resource identity is global by IRI, while metadata occurrences remain scoped to
+their named graph. A global resource record deterministically merges those
+occurrences and reports the exact graph count. This preserves graph-local facts
+without showing the same identity as unrelated duplicate objects.
+
+The dashboard reads maintained counters rather than running corpus-wide counts
+at request time. Postgres and SQLite maintain a singleton counter row with
+transactional triggers; RocksDB maintains reference counts and a versioned
+catalog generation in the same `WriteBatch` as graph mutations. A legacy
+RocksDB database with canonical data but no ready generation fails closed with
+instructions to run `sbol-db db migrate`.
 
 ## Selecting a backend
 
@@ -141,6 +176,7 @@ records that, plus the surfaces that differ by engine.
 
 | Surface | Postgres | SQLite | RocksDB |
 | --- | :---: | :---: | :---: |
+| Universal RDF catalog (stats, graphs, resources, sequences) | yes | yes | yes |
 | Document import + derived object view | yes | yes | yes |
 | Graph set semantics | yes | yes | yes |
 | SPARQL read (`TripleSource`) | yes | yes | yes |
@@ -169,13 +205,13 @@ it.
 
 ## Choosing an engine
 
-**Postgres** is the default and the most capable. Pick it for multi-node
-deployments (several `sbol-db server` pods sharing one database, work
-distributed by `FOR UPDATE SKIP LOCKED`), for the live sessions/locks and
-slow-query views on the maintenance page, and when you want the
-validation-findings audit trail and typed projection tables. It is the only
-engine that runs as a separate server process; the others are embedded. See
-[deployment.md](deployment.md) for the production shapes.
+**RocksDB** is the primary default for a consolidated single-server deployment.
+It is an embedded key/value engine with a triplestore built directly on its
+column families. It stores each RDF term once under a content-addressed 16-byte
+id and keeps permuted indexes so a triple pattern with bound leading positions
+becomes one prefix scan. The Admin maintenance view reports LSM state instead
+of pretending SQL, pool, lock, or relational-schema features exist. It is
+single-process storage: do not put multiple servers in front of one directory.
 
 **SQLite** is a single-file, embedded SQL engine. It needs no server process and
 no configuration beyond a file path. Being a SQL engine, it drives the lab's
@@ -184,23 +220,21 @@ table and index sizes with a VACUUM/ANALYZE action. Pick it for development, for
 small single-node deployments, for embedding sbol-db inside another tool, and
 for test fixtures where a throwaway database per test is convenient.
 
-**RocksDB** is an embedded, single-node key/value engine with a triplestore
-built directly on its column families. It stores each RDF term once under a
-content-addressed 16-byte id and keeps permuted indexes so a triple pattern with
-bound leading positions becomes one prefix scan. It has no SQL, so the lab shows
-an LSM maintenance view instead of the SQL console: column-family and per-level
-sizes, estimated keys, pending compaction, and a manual compaction action. Pick
-it for single-node workloads that want the throughput of an in-process store and
-the id-native SPARQL path, without a database server.
+**Postgres** is the shared-database choice for multi-process deployments
+(several `sbol-db server` instances using one database, with jobs distributed by
+`FOR UPDATE SKIP LOCKED`). Pick it when that topology or its live
+sessions/locks, slow-query views, validation audit, and typed projection tables
+are required. Those additional tables are conveniences, not a different corpus
+definition.
 
 ## The conformance suite
 
 `crates/sbol-db-conformance` is the contract's executable definition. Each
 scenario drives a backend purely through the trait surface and asserts the
-behavior every engine must share: import and derived-view reads, the graph
-set-semantics rule, neighborhood traversal, sequence search, ontology load and
-closure, and the job-queue lifecycle. `run_all` runs them in sequence against
-one store.
+behavior every engine must share: import and derived-view reads, universal RDF
+catalog counts and pagination, graph set semantics, neighborhood traversal,
+sequence search, ontology load and closure, identity pagination, and the
+job-queue lifecycle. `run_all` runs them in sequence against one store.
 
 Every backend wires the suite into its own tests and passes the full set:
 `postgres_passes_storage_conformance_suite`,

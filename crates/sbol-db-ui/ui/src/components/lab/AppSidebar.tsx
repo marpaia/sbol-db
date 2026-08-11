@@ -48,7 +48,7 @@ export interface AppSidebarProps {
 export function AppSidebar({ onOpenPalette }: AppSidebarProps) {
   const { data: info } = useBackendInfo();
   const instance = useInstance();
-  const destinations = availableAdminDestinations(info?.capabilities);
+  const destinations = availableAdminDestinations(info);
   const overview = adminDestination("overview");
   const deployment = deploymentName(instance.data?.name);
   return (

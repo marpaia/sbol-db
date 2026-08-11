@@ -1,39 +1,28 @@
 /**
- * Per-graph detail. Shows the graph's kind, triple/object counts, and
- * provenance. For an `sbol3` graph it also lists the SBOL objects derived
- * from its triples (object rows link to the typed object detail). A
- * `verbatim` graph has no derived object view; its content is the triples
- * themselves, browsed directly as a paginated triple table.
+ * Per-graph detail. Every graph uses one representation: provenance followed
+ * by a paginated view of its canonical RDF triples.
  */
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, Share2, TriangleAlert } from "lucide-react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
 import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { KpiTile } from "@/components/observability/KpiTile";
 import { graphKeys, useGraph } from "@/features/admin/graphs/queries";
-import { objectKeys } from "@/features/admin/objects/queries";
 import {
   listGraphTriples,
   type GraphTriple,
   type GraphSummary,
   type GraphTerm,
 } from "@/features/admin/graphs/api";
-import {
-  listObjects,
-  type SbolObjectRecord,
-} from "@/features/admin/objects/api";
 import { HttpError } from "@/shared/api/http";
 import { formatRelative } from "@/lib/utils";
 import { adminPath } from "@/lib/routes";
 
-const PAGE_SIZE = 100;
-
 export default function GraphDetailRoute() {
-  const navigate = useNavigate();
   const params = useParams<{ id: string }>();
   const id = params.id ?? "";
 
@@ -62,14 +51,10 @@ export default function GraphDetailRoute() {
         ) : (
           <>
             <Header graph={data} />
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <KpiTile
                 label="Triples"
-                value={data.triple_count.toLocaleString()}
-              />
-              <KpiTile
-                label="Objects"
-                value={data.object_count.toLocaleString()}
+                value={data.triple_count?.toLocaleString() ?? "Not catalogued"}
               />
               <KpiTile
                 label="Format"
@@ -77,27 +62,10 @@ export default function GraphDetailRoute() {
               />
             </div>
             <Metadata graph={data} />
-            {data.kind === "sbol3" ? (
-              <section>
-                <SectionLabel>Objects in this graph</SectionLabel>
-                <ObjectsForGraph
-                  graphId={data.id}
-                  onOpen={(iri) =>
-                    navigate(adminPath(`/objects/${encodeURIComponent(iri)}`))
-                  }
-                />
-              </section>
-            ) : (
-              <section>
-                <SectionLabel>Triples in this graph</SectionLabel>
-                <p className="mb-3 -mt-1 text-xs text-muted-foreground">
-                  A <strong>verbatim</strong> graph is stored as written, with
-                  no derived SBOL object view. Its content is the triples
-                  themselves.
-                </p>
-                <TriplesForGraph graphId={data.id} />
-              </section>
-            )}
+            <section>
+              <SectionLabel>Triples in this graph</SectionLabel>
+              <TriplesForGraph graphId={data.id} />
+            </section>
           </>
         )}
       </div>
@@ -124,12 +92,15 @@ function Header({ graph }: { graph: GraphSummary }) {
 function Metadata({ graph }: { graph: GraphSummary }) {
   return (
     <section className="rounded-lg border bg-card px-4 py-3">
-      <dl className="grid gap-3 text-sm sm:grid-cols-3">
-        <Pair label="Kind" value={graph.kind} />
+      <dl className="grid gap-3 text-sm sm:grid-cols-2">
         <Pair label="Source URI" value={graph.source_uri} mono />
         <Pair
           label="Created"
-          value={`${formatRelative(graph.created_at)} (${new Date(graph.created_at).toLocaleString()})`}
+          value={
+            graph.created_at
+              ? `${formatRelative(graph.created_at)} (${new Date(graph.created_at).toLocaleString()})`
+              : null
+          }
         />
       </dl>
     </section>
@@ -161,134 +132,17 @@ function Pair({
   );
 }
 
-function ObjectsForGraph({
-  graphId,
-  onOpen,
-}: {
-  graphId: string;
-  onOpen: (iri: string) => void;
-}) {
-  const [cursors, setCursors] = useState<string[]>([""]);
-  const after = cursors[cursors.length - 1] || undefined;
-  const page = cursors.length - 1;
-
-  const { data, isLoading, error } = useQuery({
-    queryKey: objectKeys.byGraph(graphId, after),
-    queryFn: ({ signal }) =>
-      listObjects({ graph_id: graphId, limit: PAGE_SIZE, after }, signal),
-    placeholderData: (prev) => prev,
-  });
-
-  const columns: DataTableColumn<SbolObjectRecord>[] = [
-    {
-      id: "display",
-      header: "Display ID / IRI",
-      width: 380,
-      cell: (o) => (
-        <div className="min-w-0">
-          {o.display_id && (
-            <div className="truncate text-foreground">{o.display_id}</div>
-          )}
-          <div className="truncate font-mono text-[11px] text-muted-foreground">
-            {o.iri}
-          </div>
-        </div>
-      ),
-      sortValue: (o) => o.iri,
-      filterValue: (o) =>
-        `${o.display_id ?? ""} ${o.iri} ${o.name ?? ""}`.trim(),
-    },
-    {
-      id: "name",
-      header: "Name",
-      width: 200,
-      cell: (o) =>
-        o.name ?? <span className="text-muted-foreground/60">—</span>,
-      sortValue: (o) => o.name?.toLowerCase() ?? "",
-    },
-    {
-      id: "class",
-      header: "Class",
-      width: 220,
-      cell: (o) => (
-        <span className="font-mono text-[11px] text-muted-foreground">
-          {shortIri(o.sbol_class)}
-        </span>
-      ),
-      sortValue: (o) => o.sbol_class ?? "",
-      filterValue: (o) => o.sbol_class ?? "",
-    },
-  ];
-
-  if (error) {
-    return (
-      <ErrorBanner
-        title="Couldn't list objects"
-        body={(error as Error).message}
-      />
-    );
-  }
-  if (isLoading && !data) return <Skeleton />;
-  if (!data || data.objects.length === 0) {
-    return (
-      <div className="rounded-lg border bg-card px-4 py-6 text-sm text-muted-foreground">
-        No objects projected from this graph yet.
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-3">
-      <div className="overflow-hidden rounded-lg border bg-card">
-        <DataTable
-          columns={columns}
-          rows={data.objects}
-          rowKey={(o) => o.id}
-          filterable
-          onRowClick={(o) => onOpen(o.iri)}
-        />
-      </div>
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <div className="text-muted-foreground">
-          Page {page + 1}
-          {!data.next_cursor && " · end"}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setCursors((prev) => prev.slice(0, -1))}
-            disabled={page === 0}
-            className="rounded-md border px-2.5 py-1 font-medium transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Previous
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              data.next_cursor &&
-              setCursors((prev) => [...prev, data.next_cursor!])
-            }
-            disabled={!data.next_cursor}
-            className="rounded-md border px-2.5 py-1 font-medium transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Next
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 const TRIPLES_PAGE_SIZE = 100;
 
 function TriplesForGraph({ graphId }: { graphId: string }) {
-  const [page, setPage] = useState(0);
-  const offset = page * TRIPLES_PAGE_SIZE;
+  const [cursors, setCursors] = useState<string[]>([""]);
+  const after = cursors.at(-1) || undefined;
+  const page = cursors.length - 1;
 
   const { data, isLoading, error } = useQuery({
-    queryKey: graphKeys.triples(graphId, offset),
+    queryKey: graphKeys.triples(graphId, after),
     queryFn: ({ signal }) =>
-      listGraphTriples(graphId, { limit: TRIPLES_PAGE_SIZE, offset }, signal),
+      listGraphTriples(graphId, { limit: TRIPLES_PAGE_SIZE, after }, signal),
     placeholderData: (prev) => prev,
   });
 
@@ -328,7 +182,7 @@ function TriplesForGraph({ graphId }: { graphId: string }) {
     );
   }
   if (isLoading && !data) return <Skeleton />;
-  if (!data || data.triples.length === 0) {
+  if (!data || data.items.length === 0) {
     return (
       <div className="rounded-lg border bg-card px-4 py-6 text-sm text-muted-foreground">
         This graph has no triples.
@@ -336,14 +190,12 @@ function TriplesForGraph({ graphId }: { graphId: string }) {
     );
   }
 
-  const totalPages = Math.max(1, Math.ceil(data.total / TRIPLES_PAGE_SIZE));
-
   return (
     <div className="space-y-3">
       <div className="overflow-hidden rounded-lg border bg-card">
         <DataTable
           columns={columns}
-          rows={data.triples}
+          rows={data.items}
           rowKey={(q) =>
             `${q.subject.value} ${q.predicate.value} ${q.object.value}`
           }
@@ -352,13 +204,13 @@ function TriplesForGraph({ graphId }: { graphId: string }) {
       </div>
       <div className="flex items-center justify-between gap-2 text-xs">
         <div className="text-muted-foreground">
-          {data.total.toLocaleString()} triples · page {page + 1} of{" "}
-          {totalPages}
+          Page {page + 1} · {data.items.length.toLocaleString()} triples
+          {!data.next_cursor && " · end of graph"}
         </div>
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            onClick={() => setCursors((values) => values.slice(0, -1))}
             disabled={page === 0}
             className="rounded-md border px-2.5 py-1 font-medium transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -366,8 +218,11 @@ function TriplesForGraph({ graphId }: { graphId: string }) {
           </button>
           <button
             type="button"
-            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-            disabled={page >= totalPages - 1}
+            onClick={() =>
+              data.next_cursor &&
+              setCursors((values) => [...values, data.next_cursor!])
+            }
+            disabled={!data.next_cursor}
             className="rounded-md border px-2.5 py-1 font-medium transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Next

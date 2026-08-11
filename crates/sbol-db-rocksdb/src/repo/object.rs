@@ -7,11 +7,9 @@
 
 use rocksdb::WriteBatch;
 use sbol_db_core::{DomainError, GraphId, ObjectId, ObjectSummary, SbolObjectRecord};
-use sbol_db_storage::{ListObjectsFilter, TextSearchQuery};
+use sbol_db_storage::TextSearchQuery;
 
 use crate::db::Db;
-
-const LIST_LIMIT_MAX: u32 = 5000;
 
 #[derive(Clone)]
 pub struct ObjectRepository {
@@ -32,11 +30,23 @@ impl ObjectRepository {
         summary: &ObjectSummary,
         graph_id: Option<GraphId>,
     ) -> Result<(), DomainError> {
+        self.stage_upsert_with_id(batch, summary, graph_id, None)
+            .map(|_| ())
+    }
+
+    pub(crate) fn stage_upsert_with_id(
+        &self,
+        batch: &mut WriteBatch,
+        summary: &ObjectSummary,
+        graph_id: Option<GraphId>,
+        preferred_id: Option<ObjectId>,
+    ) -> Result<ObjectId, DomainError> {
         let iri = summary.iri.as_str();
         let existing = self.get_by_iri(iri)?;
         let id = existing
             .as_ref()
             .map(|r| r.id)
+            .or(preferred_id)
             .unwrap_or_else(ObjectId::new);
 
         // Drop a stale graph-membership entry when the owning graph changes.
@@ -69,7 +79,7 @@ impl ObjectRepository {
         if let Some(g) = graph_id {
             batch.put_cf(&self.db.cf("obj_by_graph"), graph_member_key(g, iri), []);
         }
-        Ok(())
+        Ok(id)
     }
 
     /// Stage deletion of every object owned by a graph, used by cascade delete.
@@ -104,16 +114,6 @@ impl ObjectRepository {
         }
     }
 
-    pub fn get_by_iris(&self, iris: &[&str]) -> Result<Vec<SbolObjectRecord>, DomainError> {
-        let mut out = Vec::new();
-        for iri in iris {
-            if let Some(record) = self.get_by_iri(iri)? {
-                out.push(record);
-            }
-        }
-        Ok(out)
-    }
-
     pub fn get_iri_by_id(&self, id: ObjectId) -> Result<Option<String>, DomainError> {
         match self.db.get_cf("obj_by_id", id.0.as_bytes())? {
             Some(bytes) => {
@@ -123,60 +123,6 @@ impl ObjectRepository {
             }
             None => Ok(None),
         }
-    }
-
-    pub fn list(&self, filter: &ListObjectsFilter) -> Result<Vec<SbolObjectRecord>, DomainError> {
-        let limit = filter.limit.clamp(1, LIST_LIMIT_MAX) as usize;
-        let after = filter.after_iri.as_deref();
-        let mut out = Vec::new();
-
-        let matches = |r: &SbolObjectRecord| {
-            filter
-                .sbol_class
-                .as_ref()
-                .is_none_or(|c| &r.sbol_class == c)
-                && filter
-                    .role
-                    .as_ref()
-                    .is_none_or(|role| r.roles.contains(role))
-        };
-
-        match filter.graph_id {
-            // Graph-scoped: obj_by_graph already orders by IRI within the graph.
-            Some(g) => {
-                let prefix = g.0.as_bytes().to_vec();
-                self.db.for_each_prefix("obj_by_graph", &prefix, |key, _| {
-                    let iri = std::str::from_utf8(&key[16..])
-                        .map_err(|_| DomainError::Database("non-utf8 object iri".into()))?;
-                    if after.is_some_and(|a| iri <= a) {
-                        return Ok(true);
-                    }
-                    if let Some(record) = self.get_by_iri(iri)? {
-                        if matches(&record) {
-                            out.push(record);
-                        }
-                    }
-                    Ok(out.len() < limit)
-                })?;
-            }
-            // Whole corpus: the objects family is keyed by IRI in order.
-            None => {
-                let start: Vec<u8> = after.map(|a| a.as_bytes().to_vec()).unwrap_or_default();
-                self.db.for_each_prefix("objects", &start, |key, blob| {
-                    let iri = std::str::from_utf8(key)
-                        .map_err(|_| DomainError::Database("non-utf8 object iri".into()))?;
-                    if after.is_some_and(|a| iri <= a) {
-                        return Ok(true);
-                    }
-                    let record = decode(blob)?;
-                    if matches(&record) {
-                        out.push(record);
-                    }
-                    Ok(out.len() < limit)
-                })?;
-            }
-        }
-        Ok(out)
     }
 
     /// Offset-paginated substring search over the object view, scanning the

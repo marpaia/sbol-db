@@ -7,3 +7,8 @@ export {
   type SequenceSearchParams,
   type SequenceStrand,
 } from "@/lib/api";
+
+export {
+  fetchCatalogSequences,
+  type CatalogSequence,
+} from "@/features/admin/api";

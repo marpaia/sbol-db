@@ -1,16 +1,12 @@
 /**
- * Graphs listing. Paginated table of every named graph the server holds,
- * newest first. Shows both `sbol3` graphs (imported SBOL documents, with a
- * derived object view) and `verbatim` graphs (raw RDF written through the
- * SynBioHub-compatible Graph
- * Store / SPARQL Update endpoints). The "Import" button creates an `sbol3`
- * graph; rows link into the per-graph detail page.
+ * Paginated table of every named RDF graph the server holds. Rows link into a
+ * single graph detail representation backed by canonical triples.
  */
 
 import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { ChevronLeft, ChevronRight, Plus, Share2 } from "lucide-react";
+import { Plus, Search, Share2 } from "lucide-react";
 
 import { AdminPage } from "@/components/admin/AdminPage";
 import { DataTable, type DataTableColumn } from "@/components/lab/DataTable";
@@ -18,6 +14,7 @@ import { ImportDialog } from "@/components/lab/ImportDialog";
 import { ErrorBanner } from "@/components/lab/ErrorBanner";
 import { ProductEmptyState } from "@/components/product/ProductEmptyState";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { graphKeys, useGraphs } from "@/features/admin/graphs/queries";
 import { overviewKeys } from "@/features/admin/overview/queries";
 import type { GraphSummary } from "@/features/admin/graphs/api";
@@ -30,15 +27,18 @@ const PAGE_SIZE = 50;
 export default function GraphsRoute() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [page, setPage] = useState(0);
+  const [cursors, setCursors] = useState<string[]>([""]);
+  const after = cursors.at(-1) || undefined;
+  const page = cursors.length - 1;
   const [importerOpen, setImporterOpen] = useState(false);
+  const [searchDraft, setSearchDraft] = useState("");
+  const [search, setSearch] = useState("");
 
   const { data, isLoading, error } = useGraphs({
     limit: PAGE_SIZE,
-    offset: page * PAGE_SIZE,
+    after,
+    q: search || undefined,
   });
-
-  const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
 
   const onImported = useCallback(
     (report: ImportReport) => {
@@ -69,39 +69,30 @@ export default function GraphsRoute() {
       filterValue: (g) => `${g.name ?? ""} ${g.iri}`,
     },
     {
-      id: "kind",
-      header: "Kind",
-      width: 110,
-      cell: (g) => <KindBadge kind={g.kind} />,
-      sortValue: (g) => g.kind,
-      filterValue: (g) => g.kind,
-    },
-    {
       id: "triples",
       header: "Triples",
       width: 90,
       align: "right",
-      cell: (g) => g.triple_count.toLocaleString(),
-      sortValue: (g) => g.triple_count,
-    },
-    {
-      id: "objects",
-      header: "Objects",
-      width: 90,
-      align: "right",
       cell: (g) =>
-        g.object_count > 0 ? g.object_count.toLocaleString() : <Muted>—</Muted>,
-      sortValue: (g) => g.object_count,
+        g.triple_count === null ? (
+          <Muted>—</Muted>
+        ) : (
+          g.triple_count.toLocaleString()
+        ),
+      sortValue: (g) => g.triple_count ?? -1,
     },
     {
       id: "created_at",
       header: "Created",
       width: 110,
       align: "right",
-      cell: (g) => (
-        <span title={g.created_at}>{formatRelative(g.created_at)}</span>
-      ),
-      sortValue: (g) => g.created_at,
+      cell: (g) =>
+        g.created_at ? (
+          <span title={g.created_at}>{formatRelative(g.created_at)}</span>
+        ) : (
+          <Muted>Not catalogued</Muted>
+        ),
+      sortValue: (g) => g.created_at ?? "",
     },
   ];
 
@@ -109,7 +100,7 @@ export default function GraphsRoute() {
     <>
       <AdminPage
         title="Graphs"
-        description="Every named graph in the store. SBOL3 graphs are imported documents with a derived object view; verbatim graphs are raw RDF written through the triplestore endpoints."
+        description="Every named RDF graph in the canonical store, regardless of how it was created."
         eyebrow="Data model"
         action={
           <Button size="sm" type="button" onClick={() => setImporterOpen(true)}>
@@ -118,6 +109,41 @@ export default function GraphsRoute() {
           </Button>
         }
       >
+        <form
+          className="flex gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setSearch(searchDraft.trim());
+            setCursors([""]);
+          }}
+        >
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={searchDraft}
+              onChange={(event) => setSearchDraft(event.target.value)}
+              className="pl-9"
+              placeholder="Search graph name or IRI"
+              aria-label="Search graphs"
+            />
+          </div>
+          <Button type="submit" variant="outline">
+            Search
+          </Button>
+          {(search || searchDraft) && (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setSearchDraft("");
+                setSearch("");
+                setCursors([""]);
+              }}
+            >
+              Clear
+            </Button>
+          )}
+        </form>
         {error ? (
           <ErrorBanner
             title="Couldn't list graphs"
@@ -125,21 +151,49 @@ export default function GraphsRoute() {
           />
         ) : isLoading && !data ? (
           <TableSkeleton />
-        ) : !data || data.graphs.length === 0 ? (
-          <Empty onImport={() => setImporterOpen(true)} />
+        ) : !data || data.items.length === 0 ? (
+          <Empty searching={!!search} onImport={() => setImporterOpen(true)} />
         ) : (
           <>
-            <PageStatus total={data.total} page={page} pageSize={PAGE_SIZE} />
+            <div className="text-xs text-muted-foreground">
+              Page{" "}
+              <span className="tabular-nums text-foreground">{page + 1}</span>
+              {" · "}
+              <span className="tabular-nums text-foreground">
+                {data.items.length.toLocaleString()}
+              </span>{" "}
+              graphs
+              {!data.next_cursor && " · end of corpus"}
+            </div>
             <div className="overflow-hidden rounded-lg border bg-card">
               <DataTable
                 columns={columns}
-                rows={data.graphs}
+                rows={data.items}
                 rowKey={(g) => g.id}
-                filterable
                 onRowClick={(g) => navigate(adminPath(`/graphs/${g.id}`))}
               />
             </div>
-            <Pagination page={page} totalPages={totalPages} onPage={setPage} />
+            <div className="flex items-center justify-end gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setCursors((values) => values.slice(0, -1))}
+                disabled={page === 0}
+                className="rounded-md border px-2.5 py-1 font-medium transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  data.next_cursor &&
+                  setCursors((values) => [...values, data.next_cursor!])
+                }
+                disabled={!data.next_cursor}
+                className="rounded-md border px-2.5 py-1 font-medium transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
           </>
         )}
       </AdminPage>
@@ -153,96 +207,30 @@ export default function GraphsRoute() {
   );
 }
 
-function KindBadge({ kind }: { kind: GraphSummary["kind"] }) {
-  const isSbol3 = kind === "sbol3";
-  return (
-    <span
-      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${
-        isSbol3
-          ? "bg-primary/10 text-primary"
-          : "bg-muted text-muted-foreground"
-      }`}
-    >
-      {isSbol3 ? "SBOL3" : "verbatim"}
-    </span>
-  );
-}
-
-function PageStatus({
-  total,
-  page,
-  pageSize,
+function Empty({
+  searching,
+  onImport,
 }: {
-  total: number;
-  page: number;
-  pageSize: number;
+  searching: boolean;
+  onImport: () => void;
 }) {
-  const start = total === 0 ? 0 : page * pageSize + 1;
-  const end = Math.min((page + 1) * pageSize, total);
-  return (
-    <div className="text-xs text-muted-foreground">
-      Showing{" "}
-      <span className="tabular-nums text-foreground">
-        {start.toLocaleString()}–{end.toLocaleString()}
-      </span>{" "}
-      of{" "}
-      <span className="tabular-nums text-foreground">
-        {total.toLocaleString()}
-      </span>{" "}
-      graphs
-    </div>
-  );
-}
-
-function Pagination({
-  page,
-  totalPages,
-  onPage,
-}: {
-  page: number;
-  totalPages: number;
-  onPage: (p: number) => void;
-}) {
-  if (totalPages <= 1) return null;
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <button
-        type="button"
-        onClick={() => onPage(Math.max(0, page - 1))}
-        disabled={page === 0}
-        className="inline-flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        <ChevronLeft size={12} />
-        Previous
-      </button>
-      <div className="text-xs tabular-nums text-muted-foreground">
-        Page {page + 1} of {totalPages}
-      </div>
-      <button
-        type="button"
-        onClick={() => onPage(Math.min(totalPages - 1, page + 1))}
-        disabled={page >= totalPages - 1}
-        className="inline-flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        Next
-        <ChevronRight size={12} />
-      </button>
-    </div>
-  );
-}
-
-function Empty({ onImport }: { onImport: () => void }) {
   return (
     <ProductEmptyState
       density="compact"
       icon={Share2}
-      title="No graphs yet"
-      description="Import an SBOL document, or write RDF through the Graph Store endpoints, to populate the store."
+      title={searching ? "No matching graphs" : "No graphs yet"}
+      description={
+        searching
+          ? "Try a different graph name or IRI."
+          : "Import an SBOL document, or write RDF through the Graph Store endpoints, to populate the store."
+      }
       action={
-        <Button type="button" size="sm" onClick={onImport}>
-          <Plus />
-          Import a document
-        </Button>
+        !searching ? (
+          <Button type="button" size="sm" onClick={onImport}>
+            <Plus />
+            Import a document
+          </Button>
+        ) : undefined
       }
     />
   );

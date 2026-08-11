@@ -25,13 +25,25 @@ test("capability predicates drive every navigation surface consistently", () => 
     unavailable.some((item) => item.id === "maintenance"),
     false
   );
+  assert.equal(
+    unavailable.some((item) => item.id === "schema"),
+    false
+  );
+  assert.equal(
+    unavailable.some((item) => item.id === "graphs"),
+    true
+  );
 
   const available = availableAdminDestinations({
-    sql_console: true,
-    relational_schema: true,
-    maintenance: "relational",
-    slow_query_stats: true,
-    activity_and_locks: true,
+    backend: "rocksdb",
+    backend_name: "RocksDB",
+    capabilities: {
+      sql_console: true,
+      relational_schema: true,
+      maintenance: "relational",
+      slow_query_stats: true,
+      activity_and_locks: true,
+    },
   });
   assert.equal(
     available.some((item) => item.id === "sql"),
@@ -39,6 +51,14 @@ test("capability predicates drive every navigation surface consistently", () => 
   );
   assert.equal(
     available.some((item) => item.id === "maintenance"),
+    true
+  );
+  assert.equal(
+    available.some((item) => item.id === "schema"),
+    true
+  );
+  assert.equal(
+    available.some((item) => item.id === "objects"),
     true
   );
 });
@@ -51,7 +71,7 @@ test("breadcrumbs use the same destination metadata as navigation", () => {
   ]);
   assert.deepEqual(adminBreadcrumbs("/admin/objects/lookup"), [
     { label: "Data model" },
-    { label: "Objects", to: "/admin/objects" },
+    { label: "Resources", to: "/admin/objects" },
     { label: "Bulk lookup" },
   ]);
 });

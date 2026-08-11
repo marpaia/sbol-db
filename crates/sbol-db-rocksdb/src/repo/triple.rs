@@ -347,8 +347,11 @@ impl TripleRepository {
         &self,
         f: &mut dyn FnMut(TermId) -> Result<(), DomainError>,
     ) -> Result<(), DomainError> {
-        self.db.for_each(GSPO.cf, |key, _| {
-            f(keys::id_at(key, 0))?;
+        self.db.for_each_distinct_fixed_prefix(GSPO.cf, 16, |key| {
+            let gid: TermId = key
+                .try_into()
+                .map_err(|_| DomainError::Database("invalid graph id width in gspo".to_owned()))?;
+            f(gid)?;
             Ok(true)
         })
     }

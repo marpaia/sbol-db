@@ -62,7 +62,15 @@ export interface AdminUser {
 
 export interface AdminUsersResponse {
   total: number;
+  limit: number;
+  offset: number;
   items: AdminUser[];
+}
+
+export interface AdminUsersQuery {
+  q?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface CreateAdminUser {
@@ -119,6 +127,126 @@ export interface AdminAuditEvent {
 export interface AdminAuditResponse {
   total: number;
   items: AdminAuditEvent[];
+}
+
+export interface CatalogCounts {
+  resources: number;
+  named_graphs: number;
+  triples: number;
+  sequences: number;
+  ontologies: number;
+}
+
+export interface CatalogLiteral {
+  value: string;
+  datatype: string;
+  language?: string;
+}
+
+export interface CatalogResourceMeta {
+  display_id?: CatalogLiteral[];
+  name?: CatalogLiteral[];
+  description?: CatalogLiteral[];
+  version?: CatalogLiteral[];
+  types?: string[];
+  sbol_types?: string[];
+  roles?: string[];
+  creators?: string[];
+  top_level?: boolean;
+}
+
+export interface CatalogResource {
+  iri: string;
+  graph_count: number;
+  meta: CatalogResourceMeta;
+}
+
+export interface CatalogResourceOccurrence {
+  graph_iri: string;
+  resource_iri: string;
+  meta: CatalogResourceMeta;
+}
+
+export interface CatalogResourceDetail {
+  resource: CatalogResource;
+  occurrences: CatalogResourceOccurrence[];
+}
+
+export interface CatalogResourceLookup {
+  found: CatalogResource[];
+  missing: string[];
+}
+
+export interface CatalogGraph {
+  id: string;
+  iri: string;
+  name: string | null;
+  description: string | null;
+  source_uri: string | null;
+  serialization_format: string | null;
+  triple_count: number | null;
+  resource_count: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface CatalogSequence {
+  iri: string;
+  graph_count: number;
+  encoding_iri: string | null;
+  elements: string | null;
+  alphabet: string | null;
+}
+
+export interface CatalogTopClass {
+  iri: string;
+  count: number;
+}
+
+export interface CatalogOntology {
+  prefix: string;
+  name: string;
+  source_url: string | null;
+  version: string | null;
+  term_count: number;
+  imported_at: string;
+}
+
+export interface CatalogDashboard {
+  counts: CatalogCounts;
+  graphs: CatalogGraph[];
+  top_classes: CatalogTopClass[];
+  loaded_ontologies: CatalogOntology[];
+}
+
+export interface CursorPage<T> {
+  items: T[];
+  next_cursor?: string;
+}
+
+export interface CatalogPageQuery {
+  after?: string;
+  limit?: number;
+  q?: string;
+}
+
+export interface CatalogResourceQuery extends CatalogPageQuery {
+  class?: string;
+  role?: string;
+  graph?: string;
+}
+
+export interface CatalogTerm {
+  type: "uri" | "bnode" | "literal";
+  value: string;
+  datatype?: string;
+  language?: string;
+}
+
+export interface CatalogTriple {
+  subject: CatalogTerm;
+  predicate: CatalogTerm;
+  object: CatalogTerm;
 }
 
 export type CompleteBackupTrigger = "manual" | "pre_deploy";
@@ -201,6 +329,69 @@ export function fetchAdminOverview(signal?: AbortSignal) {
   return request<AdminOverview>("", { signal });
 }
 
+export function fetchCatalogDashboard(signal?: AbortSignal) {
+  return request<CatalogDashboard>("/dashboard", { signal });
+}
+
+export function fetchCatalogGraphs(
+  query: CatalogPageQuery = {},
+  signal?: AbortSignal
+) {
+  return request<CursorPage<CatalogGraph>>(
+    `/graphs${queryString(query)}`,
+    { signal }
+  );
+}
+
+export function fetchCatalogGraph(id: string, signal?: AbortSignal) {
+  return request<CatalogGraph>(`/graphs/${encodeURIComponent(id)}`, { signal });
+}
+
+export function fetchCatalogGraphTriples(
+  id: string,
+  query: Pick<CatalogPageQuery, "after" | "limit"> = {},
+  signal?: AbortSignal
+) {
+  return request<CursorPage<CatalogTriple>>(
+    `/graphs/${encodeURIComponent(id)}/triples${queryString(query)}`,
+    { signal }
+  );
+}
+
+export function fetchCatalogResources(
+  query: CatalogResourceQuery = {},
+  signal?: AbortSignal
+) {
+  return request<CursorPage<CatalogResource>>(
+    `/resources${queryString(query)}`,
+    { signal }
+  );
+}
+
+export function fetchCatalogResource(iri: string, signal?: AbortSignal) {
+  return request<CatalogResourceDetail>(
+    `/resources/lookup?iri=${encodeURIComponent(iri)}`,
+    { signal }
+  );
+}
+
+export function lookupCatalogResources(iris: string[]) {
+  return request<CatalogResourceLookup>(
+    "/resources/lookup",
+    jsonRequest("POST", { iris })
+  );
+}
+
+export function fetchCatalogSequences(
+  query: CatalogPageQuery = {},
+  signal?: AbortSignal
+) {
+  return request<CursorPage<CatalogSequence>>(
+    `/sequences${queryString(query)}`,
+    { signal }
+  );
+}
+
 export function fetchAdminInstance(signal?: AbortSignal) {
   return request<AdminInstance>("/instance", { signal });
 }
@@ -209,8 +400,19 @@ export function updateAdminInstance(payload: AdminInstancePatch) {
   return request<AdminInstance>("/instance", jsonRequest("PATCH", payload));
 }
 
-export function fetchAdminUsers(signal?: AbortSignal) {
-  return request<AdminUsersResponse>("/users", { signal });
+export function fetchAdminUsers(
+  query: AdminUsersQuery = {},
+  signal?: AbortSignal
+) {
+  const params = new URLSearchParams();
+  if (query.q) params.set("q", query.q);
+  if (typeof query.limit === "number") params.set("limit", String(query.limit));
+  if (typeof query.offset === "number")
+    params.set("offset", String(query.offset));
+  const tail = params.toString();
+  return request<AdminUsersResponse>(`/users${tail ? `?${tail}` : ""}`, {
+    signal,
+  });
 }
 
 export function createAdminUser(payload: CreateAdminUser) {
@@ -350,6 +552,16 @@ function jsonRequest(method: string, body: unknown): RequestInit {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   };
+}
+
+function queryString(query: object) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (typeof value === "string" && value.length > 0) params.set(key, value);
+    if (typeof value === "number") params.set(key, String(value));
+  }
+  const tail = params.toString();
+  return tail ? `?${tail}` : "";
 }
 
 async function responseError(res: Response): Promise<AdminApiError> {

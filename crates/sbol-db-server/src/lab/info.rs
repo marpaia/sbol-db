@@ -9,6 +9,7 @@ use axum::Json;
 use sbol_db_storage::{BackendKind, Capabilities};
 use serde::Serialize;
 
+use crate::error::ApiError;
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -20,10 +21,10 @@ pub struct LabInfo {
     pub capabilities: Capabilities,
 }
 
-pub async fn handler(State(state): State<AppState>) -> Json<LabInfo> {
-    Json(LabInfo {
+pub async fn handler(State(state): State<AppState>) -> Result<Json<LabInfo>, ApiError> {
+    Ok(Json(LabInfo {
         backend: state.backend_kind,
         backend_name: state.backend_kind.display_name(),
         capabilities: state.capabilities(),
-    })
+    }))
 }

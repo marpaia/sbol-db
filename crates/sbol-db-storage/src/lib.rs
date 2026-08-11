@@ -7,6 +7,7 @@
 
 mod accel;
 mod capabilities;
+mod catalog;
 mod graph;
 mod import;
 mod job;
@@ -24,11 +25,18 @@ mod triple;
 mod update;
 
 pub use accel::{
-    build_accel_index, generate_metadata_rows, generate_rows, integer, AccelIndex, AccelObject,
-    AccelSolutions, AcceleratedQuery, FacetKind, Field, LitVal, MetaRecord, Scope, BIOPAX_PREFIX,
+    build_accel_index, build_catalog_projection, generate_metadata_rows, generate_rows, integer,
+    AccelIndex, AccelObject, AccelSolutions, AcceleratedQuery, CatalogProjection,
+    CatalogSequenceProjection, FacetKind, Field, LitVal, MetaRecord, Scope, BIOPAX_PREFIX,
     SO_PREFIX,
 };
 pub use capabilities::{BackendKind, Capabilities, MaintenanceStyle};
+pub use catalog::{
+    merge_resource_occurrences, CatalogSequenceRecord, CorpusStats, CorpusStatsStore, CursorPage,
+    NamedGraphCatalogStore, NamedGraphQuery, NamedGraphRecord, ResourceCatalogStore,
+    ResourceOccurrence, ResourceQuery, ResourceRecord, SequenceCatalogStore, SequenceQuery,
+    TriplePageQuery,
+};
 pub use graph::ListGraphsFilter;
 pub use import::{GraphWriteMode, ImportInput, ImportOverwrite};
 pub use job::{
@@ -51,10 +59,10 @@ pub use stats::{
     TableColumn, TableSchema, TableStats,
 };
 pub use traits::{
-    distinct_graph_iris, distinct_object_iris, AclStore, BlobStore, ClusterStore, ConfigStore,
-    GraphStore, JobQueue, NeighborhoodStore, ObjectStore, OntologyStore, PageRankStore, SbolStore,
-    SequenceSearchStore, SketchStore, TextSearchStore, TokenStore, TripleSource, TripleWriter,
-    UserStore, SBH_CAN_VIEW, SBH_OWNED_BY,
+    distinct_graph_iris, distinct_object_iris, user_matches, AclStore, BlobStore, ClusterStore,
+    ConfigStore, GraphStore, JobQueue, NeighborhoodStore, ObjectStore, OntologyStore,
+    PageRankStore, SbolStore, SequenceSearchStore, SketchStore, TextSearchStore, TokenStore,
+    TripleSource, TripleWriter, UserListQuery, UserPage, UserStore, SBH_CAN_VIEW, SBH_OWNED_BY,
 };
 
 /// Re-exported so backends and consumers name the cluster id and similarity

@@ -24,7 +24,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import type { Capabilities } from "../../lib/api.ts";
+import type { LabInfo } from "../../lib/api.ts";
 import { adminPath } from "../../lib/routes.ts";
 
 export type AdminSectionId =
@@ -73,7 +73,7 @@ export interface AdminDestination {
   sidebar?: boolean;
   palette?: "query" | "go-to";
   end?: boolean;
-  available?: (capabilities: Capabilities | undefined) => boolean;
+  available?: (info: LabInfo | undefined) => boolean;
 }
 
 export const adminSections: AdminSectionDefinition[] = [
@@ -134,7 +134,7 @@ export const adminDestinations: AdminDestination[] = [
   {
     id: "objects",
     path: adminPath("/objects"),
-    label: "Objects",
+    label: "Resources",
     section: "data-model",
     icon: Boxes,
     sidebar: true,
@@ -143,7 +143,7 @@ export const adminDestinations: AdminDestination[] = [
   {
     id: "object-lookup",
     path: adminPath("/objects/lookup"),
-    label: "Bulk object lookup",
+    label: "Bulk resource lookup",
     section: "data-model",
     icon: Boxes,
     palette: "go-to",
@@ -184,6 +184,7 @@ export const adminDestinations: AdminDestination[] = [
     icon: Table2,
     sidebar: true,
     palette: "go-to",
+    available: (info) => Boolean(info?.capabilities.relational_schema),
   },
   {
     id: "sparql",
@@ -202,7 +203,7 @@ export const adminDestinations: AdminDestination[] = [
     icon: Database,
     sidebar: true,
     palette: "query",
-    available: (capabilities) => Boolean(capabilities?.sql_console),
+    available: (info) => Boolean(info?.capabilities.sql_console),
   },
   {
     id: "metrics",
@@ -231,8 +232,8 @@ export const adminDestinations: AdminDestination[] = [
     icon: HardDrive,
     sidebar: true,
     palette: "go-to",
-    available: (capabilities) =>
-      Boolean(capabilities && capabilities.maintenance !== null),
+    available: (info) =>
+      Boolean(info && info.capabilities.maintenance !== null),
   },
   {
     id: "instance",
@@ -304,12 +305,20 @@ export function adminRouteSegment(id: AdminDestinationId): string {
 }
 
 export function availableAdminDestinations(
-  capabilities: Capabilities | undefined
+  info: LabInfo | undefined
 ): AdminDestination[] {
   return adminDestinations.filter(
     (destination) =>
-      destination.available === undefined || destination.available(capabilities)
+      destination.available === undefined || destination.available(info)
   );
+}
+
+export function isAdminDestinationAvailable(
+  id: AdminDestinationId,
+  info: LabInfo | undefined
+): boolean {
+  const available = adminDestination(id).available;
+  return available === undefined || available(info);
 }
 
 export type AdminCrumb = { label: string; to?: string; mono?: boolean };

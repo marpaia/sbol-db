@@ -1,13 +1,8 @@
 //! `/lab/api/graphs` — paginated listing of every named graph.
 //!
-//! This is the graph-native browser backing the lab UI. Unlike the older
-//! document listing (which only saw `kind = 'sbol3'` imports), this lists
-//! **all** graphs, including `kind = 'verbatim'` graphs written through the
-//! SynBioHub-compatible Graph Store / SPARQL Update endpoints. Each row carries
-//! the graph's `kind`, its triple count, and (for graphs with a derived SBOL
-//! view) its object count. `GET /lab/api/graphs/:id/triples` serves one graph's
-//! raw triples, paginated — the way a `verbatim` graph (which has no derived
-//! object view) is browsed in the UI.
+//! This is the canonical graph browser backing the Admin UI. Every named graph
+//! has the same response shape and detail view, and
+//! `GET /lab/api/graphs/:id/triples` pages its RDF triples.
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
@@ -28,7 +23,6 @@ pub struct ListQuery {
     pub limit: Option<i64>,
     #[serde(default)]
     pub offset: Option<i64>,
-    /// Optional filter on graph kind (`sbol3` or `verbatim`).
     #[serde(default)]
     pub kind: Option<String>,
 }
@@ -41,9 +35,9 @@ pub struct GraphSummary {
     pub name: Option<String>,
     pub serialization_format: Option<String>,
     pub source_uri: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub object_count: i64,
-    pub triple_count: i64,
+    pub created_at: Option<DateTime<Utc>>,
+    pub object_count: Option<i64>,
+    pub triple_count: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -116,7 +110,7 @@ pub struct TripleRow {
 
 #[derive(Serialize)]
 pub struct TriplesResponse {
-    pub total: i64,
+    pub total: Option<i64>,
     pub limit: i64,
     pub offset: i64,
     pub triples: Vec<TripleRow>,
@@ -129,7 +123,6 @@ pub async fn list_graphs(
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
     let kind = q.kind.as_deref();
-
     let total = state.lab.count_graphs(kind).await?;
     let graphs = state
         .lab
@@ -157,9 +150,7 @@ pub async fn get_graph_detail(
     }
 }
 
-/// Paginated raw triples of one graph. This is how a `verbatim` graph's
-/// content is browsed in the UI — it has no derived object view, so the
-/// triples themselves are the content. Works for any graph kind.
+/// Paginated canonical RDF triples of one named graph.
 pub async fn get_graph_triples(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,

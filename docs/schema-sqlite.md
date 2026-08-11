@@ -8,7 +8,7 @@ and RocksDB layouts, see [schema-postgres.md](schema-postgres.md) and
 
 The SQLite backend mirrors the Postgres model with portable types. UUIDs and
 timestamps are `TEXT` (timestamps are sortable RFC3339, all UTC), ontology-term
-and type/role arrays are JSON in `TEXT`, and content hashes are `BLOB`. The five
+and type/role arrays are JSON in `TEXT`, and content hashes are `BLOB`. The
 migrations under `crates/sbol-db-sqlite/migrations/` run on connect via
 `connect_and_migrate`, or through the CLI's `sbol-db db migrate`.
 
@@ -37,6 +37,8 @@ document, `verbatim` for raw RDF stored as written).
 | `created_by` | `TEXT` | Free-form actor identifier. |
 | `created_at` | `TEXT` | Insertion timestamp. |
 | `updated_at` | `TEXT` | Last-modification timestamp. |
+| `triple_count` | `INTEGER` | Exact maintained count of canonical triples in the graph. |
+| `resource_count` | `INTEGER` | Exact maintained count of RDF resource occurrences in the graph. |
 
 Index: `sbol_graphs_kind_hash` on `(kind, content_hash)` for content-hash
 dedup lookups.
@@ -76,8 +78,9 @@ SQLite's index-size limit on large sequence literals in `object_literal`.
 
 ### `sbol_objects`
 
-One row per top-level SBOL object, keyed by IRI. The derived view for "give me
-the object at this IRI". `graph_id` references the owning graph with
+One row per top-level object produced by the normalized SBOL import path, keyed
+by IRI. This typed/native compatibility cache is not the universal resource
+inventory. `graph_id` references the owning graph with
 `ON DELETE SET NULL`, so objects survive a graph deletion. Types and roles are
 JSON arrays; the per-object JSON-LD slice is `data`.
 
@@ -210,8 +213,8 @@ the 2-bit packed 8-mer — so one index probe finds both strands. Indexes:
 `20260101000005_accelerator.sql` adds per-graph derived indexes that answer
 SynBioHub's fixed query templates with point lookups and range scans instead of
 graph-pattern evaluation. The indexes derive from a graph's triples (the same
-derivation every backend shares). A write marks the graph dirty in
-`accel_dirty`; the next read that needs the indexes rebuilds them in one pass.
+derivation every backend shares) and refresh in the same transaction as graph
+writes.
 
 | Table | Key | What it holds |
 | --- | --- | --- |
@@ -225,6 +228,19 @@ Supporting indexes: `accel_object_toplevel_idx` on
 `(graph_iri, sort_key, iri) WHERE top_level`, `accel_type_scan_idx` on
 `(graph_iri, type_iri, sort_key, iri)`, `accel_member_scan_idx` on
 `(graph_iri, collection_iri, sort_key, member_iri)`.
+
+## Universal RDF catalog
+
+`20260805000001_catalog_stats.sql` adds global `(iri, graph_iri)` and
+`(type_iri, iri, graph_iri)` indexes, per-graph triple/resource counts, and the
+singleton `sbol_catalog_stats` row. SQLite triggers update all counts in the
+same transaction as canonical triples and accelerator rows. Resource and
+sequence pages first select a bounded IRI page, then expand the whole page with
+set queries instead of one query per row.
+
+As on the other engines, `sbol_objects` remains a useful native-import cache;
+canonical RDF and its accelerator projection define the universal Admin
+resource catalog.
 
 ## Not yet on SQLite
 

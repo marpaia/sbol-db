@@ -21,12 +21,14 @@ impl LabRepository {
         let row = sqlx::query(
             r#"
             SELECT
-              (SELECT count(*) FROM sbol_objects)         AS objects,
-              (SELECT count(*) FROM sbol_graphs)          AS graphs,
-              (SELECT count(*) FROM sbol_triples)         AS triples,
-              (SELECT count(*) FROM sbol_sequences)       AS sequences,
+              resources                                   AS objects,
+              named_graphs                                AS graphs,
+              triples,
+              sequences,
               (SELECT count(*) FROM sbol_validation_runs) AS validation_runs,
-              (SELECT count(*) FROM sbol_ontologies)      AS ontologies
+              ontologies
+            FROM sbol_catalog_stats
+            WHERE singleton
             "#,
         )
         .fetch_one(&self.pool)
@@ -62,17 +64,9 @@ impl LabRepository {
             r#"
             SELECT
               g.id, g.iri, g.kind, g.name, g.serialization_format, g.source_uri, g.created_at,
-              coalesce(o.n, 0) AS object_count,
-              coalesce(t.n, 0) AS triple_count
+              g.resource_count AS object_count,
+              g.triple_count
             FROM sbol_graphs g
-            LEFT JOIN (
-              SELECT graph_id, count(*) AS n FROM sbol_objects
-              WHERE graph_id IS NOT NULL GROUP BY graph_id
-            ) o ON o.graph_id = g.id
-            LEFT JOIN (
-              SELECT graph_iri, count(*) AS n FROM sbol_triples
-              WHERE graph_iri IS NOT NULL GROUP BY graph_iri
-            ) t ON t.graph_iri = g.iri
             WHERE ($1::text IS NULL OR g.kind = $1)
             ORDER BY g.created_at DESC
             LIMIT $2 OFFSET $3
@@ -87,6 +81,39 @@ impl LabRepository {
         rows.into_iter().map(row_to_overview).collect()
     }
 
+    pub async fn catalog_graphs(
+        &self,
+        after: Option<&str>,
+        text: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<GraphOverview>, DomainError> {
+        let text = text
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_lowercase);
+        let rows = sqlx::query(
+            r#"
+            SELECT
+              g.id, g.iri, g.kind, g.name, g.serialization_format, g.source_uri, g.created_at,
+              g.resource_count AS object_count,
+              g.triple_count
+            FROM sbol_graphs g
+            WHERE ($1::text IS NULL OR g.iri > $1)
+              AND ($2::text IS NULL OR position($2 in lower(g.iri)) > 0
+                   OR position($2 in lower(coalesce(g.name, ''))) > 0)
+            ORDER BY g.iri
+            LIMIT $3
+            "#,
+        )
+        .bind(after)
+        .bind(text.as_deref())
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        rows.into_iter().map(row_to_overview).collect()
+    }
+
     pub async fn get_graph_overview(
         &self,
         id: GraphId,
@@ -95,8 +122,8 @@ impl LabRepository {
             r#"
             SELECT
               g.id, g.iri, g.kind, g.name, g.serialization_format, g.source_uri, g.created_at,
-              (SELECT count(*) FROM sbol_objects WHERE graph_id = g.id) AS object_count,
-              (SELECT count(*) FROM sbol_triples WHERE graph_iri = g.iri) AS triple_count
+              g.resource_count AS object_count,
+              g.triple_count
             FROM sbol_graphs g
             WHERE g.id = $1
             "#,
@@ -114,21 +141,17 @@ impl LabRepository {
         limit: i64,
         offset: i64,
     ) -> Result<Option<GraphTriplesPage>, DomainError> {
-        let iri: Option<String> =
-            sqlx::query_scalar::<_, String>("SELECT iri::text FROM sbol_graphs WHERE id = $1")
+        let graph =
+            sqlx::query("SELECT iri::text AS iri, triple_count FROM sbol_graphs WHERE id = $1")
                 .bind(id.0)
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(db_err)?;
-        let Some(iri) = iri else {
+        let Some(graph) = graph else {
             return Ok(None);
         };
-        let total: i64 =
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sbol_triples WHERE graph_iri = $1")
-                .bind(&iri)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(db_err)?;
+        let iri: String = graph.try_get("iri").map_err(db_err)?;
+        let total: i64 = graph.try_get("triple_count").map_err(db_err)?;
         let rows = sqlx::query(
             r#"
             SELECT graph_iri, subject_iri, subject_blank, predicate_iri,
@@ -149,16 +172,18 @@ impl LabRepository {
             .into_iter()
             .map(row_to_triple)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Some(GraphTriplesPage { total, triples }))
+        Ok(Some(GraphTriplesPage {
+            total: Some(total),
+            triples,
+        }))
     }
 
     pub async fn top_classes(&self, limit: i64) -> Result<Vec<ClassCount>, DomainError> {
         let rows = sqlx::query(
             r#"
-            SELECT sbol_class, count(*) AS n
-            FROM sbol_objects
-            WHERE sbol_class IS NOT NULL
-            GROUP BY sbol_class
+            SELECT type_iri AS sbol_class, count(DISTINCT iri) AS n
+            FROM accel_type
+            GROUP BY type_iri
             ORDER BY n DESC
             LIMIT $1
             "#,
@@ -186,9 +211,9 @@ fn row_to_overview(row: sqlx::postgres::PgRow) -> Result<GraphOverview, DomainEr
         name: row.try_get("name").map_err(db_err)?,
         source_uri: row.try_get("source_uri").map_err(db_err)?,
         serialization_format: row.try_get("serialization_format").map_err(db_err)?,
-        created_at: row.try_get("created_at").map_err(db_err)?,
-        object_count: row.try_get("object_count").map_err(db_err)?,
-        triple_count: row.try_get("triple_count").map_err(db_err)?,
+        created_at: Some(row.try_get("created_at").map_err(db_err)?),
+        object_count: Some(row.try_get("object_count").map_err(db_err)?),
+        triple_count: Some(row.try_get("triple_count").map_err(db_err)?),
     })
 }
 

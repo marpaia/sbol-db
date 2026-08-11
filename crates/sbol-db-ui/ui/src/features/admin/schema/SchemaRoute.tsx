@@ -253,7 +253,7 @@ function SparqlPanel({ onLaunch }: { onLaunch: (query: string) => void }) {
         }
       >
         {data.top_classes.length === 0 ? (
-          <Empty>No SBOL objects in the database yet.</Empty>
+          <Empty>No typed RDF resources in the database yet.</Empty>
         ) : (
           <ul className="divide-y">
             {data.top_classes.map((c) => (

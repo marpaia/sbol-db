@@ -45,7 +45,7 @@ export function CommandPalette({
   const history = useWorkbenchStore((s) => s.history);
   const navigate = useNavigate();
   const { data: info } = useBackendInfo();
-  const destinations = availableAdminDestinations(info?.capabilities);
+  const destinations = availableAdminDestinations(info);
   const queryDestinations = destinations.filter(
     (destination) => destination.palette === "query"
   );

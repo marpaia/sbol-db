@@ -1,10 +1,9 @@
 export {
-  exportObjectRdf,
-  getObjectByIri,
-  listObjects,
-  lookupObjects,
-  type ListObjectsQuery,
-  type ListObjectsResponse,
-  type LookupObjectsResponse,
-  type SbolObjectRecord,
-} from "@/lib/api";
+  fetchCatalogResource as getObjectByIri,
+  fetchCatalogResources as listObjects,
+  lookupCatalogResources as lookupObjects,
+  type CatalogResourceLookup as LookupObjectsResponse,
+  type CatalogResource as SbolObjectRecord,
+  type CatalogResourceDetail as ObjectDetail,
+  type CatalogResourceQuery as ListObjectsQuery,
+} from "@/features/admin/api";

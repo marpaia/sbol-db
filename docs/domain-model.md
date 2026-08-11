@@ -14,9 +14,9 @@ The graph owns the triples; the typed view is derived from those triples; the
 IRI threads through all of it.
 
 This two-layer model is the backend-neutral contract. The table names below
-(`sbol_graphs`, `sbol_triples`, `sbol_objects`, ...) are the default Postgres
-backend's realization of it; the SQLite and RocksDB backends satisfy the same
-contract with their own layouts. See [`storage.md`](storage.md) for the contract
+(`sbol_graphs`, `sbol_triples`, `sbol_objects`, ...) are the Postgres backend's
+relational realization of it; the primary RocksDB runtime and SQLite backend
+satisfy the same contract with their own layouts. See [`storage.md`](storage.md) for the contract
 and [`schema-postgres.md`](schema-postgres.md),
 [`schema-sqlite.md`](schema-sqlite.md), and
 [`schema-rocksdb.md`](schema-rocksdb.md) for each realization.

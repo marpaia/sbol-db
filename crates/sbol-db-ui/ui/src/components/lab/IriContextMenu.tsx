@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 
 import { useWorkbenchStore } from "@/features/admin/workbench/store";
+import { useBackendInfo } from "@/features/admin/backend/queries";
 import { adminPath } from "@/lib/routes";
 import { useNavigate } from "react-router-dom";
 
@@ -32,6 +33,7 @@ export interface IriContextMenuProps {
 
 export function IriContextMenu({ x, y, iri, onClose }: IriContextMenuProps) {
   const navigate = useNavigate();
+  const { data: backend } = useBackendInfo();
   const setBuffer = useWorkbenchStore((s) => s.setBuffer);
 
   useEffect(() => {
@@ -131,11 +133,13 @@ export function IriContextMenu({ x, y, iri, onClose }: IriContextMenuProps) {
         label="Open in SPARQL"
         onClick={openInSparql}
       />
-      <MenuButton
-        icon={<Database size={14} />}
-        label="Open in SQL"
-        onClick={openInSql}
-      />
+      {backend?.capabilities.sql_console && (
+        <MenuButton
+          icon={<Database size={14} />}
+          label="Open in SQL"
+          onClick={openInSql}
+        />
+      )}
       {isHttp && (
         <>
           <Divider />

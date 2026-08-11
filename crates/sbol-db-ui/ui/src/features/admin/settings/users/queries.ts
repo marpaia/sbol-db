@@ -7,6 +7,7 @@ import {
   deleteAdminUser,
   fetchAdminUsers,
   updateAdminUser,
+  type AdminUsersQuery,
   type UpdateAdminUser,
 } from "./api";
 
@@ -14,10 +15,16 @@ export const adminUserKeys = {
   all: ["admin", "settings", "users"] as const,
 };
 
-export function useAdminUsers() {
+export function useAdminUsers(query: AdminUsersQuery) {
   return useQuery({
-    queryKey: adminUserKeys.all,
-    queryFn: ({ signal }) => fetchAdminUsers(signal),
+    queryKey: [
+      ...adminUserKeys.all,
+      query.q ?? "",
+      query.limit ?? 25,
+      query.offset ?? 0,
+    ],
+    queryFn: ({ signal }) => fetchAdminUsers(query, signal),
+    placeholderData: (previous) => previous,
   });
 }
 

@@ -1,5 +1,5 @@
 /**
- * Bulk object lookup. Paste up to 1000 IRIs (one per line); the server
+ * Bulk resource lookup. Paste up to 1000 IRIs (one per line); the server
  * resolves them in a single `WHERE iri = ANY(...)` round trip and the
  * response separates resolved records from missing IRIs. Each side
  * renders as its own `DataTable`.
@@ -57,9 +57,11 @@ export default function ObjectLookupRoute() {
       header: "Display ID",
       width: 180,
       cell: (o) =>
-        o.display_id ?? <span className="text-muted-foreground/60">—</span>,
-      sortValue: (o) => o.display_id ?? "",
-      filterValue: (o) => o.display_id ?? "",
+        firstValue(o.meta.display_id) || (
+          <span className="text-muted-foreground/60">—</span>
+        ),
+      sortValue: (o) => firstValue(o.meta.display_id),
+      filterValue: (o) => firstValue(o.meta.display_id),
     },
     {
       id: "class",
@@ -67,11 +69,11 @@ export default function ObjectLookupRoute() {
       width: 220,
       cell: (o) => (
         <span className="font-mono text-[11px] text-muted-foreground">
-          {shortIri(o.sbol_class)}
+          {shortIri(o.meta.types?.[0])}
         </span>
       ),
-      sortValue: (o) => o.sbol_class ?? "",
-      filterValue: (o) => o.sbol_class ?? "",
+      sortValue: (o) => o.meta.types?.[0] ?? "",
+      filterValue: (o) => o.meta.types?.join(" ") ?? "",
     },
   ];
 
@@ -98,15 +100,15 @@ export default function ObjectLookupRoute() {
           className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           <ChevronLeft size={12} />
-          Object browser
+          Resource browser
         </Link>
 
         <header>
           <h1 className="text-2xl font-semibold tracking-tight">
-            Bulk object lookup
+            Bulk resource lookup
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Paste up to {HARD_LIMIT.toLocaleString()} SBOL IRIs (one per line).
+            Paste up to {HARD_LIMIT.toLocaleString()} RDF IRIs (one per line).
             The server resolves them in one round trip and returns matches
             alongside any IRIs that didn't hit.
           </p>
@@ -180,7 +182,7 @@ export default function ObjectLookupRoute() {
                   <DataTable
                     columns={foundColumns}
                     rows={lookup.data.found}
-                    rowKey={(o) => o.id}
+                    rowKey={(o) => o.iri}
                     filterable
                     onRowClick={(o) =>
                       navigate(
@@ -233,4 +235,8 @@ function shortIri(iri: string | null | undefined): string {
   if (!iri) return "";
   const m = iri.match(/[#/]([^#/]+)$/);
   return m ? m[1] : iri;
+}
+
+function firstValue(values?: Array<{ value: string }>): string {
+  return values?.[0]?.value ?? "";
 }

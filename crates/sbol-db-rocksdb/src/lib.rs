@@ -24,7 +24,9 @@ use sbol_db_core::DomainError;
 
 pub use bulk::{
     AccelCountImport, AccelCountKind, AccelFacetImport, AccelMemberImport, AccelObjectImport,
-    RocksdbBulkLoader, SketchBandImport, SketchImport,
+    GraphCatalogImport, OntologyAliasImport, OntologyClosureImport, OntologyImport,
+    OntologyTermImport, RocksdbBulkLoader, SequenceProjectionImport, SketchBandImport,
+    SketchImport,
 };
 pub use db::Db;
 pub use jobs::RocksdbJobs;
@@ -38,7 +40,8 @@ pub use store::RocksdbStore;
 
 /// Open (creating if absent) the database named by a `rocksdb://<path>`
 /// connection string. The column families are created on open, so the store is
-/// usable immediately without a separate migration step.
+/// usable immediately when empty. Existing databases must run the versioned
+/// migrator before catalog reads are served.
 pub fn connect(conn: &str) -> Result<Db, DomainError> {
     let path = conn
         .strip_prefix("rocksdb://")
