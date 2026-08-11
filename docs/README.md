@@ -26,6 +26,8 @@ workflows through storage and production recovery.
 
 ## Product workflows
 
+- **[Importing iGEM parts](importing-igem-parts.md)**: extract the iGEM SBOL 2
+  documents and import them with a small Python or Java REST client.
 - **[Application and admin UI guide](ui.md)**: the current public registry,
   account and collaboration workflows, admin control plane, screenshot tour,
   configuration switches, and local development loop.
