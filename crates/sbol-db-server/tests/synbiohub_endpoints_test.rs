@@ -1,6 +1,6 @@
 //! HTTP-level integration tests for the SynBioHub/Virtuoso-compatible write
 //! surface: `/sparql-auth` (SPARQL Update), `/sparql-graph-crud-auth/` (Graph
-//! Store CRUD), HTTP Basic auth, and `default-graph-uri`-scoped reads on
+//! Store CRUD), Digest/Basic auth, and `default-graph-uri`-scoped reads on
 //! `/sparql`. These drive the actual axum router via `oneshot`, exercising the
 //! same wire shapes SynBioHub sends to Virtuoso.
 
@@ -116,7 +116,7 @@ async fn graph_store_write_requires_auth() {
     let app = fresh_app().await;
     let uri = format!("/sparql-graph-crud-auth/?{}", form(&[("graph-uri", GRAPH)]));
 
-    // No credentials → 401 with a Basic challenge.
+    // No credentials → 401 with a Virtuoso-shaped Digest challenge.
     let res = app
         .clone()
         .oneshot(
@@ -130,13 +130,19 @@ async fn graph_store_write_requires_auth() {
         .await
         .expect("request");
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let www = res
+        .headers()
+        .get("www-authenticate")
+        .and_then(|v| v.to_str().ok())
+        .expect("challenge header")
+        .to_owned();
     assert!(
-        res.headers()
-            .get("www-authenticate")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.starts_with("Basic"))
-            .unwrap_or(false),
-        "expected Basic challenge"
+        www.starts_with("Digest realm=\"SPARQL\""),
+        "expected Digest challenge, got: {www}"
+    );
+    assert!(
+        www.contains("qop=\"auth\"") && www.contains("algorithm=MD5"),
+        "expected qop/algorithm in challenge: {www}"
     );
 
     // Wrong credentials → 401.
@@ -155,6 +161,91 @@ async fn graph_store_write_requires_auth() {
         .await
         .expect("request");
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// Extract a quoted parameter value from a `WWW-Authenticate: Digest` header.
+fn challenge_param(header: &str, key: &str) -> String {
+    let marker = format!("{key}=\"");
+    let start = header.find(&marker).expect("param present") + marker.len();
+    let rest = &header[start..];
+    rest[..rest.find('"').expect("closing quote")].to_owned()
+}
+
+/// Build the `Authorization: Digest` header a challenge-driven client (curl
+/// `--digest`, SynBioHub's HTTP libraries) sends in response to a challenge.
+fn digest_authorization(method: &str, uri: &str, realm: &str, nonce: &str) -> String {
+    use md5::{Digest as _, Md5};
+    let md5_hex = |s: &str| hex::encode(Md5::digest(s.as_bytes()));
+    let ha1 = md5_hex(&format!("dba:{realm}:dba"));
+    let ha2 = md5_hex(&format!("{method}:{uri}"));
+    let nc = "00000001";
+    let cnonce = "deadbeef";
+    let response = md5_hex(&format!("{ha1}:{nonce}:{nc}:{cnonce}:auth:{ha2}"));
+    format!(
+        "Digest username=\"dba\", realm=\"{realm}\", nonce=\"{nonce}\", uri=\"{uri}\", \
+         qop=auth, nc={nc}, cnonce=\"{cnonce}\", response=\"{response}\", algorithm=MD5"
+    )
+}
+
+/// Full Virtuoso-style handshake: unauthenticated request → 401 Digest
+/// challenge → retried request with the computed Digest response → stored.
+#[tokio::test]
+async fn graph_store_digest_handshake_stores() {
+    let _g = db_lock().await;
+    let app = fresh_app().await;
+    let uri = format!("/sparql-graph-crud-auth/?{}", form(&[("graph-uri", GRAPH)]));
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&uri)
+                .header("content-type", "text/turtle")
+                .body(Body::from(TTL_X))
+                .unwrap(),
+        )
+        .await
+        .expect("challenge request");
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let www = res
+        .headers()
+        .get("www-authenticate")
+        .and_then(|v| v.to_str().ok())
+        .expect("challenge header")
+        .to_owned();
+    let realm = challenge_param(&www, "realm");
+    let nonce = challenge_param(&www, "nonce");
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&uri)
+                .header(
+                    "authorization",
+                    digest_authorization("POST", &uri, &realm, &nonce),
+                )
+                .header("content-type", "text/turtle")
+                .body(Body::from(TTL_X))
+                .unwrap(),
+        )
+        .await
+        .expect("authenticated request");
+    assert_eq!(res.status(), StatusCode::OK, "digest retry should store");
+
+    let body = read(
+        &app,
+        "PREFIX sbol2: <http://sbols.org/v2#> \
+         SELECT ?s WHERE { ?s a sbol2:ComponentDefinition }",
+        GRAPH,
+    )
+    .await;
+    assert!(
+        body.contains("https://synbiohub.org/public/x/1"),
+        "digest-authed write should be queryable: {body}"
+    );
 }
 
 #[tokio::test]

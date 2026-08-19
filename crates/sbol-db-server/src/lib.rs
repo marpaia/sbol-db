@@ -154,7 +154,8 @@ pub struct ServerConfig {
     /// `truncated = true`.
     pub lab_sql_row_cap_max: u32,
     /// Credentials the authenticated SPARQL endpoints (`/sparql-auth`,
-    /// `/sparql-graph-crud-auth/`) require via HTTP Basic. Default `dba`/`dba`
+    /// `/sparql-graph-crud-auth/`) require, via Virtuoso-style Digest
+    /// challenge-response or preemptive HTTP Basic. Default `dba`/`dba`
     /// matches Virtuoso, so SynBioHub needs no config change. When
     /// `sparql_auth_disabled` is true the endpoints skip auth entirely (for
     /// trusted-network deployments behind a proxy).
@@ -565,7 +566,7 @@ fn application_router(state: AppState, config: ServerConfig, include_operations:
     }
     api = api.route_layer(axum::middleware::from_fn(metrics::track_metrics));
 
-    // SynBioHub/Virtuoso-compatible write surface, behind HTTP Basic auth.
+    // SynBioHub/Virtuoso-compatible write surface, behind Digest/Basic auth.
     // Registered on both the bare and trailing-slash paths because SynBioHub
     // configures `…/sparql-graph-crud-auth/` with the slash.
     let graph_crud = get(routes::graph_store_get)
@@ -595,7 +596,7 @@ fn application_router(state: AppState, config: ServerConfig, include_operations:
 
     // The SynBioHub V1 auth surface (`/login`, `/register`, `/profile`, …),
     // behind the `X-authorization` middleware. It is independent of the
-    // Basic-auth `/sparql-auth*` write path above.
+    // Digest/Basic-auth `/sparql-auth*` write path above.
     let synbiohub_routes = synbiohub::router(state.clone());
 
     let app = mount_portal(

@@ -215,7 +215,11 @@ docker rm "$container_name" >/dev/null
 start_container
 wait_for_health
 
-docker logs "$container_name" 2>&1 | grep -q "search plugin deployment configured"
+# Capture before grepping: under pipefail, `docker logs | grep -q` dies with
+# SIGPIPE (exit 141) whenever grep matches and exits while docker logs is
+# still writing.
+container_logs="$(docker logs "$container_name" 2>&1)"
+grep -q "search plugin deployment configured" <<<"$container_logs"
 
 strategies="$(curl -fsS "$base_url/api/v2/search/strategies")"
 if ! jq -e '.items | any(.id == "semantic.components.v1")' <<<"$strategies" >/dev/null; then
