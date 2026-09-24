@@ -719,24 +719,34 @@ impl ObjectStore for RocksdbStore {
     ) -> Result<Vec<SbolObjectRecord>, DomainError> {
         let accel = self.accel.clone();
         let catalog = self.catalog.clone();
+        let objects = self.objects.clone();
         let filter = filter.clone();
         blocking(move || {
             catalog.ensure_ready()?;
             let graph_iri = match filter.graph_id {
-                Some(id) => catalog.graph(id)?.map(|graph| graph.iri),
+                Some(id) => match catalog.graph(id)? {
+                    Some(graph) => Some(graph.iri),
+                    None => return Ok(Vec::new()),
+                },
                 None => None,
             };
-            let page = accel.resources(&ResourceQuery {
-                after: filter.after_iri,
-                limit: filter.limit,
-                text: None,
-                class: filter.sbol_class,
-                role: filter.role,
-                graph_iri,
-            })?;
+            let page = accel.object_resources(
+                &ResourceQuery {
+                    after: filter.after_iri,
+                    limit: filter.limit,
+                    text: None,
+                    class: filter.sbol_class,
+                    role: filter.role,
+                    graph_iri,
+                },
+                filter.iri_contains.as_deref(),
+            )?;
             page.items
                 .into_iter()
-                .map(|resource| compatibility_object_from_meta(&resource.iri, resource.meta))
+                .map(|resource| match objects.get_by_iri(&resource.iri)? {
+                    Some(record) => Ok(record),
+                    None => compatibility_object_from_meta(&resource.iri, resource.meta),
+                })
                 .collect()
         })
         .await

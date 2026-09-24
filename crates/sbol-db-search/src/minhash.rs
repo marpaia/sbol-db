@@ -79,10 +79,8 @@ impl Signature {
             return None;
         }
         let mut out = Vec::with_capacity(bytes.len() / 8);
-        for chunk in bytes.chunks_exact(8) {
-            let mut arr = [0u8; 8];
-            arr.copy_from_slice(chunk);
-            out.push(u64::from_le_bytes(arr));
+        for chunk in bytes.as_chunks::<8>().0 {
+            out.push(u64::from_le_bytes(*chunk));
         }
         Some(Signature(out))
     }

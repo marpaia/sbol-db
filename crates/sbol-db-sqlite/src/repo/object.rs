@@ -109,8 +109,13 @@ impl SbolObjectRepository {
             WHERE is_deleted = 0
               AND (?1 IS NULL OR sbol_class = ?1)
               AND (?2 IS NULL OR EXISTS (SELECT 1 FROM json_each(roles) WHERE value = ?2))
-              AND (?3 IS NULL OR graph_id = ?3)
               AND (?4 IS NULL OR iri > ?4)
+              AND (?6 IS NULL OR instr(lower(iri), ?6) > 0)
+              AND (?3 IS NULL OR EXISTS (
+                SELECT 1 FROM sbol_triples t
+                JOIN sbol_graphs g ON g.iri = t.graph_iri
+                WHERE g.id = ?3 AND t.subject_iri = sbol_objects.iri
+              ))
             ORDER BY iri ASC
             LIMIT ?5
             "#
@@ -120,6 +125,7 @@ impl SbolObjectRepository {
         .bind(filter.graph_id.map(|g| g.0.to_string()))
         .bind(filter.after_iri.as_deref())
         .bind(limit)
+        .bind(filter.iri_contains.as_deref().map(str::to_ascii_lowercase))
         .fetch_all(&self.pool)
         .await
         .map_err(db_err)?;

@@ -74,6 +74,7 @@ async fn export_all(
             graph_id: graph_id.map(GraphId),
             after_iri: cursor.clone(),
             limit,
+            ..ListObjectsFilter::default()
         };
         let page = service.list_objects(&filter).await?;
         let page_len = page.len();

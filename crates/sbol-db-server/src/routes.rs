@@ -353,6 +353,8 @@ pub struct ListObjectsParams {
     #[serde(default)]
     pub graph_id: Option<Uuid>,
     #[serde(default)]
+    pub iri_contains: Option<String>,
+    #[serde(default)]
     pub after: Option<String>,
     #[serde(default = "default_list_limit")]
     pub limit: u32,
@@ -379,6 +381,7 @@ pub async fn list_objects(
         sbol_class: params.sbol_class,
         role: params.role,
         graph_id: params.graph_id.map(GraphId),
+        iri_contains: params.iri_contains,
         after_iri: params.after,
         limit,
     };
