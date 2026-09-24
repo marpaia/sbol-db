@@ -68,5 +68,5 @@ For GG Circuit, map the Tauri `iri_query` argument to `iri_contains`, pass its
 existing graph ID and cursor, and convert the returned `SbolObjectRecord` through
 the existing DTO conversion. This replaces the custom SQLite reader while
 preserving combined filtering, graph membership, and pagination. Update the
-related `sbol-db-*` dependencies together and regenerate `Cargo.lock` after a
-crate release; the manifests in this branch retain the current release version.
+related `sbol-db-*` dependencies together to `0.1.7` and regenerate `Cargo.lock`
+once that crate release is published.
