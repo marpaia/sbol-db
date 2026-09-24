@@ -10,7 +10,7 @@ This guide orients a newcomer to the codebase. It complements:
 - [`storage.md`](storage.md): the storage contract, backend selection, and the capability matrix.
 - [`schema-postgres.md`](schema-postgres.md): Postgres schema reference (and the SQLite / RocksDB layout siblings).
 
-Read this first to know *where* things live and *why* the workspace is
+Read this first to know _where_ things live and _why_ the workspace is
 shaped the way it is. Read the others when you need depth on a
 particular surface.
 
@@ -59,25 +59,25 @@ surface for "track the build state of this design".
 
 ## Workspace layout
 
-| Crate              | Purpose                                                                                |
-| ------------------ | -------------------------------------------------------------------------------------- |
-| `sbol-db-core`     | Domain types (`Triple`, `IriString`, `GraphId`, `NeighborhoodQuery`, …), the k-mer encoder, the OBO parser. No I/O. |
-| `sbol-db-storage`  | Backend-neutral storage contract: the `SbolStore` / `TripleSource` / `JobQueue` traits and their request/response types. Names no concrete database. |
-| `sbol-db-rdf`      | `sbol::Document` ↔ triples projection, RDF (re-)serialization, content hashing.           |
-| `sbol-db-derive`   | Pure import plan builder: parse a document, derive its triples and object summaries, validate. No database; every backend commits the same plan. |
-| `sbol-db-app`      | Backend-neutral application services for identity, ACLs, objects, discovery, contribution, collaboration, review, administration, and downloads. |
-| `sbol-db-postgres` | Postgres implementation of the storage contract: sqlx repositories, embedded migrations, the `SbolObjectService` entry point. Hosts the typed projections, validation audit, and engine introspection. |
-| `sbol-db-sqlite`   | SQLite implementation: the same contract over a single-file, embedded SQL engine. |
-| `sbol-db-rocksdb`  | RocksDB implementation: a dictionary-encoded, permuted-index triplestore over an embedded key/value store. |
-| `sbol-db-backend`  | Backend factory: `Backend::open` routes a connection string to the engine its scheme selects and returns the neutral trait-object bundle. |
-| `sbol-db-conformance` | Backend-neutral conformance scenarios every engine passes through the trait surface alone. |
-| `sbol-db-sparql`   | Read-only SPARQL evaluator (`spareval::QueryableDataset` over any `TripleSource`).        |
-| `sbol-db-search*`  | Search contracts, built-in ranked/vector strategies, embedding and vector adapters, evaluation, and conformance tooling. |
-| `sbol-db-jobs`     | Durable background-job registry, queue, worker, and built-in operational handlers. |
-| `sbol-db-backup`   | Complete encrypted checkpoint creation, verification, restore, and rollback primitives. |
-| `sbol-db-ui`       | Embedded SBOL DB application at `/` with the data/operations workspace at `/admin` (React + Vite, baked in via `rust-embed`). |
-| `sbol-db-server`   | Axum presentation layer for the SBOL DB API and the SynBioHub v1 compatibility and v2 APIs; embedded UI and OpenAPI delivery. |
-| `sbol-db`          | CLI binary and runtime composition root for storage, server, worker, search, TLS, migration, and recovery. |
+| Crate                 | Purpose                                                                                                                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sbol-db-core`        | Domain types (`Triple`, `IriString`, `GraphId`, `NeighborhoodQuery`, …), the k-mer encoder, the OBO parser. No I/O.                                                                                    |
+| `sbol-db-storage`     | Backend-neutral storage contract: the `SbolStore` / `TripleSource` / `JobQueue` traits and their request/response types. Names no concrete database.                                                   |
+| `sbol-db-rdf`         | `sbol::Document` ↔ triples projection, RDF (re-)serialization, content hashing.                                                                                                                        |
+| `sbol-db-derive`      | Pure import plan builder: parse a document, derive its triples and object summaries, validate. No database; every backend commits the same plan.                                                       |
+| `sbol-db-app`         | Backend-neutral application services for identity, ACLs, objects, discovery, contribution, collaboration, review, administration, and downloads.                                                       |
+| `sbol-db-postgres`    | Postgres implementation of the storage contract: sqlx repositories, embedded migrations, the `SbolObjectService` entry point. Hosts the typed projections, validation audit, and engine introspection. |
+| `sbol-db-sqlite`      | SQLite implementation: the same contract over a single-file, embedded SQL engine.                                                                                                                      |
+| `sbol-db-rocksdb`     | RocksDB implementation: a dictionary-encoded, permuted-index triplestore over an embedded key/value store.                                                                                             |
+| `sbol-db-backend`     | Backend factory: `Backend::open` routes a connection string to the engine its scheme selects and returns the neutral trait-object bundle.                                                              |
+| `sbol-db-conformance` | Backend-neutral conformance scenarios every engine passes through the trait surface alone.                                                                                                             |
+| `sbol-db-sparql`      | Read-only SPARQL evaluator (`spareval::QueryableDataset` over any `TripleSource`).                                                                                                                     |
+| `sbol-db-search*`     | Search contracts, built-in ranked/vector strategies, embedding and vector adapters, evaluation, and conformance tooling.                                                                               |
+| `sbol-db-jobs`        | Durable background-job registry, queue, worker, and built-in operational handlers.                                                                                                                     |
+| `sbol-db-backup`      | Complete encrypted checkpoint creation, verification, restore, and rollback primitives.                                                                                                                |
+| `sbol-db-ui`          | Embedded SBOL DB application at `/` with the data/operations workspace at `/admin` (React + Vite, baked in via `rust-embed`).                                                                          |
+| `sbol-db-server`      | Axum presentation layer for the SBOL DB API and the SynBioHub v1 compatibility and v2 APIs; embedded UI and OpenAPI delivery.                                                                          |
+| `sbol-db`             | CLI binary and runtime composition root for storage, server, worker, search, TLS, migration, and recovery.                                                                                             |
 
 The boundaries matter:
 
@@ -255,8 +255,11 @@ amortise round-trips:
   1000 IRIs per call.
 - **Corpus listing** — `SbolObjectRepository::list(&ListObjectsFilter)`
   / `GET /objects/list` / `sbol-db object export-all`. Keyset cursor on `iri`,
-  page size capped at 5000; filters by `sbol_class`, `role`, and
-  `graph_id` compose.
+  page size capped at 5000; filters by `sbol_class`, `role`, `graph_id`, and
+  `iri_contains` compose before pagination. `graph_id` selects subject membership
+  in the graph, including objects shared across imports. See
+  [embedded object filtering](object-filtering.md) for the Rust contract and
+  migration notes. The CLI exposes class, role, and graph filters.
 - **Bulk sequence search** — `SequenceSearchRepository::search_many` /
   `POST /sequences/search`. Loops over patterns; capped at 256 per call.
 - **Atomic bulk import** — `SbolObjectService::import_documents` /

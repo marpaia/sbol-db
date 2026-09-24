@@ -16,6 +16,9 @@
 //! to the graphs and keys they create so [`run_all`] can run them in sequence
 //! against one store without cross-contamination.
 
+mod object_filters;
+pub use object_filters::{object_filtering, object_filtering_large_page};
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -109,6 +112,8 @@ pub async fn run_all(app: &AppServices) {
     let store = app.store.as_ref();
     let jobs = app.jobs.as_ref();
     import_and_read_back(store).await;
+    object_filtering(store).await;
+    object_filtering_large_page(store).await;
     graph_set_semantics(store).await;
     rdf_catalog_semantics(store).await;
     neighborhood_walk(store).await;
@@ -1112,6 +1117,7 @@ pub async fn import_and_read_back(store: &dyn SbolStore) {
             graph_id: Some(report.graph_id),
             after_iri: None,
             limit: 100,
+            ..ListObjectsFilter::default()
         })
         .await
         .expect("list_objects");
@@ -1262,6 +1268,7 @@ pub async fn neighborhood_walk(store: &dyn SbolStore) {
             graph_id: Some(report.graph_id),
             after_iri: None,
             limit: 100,
+            ..ListObjectsFilter::default()
         })
         .await
         .expect("list_objects");
@@ -1333,6 +1340,7 @@ pub async fn sequence_search(store: &dyn SbolStore) {
             graph_id: Some(report.graph_id),
             after_iri: None,
             limit: 100,
+            ..ListObjectsFilter::default()
         })
         .await
         .expect("list_objects");
@@ -1475,6 +1483,7 @@ async fn import_simple_component(app: &AppServices, source_uri: &str) -> (GraphI
             graph_id: Some(report.graph_id),
             after_iri: None,
             limit: 100,
+            ..ListObjectsFilter::default()
         })
         .await
         .expect("list_objects");

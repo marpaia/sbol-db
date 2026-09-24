@@ -84,3 +84,11 @@ async fn sqlite_passes_full_conformance_suite() {
         .with_config(config);
     sbol_db_conformance::run_all(&app).await;
 }
+
+#[tokio::test]
+async fn sqlite_passes_object_filtering() {
+    let (pool, _dir) = fresh_pool().await;
+    let store = SqliteStore::new(pool);
+    sbol_db_conformance::object_filtering(&store).await;
+    sbol_db_conformance::object_filtering_large_page(&store).await;
+}

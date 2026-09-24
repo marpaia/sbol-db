@@ -481,7 +481,16 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
+            },
+            "description": "Objects occurring as triple subjects in this graph, including objects shared with other imports. An unknown graph returns no objects."
+          },
+          {
+            "name": "iri_contains",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Literal substring of the IRI, ignoring ASCII letter case. Non-ASCII case is preserved; percent and underscore are literal characters. Empty matches all; whitespace is not trimmed. Applied with other filters before pagination."
           },
           {
             "name": "after",

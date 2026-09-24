@@ -20,6 +20,7 @@ use sbol_db_storage::{
 };
 
 use crate::db::{compose, Db, SEP};
+use crate::repo::object::ObjectRepository;
 
 const FK_TYPES: u8 = 1;
 const FK_ROLES: u8 = 2;
@@ -225,9 +226,34 @@ impl AccelRepository {
         &self,
         query: &ResourceQuery,
     ) -> Result<CursorPage<ResourceRecord>, DomainError> {
-        let limit = query.limit.clamp(1, 500) as usize;
+        self.filtered_resources(query, query.limit.clamp(1, 500) as usize, None, None)
+    }
+
+    /// Object listing has its own page-size contract and IRI-only matching.
+    /// The IRI predicate runs during the ordered scan, before pagination.
+    pub(crate) fn object_resources(
+        &self,
+        query: &ResourceQuery,
+        iri_contains: Option<&str>,
+    ) -> Result<CursorPage<ResourceRecord>, DomainError> {
+        self.filtered_resources(
+            query,
+            query.limit.clamp(1, 5000) as usize,
+            iri_contains,
+            Some(&ObjectRepository::new(self.db.clone())),
+        )
+    }
+
+    fn filtered_resources(
+        &self,
+        query: &ResourceQuery,
+        limit: usize,
+        iri_contains: Option<&str>,
+        native_objects: Option<&ObjectRepository>,
+    ) -> Result<CursorPage<ResourceRecord>, DomainError> {
         let after = query.after.as_deref();
         let needle = query.text.as_ref().map(|text| text.to_lowercase());
+        let iri_needle = iri_contains.map(str::to_ascii_lowercase);
         let mut iris: Vec<String> = Vec::with_capacity(limit + 1);
         let mut last_seen: Option<String> = None;
         self.db.for_each_prefix_after(
@@ -247,20 +273,37 @@ impl AccelRepository {
                 if after.is_some_and(|cursor| iri <= cursor) || last_seen.as_deref() == Some(iri) {
                     return Ok(true);
                 }
+                if iri_needle
+                    .as_ref()
+                    .is_some_and(|needle| !iri.to_ascii_lowercase().contains(needle))
+                {
+                    return Ok(true);
+                }
                 let meta: MetaRecord = serde_json::from_slice(value).map_err(ser_err)?;
                 let text_matches = needle.as_ref().is_none_or(|needle| {
                     iri.to_lowercase().contains(needle)
                         || serde_json::to_string(&meta)
                             .is_ok_and(|json| json.to_lowercase().contains(needle))
                 });
-                let class_matches = query
-                    .class
-                    .as_ref()
-                    .is_none_or(|class| meta.types.contains(class));
-                let role_matches = query
-                    .role
-                    .as_ref()
-                    .is_none_or(|role| meta.roles.contains(role));
+                // ObjectStore returns the native summary when one exists.
+                // Filter that same record: the compatibility catalog metadata
+                // does not carry every native SBOL3 field (including roles).
+                let native = native_objects
+                    .map(|objects| objects.get_by_iri(iri))
+                    .transpose()?
+                    .flatten();
+                let class_matches = query.class.as_ref().is_none_or(|class| {
+                    native.as_ref().map_or_else(
+                        || meta.types.contains(class),
+                        |record| &record.sbol_class == class,
+                    )
+                });
+                let role_matches = query.role.as_ref().is_none_or(|role| {
+                    native.as_ref().map_or_else(
+                        || meta.roles.contains(role),
+                        |record| record.roles.contains(role),
+                    )
+                });
                 let graph_matches = query
                     .graph_iri
                     .as_ref()

@@ -178,8 +178,16 @@ impl SbolObjectRepository {
             WHERE is_deleted = false
               AND ($1::text IS NULL OR sbol_class = $1)
               AND ($2::text IS NULL OR $2 = ANY(roles::text[]))
-              AND ($3::uuid IS NULL OR graph_id = $3)
               AND ($4::text IS NULL OR iri::text > $4)
+              AND ($6::text IS NULL OR strpos(
+                translate(iri::text, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'),
+                $6
+              ) > 0)
+              AND ($3::uuid IS NULL OR EXISTS (
+                SELECT 1 FROM sbol_triples t
+                JOIN sbol_graphs g ON g.iri = t.graph_iri
+                WHERE g.id = $3 AND t.subject_iri = sbol_objects.iri
+              ))
             ORDER BY iri::text ASC
             LIMIT $5
             "#,
@@ -189,6 +197,7 @@ impl SbolObjectRepository {
         .bind(filter.graph_id.map(|d| d.0))
         .bind(filter.after_iri.as_deref())
         .bind(limit)
+        .bind(filter.iri_contains.as_deref().map(str::to_ascii_lowercase))
         .fetch_all(&self.pool)
         .await
         .map_err(db_err)?;

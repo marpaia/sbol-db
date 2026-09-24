@@ -285,3 +285,11 @@ fn assert_integer_cell(solutions: &AccelSolutions, row: usize, column: usize, ex
         other => panic!("expected integer literal, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn rocksdb_passes_object_filtering() {
+    let (db, _dir) = fresh_db();
+    let store = RocksdbStore::new(db);
+    sbol_db_conformance::object_filtering(&store).await;
+    sbol_db_conformance::object_filtering_large_page(&store).await;
+}

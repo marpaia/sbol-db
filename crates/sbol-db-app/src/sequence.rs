@@ -411,6 +411,7 @@ PREFIX sbol: <http://sbols.org/v3#>
                 graph_id: Some(report.graph_id),
                 after_iri: None,
                 limit: 100,
+                ..ListObjectsFilter::default()
             })
             .await
             .expect("list_objects");
@@ -616,6 +617,7 @@ PREFIX sbol: <http://sbols.org/v3#>
                 graph_id: Some(report.graph_id),
                 after_iri: None,
                 limit: 100,
+                ..ListObjectsFilter::default()
             })
             .await
             .expect("list_objects");
