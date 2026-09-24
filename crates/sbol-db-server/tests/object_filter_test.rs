@@ -42,7 +42,7 @@ async fn listing_filters_shared_imports_and_preserves_cursor_response() {
         .run_migrations()
         .await
         .unwrap();
-    let body = ["a_GFP%25", "b_gfp", "c_unrelated"]
+    let body = ["a_ITEM%25", "b_item", "c_unrelated"]
         .map(|id| {
             format!(
                 "<https://example.org/{id}> a <http://sbols.org/v3#Component> ; \
@@ -101,16 +101,16 @@ async fn listing_filters_shared_imports_and_preserves_cursor_response() {
             ("graph_id", graph.0.to_string()),
             ("sbol_class", "http://sbols.org/v3#Component".to_owned()),
             ("role", "https://identifiers.org/SO:0000167".to_owned()),
-            ("iri_contains", "GfP".to_owned()),
+            ("iri_contains", "ItEm".to_owned()),
             ("limit", "1".to_owned()),
         ];
         let first = get(&app, &params).await;
         assert_eq!(first["objects"].as_array().unwrap().len(), 1);
-        assert_eq!(first["objects"][0]["iri"], "https://example.org/a_GFP%25");
+        assert_eq!(first["objects"][0]["iri"], "https://example.org/a_ITEM%25");
         assert_eq!(first["next_cursor"], first["objects"][0]["iri"]);
         params.push(("after", first["next_cursor"].as_str().unwrap().to_owned()));
         let second = get(&app, &params).await;
-        assert_eq!(second["objects"][0]["iri"], "https://example.org/b_gfp");
+        assert_eq!(second["objects"][0]["iri"], "https://example.org/b_item");
         params.last_mut().unwrap().1 = second["next_cursor"].as_str().unwrap().to_owned();
         let exhausted = get(&app, &params).await;
         assert_eq!(exhausted["objects"], serde_json::json!([]));
@@ -123,7 +123,10 @@ async fn listing_filters_shared_imports_and_preserves_cursor_response() {
             .1 = "%".to_owned();
         let literal = get(&app, &params).await;
         assert_eq!(literal["objects"].as_array().unwrap().len(), 1);
-        assert_eq!(literal["objects"][0]["iri"], "https://example.org/a_GFP%25");
+        assert_eq!(
+            literal["objects"][0]["iri"],
+            "https://example.org/a_ITEM%25"
+        );
     }
     let absent = get(&app, &[("graph_id", uuid::Uuid::new_v4().to_string())]).await;
     assert_eq!(absent["objects"], serde_json::json!([]));
