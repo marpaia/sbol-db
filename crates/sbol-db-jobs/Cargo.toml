@@ -29,9 +29,9 @@ chrono.workspace = true
 
 [dev-dependencies]
 age.workspace = true
-sbol-db-postgres.workspace = true
-sbol-db-sqlite.workspace = true
-sbol-db-rocksdb.workspace = true
-sbol-db-vector-flat.workspace = true
+sbol-db-postgres = { path = "../sbol-db-postgres" }
+sbol-db-sqlite = { path = "../sbol-db-sqlite" }
+sbol-db-rocksdb = { path = "../sbol-db-rocksdb" }
+sbol-db-vector-flat = { path = "../sbol-db-vector-flat" }
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

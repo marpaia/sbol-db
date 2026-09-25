@@ -122,6 +122,8 @@ bio = "4"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.16", default-features = false }
 
+# Member dev-dependencies on sibling crates use paths without versions so
+# source-only test helpers do not create publication cycles on crates.io.
 sbol-db-core = { path = "crates/sbol-db-core", version = "0.1.7" }
 sbol-db-search-sdk = { path = "crates/sbol-db-search-sdk", version = "0.1.7" }
 sbol-db-search-eval = { path = "crates/sbol-db-search-eval", version = "0.1.7" }

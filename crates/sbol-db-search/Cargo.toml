@@ -19,7 +19,7 @@ tantivy = { workspace = true, optional = true }
 bio = { workspace = true, optional = true }
 
 [dev-dependencies]
-sbol-db-vector-flat.workspace = true
+sbol-db-vector-flat = { path = "../sbol-db-vector-flat" }
 
 [features]
 default = []

@@ -26,7 +26,7 @@ reqwest.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-sbol-db-conformance.workspace = true
-sbol-db-app.workspace = true
-sbol-db-sparql.workspace = true
+sbol-db-conformance = { path = "../sbol-db-conformance" }
+sbol-db-app = { path = "../sbol-db-app" }
+sbol-db-sparql = { path = "../sbol-db-sparql" }
 tempfile = "3"
