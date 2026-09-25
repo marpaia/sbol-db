@@ -1,6 +1,6 @@
 [package]
 name = "sbol-db-sparql"
-version = "0.1.5"
+version = "0.1.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -26,9 +26,9 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
-sbol-db-postgres.workspace = true
-sbol-db-rocksdb.workspace = true
-sbol-db-sqlite.workspace = true
+sbol-db-postgres = { path = "../sbol-db-postgres" }
+sbol-db-rocksdb = { path = "../sbol-db-rocksdb" }
+sbol-db-sqlite = { path = "../sbol-db-sqlite" }
 sbol.workspace = true
 sqlx.workspace = true
 tempfile = "3"

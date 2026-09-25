@@ -1,6 +1,6 @@
 [package]
 name = "sbol-db-server"
-version = "0.1.5"
+version = "0.1.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -56,8 +56,8 @@ age.workspace = true
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 async-trait.workspace = true
-sbol-db-backend.workspace = true
-sbol-db-search.workspace = true
+sbol-db-backend = { path = "../sbol-db-backend" }
+sbol-db-search = { path = "../sbol-db-search" }
 sbol-genbank.workspace = true
 sbol-fasta.workspace = true
 flate2.workspace = true

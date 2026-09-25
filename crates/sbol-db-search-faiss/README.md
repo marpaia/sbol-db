@@ -8,7 +8,7 @@ atomic activation.
 The native backend is opt-in:
 
 ```toml
-sbol-db-search-faiss = { version = "0.1.1", features = ["native"] }
+sbol-db-search-faiss = { version = "0.1.7", features = ["native"] }
 ```
 
 It requires FAISS 1.14 with its C API and shared libraries. On macOS:

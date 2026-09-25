@@ -1,6 +1,6 @@
 [package]
 name = "sbol-db-search-faiss"
-version = "0.1.5"
+version = "0.1.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -42,6 +42,6 @@ tokio = { workspace = true, optional = true, features = ["sync"] }
 bindgen = { version = "0.70", optional = true }
 
 [dev-dependencies]
-sbol-db-search.workspace = true
-sbol-db-vector-conformance.workspace = true
-sbol-db-vector-flat.workspace = true
+sbol-db-search = { path = "../sbol-db-search" }
+sbol-db-vector-conformance = { path = "../sbol-db-vector-conformance" }
+sbol-db-vector-flat = { path = "../sbol-db-vector-flat" }

@@ -1,6 +1,6 @@
 [package]
 name = "sbol-db-vector-flat"
-version = "0.1.5"
+version = "0.1.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -13,5 +13,5 @@ serde_json.workspace = true
 sbol-db-search-sdk.workspace = true
 
 [dev-dependencies]
-sbol-db-vector-conformance.workspace = true
+sbol-db-vector-conformance = { path = "../sbol-db-vector-conformance" }
 tokio.workspace = true

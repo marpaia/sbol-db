@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "SBOL DB API",
-    "version": "0.1.0",
+    "version": "0.1.7",
     "description": "The SBOL DB API: graph and object management, SPARQL, sequence search, ontology, jobs, and administrator data-workspace endpoints.",
     "contact": {
       "name": "SBOL DB",

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "SynBioHub v2 API",
-    "version": "0.1.2",
+    "version": "0.1.7",
     "description": "The SynBioHub v2 API: SBOL DB's idiomatic, RESTful presentation of the SynBioHub product surface, mounted under `/api/v2`.\n\nSynBioHub v2 calls the same application services as the SynBioHub v1 compatibility adapter: both expose the same product domain and read and write the same dataset, while retaining separate wire contracts. V2 uses proper HTTP verbs (POST creates, PATCH edits, DELETE deletes, and no GET mutates), JSON request bodies, real pagination with a total, `Accept`-driven content negotiation, a single consistent error envelope, and bearer or same-origin browser-session authentication. V1 preserves classic SynBioHub behavior where compatibility requires it.\n\nWhen public browsing is enabled, a missing or unrecognized resource credential is anonymous and scoped to the public graph. An instance with `requireLogin` rejects anonymous resource requests with `401` while retaining public bootstrap and session routes. A mutating verb attempted anonymously is `403`; invalid login credentials are `401`. Reads are ACL-scoped to the caller's authorized graphs, and an out-of-scope object is a non-disclosing `404`.",
     "contact": {
       "name": "SBOL DB",
@@ -966,7 +966,7 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/Version" },
-                "example": { "name": "sbol-db", "api": "v2", "version": "0.1.2" }
+                "example": { "name": "sbol-db", "api": "v2", "version": "0.1.7" }
               }
             }
           }

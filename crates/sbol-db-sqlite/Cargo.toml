@@ -1,6 +1,6 @@
 [package]
 name = "sbol-db-sqlite"
-version = "0.1.5"
+version = "0.1.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -25,8 +25,8 @@ hex.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-sbol-db-search.workspace = true
-sbol-db-conformance.workspace = true
-sbol-db-app.workspace = true
-sbol-db-sparql.workspace = true
+sbol-db-search = { path = "../sbol-db-search" }
+sbol-db-conformance = { path = "../sbol-db-conformance" }
+sbol-db-app = { path = "../sbol-db-app" }
+sbol-db-sparql = { path = "../sbol-db-sparql" }
 tempfile = "3"
