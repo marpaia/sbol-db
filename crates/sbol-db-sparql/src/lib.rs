@@ -17,6 +17,7 @@ mod dataset;
 mod engine;
 mod error;
 mod explorer;
+mod explorer_search;
 mod results;
 mod rewrite;
 mod update;
@@ -31,5 +32,6 @@ pub use explorer::{
     recognize as recognize_explorer, search_results as explorer_search_results, ExplorerQuery,
     Paging, COUNT_VARS, SEARCH_VARS,
 };
+pub use explorer_search::ExplorerSearchQuery;
 pub use results::{ResultFormat, ResultPayload};
 pub use update::{SparqlUpdateEngine, UpdateOutcome};

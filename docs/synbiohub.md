@@ -76,6 +76,16 @@ triple past the first chunk. That path drives makePublic, so the symptom
 is a published collection that keeps its root object and drops all of its
 members.
 
+## SBOLExplorer search compatibility
+
+The optional `--explorer-bind` listener implements the private/public search policy from [SBOLExplorer issue #158](https://github.com/SynBioDex/SBOLExplorer/issues/158) and [PR #169](https://github.com/SynBioDex/SBOLExplorer/pull/169). This policy is confined to the Explorer compatibility service; the main `/sparql` endpoint evaluates ordinary SPARQL, and native discovery retains its own search semantics.
+
+For nonempty text searches, private graphs are queried directly against stored RDF using the complete SPARQL criteria. Private results therefore reflect committed submissions, edits, and removals without waiting for a text-index rebuild. Public results use the ranked text index and are intersected with live structural criteria when facets are present. Private results precede public results; within each group scores descend, with subject IRI as a stable tie-breaker. Counts and pagination apply after merging and deduplicating subjects.
+
+Structural-only searches read both private and public graphs from the store. Unranked private objects come first, followed by unranked public objects, then the remaining objects ordered together by PageRank. Sequence objects receive the upstream score penalty. Empty browsing continues to use the index, with private results first. Explicit `FROM` graphs take precedence over `default-graph-uri`; an absent dataset exposes no indexed or stored results. The listener is intended for the trusted network between classic SynBioHub and its search backend.
+
+This policy intentionally gives private substring matching and public fuzzy matching different result sets. Public search scores are native rankings, not exact Elasticsearch score parity. Compatibility comparisons should pin the SBOLExplorer image and evaluate private matching separately from public ranking. A store-query failure or a result exceeding the safety bound fails the request instead of returning partial counts.
+
 ## Compatibility issues the strict parser exposes
 
 sbol-db uses a spec-compliant SPARQL parser. Several queries SynBioHub

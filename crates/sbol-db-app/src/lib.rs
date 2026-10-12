@@ -21,6 +21,7 @@ mod collection;
 mod config;
 mod download;
 mod edit;
+mod explorer;
 mod federation;
 mod maintenance;
 pub mod memory;
@@ -46,6 +47,7 @@ pub use collection::{CollectionService, MintScope, MintedSubmission, Submission}
 pub use config::{ConfigError, ConfigService};
 pub use download::{Downloader, RemoteObjectResolver, DEFAULT_DATABASE_PREFIX};
 pub use edit::{EditService, FieldValue};
+pub use explorer::{ExplorerSearchHit, ExplorerSearchPage};
 pub use federation::{
     FederationError, FederationService, HttpWebOfRegistriesClient, JoinPayload, JoinResponse,
     WebOfRegistriesClient, WorInstance,
