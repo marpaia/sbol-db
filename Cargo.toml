@@ -75,7 +75,7 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "cloc
 
 thiserror = "2"
 anyhow = "1"
-async-trait = "0.1"
+async-trait = "0.1.92"
 
 clap = { version = "4.5", features = ["derive", "env"] }
 
