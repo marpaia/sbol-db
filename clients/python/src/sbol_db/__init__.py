@@ -19,7 +19,7 @@ from .models import GraphRecord, ImportReport, SbolObject
 from .partshop import PartShop
 from .sparql import SparqlResult
 
-__version__ = "0.1.7"
+__version__ = "0.1.8"
 
 __all__ = [
     "SbolDbClient",

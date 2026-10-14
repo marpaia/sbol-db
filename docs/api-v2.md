@@ -130,7 +130,7 @@ Base path: `/api/v2`.
 The version and health probe. Public; no token required.
 
 ```json
-{ "name": "sbol-db", "api": "v2", "version": "0.1.7" }
+{ "name": "sbol-db", "api": "v2", "version": "0.1.8" }
 ```
 
 ### Instance bootstrap
