@@ -4,9 +4,9 @@
 //!
 //! SBOLExplorer impersonates a Virtuoso SPARQL endpoint: SynBioHub smuggles
 //! intent through SPARQL comment markers (`# SIMILAR:<uri>`, `# flag_*`) and a
-//! fixed `search.sparql` body, and SBOLExplorer answers from its own indexes
-//! rather than evaluating the SPARQL. Recognizing the same shapes lets sbol-db
-//! stand in for SBOLExplorer over its native REST search.
+//! fixed `search.sparql` body. SBOLExplorer combines indexed public matches with
+//! live private queries. Recognizing the same shapes lets sbol-db apply that
+//! policy through its own application services.
 //!
 //! Recognition is textual, mirroring SBOLExplorer's own regex extraction: the
 //! markers are SPARQL comments a parser discards, so the raw query string is
@@ -20,13 +20,15 @@ use crate::GraphScope;
 
 /// The ordered `head.vars` of a recognized search or sequence-search result,
 /// identical to the projection classic SynBioHub receives from SBOLExplorer.
-pub const SEARCH_VARS: [&str; 9] = [
+pub const SEARCH_VARS: [&str; 11] = [
     "subject",
     "displayId",
     "version",
     "name",
     "description",
     "type",
+    "role",
+    "sbolType",
     "percentMatch",
     "strandAlignment",
     "CIGAR",
@@ -48,8 +50,10 @@ pub struct Paging {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExplorerQuery {
     /// The fixed SynBioHub search template with no criteria. SBOLExplorer
-    /// treats this as a PageRank-ordered browse over the allowed graphs.
+    /// treats this as an indexed browse with private results first.
     Browse { paging: Paging },
+    /// Non-text criteria use live store matching and the rule-4 rank tiers.
+    Structured { paging: Paging },
     /// `# SIMILAR:<uri>`: the target's cluster mates, ranked by PageRank alone.
     Similar { uri: String, paging: Paging },
     /// `?seq sbol2:elements "<seq>"` with optional `# flag_*` markers: align
@@ -63,7 +67,8 @@ pub enum ExplorerQuery {
     },
     /// The ranked free-text shape: one or more
     /// `CONTAINS(lcase(?displayId), lcase('<term>'))` filters. `terms` are the
-    /// keywords in order; the caller joins them for the ranked-text engine.
+    /// keywords in order; the compatibility service parses the full query to
+    /// preserve private Boolean predicates and public structural criteria.
     Text { terms: Vec<String>, paging: Paging },
 }
 
@@ -74,7 +79,8 @@ pub enum ExplorerQuery {
 /// `# SIMILAR:` marker, which wins over free-text keywords. The `# USES` /
 /// `# TWINS` advanced-search markers carry no sequence literal, similar marker,
 /// or `?displayId` keyword, so they match nothing here and fall through to
-/// generic evaluation over the real triples.
+/// generic evaluation over the real triples. Other structural criteria use
+/// the compatibility policy for private/public ranking.
 pub fn recognize(query: &str) -> Option<ExplorerQuery> {
     let paging = Paging {
         offset: extract_uint_after(query, "OFFSET").unwrap_or(0),
@@ -99,6 +105,12 @@ pub fn recognize(query: &str) -> Option<ExplorerQuery> {
     if has_empty_search_criteria(query) {
         return Some(ExplorerQuery::Browse { paging });
     }
+    if !query.contains("# USES")
+        && !query.contains("# TWINS")
+        && search_template_criteria(query).is_some()
+    {
+        return Some(ExplorerQuery::Structured { paging });
+    }
     None
 }
 
@@ -107,32 +119,23 @@ pub fn recognize(query: &str) -> Option<ExplorerQuery> {
 /// the count template and the only WHERE in the row template, so this works for
 /// both shapes without confusing arbitrary SPARQL with an Explorer browse.
 fn has_empty_search_criteria(query: &str) -> bool {
+    search_template_criteria(query)
+        .is_some_and(|criteria| criteria.is_empty() || criteria.eq_ignore_ascii_case("filter ()"))
+}
+
+pub(crate) fn search_template_criteria(query: &str) -> Option<&str> {
     let lower = query.to_ascii_lowercase();
-
-    // Explorer's own index-maintenance query has the same two required
-    // top-level triples as SynBioHub's search template, but projects `?graph`
-    // and adds `GRAPH ?graph { ... }` so it can retain each object's source
-    // graph. It is ordinary SPARQL and must reach the generic engine rather
-    // than being mistaken for an empty ranked browse.
     if lower.contains("graph ?graph") {
-        return false;
+        return None;
     }
-
-    let Some(subject_type) = lower.find("?subject a ?type") else {
-        return false;
-    };
+    let subject_type = lower.find("?subject a ?type")?;
     if !lower[subject_type..].contains("?subject sbh:toplevel ?subject") {
-        return false;
+        return None;
     }
     let before = &lower[..subject_type];
-    let Some(where_start) = before.rfind("where") else {
-        return false;
-    };
-    let Some(open_brace) = before[where_start + "where".len()..].find('{') else {
-        return false;
-    };
-    let criteria = before[where_start + "where".len() + open_brace + 1..].trim();
-    criteria.is_empty() || criteria == "filter ()"
+    let where_start = before.rfind("where")?;
+    let open_brace = before[where_start + "where".len()..].find('{')?;
+    Some(query[where_start + "where".len() + open_brace + 1..subject_type].trim())
 }
 
 /// Resolve the graph ceiling for an SBOLExplorer-compatible request.
@@ -475,7 +478,10 @@ mod tests {
             "LIMIT 50",
             "OFFSET 0",
         );
-        assert_eq!(recognize(&faceted), None);
+        assert!(matches!(
+            recognize(&faceted),
+            Some(ExplorerQuery::Structured { .. })
+        ));
         assert_eq!(recognize("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"), None);
     }
 
@@ -508,6 +514,8 @@ mod tests {
                 "name",
                 "description",
                 "type",
+                "role",
+                "sbolType",
                 "percentMatch",
                 "strandAlignment",
                 "CIGAR",

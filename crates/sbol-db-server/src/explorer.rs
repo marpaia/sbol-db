@@ -6,8 +6,8 @@
 //! The dedicated compatibility listener recognizes a shape and routes it here:
 //! `# SIMILAR:<uri>` to the cluster-mate lookup, a `sbol2:elements "<seq>"`
 //! literal to the aligner, and the `CONTAINS(lcase(?displayId), …)` free-text
-//! shape to the ranked-text index. Every response carries SBOLExplorer's exact
-//! `head.vars`. The main `/sparql` endpoint remains a literal triplestore
+//! shape to live private matching and ranked public search. Every response carries
+//! SBOLExplorer's exact `head.vars`. The main `/sparql` endpoint remains a literal triplestore
 //! surface and never enters this adapter.
 
 use axum::body::Bytes;
@@ -17,11 +17,11 @@ use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use sbol_db_app::{AlignMode, AlignOptions, FacetedSearch, Hit, SequenceAlignment};
+use sbol_db_app::{AlignMode, AlignOptions, Hit, SequenceAlignment};
 use sbol_db_core::SbolObjectRecord;
 use sbol_db_sparql::{
     explorer_count_results, explorer_graph_scope, explorer_search_results, ExplorerQuery,
-    GraphScope, Paging,
+    ExplorerSearchQuery, GraphScope, Paging,
 };
 use sbol_db_storage::{EnqueueOutcome, ListJobsFilter, NewJob};
 use serde::Deserialize;
@@ -35,16 +35,18 @@ pub(crate) async fn route(
     state: &AppState,
     query: ExplorerQuery,
     scope: GraphScope,
+    source: &str,
 ) -> Result<Response, ApiError> {
     match query {
-        ExplorerQuery::Browse { paging } => text(state, Vec::new(), paging, scope).await,
+        ExplorerQuery::Browse { paging }
+        | ExplorerQuery::Structured { paging }
+        | ExplorerQuery::Text { paging, .. } => text(state, source, paging, scope).await,
         ExplorerQuery::Similar { uri, paging } => similar(state, &uri, paging, &scope).await,
         ExplorerQuery::Sequence {
             sequence,
             exact,
             paging,
         } => sequence_search(state, &sequence, exact, paging, &scope).await,
-        ExplorerQuery::Text { terms, paging } => text(state, terms, paging, scope).await,
     }
 }
 
@@ -111,26 +113,32 @@ async fn sequence_search(
     Ok(json_response(explorer_search_results(bindings)))
 }
 
-/// The ranked free-text shape: rank the keyword match through the tantivy index,
-/// or count the matches. The ranked path applies paging internally.
+/// Live private matching and ranked public search share one count/page operation.
 async fn text(
     state: &AppState,
-    terms: Vec<String>,
+    source: &str,
     paging: Paging,
     scope: GraphScope,
 ) -> Result<Response, ApiError> {
-    let faceted = FacetedSearch {
-        free_text: Some(terms.join(" ")),
-        offset: paging.offset,
-        limit: Some(paging.limit),
-        ..FacetedSearch::default()
-    };
+    let query = ExplorerSearchQuery::parse(source, paging.count)?;
+    let page = state.app.explorer_search(&query, &paging, scope).await?;
     if paging.count {
-        let count = state.app.ranked_search_count(&faceted, scope).await?;
-        return Ok(json_response(explorer_count_results(count)));
+        return Ok(json_response(explorer_count_results(page.total)));
     }
-    let (hits, _total) = state.app.ranked_search(&faceted, scope).await?;
-    let bindings = hits.iter().map(hit_binding).collect();
+    let bindings = page
+        .hits
+        .iter()
+        .map(|row| {
+            let mut binding = hit_binding(&row.hit);
+            if let Some(role) = &row.role {
+                binding["role"] = uri_node(role);
+            }
+            if let Some(kind) = &row.sbol_type {
+                binding["sbolType"] = uri_node(kind);
+            }
+            binding
+        })
+        .collect();
     Ok(json_response(explorer_search_results(bindings)))
 }
 
@@ -167,10 +175,10 @@ pub(crate) async fn endpoint(
     };
     if let Some(recognized) = sbol_db_sparql::recognize_explorer(&query) {
         let scope = explorer_graph_scope(&query, params.default_graph_uri.as_deref());
-        return route(&state, recognized, scope).await;
+        return route(&state, recognized, scope, &query).await;
     }
 
-    // Stock SBOLExplorer delegates advanced facets, USES, and TWINS back to
+    // Stock SBOLExplorer delegates USES and TWINS back to
     // its configured SPARQL store. This listener already shares sbol-db's
     // store, so run those shapes directly. Refuse a request with no protocol
     // default and no explicit FROM instead of accidentally evaluating it over

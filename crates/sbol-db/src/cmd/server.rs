@@ -218,7 +218,7 @@ pub async fn run(backend: Backend, runtime: ServerRuntime, mut args: ServerArgs)
                 activation_mode: "offline_cli",
                 active_generation: recovery.active_generation,
                 previous_generation: recovery.previous_generation,
-                last_operation: recovery.last_operation.map(&recovery_event),
+                last_operation: recovery.last_operation.map(recovery_event),
                 history: recovery.history.into_iter().map(recovery_event).collect(),
             },
         )));

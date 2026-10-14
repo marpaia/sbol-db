@@ -1138,7 +1138,7 @@ impl AppServices {
         Ok(())
     }
 
-    async fn cached_cluster_map(&self) -> Result<Arc<ClusterMap>, DomainError> {
+    pub(crate) async fn cached_cluster_map(&self) -> Result<Arc<ClusterMap>, DomainError> {
         let stale = {
             let cached = self
                 .cluster_map_cache
